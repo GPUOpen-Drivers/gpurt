@@ -1,0 +1,50 @@
+<RTShaders>
+    <Trace>
+        <Shader outputName="GpuRtLibrarySw" path="GpuRtLibrary.hlsl" />
+        <Shader defines="DEVELOPER=1" outputName="GpuRtLibrarySwDev" path="GpuRtLibrary.hlsl" />
+        <Shader defines="USE_HW_INTRINSIC=1" outputName="GpuRtLibrary" path="GpuRtLibrary.hlsl" />
+        <Shader defines="USE_HW_INTRINSIC=1,DEVELOPER=1" outputName="GpuRtLibraryDev" path="GpuRtLibrary.hlsl" />
+    </Trace>
+
+    <BVH>
+        <Shader entryPoint="BuildBvh" outputName="BuildParallel" path="BuildParallel.hlsl" />
+        <Shader entryPoint="UpdateParallel" path="UpdateParallel.hlsl" />
+        <Shader entryPoint="BuildBVHTD" path="BuildBVHTDTR.hlsl" />
+        <Shader defines="USE_BVH_REBRAID=1" entryPoint="BuildBVHTD" outputName="BuildBVHTDTR" path="BuildBVHTDTR.hlsl" />
+        <Shader entryPoint="EncodeTriangleNodes" path="EncodeNodes.hlsl" />
+        <Shader defines="INDIRECT_BUILD=1" entryPoint="EncodeTriangleNodes" outputName="EncodeTriangleNodesIndirect" path="EncodeNodes.hlsl" />
+        <Shader entryPoint="EncodeAABBNodes" path="EncodeNodes.hlsl" />
+        <Shader entryPoint="EncodeInstances" path="EncodeTopLevel.hlsl" />
+        <Shader entryPoint="GenerateMortonCodes" path="GenerateMortonCodes.hlsl" />
+        <Shader defines="USE_BVH_AC=1" entryPoint="BuildBVH" outputName="BuildBVHSortLeaves" path="BuildBVH.hlsl" />
+        <Shader entryPoint="BuildBVH" path="BuildBVH.hlsl" />
+        <Shader entryPoint="BuildBVHPLOC" path="BuildBVHPLOC.hlsl" />
+        <Shader entryPoint="UpdateQBVH" path="UpdateQBVH.hlsl" />
+        <Shader entryPoint="RefitBounds" path="RefitBounds.hlsl" />
+        <Shader entryPoint="ClearBuffer" path="ClearBuffer.hlsl" />
+        <Shader entryPoint="CopyBufferRaw" path="CopyBufferRaw.hlsl" />
+        <Shader entryPoint="InitBuildQBVH" path="BuildQBVH.hlsl" />
+        <Shader entryPoint="BuildQBVH" path="BuildQBVH.hlsl" />
+        <Shader entryPoint="BuildQBVHCollapse" path="BuildQBVH.hlsl" />
+        <Shader entryPoint="BitHistogram" path="RadixSort/BitHistogram.hlsl" />
+        <Shader entryPoint="ScatterKeysAndValues" path="RadixSort/ScatterKeysAndValues.hlsl" />
+        <Shader entryPoint="ScanExclusiveInt4" path="RadixSort/ScanExclusiveInt4.hlsl" />
+        <Shader entryPoint="ScanExclusivePartInt4" path="RadixSort/ScanExclusivePartInt4.hlsl" />
+        <Shader entryPoint="ScanExclusiveInt4DLB" path="RadixSort/ScanExclusiveInt4DLB.hlsl" />
+        <Shader entryPoint="InitScanExclusiveInt4DLB" path="RadixSort/ScanExclusiveInt4DLB.hlsl" />
+        <Shader entryPoint="DistributePartSumInt4" path="RadixSort/DistributePartSumInt4.hlsl" />
+        <Shader entryPoint="EmitCurrentSize" path="EmitAS.hlsl" />
+        <Shader entryPoint="EmitCompactSize" path="EmitAS.hlsl" />
+        <Shader entryPoint="EmitSerializeDesc" path="EmitAS.hlsl" />
+        <Shader entryPoint="EmitToolVisDesc" path="EmitAS.hlsl" />
+        <Shader entryPoint="CopyAS" path="CopyAS.hlsl" />
+        <Shader entryPoint="CompactAS" path="CompactAS.hlsl" />
+        <Shader entryPoint="DecodeAS" path="DecodeAS.hlsl" />
+        <Shader defines="USE_BVH_COLLAPSE=1" entryPoint="DecodeAS" outputName="DecodeCollapse" path="DecodeAS.hlsl" />
+        <Shader entryPoint="SerializeAS" path="SerializeAS.hlsl" />
+        <Shader entryPoint="DeserializeAS" path="DeserializeAS.hlsl" />
+        <Shader entryPoint="InitExecuteIndirect" outputName="InitExecuteIndirect" path="InitExecuteIndirect.hlsl" />
+        <Shader entryPoint="PairCompression" path="PairCompression.hlsl" />
+        <Shader entryPoint="MergeSort" path="MergeSort.hlsl" />
+    </BVH>
+</RTShaders>

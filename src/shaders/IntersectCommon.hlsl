@@ -1,0 +1,771 @@
+/*
+ ***********************************************************************************************************************
+ *
+ *  Copyright (c) 2018-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *
+ *  Permission is hereby granted, free of charge, to any person obtaining a copy
+ *  of this software and associated documentation files (the "Software"), to deal
+ *  in the Software without restriction, including without limitation the rights
+ *  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ *  copies of the Software, and to permit persons to whom the Software is
+ *  furnished to do so, subject to the following conditions:
+ *
+ *  The above copyright notice and this permission notice shall be included in all
+ *  copies or substantial portions of the Software.
+ *
+ *  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ *  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ *  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ *  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ *  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ *  SOFTWARE.
+ *
+ **********************************************************************************************************************/
+#ifndef _INTERSECTCOMMON_HLSL
+#define _INTERSECTCOMMON_HLSL
+
+#include "Common.hlsl"
+
+//=====================================================================================================================
+// static definitions
+// Note: log(+/-0) always produces -inf. Reverse polarity here
+#ifndef INFINITY
+#define INFINITY -log(0.0)
+#endif
+
+#define INVALID_IDX       0xffffffff
+
+// Node pointer values with special meanings
+#define INVALID_NODE      0xffffffff
+#define TERMINAL_NODE     0xfffffffe
+#define SKIP_0_3          0xfffffffd
+#define SKIP_4_7          0xfffffffb
+#define SKIP_0_7          0xfffffff9
+
+#define SORT(childA,childB,distA,distB) if((childB!=INVALID_NODE&&distB<distA)||childA==INVALID_NODE){  float t0 = distA; uint t1 = childA;  childA = childB; distA = distB;  childB=t1; distB=t0; }
+
+//=====================================================================================================================
+// Avoid tracing NaN rays or null acceleration structures.
+// - Null acceleration structure bindings should result in a miss.
+// - Empty top levels should result in a miss. The address in the struct header is set to 0 for this case.
+// - NaNs are illegal, but we check here for robustness to avoid traversal hangs in bad apps (should only affect
+//   the software intersection path).
+static bool IsValidTrace(
+    RayDesc           ray,
+    GpuVirtualAddress accelStruct)
+{
+    bool valid = true;
+
+    if (accelStruct == 0)
+    {
+        valid = false;
+    }
+#if USE_HW_INTRINSIC == 0
+    if (any(isnan(ray.Origin)) || any(isnan(ray.Direction)))
+    {
+        valid = false;
+    }
+#endif
+
+    return valid;
+}
+
+//=====================================================================================================================
+static InstanceDesc FetchInstanceDescAddr(in GpuVirtualAddress instanceAddr)
+{
+    uint4 d0, d1, d2, d3;
+
+    d0 = LoadDwordAtAddrx4(instanceAddr);
+    d1 = LoadDwordAtAddrx4(instanceAddr + 0x10);
+    d2 = LoadDwordAtAddrx4(instanceAddr + 0x20);
+    d3 = LoadDwordAtAddrx4(instanceAddr + 0x30);
+
+    InstanceDesc desc;
+
+    desc.Transform[0] = asfloat(d0);
+    desc.Transform[1] = asfloat(d1);
+    desc.Transform[2] = asfloat(d2);
+
+    desc.InstanceID_and_Mask                           = d3.x;
+    desc.InstanceContributionToHitGroupIndex_and_Flags = d3.y;
+    desc.accelStructureAddressLo                       = d3.z;
+    desc.accelStructureAddressHiAndFlags               = d3.w;
+
+    return desc;
+}
+
+//=====================================================================================================================
+static InstanceDesc FetchInstanceDesc(in GpuVirtualAddress bvhAddress, uint nodePointer)
+{
+    const GpuVirtualAddress instanceAddr = bvhAddress + ExtractNodePointerOffset(nodePointer);
+    return FetchInstanceDescAddr(instanceAddr);
+}
+
+//=====================================================================================================================
+static uint FetchTriangleId(in GpuVirtualAddress bvhAddress, in uint nodePointer)
+{
+    const uint byteOffset = ExtractNodePointerOffset(nodePointer);
+    const GpuVirtualAddress nodeAddr = bvhAddress + byteOffset;
+
+    return LoadDwordAtAddr(nodeAddr + TRIANGLE_NODE_ID_OFFSET);
+}
+
+//=====================================================================================================================
+static bool CheckInstanceCulling(in InstanceDesc desc, const uint rayFlags, const uint pipelineRayFlags)
+{
+    // If the instance base pointer 'Skip Triangles' bit is 1, then the geometry is procedural.
+    const uint geomType = (desc.accelStructureAddressHiAndFlags >> (NODE_POINTER_SKIP_TRIANGLES_SHIFT - 32)) & 0x1;
+
+    bool isTriangleInstanceCulled =
+        ((geomType == GEOMETRY_TYPE_TRIANGLES) &&
+           ((rayFlags         & RAY_FLAG_SKIP_TRIANGLES) ||
+            (pipelineRayFlags & PIPELINE_FLAG_SKIP_TRIANGLES)));
+
+    bool isProceduralInstanceCulled =
+        ((geomType == GEOMETRY_TYPE_AABBS) &&
+           ((rayFlags         & RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES) ||
+            (pipelineRayFlags & PIPELINE_FLAG_SKIP_PROCEDURAL_PRIMITIVES)));
+
+    return (isTriangleInstanceCulled || isProceduralInstanceCulled);
+}
+
+//=====================================================================================================================
+static uint FetchInstanceIndexAddr(in GpuVirtualAddress nodeAddr)
+{
+    return LoadDwordAtAddr(nodeAddr + INSTANCE_NODE_EXTRA_OFFSET + INSTANCE_EXTRA_INDEX_OFFSET);
+}
+
+//=====================================================================================================================
+static uint FetchInstanceIndex(in GpuVirtualAddress bvhAddress, in uint nodePointer)
+{
+    const uint byteOffset = ExtractNodePointerOffset(nodePointer);
+    const GpuVirtualAddress nodeAddr = bvhAddress + byteOffset;
+    return FetchInstanceIndexAddr(nodeAddr);
+}
+
+//=====================================================================================================================
+static uint FetchInstanceNodePointerAddr(in GpuVirtualAddress nodeAddr)
+{
+    return LoadDwordAtAddr(nodeAddr + INSTANCE_NODE_EXTRA_OFFSET + INSTANCE_EXTRA_NODE_POINTER_OFFSET);
+}
+
+//=====================================================================================================================
+static uint FetchInstanceNodePointer(in GpuVirtualAddress bvhAddress, in uint nodePointer)
+{
+    const uint byteOffset = ExtractNodePointerOffset(nodePointer);
+    const GpuVirtualAddress nodeAddr = bvhAddress + byteOffset;
+    return FetchInstanceNodePointerAddr(nodeAddr);
+}
+
+//=====================================================================================================================
+static uint2 CalculateNodeAddr64(in GpuVirtualAddress bvhAddress, in uint nodePointer)
+{
+    const uint byteOffset = ExtractNodePointerOffset(nodePointer);
+    const GpuVirtualAddress nodeAddr64 = bvhAddress + byteOffset;
+
+    return uint2(LowPart(nodeAddr64), HighPart(nodeAddr64));
+}
+
+//=====================================================================================================================
+static TriangleNode FetchTriangleNode(in GpuVirtualAddress bvhAddress, in uint nodePointer)
+{
+    const uint byteOffset = ExtractNodePointerOffset(nodePointer);
+    const GpuVirtualAddress nodeAddr = bvhAddress + byteOffset;
+
+    uint4 d0, d1, d2, d3;
+    d0 = LoadDwordAtAddrx4(nodeAddr);
+    d1 = LoadDwordAtAddrx4(nodeAddr + 0x10);
+    d2 = LoadDwordAtAddrx4(nodeAddr + 0x20);
+    d3 = LoadDwordAtAddrx4(nodeAddr + 0x30);
+
+    TriangleNode node;
+
+    node.v0.x = asfloat(d0.x);
+    node.v0.y = asfloat(d0.y);
+    node.v0.z = asfloat(d0.z);
+    node.v1.x = asfloat(d0.w);
+    node.v1.y = asfloat(d1.x);
+    node.v1.z = asfloat(d1.y);
+    node.v2.x = asfloat(d1.z);
+    node.v2.y = asfloat(d1.w);
+    node.v2.z = asfloat(d2.x);
+    node.v3.x = asfloat(d2.y);
+    node.v3.y = asfloat(d2.z);
+    node.v3.z = asfloat(d2.w);
+    node.v4.x = asfloat(d3.x);
+    node.v4.y = asfloat(d3.y);
+    node.v4.z = asfloat(d3.z);
+    node.triangleId = d3.w;
+
+    return node;
+}
+
+//=====================================================================================================================
+static TriangleData FetchTriangleFromNode(in GpuVirtualAddress bvhAddress, in uint nodePointer)
+{
+    const uint byteOffset = ExtractNodePointerOffset(nodePointer);
+    const GpuVirtualAddress nodeAddr = bvhAddress + byteOffset;
+    const uint  nodeType = GetNodeType(nodePointer);
+    const uint3 offsets = CalcTriangleVertexOffsets(nodeType);
+
+    uint4 d0, d1, d2;
+
+    d0 = LoadDwordAtAddrx4(nodeAddr + offsets.x);
+    d1 = LoadDwordAtAddrx4(nodeAddr + offsets.y);
+    d2 = LoadDwordAtAddrx4(nodeAddr + offsets.z);
+
+    TriangleData tri;
+
+    tri.v0 = asfloat(d0.xyz);
+    tri.v1 = asfloat(d1.xyz);
+    tri.v2 = asfloat(d2.xyz);
+
+    return tri;
+}
+
+//=====================================================================================================================
+static uint FetchFloat32BoxNodeNumPrimitives(in GpuVirtualAddress bvhAddress, in uint nodePointer)
+{
+    const uint byteOffset = ExtractNodePointerOffset(nodePointer);
+    const GpuVirtualAddress nodeAddr = bvhAddress + byteOffset + FLOAT32_BOX_NODE_NUM_PRIM_OFFSET;
+
+    return LoadDwordAtAddr(nodeAddr);
+}
+
+//=====================================================================================================================
+static Float32BoxNode FetchFloat32BoxNode(in GpuVirtualAddress bvhAddress, in uint nodePointer)
+{
+    const uint byteOffset = ExtractNodePointerOffset(nodePointer);
+    const GpuVirtualAddress nodeAddr = bvhAddress + byteOffset;
+
+    uint4 d0, d1, d2, d3, d4, d5, d6;
+    d0 = LoadDwordAtAddrx4(nodeAddr);
+    d1 = LoadDwordAtAddrx4(nodeAddr + 0x10);
+    d2 = LoadDwordAtAddrx4(nodeAddr + 0x20);
+    d3 = LoadDwordAtAddrx4(nodeAddr + 0x30);
+
+    d4 = LoadDwordAtAddrx4(nodeAddr + 0x40);
+    d5 = LoadDwordAtAddrx4(nodeAddr + 0x50);
+    d6 = LoadDwordAtAddrx4(nodeAddr + 0x60);
+
+    Float32BoxNode node;
+
+    node.child0 = d0.x;
+    node.child1 = d0.y;
+    node.child2 = d0.z;
+    node.child3 = d0.w;
+
+    node.bbox0_min = asfloat(d1.xyz);
+    node.bbox0_max = float3(asfloat(d1.w), asfloat(d2.xy));
+    node.bbox1_min = float3(asfloat(d2.zw), asfloat(d3.x));
+    node.bbox1_max = asfloat(d3.yzw);
+    node.bbox2_min = asfloat(d4.xyz);
+    node.bbox2_max = float3(asfloat(d4.w), asfloat(d5.xy));
+    node.bbox3_min = float3(asfloat(d5.zw), asfloat(d6.x));
+    node.bbox3_max = asfloat(d6.yzw);
+
+    node.flags = LoadDwordAtAddr(nodeAddr + FLOAT32_BOX_NODE_FLAGS_OFFSET);
+
+    return node;
+}
+
+//=====================================================================================================================
+static Float32BoxNode FetchFloat16BoxNodeAsFp32(in GpuVirtualAddress bvhAddress, in uint nodePointer)
+{
+    const uint byteOffset = ExtractNodePointerOffset(nodePointer);
+    const GpuVirtualAddress nodeAddr = bvhAddress + byteOffset;
+
+    uint4 d0, d1, d2, d3;
+    d0 = LoadDwordAtAddrx4(nodeAddr);
+    d1 = LoadDwordAtAddrx4(nodeAddr + 0x10);
+    d2 = LoadDwordAtAddrx4(nodeAddr + 0x20);
+    d3 = LoadDwordAtAddrx4(nodeAddr + 0x30);
+
+    Float32BoxNode node;
+
+    node.child0 = d0.x;
+    node.child1 = d0.y;
+    node.child2 = d0.z;
+    node.child3 = d0.w;
+
+    const BoundingBox b0 = UncompressBBoxFromUint3(d1.xyz);
+    const BoundingBox b1 = UncompressBBoxFromUint3(uint3(d1.w,  d2.xy));
+    const BoundingBox b2 = UncompressBBoxFromUint3(uint3(d2.zw, d3.x ));
+    const BoundingBox b3 = UncompressBBoxFromUint3(d3.yzw);
+
+    node.bbox0_min = b0.min;
+    node.bbox0_max = b0.max;
+    node.bbox1_min = b1.min;
+    node.bbox1_max = b1.max;
+    node.bbox2_min = b2.min;
+    node.bbox2_max = b2.max;
+    node.bbox3_min = b3.min;
+    node.bbox3_max = b3.max;
+
+    // fp16 node does not have space to store flags,
+    // initialize the field to 0.
+    node.flags = 0;
+
+    return node;
+}
+
+//=====================================================================================================================
+static Float16BoxNode FetchFloat16BoxNode(in GpuVirtualAddress bvhAddress, in uint nodePointer)
+{
+    const uint byteOffset = ExtractNodePointerOffset(nodePointer);
+    const GpuVirtualAddress nodeAddr = bvhAddress + byteOffset;
+
+    uint4 d0, d1, d2, d3;
+    d0 = LoadDwordAtAddrx4(nodeAddr);
+    d1 = LoadDwordAtAddrx4(nodeAddr + 0x10);
+    d2 = LoadDwordAtAddrx4(nodeAddr + 0x20);
+    d3 = LoadDwordAtAddrx4(nodeAddr + 0x30);
+
+    Float16BoxNode node;
+
+    node.child0 = d0.x;
+    node.child1 = d0.y;
+    node.child2 = d0.z;
+    node.child3 = d0.w;
+
+    node.bbox0 = d1.xyz;
+    node.bbox1 = uint3(d1.w,  d2.xy);
+    node.bbox2 = uint3(d2.zw, d3.x );
+    node.bbox3 = d3.yzw;
+
+    return node;
+}
+
+//=====================================================================================================================
+static ProceduralNode FetchProceduralNode(in GpuVirtualAddress bvhAddress, in uint nodePointer)
+{
+    const uint byteOffset = ExtractNodePointerOffset(nodePointer);
+    const GpuVirtualAddress nodeAddr = bvhAddress + byteOffset;
+
+    uint4 d0, d1;
+
+    d0 = LoadDwordAtAddrx4(nodeAddr);
+    d1 = LoadDwordAtAddrx4(nodeAddr + 0x10);
+
+    ProceduralNode node;
+
+    node.bbox_min = asfloat(d0.xyz);
+    node.bbox_max = float3(asfloat(d0.w), asfloat(d1.xy));
+
+    return node;
+}
+
+//=====================================================================================================================
+static bool IsOpaque(uint geometryFlags, uint instanceFlags, uint rayFlags)
+{
+    const bool isOpaqueGeometry    = (geometryFlags & D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE);
+    const bool isOpaqueInstance    = (instanceFlags & D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_OPAQUE);
+    const bool isNonOpaqueInstance = (instanceFlags & D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_NON_OPAQUE);
+    bool isOpaque                  = isOpaqueInstance || (isOpaqueGeometry && (isNonOpaqueInstance == false));
+
+    if (rayFlags & RAY_FLAG_FORCE_OPAQUE)
+    {
+        isOpaque = true;
+    }
+    else if (rayFlags & RAY_FLAG_FORCE_NON_OPAQUE)
+    {
+        isOpaque = false;
+    }
+
+    return isOpaque;
+}
+
+//=====================================================================================================================
+static uint2 CalculateRawBvh64NodePointer(
+    GpuVirtualAddress bvhAddress, uint nodePointer)
+{
+    // Node pointers are 64-byte aligned with the node type in the bottom 3 bits.
+    GpuVirtualAddress nodeAddr = (bvhAddress >> 3) + nodePointer;
+
+    uint2 retVal;
+    retVal.x = LowPart(nodeAddr);
+    retVal.y = HighPart(nodeAddr);
+
+    return retVal;
+}
+
+//=====================================================================================================================
+static uint GetBoxSortingHeuristicFromRayFlags(
+    in uint rayFlags,
+    in uint mode)
+{
+    uint heuristic = BoxSortHeuristic::Closest;
+
+#ifdef __cplusplus
+    if (rayFlags & RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH)
+#else
+    // Note, wave traversal is always bound by the longest running thread/ray. Because of that we want to pick a
+    // a heuristic that makes the longest ray run faster. Select largest first heuristic only if all rays in a wave
+    // benefit from it.
+
+    // When largest first heuristic is enabled one of the values used to calculate the sort key gets clamped to
+    // ray's tMax. On a commit the ray's tMax value is updated. As a result if after committing the hit a ray visits
+    // nodes via stackless walkback, the sort keys are different than the original intersection and hence the child
+    // nodes may be sorted in a different order. This breaks stackless walkback as it strictly requires the intersected
+    // child nodes to be in the original intersection order. This heuristic is only intended to be used for
+    // acceptFirstHitAndEndSearch scenarios where stackless walkback after a committed hit is not triggered.
+    //
+    if (WaveActiveAllTrue(rayFlags & RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH))
+#endif
+    {
+        if (mode == BoxSortHeuristic::DisabledOnAcceptFirstHit)
+        {
+            // intentionally choose to disable BoxSort
+            // if rayFlag is set to "RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH"
+            // The intention is to benefit ShadowRay with BvhNodeSort
+            heuristic = BoxSortHeuristic::Disabled;
+        }
+    }
+    else
+    {
+        heuristic = BoxSortHeuristic::Closest;
+    }
+
+    return heuristic;
+}
+
+#if USE_HW_INTRINSIC == 0
+//=====================================================================================================================
+// Intersect rays vs bbox and return intersection span.
+static float4 fast_intersect_bbox(
+    float3 ray_origin, float3 ray_inv_dir, float3 box_min, float3 box_max, float t_max)
+{
+    const float3 box_min_rel = box_min - ray_origin;
+    const float3 box_max_rel = box_max - ray_origin;
+
+    const float3 t_plane_min = box_min_rel * ray_inv_dir;
+    const float3 t_plane_max = box_max_rel * ray_inv_dir;
+
+    float3 min_interval, max_interval;
+
+    min_interval.x = ray_inv_dir.x >= 0.0f ? t_plane_min.x : t_plane_max.x;
+    max_interval.x = ray_inv_dir.x >= 0.0f ? t_plane_max.x : t_plane_min.x;
+
+    min_interval.y = ray_inv_dir.y >= 0.0f ? t_plane_min.y : t_plane_max.y;
+    max_interval.y = ray_inv_dir.y >= 0.0f ? t_plane_max.y : t_plane_min.y;
+
+    min_interval.z = ray_inv_dir.z >= 0.0f ? t_plane_min.z : t_plane_max.z;
+    max_interval.z = ray_inv_dir.z >= 0.0f ? t_plane_max.z : t_plane_min.z;
+
+    // intersection interval before clamping
+    float min_of_intervals_t = max3(min_interval);
+    float max_of_intervals_t = min3(max_interval);
+
+    // intersection interval after clamping
+    float min_t = max(min_of_intervals_t, 0.0f);
+    float max_t = min(max_of_intervals_t, t_max);
+
+    if (isnan(min_of_intervals_t) || isnan(max_of_intervals_t))
+    {
+        min_t = INFINITY;
+        max_t = -INFINITY;
+    }
+
+    // NaNs for values used in the closest midpoint sort algorithm are overridden to
+    // maintain consistency with the other sorting heuristic.
+    if (isnan(min_of_intervals_t))
+    {
+        min_of_intervals_t = 0;
+    }
+
+    if (isnan(max_of_intervals_t))
+    {
+        max_of_intervals_t = INFINITY;
+    }
+
+    return float4(min_t, max_t, min_of_intervals_t, max_of_intervals_t);
+}
+
+//=====================================================================================================================
+static uint4 IntersectNode(
+    const Float32BoxNode node, float ray_extent, float3 ray_origin, float3 ray_inv_dir, uint box_grow_ulp, uint box_sort_heuristic)
+{
+    // Box nodes consist of the bounds of four different axis aligned
+    // bounding boxes
+    uint child0, child1, child2, child3;
+    float3 pmin0, pmin1, pmin2, pmin3, pmax0, pmax1, pmax2, pmax3;
+    bool box_sorting_enabled = (box_sort_heuristic != BoxSortHeuristic::Disabled);
+    child0 = node.child0;
+    child1 = node.child1;
+    child2 = node.child2;
+    child3 = node.child3;
+
+    pmin0 = node.bbox0_min;
+    pmax0 = node.bbox0_max;
+    pmin1 = node.bbox1_min;
+    pmax1 = node.bbox1_max;
+    pmin2 = node.bbox2_min;
+    pmax2 = node.bbox2_max;
+    pmin3 = node.bbox3_min;
+    pmax3 = node.bbox3_max;
+
+    // Perform ray box intersection for all 4 children
+    float4 s0 = fast_intersect_bbox(ray_origin, ray_inv_dir, pmin0, pmax0, ray_extent);
+    float4 s1 = fast_intersect_bbox(ray_origin, ray_inv_dir, pmin1, pmax1, ray_extent);
+    float4 s2 = fast_intersect_bbox(ray_origin, ray_inv_dir, pmin2, pmax2, ray_extent);
+    float4 s3 = fast_intersect_bbox(ray_origin, ray_inv_dir, pmin3, pmax3, ray_extent);
+
+    // Setup default sorting key to handle box_sort_heuristic == 0(closest child)
+    // and box_sort_heuristic == 3 (undefined sorting order))
+    float sort_key0 = s0.x;
+    float sort_key1 = s1.x;
+    float sort_key2 = s2.x;
+    float sort_key3 = s3.x;
+
+    //Mark out the nodes that didn't hit by setting them to the
+    //INVALID_NODE.
+
+    //The check for equality here is important since errors from the
+    //floating point rounding will cause small intervals to snap to identical
+    //times. Under this situation you can not determine if the box intersected
+    //So, you must conservatively treat equality as a hit.
+    //
+    //Also in order to address the inconsistant error between ray-box and
+    //ray-triangle test, we make the ray-box test more conservative by growing the
+    //interval in post-projection space by several ULPs.
+
+    const float eps = 5.960464478e-8f; // 2^-24;
+    uint traverse0 = (s0.x <= (s0.y * (1 + box_grow_ulp * eps))) ? child0 : INVALID_NODE;
+    uint traverse1 = (s1.x <= (s1.y * (1 + box_grow_ulp * eps))) ? child1 : INVALID_NODE;
+    uint traverse2 = (s2.x <= (s2.y * (1 + box_grow_ulp * eps))) ? child2 : INVALID_NODE;
+    uint traverse3 = (s3.x <= (s3.y * (1 + box_grow_ulp * eps))) ? child3 : INVALID_NODE;
+
+    //4-item sorting network to optimize BVH traversal using the
+    //distance heuristic
+    //Traverse0 --*------*------- Traverse0
+    //            |      |
+    //Traverse1 -(---*---*---*--- Traverse1
+    //            |  |       |
+    //Traverse2 --*-(----*---*--- Traverse2
+    //               |   |
+    //Traverse3 -----*---*------- Traverse3
+
+    if (box_sorting_enabled)
+    {
+        SORT(traverse0, traverse2, sort_key0, sort_key2)
+        SORT(traverse1, traverse3, sort_key1, sort_key3)
+        SORT(traverse0, traverse1, sort_key0, sort_key1)
+        SORT(traverse2, traverse3, sort_key2, sort_key3)
+        SORT(traverse1, traverse2, sort_key1, sort_key2)
+    }
+
+    return uint4(traverse0, traverse1, traverse2, traverse3);
+}
+
+//=====================================================================================================================
+// Intersect rays vs bbox and return intersection span.
+static float2 fast_intersect_bbox_compressed(
+    float3 oprime, float3 dprime, float3 box_min, float3 box_max, float t_max)
+{
+    const float3 t_plane_min = box_min * dprime + oprime;
+    const float3 t_plane_max = box_max * dprime + oprime;
+
+    float3 min_interval, max_interval;
+
+    min_interval.x = dprime.x >= 0.0f ? t_plane_min.x : t_plane_max.x;
+    max_interval.x = dprime.x >= 0.0f ? t_plane_max.x : t_plane_min.x;
+
+    min_interval.y = dprime.y >= 0.0f ? t_plane_min.y : t_plane_max.y;
+    max_interval.y = dprime.y >= 0.0f ? t_plane_max.y : t_plane_min.y;
+
+    min_interval.z = dprime.z >= 0.0f ? t_plane_min.z : t_plane_max.z;
+    max_interval.z = dprime.z >= 0.0f ? t_plane_max.z : t_plane_min.z;
+
+    const float min_of_intervals = max3(min_interval);
+    const float max_of_intervals = min3(max_interval);
+
+    const float min_t = max(min_of_intervals, 0.0f);
+    const float max_t = min(max_of_intervals, t_max);
+
+    return float2(min_t, max_t);
+}
+
+//=====================================================================================================================
+// Intersect ray against a triangle and return whether the triangle hit is accepted or not. If hit is accepted
+// hit attributes (closest distance, barycentrics and hit kind) are updated
+static uint4 fast_intersect_triangle(
+    float3      origin,
+    float3      direction,
+    float3      v1,
+    float3      v2,
+    float3      v3)
+{
+    // Determine edge vectors for clockwise triangle vertices
+    float3 e1 = v2 - v1;
+    float3 e2 = v3 - v1;
+    float3 e3 = origin - v1;
+
+    float4 result;
+
+    const float3 s1 = cross(direction, e2);
+    const float3 s2 = cross(e3, e1);
+
+    result.x = dot(e2, s2);
+    result.y = dot(s1, e1);
+    result.z = dot(e3, s1);
+    result.w = dot(direction, s2);
+
+    float t = result.x / result.y;
+    float u = result.z / result.y;
+    float v = result.w / result.y;
+
+    // Barycentric coordinate U is outside range
+    bool triangle_missed = ((u < 0.f) || (u > 1.f));
+    triangle_missed |= ((v < 0.f) || (u + v > 1.f));
+    triangle_missed |= (t < 0.f);
+
+    const float inf = INFINITY;
+    result.x = triangle_missed ? inf  : result.x;
+    result.y = triangle_missed ? 1.0f : result.y;
+
+    return asuint(result);
+}
+
+//=====================================================================================================================
+// Swizzle barycentrics to undo the triangle rotation that was applied during compression.
+static void SwizzleBarycentrics(
+    inout_param(uint4) result,
+    in uint            nodePointer,
+    in uint            triangleId)
+{
+    // The triangle barycentric coordinates are:
+    // barycentrics.x = asfloat(result.z) / asfloat(result.y)
+    // barycentrics.y = asfloat(result.w) / asfloat(result.y)
+    // barycentrics.w = (1 - barycentrics.x - barycentrics.y)
+    //
+    // The following is derived by multiplying all the barycentric coordinates by the tDenom, i.e., result.y, to avoid
+    // additional ALU ops since we have to multiply by result.y again anyway when modifying result.z and result.w.
+    float baryc[3] = { asfloat(result.y) - asfloat(result.z) - asfloat(result.w),
+                       asfloat(result.z),
+                       asfloat(result.w) };
+
+    const uint triangleShift = TRIANGLE_ID_BIT_STRIDE * GetNodeType(nodePointer);
+
+    result.z = asuint(baryc[(triangleId >> (triangleShift + TRIANGLE_ID_I_SRC_SHIFT)) % 4]);
+    result.w = asuint(baryc[(triangleId >> (triangleShift + TRIANGLE_ID_J_SRC_SHIFT)) % 4]);
+}
+
+//=====================================================================================================================
+// Given a point in triangle plane, calculate its barycentrics
+static float2 triangle_calculate_barycentrics(float3 p, float3 v1, float3 v2, float3 v3)
+{
+    const float3 e1 = v2 - v1;
+    const float3 e2 = v3 - v1;
+    const float3 e = p - v1;
+    const float d00 = dot(e1, e1);
+    const float d01 = dot(e1, e2);
+    const float d11 = dot(e2, e2);
+    const float d20 = dot(e, e1);
+    const float d21 = dot(e, e2);
+    const float invdenom = rcp(d00 * d11 - d01 * d01);
+    const float b1 = (d11 * d20 - d01 * d21) * invdenom;
+    const float b2 = (d00 * d21 - d01 * d20) * invdenom;
+    return float2(b1, b2);
+}
+
+#endif
+
+#define INTERSECT_RAY_VERSION_1 1
+
+//=====================================================================================================================
+static uint4 image_bvh64_intersect_ray_base(
+    GpuVirtualAddress bvhAddress,
+    uint              nodePointer,
+    uint              pointerFlags,
+    uint              boxSortHeuristic,
+    float             rayExtent,
+    float3            rayOrigin,
+    float3            rayDirection,
+    float3            rayDirectionInverse,
+    uint              intersectRayVersion)
+{
+    uint4 result;
+
+#if USE_HW_INTRINSIC
+    uint2 address = CalculateRawBvh64NodePointer(bvhAddress, nodePointer);
+
+    result = AmdExtD3DShaderIntrinsics_IntersectBvhNode(address,
+                                                        rayExtent,
+                                                        rayOrigin,
+                                                        rayDirection,
+                                                        rayDirectionInverse,
+                                                        boxSortHeuristic,
+                                                        BOX_EXPANSION_DEFAULT_AMOUNT);
+#else
+    uint64_t hwNodePtr = (bvhAddress >> 3) + nodePointer;
+
+    if (IsBoxNode(nodePointer))
+    {
+        // When using 16bit bboxes in BLAS, convert to a full 32bit box on load for simplicity
+        Float32BoxNode node;
+        if (IsBoxNode16(nodePointer))
+        {
+            node = FetchFloat16BoxNodeAsFp32(bvhAddress, nodePointer);
+        }
+        else
+        {
+            node = FetchFloat32BoxNode(bvhAddress, nodePointer);
+
+        }
+
+        // Intersect ray with qbvh node
+        result = IntersectNode(node,
+                               rayExtent,
+                               rayOrigin,
+                               rayDirectionInverse,
+                               BOX_EXPANSION_DEFAULT_AMOUNT,
+                               boxSortHeuristic);
+    }
+    else if (IsTriangleNode(nodePointer))
+    {
+        bool procedural = false;
+        uint hwTriFlags = 0;
+
+        const uint triangleId = FetchTriangleId(bvhAddress, nodePointer);
+
+        {
+            // The triangle leaf node stores face vertices
+            const TriangleData tri = FetchTriangleFromNode(bvhAddress, nodePointer);
+
+            result = fast_intersect_triangle(rayOrigin,
+                                             rayDirection,
+                                             tri.v0,
+                                             tri.v1,
+                                             tri.v2);
+
+            SwizzleBarycentrics(result, nodePointer, triangleId);
+        }
+
+    }
+    else
+    {
+        // User defined instance node or procedural node. HW returns -1
+        return uint4(-1, -1, -1, -1);
+    }
+#endif
+
+    return result;
+}
+
+//=====================================================================================================================
+static uint4 image_bvh64_intersect_ray(
+    GpuVirtualAddress bvhAddress,
+    uint              nodePointer,
+    uint              boxSortHeuristic,
+    float             rayExtent,
+    float3            rayOrigin,
+    float3            rayDirection,
+    float3            rayDirectionInverse)
+{
+    return image_bvh64_intersect_ray_base(
+        bvhAddress, nodePointer, 0, boxSortHeuristic, rayExtent, rayOrigin, rayDirection, rayDirectionInverse,
+        INTERSECT_RAY_VERSION_1);
+}
+
+#endif

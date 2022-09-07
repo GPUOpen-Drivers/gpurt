@@ -1,0 +1,750 @@
+/*
+ ***********************************************************************************************************************
+ *
+ *  Copyright (c) 2018-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *
+ *  Permission is hereby granted, free of charge, to any person obtaining a copy
+ *  of this software and associated documentation files (the "Software"), to deal
+ *  in the Software without restriction, including without limitation the rights
+ *  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ *  copies of the Software, and to permit persons to whom the Software is
+ *  furnished to do so, subject to the following conditions:
+ *
+ *  The above copyright notice and this permission notice shall be included in all
+ *  copies or substantial portions of the Software.
+ *
+ *  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ *  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ *  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ *  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ *  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ *  SOFTWARE.
+ *
+ **********************************************************************************************************************/
+//
+// For matrix functions based on Microsoft's D3D12RaytracingFallback:
+// Copyright (c) Microsoft. All rights reserved.
+// This code is licensed under the MIT License (MIT).
+// THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
+// ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING ANY
+// IMPLIED WARRANTIES OF FITNESS FOR A PARTICULAR
+// PURPOSE, MERCHANTABILITY, OR NON-INFRINGEMENT.
+
+#ifndef _COMMON_HLSL
+#define _COMMON_HLSL
+
+#include "RayTracingDefs.h"
+
+#if !defined(__cplusplus)
+#define out_param(x) out x
+#define inout_param(x) inout x
+#endif
+
+#ifdef AMD_VULKAN_GLSLANG
+// Vulkan workarounds for glslangValidator.
+#define export
+
+struct BuiltInTriangleIntersectionAttributes
+{
+    float2 barycentrics;
+};
+
+#endif
+
+#ifndef INT_MAX
+#define INT_MAX 0x7FFFFFFF
+#endif
+#ifndef FLT_MAX
+#define FLT_MAX 3.402823466e+38F
+#endif
+
+#include "Extensions.hlsl"
+
+// Workaround for lack of 64 bit literals and casts in glslang
+static const uint64_t OneU64 = 1;
+static const float NaN =  (0.0 / 0.0);
+
+static const BoundingBox InvalidBoundingBox =
+{
+    float3(FLT_MAX, FLT_MAX, FLT_MAX),
+    float3(-FLT_MAX, -FLT_MAX, -FLT_MAX)
+};
+
+#define FLAG_IS_SET(x, flagName)   (((x) & (OneU64 << (flagName##_SHIFT))) != 0)
+#define FLAG_IS_CLEAR(x, flagName) (FLAG_IS_SET(x, flagName) == 0)
+
+//=====================================================================================================================
+#define RAY_FLAG_NONE                            0x00
+#define RAY_FLAG_FORCE_OPAQUE                    0x01
+#define RAY_FLAG_FORCE_NON_OPAQUE                0x02
+#define RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH 0x04
+#define RAY_FLAG_SKIP_CLOSEST_HIT_SHADER         0x08
+#define RAY_FLAG_CULL_BACK_FACING_TRIANGLES      0x10
+#define RAY_FLAG_CULL_FRONT_FACING_TRIANGLES     0x20
+#define RAY_FLAG_CULL_OPAQUE                     0x40
+#define RAY_FLAG_CULL_NON_OPAQUE                 0x80
+#define RAY_FLAG_SKIP_TRIANGLES                  0x100
+#define RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES      0x200
+
+#define HIT_KIND_TRIANGLE_FRONT_FACE 0xFE
+#define HIT_KIND_TRIANGLE_BACK_FACE  0xFF
+#define HIT_KIND_EARLY_RAY_TERMINATE 0x100
+
+#define HIT_STATUS_IGNORE                0
+#define HIT_STATUS_ACCEPT                1
+#define HIT_STATUS_ACCEPT_AND_END_SEARCH 2
+
+#define GEOMETRY_TYPE_TRIANGLES 0 // D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES
+#define GEOMETRY_TYPE_AABBS     1 // D3D12_RAYTRACING_GEOMETRY_TYPE_PROCEDURAL_PRIMITIVE_AABBS
+
+#define DDI_BUILD_FLAG_NONE              0x00
+#define DDI_BUILD_FLAG_ALLOW_UPDATE      0x01
+#define DDI_BUILD_FLAG_ALLOW_COMPACTION  0x02
+#define DDI_BUILD_FLAG_PREFER_FAST_TRACE 0x04
+#define DDI_BUILD_FLAG_PREFER_FAST_BUILD 0x08
+#define DDI_BUILD_FLAG_MINIMIZE_MEMORY   0x10
+#define DDI_BUILD_FLAG_PERFORM_UPDATE    0x20
+
+#define D3D12_RAYTRACING_INSTANCE_FLAG_NONE                             0x0
+#define D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE            0x1
+#define D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_FRONT_COUNTERCLOCKWISE  0x2
+#define D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_OPAQUE                     0x4
+#define D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_NON_OPAQUE                 0x8
+
+#define D3D12_RAYTRACING_GEOMETRY_FLAG_NONE                             0x0
+#define D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE                           0x1
+#define D3D12_RAYTRACING_GEOMETRY_FLAG_NO_DUPLICATE_ANYHIT_INVOCATION   0x2
+
+//=====================================================================================================================
+// The following functions depend on static flags
+static uint IsBvhCollapse()
+{
+    const uint BvhCollapseFlagMask = 0x80000000;
+    return (AmdTraceRayGetStaticFlags() & BvhCollapseFlagMask);
+}
+static uint IsBvhRebraid()
+{
+    const uint BvhRebraidFlagMask = 1 << 27;
+    return (AmdTraceRayGetStaticFlags() & BvhRebraidFlagMask);
+}
+static uint IsUseRayQueryForTraceRays()
+{
+    const uint UseRayQueryForTraceRaysFlagMask = 0x10000000;
+    return (AmdTraceRayGetStaticFlags() & UseRayQueryForTraceRaysFlagMask);
+}
+static uint EnableAccelStructTracking()
+{
+    const uint EnableAccelStructTracking = 1 << 25;
+    return (AmdTraceRayGetStaticFlags() & EnableAccelStructTracking);
+}
+
+#if DEVELOPER
+static bool EnableTraversalCounter()
+{
+    const uint EnableTraversalCounter = 1 << 24;
+    return (AmdTraceRayGetStaticFlags() & EnableTraversalCounter);
+}
+#endif
+
+//=====================================================================================================================
+// Copy from: BVHTest/Common/ResourceHelpers.h
+// template specialized to uint
+static uint Pow2Align(
+    uint value,      ///< Value to align.
+    uint alignment)  ///< Desired alignment (must be a power of 2).
+{
+    return ((value + alignment - 1) & ~(alignment - 1));
+}
+
+//=====================================================================================================================
+static GpuVirtualAddress MakeGpuVirtualAddress(uint lowBits, uint highBits)
+{
+    return PackUint64(lowBits, highBits);
+}
+
+//=====================================================================================================================
+static GpuVirtualAddress MakeGpuVirtualAddress(uint2 lowHigh)
+{
+    return PackUint64(lowHigh.x, lowHigh.y);
+}
+
+//=====================================================================================================================
+static GpuVirtualAddress ExtractInstanceAddr(uint64_t instanceBasePointer)
+{
+    // Since the zero field should be zero, its mask is included here to avoid extra ALU for masking the low bits.
+    return (instanceBasePointer & (INSTANCE_BASE_POINTER_ADDRESS_USED_MASK | INSTANCE_BASE_POINTER_ZERO_MASK)) << 3;
+}
+
+//=====================================================================================================================
+static GpuVirtualAddress GetInstanceAddr(in InstanceDesc desc)
+{
+    return ExtractInstanceAddr(PackUint64(desc.accelStructureAddressLo, desc.accelStructureAddressHiAndFlags));
+}
+
+//=====================================================================================================================
+static GpuVirtualAddress GetInstanceAddr(in uint instanceBasePointerLo, in uint instanceBasePointerHi)
+{
+    return ExtractInstanceAddr(PackUint64(instanceBasePointerLo, instanceBasePointerHi));
+}
+
+//=====================================================================================================================
+static uint64_t GetNodeAddr(uint64_t baseNodePtr, uint nodePtr)
+{
+    return ExtractInstanceAddr(baseNodePtr) + ExtractNodePointerOffset(nodePtr);
+}
+
+//=====================================================================================================================
+static uint64_t GetInstanceBasePointer(in InstanceDesc desc)
+{
+    // Mask out the extra address bits, which are repurposed to contain the geometry type.
+    const uint highMask = HighPart(INSTANCE_BASE_POINTER_FLAGS_MASK | INSTANCE_BASE_POINTER_ADDRESS_USED_MASK);
+
+    return PackUint64(desc.accelStructureAddressLo,
+                      desc.accelStructureAddressHiAndFlags & highMask);
+}
+
+//=====================================================================================================================
+static uint64_t PackInstanceBasePointer(GpuVirtualAddress instanceVa, uint instanceFlags, uint geometryType)
+{
+    uint64_t instanceBasePointer = instanceVa >> 3;
+
+    instanceBasePointer |= (instanceFlags & D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE)
+                           ? (1 << NODE_POINTER_DISABLE_TRIANGLE_CULL_SHIFT) : 0;
+
+    instanceBasePointer |= (instanceFlags & D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_FRONT_COUNTERCLOCKWISE)
+                           ? (1 << NODE_POINTER_FLIP_FACEDNESS_SHIFT) : 0;
+
+    instanceBasePointer |= (instanceFlags & D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_OPAQUE)
+                           ? (1 << NODE_POINTER_FORCE_OPAQUE_SHIFT) : 0;
+
+    instanceBasePointer |= (instanceFlags & D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_NON_OPAQUE)
+                           ? (1 << NODE_POINTER_FORCE_NON_OPAQUE_SHIFT) : 0;
+
+    // Set 'Skip Procedural' for triangles and 'Skip Triangles' for procedural geometry
+    instanceBasePointer |= (geometryType == GEOMETRY_TYPE_TRIANGLES)
+                           ? (1 << NODE_POINTER_SKIP_PROCEDURAL_SHIFT)
+                           : (1 << NODE_POINTER_SKIP_TRIANGLES_SHIFT);
+
+    return instanceBasePointer;
+}
+
+//======================================================================================================================
+// Produces a node pointer at the provided address with API ray flags encoded into the appropriate node pointer flags.
+static uint64_t EncodeBasePointer(
+    uint64_t accelStructAddr,
+    uint     rayFlags)
+{
+    // Encode API ray flags into pointer flags resetting ACCEPT_FIRST_HIT and SKIP_CLOSEST_HIT which are not implemented
+    // using the pointer flags feature.
+    const uint64_t rayFlagsToInclude    = rayFlags & ~RAY_FLAG_EXCLUDE_MASK;
+    const uint64_t topLevelPointerFlags = rayFlagsToInclude << NODE_POINTER_FLAGS_SHIFT;
+    const uint64_t basePointer          = (accelStructAddr >> 3) | topLevelPointerFlags;
+
+    return basePointer;
+}
+
+//=====================================================================================================================
+static bool CheckHandleTriangleNode(in uint pointerOrType)
+{
+    bool skipTriangleFlag   = false;
+
+    bool isNodeTypeTriangle = (GetNodeType(pointerOrType) <= NODE_TYPE_TRIANGLE_3);
+
+    const uint pipelineRayFlag = AmdTraceRayGetStaticFlags();
+    skipTriangleFlag = (pipelineRayFlag & PIPELINE_FLAG_SKIP_TRIANGLES) ? true : false;
+
+    return (isNodeTypeTriangle && (!skipTriangleFlag));
+}
+
+//=====================================================================================================================
+static bool CheckHandleProceduralUserNode(in uint nodePointer)
+{
+    bool skipProceduralFlag   = false;
+
+    bool isNodeTypeProcedural = (GetNodeType(nodePointer) == NODE_TYPE_USER_NODE_PROCEDURAL);
+
+    const uint pipelineRayFlag = AmdTraceRayGetStaticFlags();
+    skipProceduralFlag =
+        (pipelineRayFlag & PIPELINE_FLAG_SKIP_PROCEDURAL_PRIMITIVES) ? true : false;
+
+    return (isNodeTypeProcedural && (!skipProceduralFlag));
+}
+
+//=====================================================================================================================
+static uint WriteTriangleIdField(uint triangleId, uint nodeType, uint rotation, uint geometryFlags)
+{
+    const uint triangleShift = nodeType * TRIANGLE_ID_BIT_STRIDE;
+
+    // Compute the barycentrics mapping table that is stored in triangle_id for RT IP 1.1
+    triangleId |= ((rotation + 1) % 3) << (triangleShift + TRIANGLE_ID_I_SRC_SHIFT);
+    triangleId |= ((rotation + 2) % 3) << (triangleShift + TRIANGLE_ID_J_SRC_SHIFT);
+
+    return triangleId;
+}
+
+//=====================================================================================================================
+static uint CalcUncompressedTriangleId(uint geometryFlags)
+{
+    return WriteTriangleIdField(0, NODE_TYPE_TRIANGLE_0, 0, geometryFlags);
+}
+
+//=====================================================================================================================
+// Extract the order of the triangle vertices from the node's triangle ID field.
+static uint3 CalcTriangleCompressionVertexOffsets(uint nodeType, uint triangleId)
+{
+    uint3 vertexSwizzle;
+    vertexSwizzle.y = (triangleId >> (TRIANGLE_ID_BIT_STRIDE * nodeType + TRIANGLE_ID_I_SRC_SHIFT)) % 4;
+    vertexSwizzle.z = (triangleId >> (TRIANGLE_ID_BIT_STRIDE * nodeType + TRIANGLE_ID_J_SRC_SHIFT)) % 4;
+    vertexSwizzle.x = 3 - vertexSwizzle.y - vertexSwizzle.z;
+
+    // Packed triangle vertex mapping similar to the one used by the compression algorithm.
+    // node type 0 -> V0, V1, V2
+    // node type 1 -> V1, V3, V2
+    // node type 2 -> V2, V3, V4
+    // node type 3 -> V2, V4, V0
+    const uint nodeVertexMapping[4] = { 0x210, 0x231, 0x432, 0x042 };
+
+    uint3 nodeVertexIndices;
+    nodeVertexIndices.x = (nodeVertexMapping[nodeType] >> (vertexSwizzle.x * 4)) & 0xf;
+    nodeVertexIndices.y = (nodeVertexMapping[nodeType] >> (vertexSwizzle.y * 4)) & 0xf;
+    nodeVertexIndices.z = (nodeVertexMapping[nodeType] >> (vertexSwizzle.z * 4)) & 0xf;
+
+    const uint nodeVertexStride = 12;
+
+    return nodeVertexIndices * nodeVertexStride;
+}
+
+//=====================================================================================================================
+// Gets the offsets for a node type's vertex slots. This function does not account for the rotation information stored
+// in the node's triangle ID field (see CalcTriangleCompressionVertexOffsets), so it should only be used when the vertex
+// order does not matter (e.g. for generating a bounding box).
+static uint3 CalcTriangleVertexOffsets(uint nodeType)
+{
+    uint3 offsets;
+
+    switch (nodeType)
+    {
+    case NODE_TYPE_TRIANGLE_0:
+    default:
+        offsets.x = TRIANGLE_NODE_V0_OFFSET;
+        offsets.y = TRIANGLE_NODE_V1_OFFSET;
+        offsets.z = TRIANGLE_NODE_V2_OFFSET;
+        break;
+    case NODE_TYPE_TRIANGLE_1:
+        offsets.x = TRIANGLE_NODE_V1_OFFSET;
+        offsets.y = TRIANGLE_NODE_V3_OFFSET;
+        offsets.z = TRIANGLE_NODE_V2_OFFSET;
+        break;
+    case NODE_TYPE_TRIANGLE_2:
+        offsets.x = TRIANGLE_NODE_V2_OFFSET;
+        offsets.y = TRIANGLE_NODE_V3_OFFSET;
+        offsets.z = TRIANGLE_NODE_V4_OFFSET;
+        break;
+    case NODE_TYPE_TRIANGLE_3:
+        offsets.x = TRIANGLE_NODE_V2_OFFSET;
+        offsets.y = TRIANGLE_NODE_V4_OFFSET;
+        offsets.z = TRIANGLE_NODE_V0_OFFSET;
+        break;
+    }
+
+    return offsets;
+}
+
+//=====================================================================================================================
+struct TriangleData
+{
+    float3 v0; ///< Vertex 0
+    float3 v1; ///< Vertex 1
+    float3 v2; ///< Vertex 2
+};
+
+//=====================================================================================================================
+// Calculate an AABB from the 3 points of the triangle.
+static BoundingBox GenerateTriangleBoundingBox(float3 v0, float3 v1, float3 v2)
+{
+    BoundingBox bbox =
+    {
+        min(min(v0, v1), v2),
+        max(max(v0, v1), v2),
+    };
+
+    // Generate degenerate bounding box for triangles that degenerate into line or point
+#ifdef AMD_VULKAN
+    if (((v0.x == v1.x) && (v0.y == v1.y) && (v0.z == v1.z)) ||
+        ((v0.x == v2.x) && (v0.y == v2.y) && (v0.z == v2.z)) ||
+        ((v1.x == v2.x) && (v1.y == v2.y) && (v1.z == v2.z)))
+#else
+    if (all(v0 == v1) || all(v0 == v2) || all(v1 == v2))
+#endif
+    {
+        bbox.min.x = +FLT_MAX;
+        bbox.min.y = +FLT_MAX;
+        bbox.min.z = +FLT_MAX;
+        bbox.max.x = -FLT_MAX;
+        bbox.max.y = -FLT_MAX;
+        bbox.max.z = -FLT_MAX;
+    }
+
+    return bbox;
+};
+
+//=====================================================================================================================
+static BoundingBox CombineAABB(BoundingBox b0, BoundingBox b1)
+{
+    BoundingBox bbox;
+
+    bbox.min = min(b0.min, b1.min);
+    bbox.max = max(b0.max, b1.max);
+
+    return bbox;
+}
+
+//=====================================================================================================================
+static BoundingBox GetScratchNodeBoundingBox(in ScratchNode node)
+{
+    BoundingBox bbox;
+
+    // For triangle geometry we need to generate bounding box from triangle vertices
+    if (GetNodeType(node.type) <= NODE_TYPE_TRIANGLE_3)
+    {
+        bbox = GenerateTriangleBoundingBox(node.bbox_min_or_v0,
+                                           node.bbox_max_or_v1,
+                                           node.range_or_v2_or_instBasePtr);
+    }
+    else
+    {
+        // Internal nodes and AABB geometry encodes bounding box in scratch node
+        bbox.min = node.bbox_min_or_v0;
+        bbox.max = node.bbox_max_or_v1;
+    }
+
+    return bbox;
+}
+
+//=====================================================================================================================
+// Compresses a single bounding box into a uint3 representing each bounding plane using half floats
+static uint3 CompressBBoxToUint3(in BoundingBox box)
+{
+    // Note: Converted bounds must be conservative and, assuming infinite precision,
+    // resulting 16-bit bound representation must contain original 32-bit bounds
+    // Thus: round down for min and round up for max
+
+    // HLSL spec forces rounding modes towards 0, rather than -inf or +inf
+    // So use AMDIL extension to call appropriate rounding function
+
+    // For prototype/testing, can help to force default HLSL conversion mode
+#if FORCE_FP16_CONV_MODE_TO_DEF
+    const uint3 boxMin = f32tof16(box.min);
+    const uint3 boxMax = f32tof16(box.max);
+#else
+    const uint3 boxMin = AmdExtD3DShaderIntrinsics_ConvertF32toF16NegInf(box.min);
+    const uint3 boxMax = AmdExtD3DShaderIntrinsics_ConvertF32toF16PosInf(box.max);
+#endif
+
+    // Interleave into the following format:
+    //         low,   high
+    // word 0: min.x, min.y
+    // word 1: min.z, max.x
+    // word 2: max.y, max.z
+    const uint3 loRet = { boxMin.x, boxMin.z, boxMax.y };
+    const uint3 hiRet = { boxMin.y, boxMax.x, boxMax.z };
+
+    // Combine component-wise to return
+    // f32tof16 documentation specifies (loRet & 0xFFFF) is unnecessary
+    return ((hiRet << 16) | loRet);
+}
+
+//=====================================================================================================================
+// Uncompresses a single bounding box from uint3
+// Intended for software path only
+static BoundingBox UncompressBBoxFromUint3(in uint3 box)
+{
+    // See notes above about rounding modes
+
+    // Swizzle into individual min,max bounds
+    const uint3  loU = (box & 0x0000FFFF);
+    const uint3  hiU = (box >> 16);
+    const uint3 minU = { loU.x, hiU.x, loU.y };
+    const uint3 maxU = { hiU.y, loU.z, hiU.z };
+
+    // We should convert fp16->fp32 conservatively (which would likely expand the bbox)
+    // but seems like op codes for f16->f32 conversion with +-inf rounding are not exposed and
+    // this path is for SW only, so use default
+    BoundingBox toRet;
+    toRet.min = f16tof32(minU);
+    toRet.max = f16tof32(maxU);
+
+    return toRet;
+}
+
+//=====================================================================================================================
+static float ComputeBoxSurfaceArea(BoundingBox aabb)
+{
+    // check for degenerate
+    float3 dim = aabb.max - aabb.min;
+    return (aabb.min.x > aabb.max.x) ? 0 : 2.0f * (dim.x * dim.y + dim.x * dim.z + dim.y * dim.z);
+}
+
+//=====================================================================================================================
+static float ComputeBoxSurfaceArea(const uint3 aabb)
+{
+    const BoundingBox aabbFp32 = UncompressBBoxFromUint3(aabb);
+    return ComputeBoxSurfaceArea(aabbFp32);
+}
+
+//=====================================================================================================================
+// HLSL implementation of OpenCL clz. This function counts the number of leading 0's from MSB
+static int clz(int value)
+{
+    return (31 - firstbithigh(value));
+}
+
+//=====================================================================================================================
+static int clz64(uint64_t value)
+{
+    return (63 - firstbithigh(value));
+}
+
+//=====================================================================================================================
+// HLSL emulation of min3. We can use intrinsics here if available
+static float min3(float3 val)
+{
+    return min(min(val.x, val.y), val.z);
+}
+
+//=====================================================================================================================
+// HLSL emulation of max3. We can use intrinsics here if available
+static float max3(float3 val)
+{
+    return max(max(val.x, val.y), val.z);
+}
+
+//=====================================================================================================================
+static bool IsUpdate(uint buildFlags)
+{
+    return buildFlags & DDI_BUILD_FLAG_PERFORM_UPDATE;
+}
+
+//=====================================================================================================================
+static bool AllowUpdate(uint buildFlags)
+{
+    return buildFlags & DDI_BUILD_FLAG_ALLOW_UPDATE;
+}
+
+//=====================================================================================================================
+// Transform a ray for the given instance. Hand-unrolled version since the version above results in less efficient code
+static void InstanceTransform(
+    in  InstanceDesc  instanceDesc,
+    in  float3        origin,
+    in  float3        direction,
+    out_param(float3) newOrigin,
+    out_param(float3) newDirection)
+{
+    float4 t0 = instanceDesc.Transform[0];
+    float4 t1 = instanceDesc.Transform[1];
+    float4 t2 = instanceDesc.Transform[2];
+
+    float r0x = mad(origin.z, t0.z, t0.w);
+    float r0y = mad(origin.z, t1.z, t1.w);
+    float r0z = mad(origin.z, t2.z, t2.w);
+
+    float r1x = mul(direction.z, t0.z);
+    float r1y = mul(direction.z, t1.z);
+    float r1z = mul(direction.z, t2.z);
+
+    r0x = mad(origin.y, t0.y, r0x);
+    r0y = mad(origin.y, t1.y, r0y);
+    r0z = mad(origin.y, t2.y, r0z);
+
+    r1x = mad(direction.y, t0.y, r1x);
+    r1y = mad(direction.y, t1.y, r1y);
+    r1z = mad(direction.y, t2.y, r1z);
+
+    r0x = mad(origin.x, t0.x, r0x);
+    r0y = mad(origin.x, t1.x, r0y);
+    r0z = mad(origin.x, t2.x, r0z);
+
+    r1x = mad(direction.x, t0.x, r1x);
+    r1y = mad(direction.x, t1.x, r1y);
+    r1z = mad(direction.x, t2.x, r1z);
+
+    newOrigin = float3(r0x, r0y, r0z);
+    newDirection = float3(r1x, r1y, r1z);
+}
+
+//=====================================================================================================================
+static bool IsBoxNode16(uint pointer)
+{
+    return (GetNodeType(pointer) == NODE_TYPE_BOX_FLOAT16);
+}
+
+//=====================================================================================================================
+static bool IsBoxNode32(uint pointer)
+{
+    return (GetNodeType(pointer) == NODE_TYPE_BOX_FLOAT32);
+}
+
+//=====================================================================================================================
+static bool IsBoxNode(uint pointer)
+{
+    return IsBoxNode16(pointer) || IsBoxNode32(pointer);
+}
+
+//=====================================================================================================================
+static bool IsTriangleNode(uint pointer)
+{
+    return (GetNodeType(pointer) <= NODE_TYPE_TRIANGLE_3);
+}
+
+//=====================================================================================================================
+static bool IsUserNodeInstance(uint pointer)
+{
+    return (GetNodeType(pointer) == NODE_TYPE_USER_NODE_INSTANCE);
+}
+
+//=====================================================================================================================
+static bool IsUserNodeProcedural(uint pointer)
+{
+    return (GetNodeType(pointer) == NODE_TYPE_USER_NODE_PROCEDURAL);
+}
+
+//=====================================================================================================================
+// Mask Out Primitive Count for Collapse
+static uint ExtractNodePointerCollapse(uint nodePointer)
+{
+    return nodePointer & ((1 << 29) - 1); // mask out the triangle count
+}
+
+//=====================================================================================================================
+static uint ExtractNodePointer(uint nodePointer)
+{
+    if (IsBvhCollapse())
+    {
+        return ExtractNodePointerCollapse(nodePointer); // mask out the triangle count
+    }
+    else
+    {
+        return nodePointer;
+    }
+}
+
+//=====================================================================================================================
+// Get Num Primitives For Collapse
+static uint ExtractPrimitiveCount(uint nodePointer)
+{
+    return nodePointer >> 29;
+}
+
+//=====================================================================================================================
+// For BVH Collapse, need to compare this node Pointer which points to the start of the primitive list to the end which
+// is the lastNodePointer
+static bool ComparePointers(uint nodePointer, uint lastNodePointer)
+{
+    if (IsBvhCollapse())
+    {
+        const uint NodeCountPtr = (1 << 3);
+        return ExtractNodePointer((nodePointer + ExtractPrimitiveCount(nodePointer) * NodeCountPtr)) == lastNodePointer;
+    }
+    else if ((AmdTraceRayGetTriangleCompressionMode() == PAIR_TRIANGLE_COMPRESSION) ||
+             (AmdTraceRayGetTriangleCompressionMode() == AUTO_TRIANGLE_COMPRESSION))
+    {
+        // Ignore the node type, as both triangles in a node share a parent, and all other types will always
+        // have different offsets.
+        return ClearNodeType(nodePointer) == ClearNodeType(lastNodePointer);
+    }
+    else
+    {
+        return nodePointer == lastNodePointer;
+    }
+}
+
+//=====================================================================================================================
+// For BVH Collapse, increment the node pointer to the next primitive and decrement the counter
+static uint IncrementNodePointer(uint nodePointer)
+{
+    return nodePointer - (1 << 29) + (1 << 3);
+}
+
+//=====================================================================================================================
+static uint CalcPrimitiveIndexOffset(
+    uint nodePointer)
+{
+    uint offset;
+    if (IsTriangleNode(nodePointer))
+    {
+        offset = GetNodeType(nodePointer) * 4;
+    }
+    else // procedural node
+    {
+        offset = 1;
+    }
+
+    return offset;
+}
+
+//=====================================================================================================================
+static uint FetchHeaderField(in GpuVirtualAddress bvhAddress, const uint offset)
+{
+    // The BVH data memory begins with AccelStructHeader
+    return LoadDwordAtAddr(bvhAddress + offset);
+}
+
+//=====================================================================================================================
+static uint FetchHeaderOffsetField(in GpuVirtualAddress base, const uint offset)
+{
+    return FetchHeaderField(base, ACCEL_STRUCT_HEADER_OFFSETS_OFFSET + offset);
+}
+
+//=====================================================================================================================
+static uint FetchParentNodePointer(
+    in GpuVirtualAddress bvhAddress,
+    in uint              packedNodePtr)
+{
+    // Fetch parent pointer from metadata memory which is allocated before acceleration structure data.
+    // bvhAddress points to the beginning of acceleration structure memory
+    const uint nodePtr = ExtractNodePointer(packedNodePtr);
+    return LoadDwordAtAddr(bvhAddress - CalcParentPtrOffset(nodePtr));
+}
+
+//=====================================================================================================================
+static PrimitiveData FetchPrimitiveDataAddr(
+    in uint              nodePointer,
+    in GpuVirtualAddress nodeAddress)
+{
+    PrimitiveData primitiveData = { 0, 0, 0 };
+
+    // Load sideband data from leaf node
+    const uint  geometryIndexAndFlags = LoadDwordAtAddr(nodeAddress + TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET);
+    const uint2 primitiveIndex        = LoadDwordAtAddrx2(nodeAddress + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET);
+
+    // Load the primitive index based on the bottom bit of the node pointer which indicates triangle index.
+    // Only 2 triangles can be potentially compressed in this path so we only care about the least significant bit
+    // Procedural node primitive index overlaps with primitive index of NODE_TYPE_TRIANGLE_1 and does not need
+    // additional checks.
+    primitiveData.primitiveIndex = (nodePointer & 0x1) ? primitiveIndex.y : primitiveIndex.x;
+
+    const uint2 unpackedGeometryData  = UnpackGeometryIndexAndFlags(geometryIndexAndFlags);
+    primitiveData.geometryIndex       = unpackedGeometryData.x;
+    primitiveData.geometryFlags       = unpackedGeometryData.y;
+
+    return primitiveData;
+}
+
+//=====================================================================================================================
+static PrimitiveData FetchPrimitiveData(
+    in GpuVirtualAddress bvhAddress,
+    in uint              nodePointer)
+{
+    const GpuVirtualAddress nodeAddress = bvhAddress + ExtractNodePointerOffset(nodePointer);
+    return FetchPrimitiveDataAddr(nodePointer, nodeAddress);
+}
+
+//=====================================================================================================================
+// Node pointers with all upper bits set are sentinels: INVALID_NODE, TERMINAL_NODE, SKIP_*
+static bool IsValidNode(uint nodePtr)
+{
+    return nodePtr < 0xFFFFFFF8;
+}
+
+#endif
