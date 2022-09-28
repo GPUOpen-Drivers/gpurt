@@ -184,7 +184,8 @@ const uint32 ReservedLogicalIdCount = 1;
 extern const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsType::Count)];
 
 extern uint32 CalculateRayTracingAABBCount(
-    const AccelStructBuildInputs& buildInfo);
+    const AccelStructBuildInputs& buildInfo,
+    const ClientCallbacks&        clientCb);
 
 // =====================================================================================================================
 // Calculate acceleration structure internal node count for QBVH
@@ -192,29 +193,6 @@ inline uint32 CalcNumQBVHInternalNodes(
     uint32 primitiveCount)    // Primitive node count (instances or triangle/aabb geometry)
 {
     return Util::Max(1U, (2 * primitiveCount) / 3);
-}
-
-// =====================================================================================================================
-// Gets geometry type for BLAS build inputs
-static GeometryType GetGeometryType(
-    const AccelStructBuildInputs inputs)
-{
-    GeometryType type;
-
-    const bool isBottomLevel = (inputs.type == AccelStructType::BottomLevel);
-
-    if (isBottomLevel && (inputs.inputElemCount > 0))
-    {
-        const Geometry geometry = ClientConvertAccelStructBuildGeometry(inputs, 0);
-        type = geometry.type;
-    }
-    else
-    {
-        // No geometries, so pick an arbitrary geometry type to initialize the variable
-        type = GeometryType::Triangles;
-    }
-
-    return type;
 }
 
 // Layout used for build shader PSO hashes.
@@ -261,4 +239,274 @@ static uint64 GetInternalPsoHash(
 
     return hash.u64All;
 }
-}; // namespace GpuRt
+
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 28
+// =====================================================================================================================
+// Backward compatibility function. Remove this once we've completely removed the client facing Device wrapper class.
+static void InitInternalClientCallbacks(
+    ClientCallbacks* const pClientCb)
+{
+#if GPURT_DEVELOPER
+    pClientCb->pfnInsertRGPMarker                            = &ClientInsertRGPMarker;
+#endif
+    pClientCb->pfnConvertAccelStructBuildGeometry            = &ClientConvertAccelStructBuildGeometry;
+    pClientCb->pfnConvertAccelStructBuildInstanceBottomLevel = &ClientConvertAccelStructBuildInstanceBottomLevel;
+    pClientCb->pfnConvertAccelStructPostBuildInfo            = &ClientConvertAccelStructPostBuildInfo;
+    pClientCb->pfnAccelStructBuildDumpEvent                  = &ClientAccelStructBuildDumpEvent;
+    pClientCb->pfnAccelStatsBuildDumpEvent                   = &ClientAccelStatsBuildDumpEvent;
+    pClientCb->pfnCreateInternalComputePipeline              = &ClientCreateInternalComputePipeline;
+    pClientCb->pfnDestroyInternalComputePipeline             = &ClientDestroyInternalComputePipeline;
+    pClientCb->pfnAcquireCmdContext                          = &ClientAcquireCmdContext;
+    pClientCb->pfnFlushCmdContext                            = &ClientFlushCmdContext;
+    pClientCb->pfnAllocateGpuMemory                          = &ClientAllocateGpuMemory;
+    pClientCb->pfnFreeGpuMem                                 = &ClientFreeGpuMem;
+}
+#endif
+
+namespace Internal {
+// =====================================================================================================================
+class Device : public IDevice
+{
+public:
+    Device(const DeviceInitInfo& info, const ClientCallbacks& clientCb);
+
+    // Destroy device
+    //
+    virtual void Destroy() override;
+
+    // Initializes the device
+    //
+    // @returns Initialization success status
+    virtual Pal::Result Init() override;
+
+    // Allocate system memory
+    //
+    // @param [in] allocInfo Contains information about the requested allocation.
+    void* Alloc(
+        const Util::AllocInfo& allocInfo);
+
+    // Free system memory
+    //
+    // @param [in] freeInfo Contains information about the requested free.
+    void Free(
+        const Util::FreeInfo& freeInfo);
+
+    // Returns GPURT shader library function table for input ray tracing IP level.
+    //
+    // @param rayTracingIpLevel   [in]  Pal IP level
+    // @param pEntryFunctionTable [out] Requested function table, if found
+    //
+    // @return whether the function table was found successfully
+    virtual Pal::Result QueryRayTracingEntryFunctionTable(
+        const Pal::RayTracingIpLevel   rayTracingIpLevel,
+        EntryFunctionTable* const      pEntryFunctionTable) override;
+
+    // Returns the static pipeline mask shader constant values for a particular pipeline given a compatible
+    // AS memory layout parameters.
+    //
+    // @param skipTriangles             (in) Force skip all triangle intersections
+    // @param skipProceduralPrims       (in) Force skip all procedural AABB intersections
+    // @param useRayQueryForTraceRays   (in) Use rayquery internally for regular traversal
+    // @param usePointerFlags           (in) Node pointer contains embedded flags
+    // @param enableAccelStructTracking (in) Enable AccelStruct tracking
+    // @param enableTraversalCounter    (in) Enable Traversal Counter
+    //
+    // @return Static pipeline mask literal
+    //
+    // This is the value that drivers must return back to the shader by implementing the AmdTraceRayGetStaticFlags()
+    // driver stub.
+    virtual uint32 GetStaticPipelineFlags(
+        bool  skipTriangles,
+        bool  skipProceduralPrims,
+        bool  useRayQueryForTraceRays,
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 27
+        bool  unused,
+#endif
+        bool  enableAccelStructTracking,
+        bool  enableTraversalCounter) override;
+
+    // Builds an acceleration structure.
+    //
+    // When pCmdBuffer is non-nullptr, it writes commands to perform the operation into the command buffer.  Otherwise,
+    // this operation executes on the CPU.
+    //
+    // @param pCmdBuffer           [in] Command buffer where commands will be written (optional)
+    // @param buildInfo            [in] Acceleration structure build info
+    virtual void BuildAccelStruct(
+        Pal::ICmdBuffer*              pCmdBuffer,
+        const AccelStructBuildInfo&   buildInfo
+    ) override;
+
+    // Writes commands into a command buffer to emit post-build information about an acceleration structure
+    //
+    // @param pCmdBuffer           [in] Command buffer where commands will be written
+    // @param postBuildInfo        [in] Post-build event info
+    virtual void EmitAccelStructPostBuildInfo(
+        Pal::ICmdBuffer*                pCmdBuffer,
+        const AccelStructPostBuildInfo& postBuildInfo
+    ) override;
+
+    // Writes commands into a command buffer to execute an acceleration structure copy/update/compress operation
+    //
+    // @param pCmdBuffer           [in] Command buffer where commands will be written
+    // @param copyInfo             [in] Copy operation info
+    virtual void CopyAccelStruct(
+        Pal::ICmdBuffer*              pCmdBuffer,
+        const AccelStructCopyInfo&    copyInfo
+    ) override;
+
+    // Prepares the input buffer (indirect arguments, bindings, constants) for an indirect raytracing dispatch
+    //
+    // @param pCmdBuffer           [in/out] Command buffer where commands will be written
+    // @param userData             [in] Addresses of input/output buffers
+    // @param maxDispatchCount     Max indirect dispatches
+    // @param pipelineCount        Number of pipelines to dispatch
+    virtual void InitExecuteIndirect(
+        Pal::ICmdBuffer*                   pCmdBuffer,
+        const InitExecuteIndirectUserData& userData,
+        uint32                             maxDispatchCount,
+        uint32                             pipelineCount) const override;
+
+    // Calculates and returns prebuild information about some given future acceleration structure.
+    //
+    // @param inputs          [in]  Struct describing the inputs for building an acceleration structure
+    // @param pPrebuildInfo   [out] Resulting prebuild information
+    virtual void GetAccelStructPrebuildInfo(
+        const AccelStructBuildInputs& inputs,
+        AccelStructPrebuildInfo*      pPrebuildInfo) override;
+
+    // Decodes the acceleration structure memory and returns information about the built acceleration structure.
+    // @param pAccelStructData [in]  CPU pointer to acceleration structure data
+    // @param pAccelStructInfo [out] Result acceleration structure info
+    virtual void GetAccelStructInfo(
+        const void*            pAccelStructData,
+        AccelStructInfo* const pAccelStructInfo) override;
+
+    // Parses acceleration structure header to read acceleration structure UUID
+    // @param pData        [in]  Serialized acceleration structure pointer
+    // @param pVersion     [out] Result UUID
+    virtual void GetSerializedAccelStructVersion(
+        const void*     pData,
+        uint64_t*       pVersion) override;
+
+    // Check serialized acceleration structure GUID and version
+    // @param identifier [in] Serialized acceleration structure identifier
+    // Returns the matching status
+    virtual DataDriverMatchingIdentifierStatus CheckSerializedAccelStructVersion(
+        const DataDriverMatchingIdentifier* identifier) override;
+
+    // Returns true if the acceleration structure trace source is currently enabled.
+    virtual bool AccelStructTraceEnabled() const override
+    {
+        return m_accelStructTraceSource.Enabled();
+    }
+
+    // Returns the GPUVA of the AccelStructTracker
+    Pal::gpusize AccelStructTrackerGpuAddr() const { return m_info.accelStructTrackerGpuAddr; }
+
+    static uint32 NumPrimitivesAfterSplit(uint32 primitiveCount, float splitFactor);
+
+    void BeginBvhTrace();
+
+    void EndBvhTrace();
+
+    void WriteCapturedBvh(
+        GpuUtil::ITraceSource* pTraceSource);
+
+    void WriteAccelStructChunk(
+        GpuUtil::ITraceSource* pTraceSource,
+        Pal::gpusize           gpuVa,
+        uint32                 isBlas,
+        const void*            pData,
+        size_t                 dataSize);
+
+    void NotifyTlasBuild(Pal::gpusize address);
+
+    Pal::IPipeline* GetInternalPipeline(
+        InternalRayTracingCsType        type,
+        const CompileTimeBuildSettings& buildSettings,
+        uint32                          buildSettingsHash) const;
+
+    // Computes size for decoded acceleration structure
+    //
+    // @param type              Type of post build info
+    // @param pGpuVas     [in]  Gpu virtual address
+    // @param count             Number of elements
+    // @param sizeInByte  [out] Post build size of accelerate structure
+    //
+    // @return Post build size success status
+    Pal::Result GetAccelStructPostBuildSize(
+        AccelStructPostBuildInfoType type,
+        const Pal::gpusize*          pGpuVas,
+        uint32                       count,
+        uint64*                      pSizeInBytes);
+
+    // Executes the copy buffer shader
+    //
+    // @param pCmdBuffer     [in] Command buffer where commands will be written
+    // @param dstBufferVa         Destination buffer GPU VA
+    // @param srcBufferVa         Source buffer GPU VA
+    // @param numDwords           Number of Dwords to copy
+    void CopyBufferRaw(
+        Pal::ICmdBuffer* pCmdBuffer,
+        Pal::gpusize     dstBufferVa,
+        Pal::gpusize     srcBufferVa,
+        uint32           numDwords);
+
+    // Writes the provided entries into the compute shader user data slots
+    //
+    // @param pCmdBuffer       [in] Command buffer where commands will be written
+    // @param pEntries              User data entries
+    // @param numEntries            Number of entries
+    // @param entryOffset           Offset of the first entry
+    //
+    // @return Data entry
+    static uint32 WriteUserDataEntries(
+        Pal::ICmdBuffer* pCmdBuffer,
+        const void* pEntries,
+        uint32           numEntries,
+        uint32           entryOffset);
+
+    // Writes a gpu virtual address for a buffer into the compute shader user data slots
+    //
+    // @param pCmdBuffer       [in] Command buffer where commands will be written
+    // @param virtualAddress        GPUVA of the buffer
+    // @param entryOffset           Offset of the first entry
+    //
+    // @return Data entry
+    static uint32 WriteBufferVa(
+        Pal::ICmdBuffer* pCmdBuffer,
+        Pal::gpusize     virtualAddress,
+        uint32           entryOffset);
+
+#if GPURT_DEVELOPER
+    // Driver generated RGP markers are only added in internal builds because they expose details about the
+    // construction of acceleration structure.
+    void PushRGPMarker(Pal::ICmdBuffer* pCmdBuffer, const char* pFormat, ...);
+    void PopRGPMarker(Pal::ICmdBuffer* pCmdBuffer);
+
+    void OutputPipelineName(
+        Pal::ICmdBuffer* pCmdBuffer,
+        InternalRayTracingCsType type);
+#endif
+
+protected:
+
+    void SetUpClientCallbacks(
+        ClientCallbacks* pClientCb);
+
+    virtual ~Device() override;
+
+    DeviceInitInfo  m_info;
+
+    Util::GenericAllocatorTracked            m_allocator;
+    Util::RWLock                             m_internalPipelineLock;
+    InternalPipelineMap                      m_pipelineMap;
+    Util::Vector<Pal::gpusize, 8, Device>    m_tlasCaptureList;
+    Util::Mutex                              m_traceBvhLock;
+    bool                                     m_isTraceActive;
+    GpuRt::AccelStructTraceSource            m_accelStructTraceSource;
+    ClientCallbacks                          m_clientCb;
+};
+}  // namespace Internal
+} // namespace GpuRt

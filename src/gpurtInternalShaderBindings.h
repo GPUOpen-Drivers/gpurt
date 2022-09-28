@@ -353,7 +353,7 @@ namespace BuildParallel
     {
         uint32 numPrimitives;
         uint32 numThreadGroups;
-        uint32 padding;
+        uint32 tsBudgetPerTriangle;
         uint32 maxNumPrimitives;
 
         uint32 encodeArrayOfPointers;

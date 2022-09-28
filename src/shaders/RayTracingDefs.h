@@ -978,7 +978,7 @@ struct ScratchNode
     float3 bbox_max_or_v1;
     uint   right_or_geometryIndex;         // right child for internal nodes /
                                            // geometryIndex if it's a leaf node
-    float3 range_or_v2_or_instBasePtr;     // SAH cost for internal nodes /
+    float3 sah_or_v2_or_instBasePtr;       // SAH cost, area and density for internal nodes /
                                            // vertex2 for triangle nodes /
                                            // instanceNodeBasePointerLo, instanceNodeBasePointerHi for instance node
     uint   parent;
@@ -1000,10 +1000,12 @@ struct ScratchNode
 #define SCRATCH_NODE_V1_OFFSET                        SCRATCH_NODE_BBOX_MAX_OFFSET
 #define SCRATCH_NODE_RIGHT_OFFSET                     28
 #define SCRATCH_NODE_GEOMETRY_INDEX_OFFSET            SCRATCH_NODE_RIGHT_OFFSET
-#define SCRATCH_NODE_RANGE_OFFSET                     32
-#define SCRATCH_NODE_V2_OFFSET                        SCRATCH_NODE_RANGE_OFFSET
+#define SCRATCH_NODE_COST_OFFSET                      32
+#define SCRATCH_NODE_SA_OFFSET                        36
+#define SCRATCH_NODE_DENSITY_OFFSET                   40
+#define SCRATCH_NODE_V2_OFFSET                        SCRATCH_NODE_COST_OFFSET
 #define SCRATCH_NODE_INSTANCE_BASE_PTR_OFFSET         SCRATCH_NODE_V2_OFFSET
-#define SCRATCH_NODE_INSTANCE_NUM_PRIMS_OFFSET        40
+#define SCRATCH_NODE_INSTANCE_NUM_PRIMS_OFFSET        SCRATCH_NODE_DENSITY_OFFSET
 #define SCRATCH_NODE_PARENT_OFFSET                    44
 #define SCRATCH_NODE_TYPE_OFFSET                      48
 #define SCRATCH_NODE_FLAGS_OFFSET                     52

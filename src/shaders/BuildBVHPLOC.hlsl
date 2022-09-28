@@ -621,6 +621,7 @@ void FindNearestNeighbour(
             BoundingBox aabbRight = aabb;
 
             BoundingBox mergedBox = CombineAABB(aabbLeft, aabbRight);
+            const float mergedBoxSurfaceArea = ComputeBoxSurfaceArea(mergedBox);
 
             const uint mergedNodeOffset = CalcScratchNodeOffset(args.scratchNodesScratchOffset,
                                                                 mergedNodeIndex);
@@ -650,6 +651,11 @@ void FindNearestNeighbour(
                 mergedNodeIndex,
                 leftNode,
                 rightNode);
+
+            WriteScratchNodeSurfaceArea(ScratchBuffer,
+                args.scratchNodesScratchOffset,
+                mergedNodeIndex,
+                mergedBoxSurfaceArea);
 
             ScratchBuffer.Store(mergedNodeOffset + SCRATCH_NODE_BBOX_MIN_OFFSET, mergedBox.min);
             ScratchBuffer.Store(mergedNodeOffset + SCRATCH_NODE_BBOX_MAX_OFFSET, mergedBox.max);
@@ -700,8 +706,7 @@ void FindNearestNeighbour(
                 numRight = FetchScratchNodeNumPrimitives(ScratchBuffer, args.scratchNodesScratchOffset, rightNodeIndex) >> 1;
 
                 const uint  numTris      = numLeft + numRight;
-                const float surfaceArea  = ComputeBoxSurfaceArea(mergedBox);
-                const float splitCost    = Ci + leftCost / surfaceArea + rightCost / surfaceArea;
+                const float splitCost    = Ci + leftCost / mergedBoxSurfaceArea + rightCost / mergedBoxSurfaceArea;
                 const float collapseCost = Ct * numTris;
                 const bool  useCostCheck = enableCollapse || (args.flags & BUILD_FLAGS_PAIR_COST_CHECK);
 

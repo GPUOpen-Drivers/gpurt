@@ -101,7 +101,7 @@ struct Constants
 {
     uint numPrimitives;
     uint numThreadGroups;
-    uint padding;
+    uint tsBudgetPerTriangle;
     uint maxNumPrimitives;
 
     uint encodeArrayOfPointers;
@@ -353,6 +353,7 @@ void TriangleSplitting(
     args.atomicFlagsScratchOffset       = ShaderConstants.offsets.splitAtomicFlags;
     args.dynamicBlockIndexScratchOffset = ShaderConstants.offsets.dynamicBlockIndex;
     args.sceneBoundsByteOffset          = ShaderConstants.offsets.sceneBounds;
+    args.tsBudgetPerTriangle            = ShaderConstants.tsBudgetPerTriangle;
 
     TriangleSplittingImpl(globalId, localId, groupId, args);
 }
@@ -493,6 +494,7 @@ void InitBuildQbvh(
 //======================================================================================================================
 void BuildQbvh(
     uint globalId,
+    uint localId,
     uint numPrimitives)
 {
     BuildQbvhArgs qbvhArgs;
@@ -529,7 +531,7 @@ void BuildQbvh(
     }
     else
     {
-        BuildQbvhImpl(globalId, qbvhArgs, (Settings.topLevelBuild != 0));
+        BuildQbvhImpl(globalId, localId, qbvhArgs, (Settings.topLevelBuild != 0));
     }
 }
 
@@ -725,7 +727,7 @@ void BuildBvh(
 
         BEGIN_TASK(RoundUpQuotient(CalcNumQBVHInternalNodes(numNodesToProcess), BUILD_THREADGROUP_SIZE));
 
-        BuildQbvh(globalId, numPrimitives);
+        BuildQbvh(globalId, localId, numPrimitives);
 
         END_TASK(RoundUpQuotient(CalcNumQBVHInternalNodes(numNodesToProcess), BUILD_THREADGROUP_SIZE));
         writeDebugCounter(COUNTER_BUILDQBVH_OFFSET);

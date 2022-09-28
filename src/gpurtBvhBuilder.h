@@ -111,8 +111,9 @@ protected:
     };
 
     BvhBuilder(
-        Device*                      pDevice,
+        Internal::Device*    const   pDevice,
         const Pal::DeviceProperties& deviceProps,
+        ClientCallbacks              clientCb,
         const DeviceSettings&        deviceSettings);
 
     static uint32 GetLeafNodeSize(
@@ -164,13 +165,18 @@ protected:
         return m_buildArgs.srcAccelStructGpuAddr == m_buildArgs.dstAccelStructGpuAddr;
     }
 
-    Device*                           m_pDevice;             // GPURT device
+    Internal::Device*           const m_pDevice;             // GPURT device
+    ClientCallbacks                   m_clientCb;            // Function Cb table
     const DeviceSettings&             m_deviceSettings;      // Device settings
     BuildConfig                       m_buildConfig;         // Build info on the accel struct
     AccelStructDataOffsets            m_resultOffsets;       // Result offsets for the build
     AccelStructBuildInfo              m_buildArgs;           // Accel struct build arguments
     const Pal::DeviceProperties&      m_deviceProps;         // PAL device properties
     uint32                            m_metadataSizeInBytes; // Metadata size in bytes
+
+private:
+    GeometryType GetGeometryType(
+        const AccelStructBuildInputs inputs);
 };
 
 // =====================================================================================================================
@@ -180,8 +186,9 @@ class GpuBvhBuilder : public BvhBuilder
 public:
     // Constructor for the ray tracing bvh builder class
     explicit GpuBvhBuilder(Pal::ICmdBuffer*             pCmdBuf,
-                           Device*                      pDevice,
+                           Internal::Device*            pDevice,
                            const Pal::DeviceProperties& deviceProps,
+                           ClientCallbacks              clientCb,
                            const DeviceSettings&        deviceSettings);
 
     // Destructor for the ray tracing bvh builder class

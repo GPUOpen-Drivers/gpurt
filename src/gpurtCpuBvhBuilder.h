@@ -40,8 +40,9 @@ class CpuBvhBuilder : public BvhBuilder
 {
 public:
     CpuBvhBuilder(
-        Device* pDevice,
+        Internal::Device*      const pDevice,
         const Pal::DeviceProperties& deviceProps,
+        ClientCallbacks              clientCb,
         const DeviceSettings&        deviceSettings);
 
     struct ScratchOffsets

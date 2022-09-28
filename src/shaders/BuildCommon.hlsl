@@ -630,7 +630,7 @@ void WriteScratchNodeCost(
 {
     const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
 
-    buffer.Store<float>(nodeOffset + SCRATCH_NODE_RANGE_OFFSET, cost);
+    buffer.Store<float>(nodeOffset + SCRATCH_NODE_COST_OFFSET, cost);
 }
 
 //=====================================================================================================================
@@ -641,7 +641,30 @@ float FetchScratchNodeCost(
 {
     const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
 
-    return buffer.Load<float>(nodeOffset + SCRATCH_NODE_RANGE_OFFSET);
+    return buffer.Load<float>(nodeOffset + SCRATCH_NODE_COST_OFFSET);
+}
+
+//=====================================================================================================================
+void WriteScratchNodeSurfaceArea(
+    RWByteAddressBuffer buffer,
+    uint                baseScratchNodesOffset,
+    uint                nodeIndex,
+    float               surfaceArea)
+{
+    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
+
+    buffer.Store<float>(nodeOffset + SCRATCH_NODE_SA_OFFSET, surfaceArea);
+}
+
+//=====================================================================================================================
+float FetchScratchNodeSurfaceArea(
+    RWByteAddressBuffer buffer,
+    uint  baseScratchNodesOffset,
+    uint  nodeIndex)
+{
+    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
+
+    return buffer.Load<float>(nodeOffset + SCRATCH_NODE_SA_OFFSET);
 }
 
 //=====================================================================================================================

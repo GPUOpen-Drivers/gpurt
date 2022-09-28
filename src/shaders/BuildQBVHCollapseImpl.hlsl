@@ -120,7 +120,7 @@ uint WritePrimitiveNodeCollapse(
 
         ResultBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.x, node.bbox_min_or_v0);
         ResultBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.y, node.bbox_max_or_v1);
-        ResultBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.z, node.range_or_v2_or_instBasePtr);
+        ResultBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.z, node.sah_or_v2_or_instBasePtr);
 
         ResultBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + (nodeType * 4),
                            node.left_or_primIndex_or_instIndex);
@@ -137,7 +137,7 @@ uint WritePrimitiveNodeCollapse(
 
             const float3 otherVerts[3] = { otherNode.bbox_min_or_v0,
                                            otherNode.bbox_max_or_v1,
-                                           otherNode.range_or_v2_or_instBasePtr };
+                                           otherNode.sah_or_v2_or_instBasePtr };
             const uint3 otherVertexOffsets = CalcTriangleCompressionVertexOffsets(otherNodeType, triangleId);
             for (uint i = 0; i < 3; ++i)
             {

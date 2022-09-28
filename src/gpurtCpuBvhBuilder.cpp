@@ -557,11 +557,12 @@ static TriangleData FetchTransformedTriangleData(
 
 // =====================================================================================================================
 CpuBvhBuilder::CpuBvhBuilder(
-    Device*                      pDevice,
+    Internal::Device*      const pDevice,
     const Pal::DeviceProperties& deviceProps,
+    ClientCallbacks              clientCb,
     const DeviceSettings&        deviceSettings)
     :
-    BvhBuilder(pDevice, deviceProps, deviceSettings)
+    BvhBuilder(pDevice, deviceProps, clientCb, deviceSettings)
 {
 }
 
@@ -616,7 +617,8 @@ uint32 CpuBvhBuilder::EncodeLeafPrimitives()
             uint32 primitiveCount = 0;
             const uint32 primitiveOffset = totalPrimitiveCount;
 
-            const Geometry geometry = ClientConvertAccelStructBuildGeometry(m_buildArgs.inputs, geometryIndex);
+            const Geometry geometry =
+                m_clientCb.pfnConvertAccelStructBuildGeometry(m_buildArgs.inputs, geometryIndex);
 
             // Mixing geometry types within a bottom-level acceleration structure is not allowed.
             PAL_ASSERT(geometry.type == m_buildConfig.geometryType);
@@ -811,7 +813,7 @@ void CpuBvhBuilder::BuildRaytracingAccelerationStructure(
         info.gpuVa                   = HeaderBufferBaseVa();
         info.sizeInBytes             = resultDataSize;
 
-        ClientAccelStructBuildDumpEvent(nullptr, info, m_buildArgs, nullptr);
+        m_clientCb.pfnAccelStructBuildDumpEvent(nullptr, info, m_buildArgs, nullptr);
     }
 }
 
@@ -2655,9 +2657,8 @@ void CpuBvhBuilder::EncodeInstances(
     {
         ScratchPrimitive* pPrimitive = &m_pPrimitives[instanceIndex];
 
-        const InstanceBottomLevelInfo blasInfo = ClientConvertAccelStructBuildInstanceBottomLevel(
-            m_buildArgs.inputs,
-            instanceIndex);
+        const InstanceBottomLevelInfo blasInfo =
+            m_clientCb.pfnConvertAccelStructBuildInstanceBottomLevel(m_buildArgs.inputs, instanceIndex);
 
         const Pal::gpusize blasGpuAddr = (blasInfo.desc.accelerationStructure & AccelStructAddressMask);
 

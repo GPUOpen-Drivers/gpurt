@@ -33,7 +33,10 @@ class ICmdBuffer;
 
 namespace GpuRt
 {
-class Device;
+    namespace Internal
+    {
+        class Device;
+    };
 };
 
 namespace GpuRt
@@ -42,7 +45,7 @@ namespace GpuRt
 class AccelStructTraceSource : public GpuUtil::ITraceSource
 {
 public:
-    AccelStructTraceSource(GpuRt::Device* pDevice)
+    AccelStructTraceSource(GpuRt::Internal::Device* pDevice)
         :
         m_pDevice(pDevice),
         m_enabled(false)
@@ -97,7 +100,7 @@ private:
 
     static const Pal::uint32 AccelStructTraceSourceVersion = 0;
 
-    GpuRt::Device* m_pDevice;
+    GpuRt::Internal::Device* m_pDevice;
     bool m_enabled;
 };
 }

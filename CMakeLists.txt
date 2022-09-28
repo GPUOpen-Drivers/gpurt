@@ -29,7 +29,16 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 project(GPU_RAY_TRACING LANGUAGES "CXX")
 
-add_library(gpurt STATIC)
+if (GPURT_BUILD_SHARED)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    add_library(gpurt SHARED)
+
+    # Add shared library compiler definition
+    target_compile_definitions(gpurt PUBLIC GPURT_BUILD_SHARED=1)
+else()
+    add_library(gpurt STATIC)
+endif()
+
 add_library(AMD::gpurt ALIAS gpurt)
 
 # Force client to specify developer mode
@@ -42,7 +51,7 @@ if (NOT DEFINED GPURT_CLIENT_API)
     message(FATAL_ERROR "Client must specify API")
 endif()
 
-# GPU Ray Tracing requires PAL as a dependency
+# Client must already have setup the Pal directories to include
 target_link_libraries(gpurt PUBLIC pal)
 
 # Enable gpu developer mode if the client wants it.
@@ -57,7 +66,9 @@ target_compile_definitions(gpurt PUBLIC GPURT_CLIENT_API_${GPURT_CLIENT_API}=1)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(gpurt PRIVATE -fno-rtti)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-    target_compile_options(gpurt PRIVATE /GR-)
+    target_compile_options(gpurt PRIVATE
+        # Disable run time type information
+        /GR-)
 endif()
 
 if (DEFINED GPURT_CLIENT_INTERFACE_MAJOR_VERSION)

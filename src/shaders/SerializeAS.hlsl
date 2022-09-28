@@ -74,6 +74,10 @@ void SerializeAS(in uint3 globalThreadId : SV_DispatchThreadID)
     // write D3D12_SERIALIZED_ACCELERATION_STRUCTURE_HEADER
     if (globalID == 0)
     {
+        // 0 - DataDriverMatchingIdentifier
+        DstBuffer.Store4(0, uint4(GPURT_AMD_GUID_0, GPURT_AMD_GUID_1, GPURT_AMD_GUID_2, GPURT_AMD_GUID_3));
+        DstBuffer.Store4(16, uint4(header.uuidLo, header.uuidHi, header.version, 0));
+
         // 1 - SerializedSizeInBytesIncludingHeader
         DstBuffer.Store2(SERIALIZED_AS_HEADER_SERIALIZED_SIZE_OFFSET, uint2(header.sizeInBytes + serializedHeaderSize, 0));
 

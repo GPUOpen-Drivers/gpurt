@@ -165,8 +165,8 @@ float CalculatePriorityUsingSAHComparison(RebraidArgs args, ScratchNode leaf)
         desc = InstanceDescBuffer.Load<InstanceDesc>(leaf.left_or_primIndex_or_instIndex * INSTANCE_DESC_SIZE);
     }
 
-    const GpuVirtualAddress address = GetInstanceAddr(asuint(leaf.range_or_v2_or_instBasePtr.x),
-                                                      asuint(leaf.range_or_v2_or_instBasePtr.y));
+    const GpuVirtualAddress address = GetInstanceAddr(asuint(leaf.sah_or_v2_or_instBasePtr.x),
+                                                      asuint(leaf.sah_or_v2_or_instBasePtr.y));
 
     const Float32BoxNode node = FetchFloat32BoxNode(address, rootNodePointer);
 
@@ -430,8 +430,8 @@ void RebraidImpl(
                         if (numOpenings > 0)
                         {
                             const GpuVirtualAddress address = GetInstanceAddr(
-                                                asuint(leaf.range_or_v2_or_instBasePtr.x),
-                                                asuint(leaf.range_or_v2_or_instBasePtr.y));
+                                                asuint(leaf.sah_or_v2_or_instBasePtr.x),
+                                                asuint(leaf.sah_or_v2_or_instBasePtr.y));
 
                             InstanceDesc desc;
                             if (args.encodeArrayOfPointers != 0)
@@ -543,8 +543,8 @@ void RebraidImpl(
 
                     if (IsNodeActive(leaf))
                     {
-                        const GpuVirtualAddress address = GetInstanceAddr(asuint(leaf.range_or_v2_or_instBasePtr.x),
-                                                                          asuint(leaf.range_or_v2_or_instBasePtr.y));
+                        const GpuVirtualAddress address = GetInstanceAddr(asuint(leaf.sah_or_v2_or_instBasePtr.x),
+                                                                          asuint(leaf.sah_or_v2_or_instBasePtr.y));
 
                         InstanceDesc desc;
                         if (args.encodeArrayOfPointers != 0)
@@ -600,7 +600,7 @@ void RebraidImpl(
                                 const uint writeIndex = args.numPrimitives + prevSum + localKeys[keyIndex] + numSiblings;
 
                                 leaf.splitBox_or_nodePointer = node.child1;
-                                leaf.range_or_v2_or_instBasePtr.z = asfloat(numPrims[1]);
+                                leaf.sah_or_v2_or_instBasePtr.z = asfloat(numPrims[1]);
 
                                 ScratchBuffer.Store<ScratchNode>(args.bvhLeafNodeDataScratchOffset
                                                                  + writeIndex * sizeof(ScratchNode), leaf);
@@ -625,7 +625,7 @@ void RebraidImpl(
                                 const uint writeIndex = args.numPrimitives + prevSum + localKeys[keyIndex] + numSiblings;
 
                                 leaf.splitBox_or_nodePointer = node.child2;
-                                leaf.range_or_v2_or_instBasePtr.z = asfloat(numPrims[2]);
+                                leaf.sah_or_v2_or_instBasePtr.z = asfloat(numPrims[2]);
 
                                 ScratchBuffer.Store<ScratchNode>(args.bvhLeafNodeDataScratchOffset
                                                                  + writeIndex * sizeof(ScratchNode), leaf);
@@ -650,7 +650,7 @@ void RebraidImpl(
                                 const uint writeIndex = args.numPrimitives + prevSum + localKeys[keyIndex] + numSiblings;
 
                                 leaf.splitBox_or_nodePointer = node.child3;
-                                leaf.range_or_v2_or_instBasePtr.z = asfloat(numPrims[3]);
+                                leaf.sah_or_v2_or_instBasePtr.z = asfloat(numPrims[3]);
 
                                 ScratchBuffer.Store<ScratchNode>(args.bvhLeafNodeDataScratchOffset
                                                                  + writeIndex * sizeof(ScratchNode), leaf);

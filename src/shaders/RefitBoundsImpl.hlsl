@@ -37,7 +37,7 @@ void WriteScratchNodeCollapseInfo(
 {
     const uint nodeOffset = baseScratchNodesOffset + (nodeIndex * SCRATCH_NODE_SIZE);
 
-    ScratchBuffer.Store<float>(nodeOffset + SCRATCH_NODE_RANGE_OFFSET, cost);
+    ScratchBuffer.Store<float>(nodeOffset + SCRATCH_NODE_COST_OFFSET, cost);
     ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET, numPrimitivesAndDoCollapse);
 }
 
@@ -73,8 +73,8 @@ void RefitBoundsImpl(
 
     uint instancePrimCount = 0;
 
-    //Ct is the cost of intersecting triangle
-    //Ci is the cost of interecting bbox
+    // Ct is the cost of intersecting triangle
+    // Ci is the cost of interecting bbox
     const float Ct = SAH_COST_TRIANGLE_INTERSECTION;
     const float Ci = SAH_COST_AABBB_INTERSECTION;
 
@@ -119,95 +119,70 @@ void RefitBoundsImpl(
 
             uint numMortonCells = 0;
 
-            if (doTriangleSplitting)
+            // Right child
             {
-                if (IsLeafNode(rc, numActivePrims))
+                const bool isLeafNode = IsLeafNode(rc, numActivePrims);
+
+                if (doTriangleSplitting)
                 {
                     bboxRightChild =
                         ScratchBuffer.Load<BoundingBox>(splitBoxesOffset +
                                                         sizeof(BoundingBox) * rightNode.splitBox_or_nodePointer);
-
-                    rightCost = ComputeBoxSurfaceArea(bboxRightChild) * Ct;
-
-                    numMortonCells++;
                 }
                 else
                 {
                     bboxRightChild = GetScratchNodeBoundingBox(rightNode);
-
-                    rightCost = ComputeBoxSurfaceArea(bboxRightChild) * rightNode.range_or_v2_or_instBasePtr.x;
-
-                    numMortonCells += rightNode.splitBox_or_nodePointer;
                 }
 
-                if (IsLeafNode(lc, numActivePrims))
+                const float surfaceArea = rightNode.sah_or_v2_or_instBasePtr.y;
+                const float cost = isLeafNode ? Ct : rightNode.sah_or_v2_or_instBasePtr.x;
+                rightCost = surfaceArea * cost;
+                numMortonCells += isLeafNode ? 1 : rightNode.splitBox_or_nodePointer;
+            }
+
+            // Left child
+            {
+                const bool isLeafNode = IsLeafNode(lc, numActivePrims);
+
+                if (doTriangleSplitting)
                 {
                     bboxLeftChild =
                         ScratchBuffer.Load<BoundingBox>(splitBoxesOffset +
                                                         sizeof(BoundingBox) * leftNode.splitBox_or_nodePointer);
-
-                    leftCost = ComputeBoxSurfaceArea(bboxLeftChild) * Ct;
-
-                    numMortonCells++;
                 }
                 else
                 {
                     bboxLeftChild = GetScratchNodeBoundingBox(leftNode);
-
-                    leftCost = ComputeBoxSurfaceArea(bboxLeftChild) * leftNode.range_or_v2_or_instBasePtr.x;
-
-                    numMortonCells += leftNode.splitBox_or_nodePointer;
-                }
-            }
-            else
-            {
-                if (IsLeafNode(rc, numActivePrims))
-                {
-                    bboxRightChild = GetScratchNodeBoundingBox(rightNode);
-
-                    rightCost = ComputeBoxSurfaceArea(bboxRightChild) * Ct;
-
-                    numMortonCells++;
-                }
-                else
-                {
-                    bboxRightChild = GetScratchNodeBoundingBox(rightNode);
-                    rightCost = ComputeBoxSurfaceArea(bboxRightChild) * rightNode.range_or_v2_or_instBasePtr.x;
-
-                    numMortonCells += rightNode.splitBox_or_nodePointer;
                 }
 
-                if (IsLeafNode(lc, numActivePrims))
-                {
-                    bboxLeftChild = GetScratchNodeBoundingBox(leftNode);
-
-                    leftCost = ComputeBoxSurfaceArea(bboxLeftChild) * Ct;
-
-                    numMortonCells++;
-                }
-                else
-                {
-                    bboxLeftChild = GetScratchNodeBoundingBox(leftNode);
-                    leftCost = ComputeBoxSurfaceArea(bboxLeftChild) * leftNode.range_or_v2_or_instBasePtr.x;
-
-                    numMortonCells += leftNode.splitBox_or_nodePointer;
-                }
+                const float surfaceArea = leftNode.sah_or_v2_or_instBasePtr.y;
+                const float cost = isLeafNode ? Ct : leftNode.sah_or_v2_or_instBasePtr.x;
+                leftCost = surfaceArea * cost;
+                numMortonCells += isLeafNode ? 1 : leftNode.splitBox_or_nodePointer;
             }
 
             // Merge bounding boxes up to parent
-            const float3 bboxMinParent = min(bboxLeftChild.min, bboxRightChild.min);
-            const float3 bboxMaxParent = max(bboxLeftChild.max, bboxRightChild.max);
+            BoundingBox mergedBox = (BoundingBox)0;
+            mergedBox.min = min(bboxLeftChild.min, bboxRightChild.min);
+            mergedBox.max = max(bboxLeftChild.max, bboxRightChild.max);
+
+            // Compute surface area of parent box
+            const float mergedBoxSurfaceArea = ComputeBoxSurfaceArea(mergedBox);
+
             WriteScratchNodeBoundingBox(ScratchBuffer,
                                         baseScratchNodesOffset,
                                         parentNodeIndex,
-                                        bboxMinParent,
-                                        bboxMaxParent);
+                                        mergedBox.min,
+                                        mergedBox.max);
+
+            WriteScratchNodeSurfaceArea(ScratchBuffer,
+                                        baseScratchNodesOffset,
+                                        parentNodeIndex,
+                                        mergedBoxSurfaceArea);
+
             if (doCollapse || enablePairCompression)
             {
-                const BoundingBox mergedBbox = { bboxMinParent, bboxMaxParent };
-
-                const float surfaceArea  = ComputeBoxSurfaceArea(mergedBbox);
-                const float splitCost    = Ci + leftCost / surfaceArea + rightCost / surfaceArea;
+                const float splitCost    = Ci + leftCost / mergedBoxSurfaceArea + rightCost / mergedBoxSurfaceArea;
                 const float collapseCost = Ct * numTris;
                 const bool  useCostCheck = doCollapse || enablePairCostCheck;
 
@@ -265,8 +240,8 @@ void RefitBoundsImpl(
                                  parentNodeIndex,
                                  leftNode.type,
                                  rightNode.type,
-                                 bboxMinParent,
-                                 bboxMaxParent);
+                                 mergedBox.min,
+                                 mergedBox.max);
 
             WriteScratchNodeFlags(ScratchBuffer,
                                   baseScratchNodesOffset,
@@ -276,8 +251,8 @@ void RefitBoundsImpl(
 
             if (enableInstancePrimCount)
             {
-                const uint instancePrimCount = asuint(rightNode.range_or_v2_or_instBasePtr[2]) +
-                                               asuint(leftNode.range_or_v2_or_instBasePtr[2]);
+                const uint instancePrimCount = asuint(rightNode.sah_or_v2_or_instBasePtr[2]) +
+                                               asuint(leftNode.sah_or_v2_or_instBasePtr[2]);
 
                 WriteScratchNodeInstanceNumPrims(ScratchBuffer,
                                                  baseScratchNodesOffset,

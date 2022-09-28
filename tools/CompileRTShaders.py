@@ -502,7 +502,7 @@ def main() -> int:
         # Compile traversal shaders first
         args.skip_bvh = True
         args.outputDir = outputDir # vk root dir
-        CompileShaders(args, internalShadersHeader, CompilationType.Dxil)
+        result |= CompileShaders(args, internalShadersHeader, CompilationType.Dxil)
         # Compile BVH shaders later
         args.skip_bvh = False
         args.skip_trace = True
@@ -512,7 +512,7 @@ def main() -> int:
             compileType = CompilationType.VulkanRtSpirv
         os.chdir(originalPath)
 
-    CompileShaders(args, internalShadersHeader, compileType)
+    result |= CompileShaders(args, internalShadersHeader, compileType)
 
     internalShadersHeader.flush()
     internalShadersHeader.close()

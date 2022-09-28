@@ -1069,32 +1069,32 @@ void PushNodeForUpdate(
             // comparison when finding the child index in the parent below.
             childNodePointer |= NODE_TYPE_TRIANGLE_1;
 
-            // Get the index offset for the vertex in slot 3 of the triangle node.
-            const uint triangleIdShift = (NODE_TYPE_TRIANGLE_1 * TRIANGLE_ID_BIT_STRIDE) + TRIANGLE_ID_I_SRC_SHIFT;
-            const uint indexOffset = (triangleId >> triangleIdShift) % 4;
-
             const uint otherPrimIndex = SourceBuffer.Load(triNodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET);
 
-            // Fetch index from index buffer.
-            const uint index = FetchIndex(IndexBuffer,
-                                          otherPrimIndex,
-                                          indexOffset,
-                                          ShaderConstants.IndexBufferByteOffset,
-                                          ShaderConstants.IndexBufferFormat);
+            // Fetch face indices from index buffer.
+            const uint3 faceIndices = FetchFaceIndices(IndexBuffer,
+                                                       otherPrimIndex,
+                                                       ShaderConstants.IndexBufferByteOffset,
+                                                       ShaderConstants.IndexBufferFormat);
 
-            // Check if vertex index is within bounds.
-            if (index < ShaderConstants.vertexCount)
+            // Check if vertex indices are within bounds.
+            if ((faceIndices.x < ShaderConstants.vertexCount) &&
+                (faceIndices.y < ShaderConstants.vertexCount) &&
+                (faceIndices.z < ShaderConstants.vertexCount))
             {
                 // Fetch triangle vertex data from vertex buffer.
-                const float3 vertex = FetchTransformedVertex(GeometryBuffer,
-                                                             index,
-                                                             vertexOffset,
-                                                             ShaderConstants.HasValidTransform,
-                                                             TransformBuffer);
+                const TriangleData tri = FetchTransformedTriangleData(GeometryBuffer,
+                                                                      faceIndices,
+                                                                      ShaderConstants.GeometryBufferStrideInBytes,
+                                                                      vertexOffset,
+                                                                      ShaderConstants.HasValidTransform,
+                                                                      TransformBuffer);
+
+                const BoundingBox otherBox = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
 
                 // Merge the bounding boxes of the two triangles.
-                boundingBox.min = min(boundingBox.min, vertex);
-                boundingBox.max = max(boundingBox.max, vertex);
+                boundingBox.min = min(boundingBox.min, otherBox.min);
+                boundingBox.max = max(boundingBox.max, otherBox.max);
             }
         }
     }
@@ -1403,8 +1403,10 @@ void EncodeTriangleNodes(
         }
 
         // ClearFlags for refit and update
-        const uint flagOffset = ShaderConstants.PropagationFlagsScratchOffset + (flattenedPrimitiveIndex * sizeof(uint));
-        ScratchBuffer.Store(flagOffset, 0);
+        {
+            const uint flagOffset = ShaderConstants.PropagationFlagsScratchOffset + (flattenedPrimitiveIndex * sizeof(uint));
+            ScratchBuffer.Store(flagOffset, 0);
+        }
 
         IncrementTaskCounter();
     }
@@ -1591,8 +1593,10 @@ void EncodeAABBNodes(
         // ClearFlags for refit and update
         const uint flattenedPrimitiveIndex = primitiveOffset + primitiveIndex;
 
-        const uint flagOffset = ShaderConstants.PropagationFlagsScratchOffset + (flattenedPrimitiveIndex * sizeof(uint));
-        ScratchBuffer.Store(flagOffset, 0);
+        {
+            const uint flagOffset = ShaderConstants.PropagationFlagsScratchOffset + (flattenedPrimitiveIndex * sizeof(uint));
+            ScratchBuffer.Store(flagOffset, 0);
+        }
 
         IncrementTaskCounter();
     }

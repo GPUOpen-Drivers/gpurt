@@ -24,7 +24,7 @@
  **********************************************************************************************************************/
 
 #include "gpurtTraceSource.h"
-#include "gpurt/gpurt.h"
+#include "gpurtInternal.h"
 #include "util/ddStructuredReader.h"
 
 namespace GpuRt

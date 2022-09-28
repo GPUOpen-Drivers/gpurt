@@ -39,6 +39,7 @@ struct TriangleSplittingArgs
     uint atomicFlagsScratchOffset;
     uint dynamicBlockIndexScratchOffset;
     uint sceneBoundsByteOffset;
+    uint tsBudgetPerTriangle;
 };
 
 #define TS_KEYS_PER_THREAD         4
@@ -247,7 +248,11 @@ void AllocRefs(TriangleSplittingArgs args,
                 const float priority = ScratchBuffer.Load<float>(args.splitPrioritiesScratchOffset
                                                                  + sizeof(float) * readIndex);
 
-                const uint numSplits = (priority / globalSum) * smax;
+                uint numSplits = (priority / globalSum) * smax;
+                if (args.tsBudgetPerTriangle > 0)
+                {
+                    numSplits = min(numSplits, args.tsBudgetPerTriangle);
+                }
 
                 count = numSplits;
             }
@@ -326,7 +331,11 @@ void AllocRefs(TriangleSplittingArgs args,
                 const float priority = ScratchBuffer.Load<float>(args.splitPrioritiesScratchOffset
                                                                  + sizeof(float) * storeIndex);
 
-                const uint numSplits = (priority / globalSum) * smax;
+                uint numSplits = (priority / globalSum) * smax;
+                if (args.tsBudgetPerTriangle > 0)
+                {
+                    numSplits = min(numSplits, args.tsBudgetPerTriangle);
+                }
 
                 // write ref
                 ScratchTSRef ref;
@@ -612,7 +621,7 @@ void TriangleSplittingImpl(
                     {
                         // calculate priority
                         const float3 dir1 = node.bbox_max_or_v1 - node.bbox_min_or_v0;
-                        const float3 dir2 = node.range_or_v2_or_instBasePtr - node.bbox_min_or_v0;
+                        const float3 dir2 = node.sah_or_v2_or_instBasePtr - node.bbox_min_or_v0;
 
                         const float3 dir3 = cross(dir1, dir2);
 
@@ -621,7 +630,7 @@ void TriangleSplittingImpl(
 
                         const BoundingBox bbox = GenerateTriangleBoundingBox(node.bbox_min_or_v0,
                                                                              node.bbox_max_or_v1,
-                                                                             node.range_or_v2_or_instBasePtr);
+                                                                             node.sah_or_v2_or_instBasePtr);
 
                         const float surfaceArea = ComputeBoxSurfaceArea(bbox);
 
@@ -814,7 +823,7 @@ void TriangleSplittingImpl(
                         }
 
                         // v1->v2
-                        dir = leafNode.range_or_v2_or_instBasePtr - leafNode.bbox_max_or_v1;
+                        dir = leafNode.sah_or_v2_or_instBasePtr - leafNode.bbox_max_or_v1;
 
                         dist = (splitPlane - leafNode.bbox_max_or_v1[largestAxis]) / dir[largestAxis];
 
@@ -842,25 +851,25 @@ void TriangleSplittingImpl(
                         }
 
                         // v2->v0
-                        dir = leafNode.bbox_min_or_v0 - leafNode.range_or_v2_or_instBasePtr;
+                        dir = leafNode.bbox_min_or_v0 - leafNode.sah_or_v2_or_instBasePtr;
 
-                        dist = (splitPlane - leafNode.range_or_v2_or_instBasePtr[largestAxis]) / dir[largestAxis];
+                        dist = (splitPlane - leafNode.sah_or_v2_or_instBasePtr[largestAxis]) / dir[largestAxis];
 
-                        if (leafNode.range_or_v2_or_instBasePtr[largestAxis] <= splitPlane)
+                        if (leafNode.sah_or_v2_or_instBasePtr[largestAxis] <= splitPlane)
                         {
-                            leftTri.min = min(leafNode.range_or_v2_or_instBasePtr, leftTri.min);
-                            leftTri.max = max(leafNode.range_or_v2_or_instBasePtr, leftTri.max);
+                            leftTri.min = min(leafNode.sah_or_v2_or_instBasePtr, leftTri.min);
+                            leftTri.max = max(leafNode.sah_or_v2_or_instBasePtr, leftTri.max);
                         }
 
-                        if (leafNode.range_or_v2_or_instBasePtr[largestAxis] >= splitPlane)
+                        if (leafNode.sah_or_v2_or_instBasePtr[largestAxis] >= splitPlane)
                         {
-                            rightTri.min = min(leafNode.range_or_v2_or_instBasePtr, rightTri.min);
-                            rightTri.max = max(leafNode.range_or_v2_or_instBasePtr, rightTri.max);
+                            rightTri.min = min(leafNode.sah_or_v2_or_instBasePtr, rightTri.min);
+                            rightTri.max = max(leafNode.sah_or_v2_or_instBasePtr, rightTri.max);
                         }
 
                         if ((dist > 0) && (dist <= 1))
                         {
-                            float3 intersection = dir * dist + leafNode.range_or_v2_or_instBasePtr;
+                            float3 intersection = dir * dist + leafNode.sah_or_v2_or_instBasePtr;
 
                             leftTri.min = min(intersection, leftTri.min);
                             leftTri.max = max(intersection, leftTri.max);

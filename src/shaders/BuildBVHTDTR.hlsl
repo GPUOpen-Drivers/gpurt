@@ -205,13 +205,13 @@ uint AllocScratchNode(uint parent, BoundingBox box, TDArgs args)
     ScratchBuffer.InterlockedAdd(numNodesAllocOffset, 1, orig);
 
     // alloc internal scratch node
-    ScratchNode internalNode;
+    ScratchNode internalNode = (ScratchNode)0;
 
     internalNode.bbox_min_or_v0 = box.min;
     internalNode.left_or_primIndex_or_instIndex = 0; // not set yet
     internalNode.bbox_max_or_v1 = box.max;
     internalNode.right_or_geometryIndex = 0; // not set yet
-    internalNode.range_or_v2_or_instBasePtr = float3(0, 0, 0);
+    internalNode.sah_or_v2_or_instBasePtr = float3(0, ComputeBoxSurfaceArea(box), 0);
     internalNode.parent = parent;
 
     internalNode.type = NODE_TYPE_BOX_FLOAT32;
@@ -338,16 +338,6 @@ void UpdateScratchNodeFlags(uint scratchNodeIndex, uint leafScratchNodeIndex, ui
     const uint nodeOffset = args.BvhNodeDataScratchOffset + (scratchNodeIndex * sizeof(ScratchNode));
 
     ScratchBuffer.InterlockedAnd(nodeOffset + SCRATCH_NODE_FLAGS_OFFSET, flagsMask);
-}
-
-//=====================================================================================================================
-void SetScratchNodeBBox(uint index, BoundingBox box, TDArgs args)
-{
-    ScratchBuffer.Store<float3>(args.BvhNodeDataScratchOffset + sizeof(ScratchNode) * index +
-                                SCRATCH_NODE_BBOX_MIN_OFFSET, box.min);
-
-    ScratchBuffer.Store<float3>(args.BvhNodeDataScratchOffset + sizeof(ScratchNode) * index +
-                                SCRATCH_NODE_BBOX_MAX_OFFSET, box.max);
 }
 
 //=====================================================================================================================
@@ -732,8 +722,8 @@ void WriteChildrenTreeRefList(uint replaceIndex, uint startIndex, TDRefScratch r
     ScratchNode node = ScratchBuffer.Load<ScratchNode>(args.BvhLeafNodeDataScratchOffset +
                                                        ref.primitiveIndex * sizeof(ScratchNode));
 
-    const GpuVirtualAddress address = GetInstanceAddr(asuint(node.range_or_v2_or_instBasePtr.x),
-                                                      asuint(node.range_or_v2_or_instBasePtr.y));
+    const GpuVirtualAddress address = GetInstanceAddr(asuint(node.sah_or_v2_or_instBasePtr.x),
+                                                      asuint(node.sah_or_v2_or_instBasePtr.y));
 
     InstanceDesc desc;
     if (args.EncodeArrayOfPointers != 0)
@@ -803,8 +793,8 @@ void BuildRefList(uint globalIndex, TDArgs args)
             ref.nodePointer = CreateRootNodePointer();
 #endif
 #if USE_BLAS_PRIM_COUNT
-            const GpuVirtualAddress address = GetInstanceAddr(asuint(leafNode.range_or_v2_or_instBasePtr.x),
-                                                              asuint(leafNode.range_or_v2_or_instBasePtr.y));
+            const GpuVirtualAddress address = GetInstanceAddr(asuint(leafNode.sah_or_v2_or_instBasePtr.x),
+                                                              asuint(leafNode.sah_or_v2_or_instBasePtr.y));
 
             ref.numPrimitives = FetchFloat32BoxNodeNumPrimitives(address, ref.nodePointer);
 #endif

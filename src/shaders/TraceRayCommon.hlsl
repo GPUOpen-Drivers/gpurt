@@ -135,6 +135,28 @@ static HitGroupInfo GetHitGroupInfo(
     return hitInfo;
 }
 
+//=====================================================================================================================
+static uint GetAnyHitIdLow(
+    in uint traceParameters,
+    in uint geometryContributionToHitGroupIndex,
+    in uint instanceContributionToHitGroupIndex)
+{
+    const uint hitGroupRecordIndex =
+        CalculateHitGroupRecordAddress(ExtractRayContributionToHitIndex(traceParameters),
+                                       ExtractMultiplierForGeometryContributionToHitIndex(traceParameters),
+                                       geometryContributionToHitGroupIndex,
+                                       instanceContributionToHitGroupIndex);
+
+    const uint offset = DispatchRaysInfo.HitGroupTableStrideInBytes * hitGroupRecordIndex;
+
+    const GpuVirtualAddress tableVa = MakeGpuVirtualAddress(DispatchRaysInfo.HitGroupTableStartAddressLow,
+                                                            DispatchRaysInfo.HitGroupTableStartAddressHigh);
+
+    const uint anyHitIdLow = LoadDwordAtAddr(tableVa + offset + 8);
+
+    return anyHitIdLow;
+}
+
 #if DEVELOPER
 //=====================================================================================================================
 static uint GetRayId(in uint3 dispatchRaysIndex)

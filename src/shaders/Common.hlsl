@@ -410,7 +410,7 @@ static BoundingBox GetScratchNodeBoundingBox(in ScratchNode node)
     {
         bbox = GenerateTriangleBoundingBox(node.bbox_min_or_v0,
                                            node.bbox_max_or_v1,
-                                           node.range_or_v2_or_instBasePtr);
+                                           node.sah_or_v2_or_instBasePtr);
     }
     else
     {

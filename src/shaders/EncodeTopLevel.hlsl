@@ -375,8 +375,10 @@ void EncodeInstances(
         }
 
         // ClearFlags for refit and update
-        const uint flagOffset = ShaderConstants.propagationFlagsScratchOffset + (index * sizeof(uint));
-        ScratchBuffer.Store(flagOffset, 0);
+        {
+            const uint flagOffset = ShaderConstants.propagationFlagsScratchOffset + (index * sizeof(uint));
+            ScratchBuffer.Store(flagOffset, 0);
+        }
 
         DeviceMemoryBarrier();
         ResultBuffer.InterlockedAdd(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 1);

@@ -168,7 +168,7 @@ void CopyUnsortedScratchLeafNode(
     ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_PRIMITIVE_ID_OFFSET,   unsortedNode.left_or_primIndex_or_instIndex);
     ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_V1_OFFSET,             unsortedNode.bbox_max_or_v1);
     ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_GEOMETRY_INDEX_OFFSET, unsortedNode.right_or_geometryIndex);
-    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_V2_OFFSET,             unsortedNode.range_or_v2_or_instBasePtr);
+    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_V2_OFFSET,             unsortedNode.sah_or_v2_or_instBasePtr);
 
     // DO NOT COPY PARENT!!!
 
@@ -207,7 +207,6 @@ void SplitInternalNodeLbvh(
 
     ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_LEFT_OFFSET,  c1idx);
     ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_RIGHT_OFFSET, c2idx);
-    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_RANGE_OFFSET, range); //TODO: don't think we need this
     ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_TYPE_OFFSET,  NODE_TYPE_BOX_FLOAT32);
     ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_FLAGS_OFFSET, 0);
 }
@@ -231,7 +230,7 @@ void FastBuildBVH(uint globalId, uint numPrims, uint leafNodesOffset, uint bvhNo
             ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_PRIMITIVE_ID_OFFSET,   node.left_or_primIndex_or_instIndex);
             ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_V1_OFFSET,             node.bbox_max_or_v1);
             ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_GEOMETRY_INDEX_OFFSET, node.right_or_geometryIndex);
-            ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_V2_OFFSET,             node.range_or_v2_or_instBasePtr);
+            ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_V2_OFFSET,             node.sah_or_v2_or_instBasePtr);
 
             ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_TYPE_OFFSET,            node.type);
             ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_FLAGS_OFFSET,           node.flags);

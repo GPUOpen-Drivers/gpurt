@@ -36,6 +36,19 @@
 #include "palHashSetImpl.h"
 #include "palVectorImpl.h"
 
+// __declspec(dllexport) has limitations. "No name decoration is applied to exported C functions or C++ extern "C"
+// functions using the __cdecl calling convention." In order to export a unmangled symbol for a function that uses a
+// different calling convention you must invoke the linker directly on MSVC. NOTE: Name mangling doesn't occur for
+// exported C functions on 64-bit platforms.
+//
+// Place this inside the function body you want to export. And ensure the name of the function is the symbol name
+// you want to export
+#if _MSVC_LANG && GPURT_BUILD_SHARED
+#define GPURT_EXPORT_UNMANGLED_SYMBOL_MSVC _Pragma("comment(linker, \"/EXPORT:\" __FUNCTION__ \"=\" __FUNCDNAME__)")
+#else
+#define GPURT_EXPORT_UNMANGLED_SYMBOL_MSVC
+#endif
+
 #if GPURT_DEVELOPER
 #if defined(__GNUC__)
 #define RGP_PUSH_MARKER(format1, format2, ...) PushRGPMarker(format1, format2, ##__VA_ARGS__)
@@ -54,11 +67,6 @@ namespace GpuRt
 {
 
 #include "pipelines/g_internal_shaders.h"
-
-};
-
-namespace GpuRt
-{
 
 //=====================================================================================================================
 // Enumeration for supported intrinsic functions in GPURT
@@ -92,8 +100,171 @@ constexpr const char* FunctionTableRTIP1_1[] =
 };
 
 // =====================================================================================================================
-Device::Device()
+// Create GPURT device
+//
+Pal::Result GPURT_API_ENTRY CreateDevice(
+    const DeviceInitInfo&  info,
+    const ClientCallbacks& callbacks,
+    void*            const pMemory,
+    IDevice**        const ppDevice)
+{
+    GPURT_EXPORT_UNMANGLED_SYMBOL_MSVC
+
+    Pal::Result result = Pal::Result::ErrorInvalidValue;
+    if ((ppDevice != nullptr) && (pMemory != nullptr))
+    {
+        Internal::Device* pDevice = PAL_PLACEMENT_NEW(pMemory) Internal::Device(info, callbacks);
+        result = pDevice->Init();
+
+        if (result != Pal::Result::Success)
+        {
+            pDevice->Destroy();
+            pDevice = nullptr;
+        }
+
+        *ppDevice = pDevice;
+    }
+
+    return result;
+}
+
+// =====================================================================================================================
+size_t GPURT_API_ENTRY GetDeviceSize()
+{
+    GPURT_EXPORT_UNMANGLED_SYMBOL_MSVC
+
+    return sizeof(Internal::Device);
+}
+
+// =====================================================================================================================
+PipelineShaderCode GPURT_API_ENTRY GetShaderLibraryCode(
+    ShaderLibraryFeatureFlags flags)
+{
+    GPURT_EXPORT_UNMANGLED_SYMBOL_MSVC
+
+    const bool enableDevFeatures =
+        Util::TestAnyFlagSet(flags, static_cast<uint32>(ShaderLibraryFeatureFlag::Developer));
+
+    const bool enableSwTraversal =
+        Util::TestAnyFlagSet(flags, static_cast<uint32>(ShaderLibraryFeatureFlag::SoftwareTraversal));
+
+    PipelineShaderCode code = {};
+
+#define CHOOSE_SHADER(x) { code.pDxilCode = (x); code.dxilSize = sizeof(x); }
+
+    if (enableSwTraversal)
+    {
+        if (enableDevFeatures)
+        {
+            CHOOSE_SHADER(CsGpuRtLibrarySwDev);
+        }
+        else
+        {
+            CHOOSE_SHADER(CsGpuRtLibrarySw);
+        }
+    }
+    else
+    {
+        if (enableDevFeatures)
+        {
+            CHOOSE_SHADER(CsGpuRtLibraryDev);
+        }
+        else
+        {
+            CHOOSE_SHADER(CsGpuRtLibrary);
+        }
+    }
+#undef CHOOSE_SHADER
+
+    return code;
+}
+
+namespace Internal {
+
+//=====================================================================================================================
+uint32 Device::GetStaticPipelineFlags(
+    bool  skipTriangles,
+    bool  skipProceduralPrims,
+    bool  useRayQueryForTraceRays,
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 27
+    bool  unused,
+#endif
+    bool  enableAccelStructTracking,
+    bool  enableTraversalCounter)
+{
+    uint32 pipelineFlags = 0;
+
+    if (skipTriangles)
+    {
+        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::SkipTriangles);
+    }
+
+    if (skipProceduralPrims)
+    {
+        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::SkipProceduralPrims);
+    }
+
+    if (m_info.deviceSettings.bvhCollapse)
+    {
+        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::BvhCollapse);
+    }
+
+    if (useRayQueryForTraceRays)
+    {
+        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::UseRayQuery);
+    }
+
+    if (m_info.deviceSettings.rebraidType != RebraidType::Off)
+    {
+        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::UseTreeRebraid);
+    }
+
+    if (enableTraversalCounter)
+    {
+        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::EnableTraversalCounter);
+    }
+
+    return pipelineFlags;
+}
+
+// =====================================================================================================================
+void Device::SetUpClientCallbacks(ClientCallbacks* pClientCb)
+{
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 28
+    InitInternalClientCallbacks(pClientCb);
+#else
+    *pClientCb = m_clientCb;
+#endif
+}
+
+// =====================================================================================================================
+void Device::GetAccelStructPrebuildInfo(
+    const AccelStructBuildInputs& buildInfo,
+    AccelStructPrebuildInfo* pPrebuildInfo)
+{
+    DeviceSettings deviceSettings;
+    ClientCallbacks clientCb = {};
+
+    SetUpClientCallbacks(&clientCb);
+
+    deviceSettings = m_info.deviceSettings;
+
+    GpuBvhBuilder builder(nullptr,
+                          this,
+                          *m_info.pDeviceProperties,
+                          clientCb,
+                          deviceSettings);
+
+    builder.GetAccelerationStructurePrebuildInfo(buildInfo, pPrebuildInfo);
+}
+
+// =====================================================================================================================
+Device::Device(
+    const DeviceInitInfo&  info,
+    const ClientCallbacks& clientCb)
     :
+    m_info(info),
+    m_clientCb(clientCb),
     m_pipelineMap(64, &m_allocator),
     m_tlasCaptureList(this),
     m_isTraceActive(false),
@@ -106,17 +277,21 @@ Device::~Device()
 {
     for (InternalPipelineMap::Iterator itr = m_pipelineMap.Begin(); itr.Get(); itr.Next())
     {
-        ClientDestroyInternalComputePipeline(m_info, itr.Get()->value.pPipeline, itr.Get()->value.pMemory);
+        m_clientCb.pfnDestroyInternalComputePipeline(m_info, itr.Get()->value.pPipeline, itr.Get()->value.pMemory);
     }
 }
 
 // =====================================================================================================================
+void Device::Destroy()
+{
+    this->~Device();
+}
+
+// =====================================================================================================================
 // Initialize the GPURT device.
-Pal::Result Device::Init(
-    const DeviceInitInfo& info)
+Pal::Result Device::Init()
 {
     Pal::Result result = Pal::Result::Success;
-    m_info = info;
     result = m_pipelineMap.Init();
     *m_info.pAccelStructTracker = {};
 
@@ -193,98 +368,6 @@ void Device::Free(
     const Util::FreeInfo& freeInfo)
 {
     m_allocator.Free(freeInfo);
-}
-
-// =====================================================================================================================
-PipelineShaderCode Device::GetShaderLibraryData(
-    ShaderLibraryFeatureFlags flags)
-{
-    const bool enableDevFeatures =
-        Util::TestAnyFlagSet(flags, static_cast<uint32>(ShaderLibraryFeatureFlag::Developer));
-
-    const bool enableSwTraversal =
-        Util::TestAnyFlagSet(flags, static_cast<uint32>(ShaderLibraryFeatureFlag::SoftwareTraversal));
-
-    PipelineShaderCode code = {};
-
-#define CHOOSE_SHADER(x) { code.pDxilCode = (x); code.dxilSize = sizeof(x); }
-
-    if (enableSwTraversal)
-    {
-        if (enableDevFeatures)
-        {
-            CHOOSE_SHADER(CsGpuRtLibrarySwDev);
-        }
-        else
-        {
-            CHOOSE_SHADER(CsGpuRtLibrarySw);
-        }
-    }
-    else
-    {
-        if (enableDevFeatures)
-        {
-            CHOOSE_SHADER(CsGpuRtLibraryDev);
-        }
-        else
-        {
-            CHOOSE_SHADER(CsGpuRtLibrary);
-        }
-    }
-#undef CHOOSE_SHADER
-
-    return code;
-}
-
-//=====================================================================================================================
-uint32 Device::GetStaticPipelineFlags(
-    bool  skipTriangles,
-    bool  skipProceduralPrims,
-    bool  useRayQueryForTraceRays,
-#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 27
-    bool  unused,
-#endif
-    bool  enableAccelStructTracking,
-    bool  enableTraversalCounter)
-{
-    uint32 pipelineFlags = 0;
-
-    if (skipTriangles)
-    {
-        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::SkipTriangles);
-    }
-
-    if (skipProceduralPrims)
-    {
-        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::SkipProceduralPrims);
-    }
-
-    if (m_info.deviceSettings.bvhCollapse)
-    {
-        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::BvhCollapse);
-    }
-
-    if (useRayQueryForTraceRays)
-    {
-        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::UseRayQuery);
-    }
-
-    if (m_info.deviceSettings.rebraidType != RebraidType::Off)
-    {
-        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::UseTreeRebraid);
-    }
-
-    if (enableAccelStructTracking)
-    {
-        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::EnableAccelStructTracking);
-    }
-
-    if (enableTraversalCounter)
-    {
-        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::EnableTraversalCounter);
-    }
-
-    return pipelineFlags;
 }
 
 // =====================================================================================================================
@@ -463,7 +546,7 @@ Pal::IPipeline* Device::GetInternalPipeline(
 #endif
             }
 
-            result = ClientCreateInternalComputePipeline(
+            result = m_clientCb.pfnCreateInternalComputePipeline(
                 m_info,
                 buildInfo,
                 compileConstants,
@@ -475,719 +558,6 @@ Pal::IPipeline* Device::GetInternalPipeline(
     }
 
     return (pPipelinePair != nullptr) ? pPipelinePair->pPipeline : nullptr;
-}
-
-// =====================================================================================================================
-// Calculates the total number of AABBs required
-uint32 CalculateRayTracingAABBCount(
-    const AccelStructBuildInputs& buildInfo)
-{
-    uint32 aabbCount = 0;
-
-    if (buildInfo.type == AccelStructType::BottomLevel)
-    {
-        // Bottom level
-        for (uint32 i = 0; i < buildInfo.inputElemCount; ++i)
-        {
-            const Geometry geometry = ClientConvertAccelStructBuildGeometry(buildInfo, i);
-
-            if (geometry.type == GeometryType::Triangles)
-            {
-                // There is one axis aligned bounding box per face.
-                if (geometry.triangles.indexFormat != IndexFormat::Unknown)
-                {
-                    // Indexed triangle vertices
-                    PAL_ASSERT((geometry.triangles.indexCount % 3) == 0);
-                    aabbCount += (geometry.triangles.indexCount / 3);
-                }
-                else
-                {
-                    // Auto-indexed triangle vertices
-                    PAL_ASSERT((geometry.triangles.vertexCount % 3) == 0);
-                    aabbCount += (geometry.triangles.vertexCount / 3);
-                }
-            }
-            else
-            {
-                // Procedural AABB geometry does not require any additional data. Note that AABBCount is 64-bit; in
-                // practice we can't support more than 4 billion AABBs so for now just assert that it's a 32-bit value.
-                PAL_ASSERT(Util::HighPart(geometry.aabbs.aabbCount) == 0);
-                aabbCount += static_cast<uint32>(geometry.aabbs.aabbCount);
-            }
-        }
-    }
-    else
-    {
-        // Top level
-
-        // One AABB per instance
-        aabbCount = buildInfo.inputElemCount;
-    }
-    return aabbCount;
-}
-
-// =====================================================================================================================
-// Calculates the result buffer offsets and returns the total result memory size
-uint32 BvhBuilder::CalculateResultBufferInfo(
-    AccelStructDataOffsets* pOffsets,
-    uint32*                 pMetadataSizeInBytes)
-{
-    uint32 runningOffset = 0;
-
-    //-----------------------------------------------------------------------------------------------------------//
-    //  DestAccelerationStructureData layout
-    //
-    //-------------- Type: All ----------------------------------------------------------------------------------//
-    //  AccelStructMetadataHeader
-    //  Parent pointers
-    //  AccelStructHeader
-    //  Internal Nodes                              : BVHNode (BVH2) or Float32BoxNode (BVH4)
-    //  Leaf Nodes                                  : BVHNode (BVH2), TriangleNode (BVH4) or InstanceNode (TopLevel)
-    //  Per-geometry description info               : Bottom Level Only
-    //  Per-leaf node pointers (uint32)
-    //-----------------------------------------------------------------------------------------------------------//
-    AccelStructDataOffsets offsets = {};
-
-    // Acceleration structure data starts with the header
-    runningOffset += sizeof(AccelStructHeader);
-
-    uint32 internalNodeSize = 0;
-    uint32 leafNodeSize     = 0;
-
-    if (m_buildConfig.numLeafNodes > 0)
-    {
-        internalNodeSize = BvhBuilder::CalculateInternalNodesSize();
-        leafNodeSize     = BvhBuilder::CalculateLeafNodesSize();
-
-        offsets.internalNodes = runningOffset;
-        runningOffset += internalNodeSize;
-
-        offsets.leafNodes = runningOffset;
-        runningOffset += leafNodeSize;
-
-        if (m_buildConfig.topLevelBuild == false)
-        {
-            offsets.geometryInfo = runningOffset;
-            runningOffset += BvhBuilder::CalculateGeometryInfoSize(m_buildArgs.inputs.inputElemCount);
-        }
-
-        offsets.primNodePtrs = runningOffset;
-        runningOffset += m_buildConfig.numLeafNodes * sizeof(uint32);
-    }
-
-    // Metadata section is at the beginning of the acceleration structure buffer
-    uint32 metadataSizeInBytes = CalcMetadataSizeInBytes(internalNodeSize,
-                                                         leafNodeSize);
-
-    // Align metadata size to cache line
-    metadataSizeInBytes = Util::Pow2Align(metadataSizeInBytes, 128);
-
-    // Add in metadata size at the end of the calculation, as we do not want to include it in any of the offsets.
-    runningOffset += metadataSizeInBytes;
-
-    if (pOffsets != nullptr)
-    {
-        memcpy(pOffsets, &offsets, sizeof(offsets));
-    }
-
-    if (pMetadataSizeInBytes != nullptr)
-    {
-        *pMetadataSizeInBytes = metadataSizeInBytes;
-    }
-
-    return runningOffset;
-}
-
-// =====================================================================================================================
-// Calculates the scratch buffer offsets and returns the total scratch memory size
-uint32 GpuBvhBuilder::CalculateScratchBufferInfo(
-    RayTracingScratchDataOffsets* pOffsets)
-{
-    //-----------------------------------------------------------------------------------------------------------//
-    //  ScratchAccelerationStructureData layout
-    //
-    //-------------- Type: All ----------------------------------------------------------------------------------//
-    //  TaskQueue Counters (phase, taskCounter, startIndex, endIndex, numTaskDone)
-    //  AABB               (ScratchNode InternalAABB[node_count = (2 * aabbCount) - 1])...AABB + Sorted Leaf
-    //  PropagationFlags   (uint32_t PropagationFlags[NumPrimitives])
-    //  TriangleSplitBox   (BoundingBox TriangleSplitBoxes[NumPrimitives])                     - Bottom Level Only
-
-    //  ============ PASS 1 ============
-    //  AABB              (ScratchNode LeafAABB[NumPrimitives])
-    //  TriangleSplitRef  (ScratchTSRef TriangleSplitRefs[NumPrimitives])                     - Bottom Level Only
-    //  SceneAABB         (D3D12_RAYTRACING_AABB SceneAABB)
-    //  MortonCodes       (uint32/uint64 MortonCodes[NumPrimitives])
-    //  MortonCodesSorted (uint32/uint64 MortonCodesSorted[NumPrimitives])
-    //  PrimIndicesSorted (uint32 PrimIndicesSorted[NumPrimitives])
-    //  DeviceHistogram
-    //  TempKeys          (uint32/uint64 TempKeys[NumPrimitives])
-    //  TempVals          (uint32 TempVals[NumPrimitives])
-    //  DevicePartialSum
-
-    //  ============ PASS 2 ============
-    //  ClusterList0      (uint32 ClusterList0[NumPrimitives])                                - BVH AC only
-    //  ClusterList1      (uint32 ClusterList1[NumPrimitives])                                - BVH AC only
-    //  NumClusterList0   (uint32 NumClusterList0)                                            - BVH AC only
-    //  NumClusterList1   (uint32 NumClusterList1)                                            - BVH AC only
-    //  InternalNodesIndex0   (uint32 NumClusterList0)                                        - BVH AC only
-    //  InternalNodesIndex1   (uint32 NumClusterList1)                                        - BVH AC only
-
-    //  ============ PASS 3 ============
-    //  QBVH Global Stack (uint2 GlobalStack[internal_node_count])
-    //  QBVH Stack Ptrs   (StackPtrs StackPtrs)
-    //  BVH2Prims         (BVHNode bvh2prims[NumPrimitives])                                    -Bottom Level Only
-    //  Collapse Stack    (CTask CollapseStack[node_count])                                     -Bottom Level Only
-    //  Collapse Stack Ptrs (StackPtrs StackPtrs)                                               -Bottom Level Only
-    //-----------------------------------------------------------------------------------------------------------//
-
-    uint32 runningOffset = 0;
-
-    // Scratch data for storing internal BVH node data
-    const uint32 bvhNodeData = runningOffset;
-    const uint32 aabbCount = m_buildConfig.numLeafNodes;
-
-    // The scratch acceleration structure is built as a BVH2.
-    const uint32 nodeCount = (aabbCount > 0) ? ((2 * aabbCount) - 1) : 0;
-    runningOffset += nodeCount * RayTracingScratchNodeSize;
-
-    // Propagation flags
-    const uint32 propagationFlags = runningOffset;
-    runningOffset += aabbCount * sizeof(uint32);
-
-    uint32 triangleSplitState = 0xFFFFFFFF;
-    uint32 triangleSplitBoxes = 0xFFFFFFFF;
-
-    if (m_buildConfig.triangleSplitting)
-    {
-        triangleSplitState = runningOffset;
-        runningOffset += RayTracingStateTSBuildSize;
-
-        triangleSplitBoxes = runningOffset;
-        runningOffset += aabbCount * sizeof(Aabb);
-    }
-
-    uint32 currentState = 0xFFFFFFFF;
-
-    if ((m_buildConfig.topDownBuild == false) && (m_buildConfig.buildMode == BvhBuildMode::PLOC))
-    {
-        currentState = runningOffset;
-        runningOffset += RayTracingTaskQueueCounterSize;    // PLOC task counters
-        runningOffset += RayTracingStatePLOCSize;           // PLOC state
-    }
-
-    uint32 tdState = 0xFFFFFFFF;
-    uint32 tdTaskQueueCounter = 0xFFFFFFFF;
-
-    if (m_buildConfig.topDownBuild)
-    {
-        tdState = runningOffset;
-
-        if (m_buildConfig.rebraidType == GpuRt::RebraidType::V1)
-        {
-            runningOffset += RayTracingStateTDTRBuildSize;
-        }
-        else
-        {
-            runningOffset += RayTracingStateTDBuildSize;
-        }
-
-        tdTaskQueueCounter = runningOffset;               // td /tdtr taskCounter
-        runningOffset += RayTracingTaskQueueCounterSize;
-    }
-
-    const uint32 dynamicBlockIndex = runningOffset;
-    runningOffset += sizeof(uint32);
-
-    uint32 numBatches      = 0xFFFFFFFF;
-    uint32 batchIndices    = 0xFFFFFFFF;
-    uint32 indexBufferInfo = 0xFFFFFFFF;
-
-    if (m_buildConfig.triangleCompressionMode == TriangleCompressionMode::Pair)
-    {
-        numBatches = runningOffset;
-        runningOffset += sizeof(uint32);
-
-        batchIndices = runningOffset;
-        runningOffset += aabbCount * sizeof(uint32);
-
-        indexBufferInfo = runningOffset;
-        runningOffset += BvhBuilder::CalculateIndexBufferInfoSize(m_buildArgs.inputs.inputElemCount);
-    }
-
-    uint32 debugCounters = 0;
-
-    if (m_deviceSettings.enableBVHBuildDebugCounters)
-    {
-        // Adding a Build debug counter
-        // Allocate memory for counters
-        debugCounters = runningOffset;
-        runningOffset += sizeof(uint32) * RayTracingBuildDebugCounters;
-    }
-
-    uint32 rebraidState = 0xFFFFFFFF;
-
-    if (m_buildConfig.rebraidType == GpuRt::RebraidType::V2)
-    {
-        rebraidState = runningOffset;
-        runningOffset += RayTracingStateRebraidBuildSize;
-    }
-
-    uint32 maxSize = runningOffset;
-
-    const uint32 passOffset = runningOffset;
-
-    // ============ PASS 1 ============
-
-    runningOffset = passOffset;
-
-    uint32 bvhLeafNodeData   = 0xFFFFFFFF;
-    uint32 sceneBounds       = 0xFFFFFFFF;
-    uint32 mortonCodes       = 0xFFFFFFFF;
-    uint32 mortonCodesSorted = 0xFFFFFFFF;
-    uint32 primIndicesSorted = 0xFFFFFFFF;
-    uint32 primIndicesSortedSwap = 0xFFFFFFFF;
-    uint32 histogram         = 0xFFFFFFFF;
-    uint32 tempKeys          = 0xFFFFFFFF;
-    uint32 tempVals          = 0xFFFFFFFF;
-
-    uint32 atomicFlags         = 0xFFFFFFFF;
-    uint32 distributedPartSums = 0xFFFFFFFF;
-
-    uint32 refList             = 0xFFFFFFFF;
-    uint32 tdNodeList          = 0xFFFFFFFF;
-    uint32 refOffsets          = 0xFFFFFFFF;
-    uint32 tdBins              = 0xFFFFFFFF;
-
-    // Scratch data for storing unsorted leaf nodes
-    bvhLeafNodeData = runningOffset;
-    runningOffset += aabbCount * RayTracingScratchNodeSize;
-
-    uint32 triangleSplitRefs0 = 0xFFFFFFFF;
-    uint32 triangleSplitRefs1 = 0xFFFFFFFF;
-    uint32 splitPriorities    = 0xFFFFFFFF;
-    uint32 atomicFlagsTS      = 0xFFFFFFFF;
-
-    if (m_buildConfig.triangleSplitting)
-    {
-        triangleSplitRefs0 = runningOffset;
-        runningOffset += aabbCount * RayTracingTSRefScratchSize;
-
-        triangleSplitRefs1 = runningOffset;
-        runningOffset += aabbCount * RayTracingTSRefScratchSize;
-
-        splitPriorities = runningOffset;
-        runningOffset += aabbCount * sizeof(float);
-
-        atomicFlagsTS = runningOffset;  // TODO: calculate number of blocks based on KEYS_PER_THREAD
-        runningOffset += aabbCount * RayTracingAtomicFlags;
-    }
-    else if (m_buildConfig.rebraidType == GpuRt::RebraidType::V2)
-    {
-        atomicFlagsTS = runningOffset;  // TODO: calculate number of blocks based on KEYS_PER_THREAD
-        runningOffset += aabbCount * RayTracingAtomicFlags;
-    }
-
-    sceneBounds = runningOffset;
-    runningOffset += sizeof(Aabb) + 2 * sizeof(float);  // scene bounding box + min/max prim size
-
-    if (m_buildConfig.topLevelBuild == true)
-    {
-        runningOffset += sizeof(Aabb);  // scene bounding box for rebraid
-    }
-
-    if ((m_buildConfig.topLevelBuild == false) || (m_buildConfig.topDownBuild == false))
-    {
-        const uint32 dataSize = m_deviceSettings.enableMortonCode30 ? sizeof(uint32) : sizeof(uint64);
-
-        // Morton codes buffer size
-        mortonCodes = runningOffset;
-        runningOffset += aabbCount * dataSize;
-
-        // Sorted morton codes buffer size
-        mortonCodesSorted = runningOffset;
-        runningOffset += aabbCount * dataSize;
-
-        // Sorted primitive indices buffer size
-        primIndicesSorted = runningOffset;
-        runningOffset += aabbCount * sizeof(uint32);
-
-        // Merge Sort
-        if (m_deviceSettings.enableMergeSort)
-        {
-            primIndicesSortedSwap = runningOffset;
-            runningOffset += aabbCount * sizeof(uint32);
-        }
-        // Radix Sort
-        else
-        {
-            // Radix sort temporary buffers
-            const uint32 numBlocks = (aabbCount + m_radixSortConfig.groupBlockSize - 1) /
-                                     m_radixSortConfig.groupBlockSize;
-
-            // device histograms buffer (int4)
-            histogram = runningOffset;
-            const uint32 numHistogramElements = numBlocks * m_radixSortConfig.numBins;
-            runningOffset += numHistogramElements * sizeof(uint32);
-
-            // device temp keys buffer (int)
-            tempKeys = runningOffset;
-            runningOffset += aabbCount * dataSize;
-
-            // device temp vals buffer (int)
-            tempVals = runningOffset;
-            runningOffset += aabbCount * sizeof(uint32);
-
-            if (m_buildConfig.radixSortScanLevel == 0)
-            {
-                const uint32 blockSize        = m_radixSortConfig.workGroupSize;
-                const uint32 numKeysPerThread = m_radixSortConfig.keysPerThread;
-                const uint32 numDynamicBlocks = (numHistogramElements +
-                    ((blockSize * numKeysPerThread) - 1)) / (blockSize * numKeysPerThread);
-
-                atomicFlags = runningOffset;
-                runningOffset += numDynamicBlocks * RayTracingScanDLBFlagsSize;
-            }
-            else
-            {
-                // partial sum scratch memory
-                const uint32 numGroupsBottomLevelScan =
-                    Util::RoundUpQuotient(m_buildConfig.numHistogramElements, m_radixSortConfig.groupBlockSizeScan);
-
-                distributedPartSums = runningOffset;
-                runningOffset += numGroupsBottomLevelScan * sizeof(uint32);
-
-                if (m_buildConfig.numHistogramElements >= m_radixSortConfig.scanThresholdTwoLevel)
-                {
-                    const uint32 numGroupsMidLevelScan =
-                        Util::RoundUpQuotient(numGroupsBottomLevelScan, m_radixSortConfig.groupBlockSizeScan);
-
-                    runningOffset += numGroupsMidLevelScan * sizeof(uint32);
-                }
-            }
-        }
-    }
-    else
-    {
-        refList = runningOffset;
-
-        if (m_buildConfig.rebraidType == GpuRt::RebraidType::V1)
-        {
-            runningOffset += RayTracingTDTRRefScratchSize * aabbCount;
-        }
-        else
-        {
-            runningOffset += RayTracingTDRefScratchSize * aabbCount;
-        }
-
-        // Align the beginning of the TDBins structs to 8 bytes so that 64-bit atomic operations on the first field in
-        // the struct work correctly.
-        runningOffset = Util::RoundUpToMultiple(runningOffset, 8u);
-
-        tdBins = runningOffset;
-
-        runningOffset += RayTracingTDBinsSize * (aabbCount / 3);
-
-        tdNodeList = runningOffset;
-
-        if (m_buildConfig.rebraidType == GpuRt::RebraidType::V1)
-        {
-            runningOffset += RayTracingTDTRNodeSize * (aabbCount - 1);
-        }
-        else
-        {
-            runningOffset += RayTracingTDNodeSize * (aabbCount - 1);
-        }
-
-    }
-
-    maxSize = Util::Max(maxSize, runningOffset);
-
-    // ============ PASS 2 ============
-
-    runningOffset = passOffset;
-
-    uint32 clustersList0        = 0xFFFFFFFF;
-    uint32 clustersList1        = 0xFFFFFFFF;
-    uint32 numClusterList0      = 0xFFFFFFFF;
-    uint32 numClusterList1      = 0xFFFFFFFF;
-    uint32 internalNodesIndex0  = 0xFFFFFFFF;
-    uint32 internalNodesIndex1  = 0xFFFFFFFF;
-    uint32 neighbourIndices     = 0xFFFFFFFF;
-    uint32 atomicFlagsPloc      = 0xFFFFFFFF;
-    uint32 clusterOffsets       = 0xFFFFFFFF;
-
-    if (m_buildConfig.topDownBuild == false)
-    {
-        if (m_buildConfig.buildMode == BvhBuildMode::PLOC)
-        {
-            clustersList0 = runningOffset;
-            runningOffset += aabbCount * sizeof(uint32);
-
-            clustersList1 = runningOffset;
-            runningOffset += aabbCount * sizeof(uint32);
-
-            neighbourIndices = runningOffset;
-            runningOffset += aabbCount * sizeof(uint32);
-
-            atomicFlagsPloc = runningOffset; // TODO: calculate number of blocks based on KEYS_PER_THREAD
-            runningOffset += aabbCount * RayTracingPLOCFlags;
-
-            clusterOffsets = runningOffset;
-            runningOffset += aabbCount * sizeof(uint32);
-        }
-    }
-
-    maxSize = Util::Max(maxSize, runningOffset);
-
-    // ============ PASS 3 ============
-
-    runningOffset = passOffset;
-
-    uint32 qbvhGlobalStack = 0;
-    uint32 qbvhGlobalStackPtrs = 0;
-
-    uint32 collapseBVHStack = 0;
-    uint32 collapseBVHStackPtrs = 0;
-    uint32 bvh2Prims = 0;
-
-    // ..and QBVH global stack
-    qbvhGlobalStack = runningOffset;
-
-    const uint32 maxStackEntry = CalcNumQBVHInternalNodes(m_buildConfig.numLeafNodes);
-
-    if ((m_buildConfig.topLevelBuild == false) && m_buildConfig.collapse)
-    {
-        runningOffset += maxStackEntry * RayTracingQBVHCollapseTaskSize;
-    }
-    else
-    {
-        // Stack pointers require 2 entries per node when fp16 and fp32 box nodes intermix in BLAS
-        const Fp16BoxNodesInBlasMode intNodeTypes = m_buildConfig.fp16BoxNodesInBlasMode;
-        const bool intNodeTypesMix = (intNodeTypes != Fp16BoxNodesInBlasMode::NoNodes) &&
-                                     (intNodeTypes != Fp16BoxNodesInBlasMode::AllNodes);
-        const bool intNodeTypesMixInBlas = intNodeTypesMix &&
-                                           (m_buildArgs.inputs.type == AccelStructType::BottomLevel);
-        const uint32 stackEntrySize      = ((intNodeTypesMixInBlas ||
-                                             m_deviceSettings.enableHalfBoxNode32) ? 2u : 1u);
-
-        runningOffset += maxStackEntry * stackEntrySize * sizeof(uint32);
-    }
-
-    qbvhGlobalStackPtrs = runningOffset;
-
-    runningOffset += RayTracingQBVHStackPtrsSize;
-
-    maxSize = Util::Max(maxSize, runningOffset);
-
-    // If the caller requested offsets, return them.
-    if (pOffsets != nullptr)
-    {
-        pOffsets->bvhNodeData          = bvhNodeData;
-        pOffsets->triangleSplitBoxes   = triangleSplitBoxes;
-        pOffsets->triangleSplitRefs0   = triangleSplitRefs0;
-        pOffsets->triangleSplitRefs1   = triangleSplitRefs1;
-        pOffsets->splitPriorities      = splitPriorities;
-        pOffsets->triangleSplitState   = triangleSplitState;
-        pOffsets->rebraidState         = rebraidState;
-        pOffsets->atomicFlagsTS        = atomicFlagsTS;
-        pOffsets->refList              = refList;
-        pOffsets->tdNodeList           = tdNodeList;
-        pOffsets->tdBins               = tdBins;
-        pOffsets->tdState              = tdState;
-        pOffsets->tdTaskQueueCounter   = tdTaskQueueCounter;
-        pOffsets->refOffsets           = refOffsets;
-        pOffsets->bvhLeafNodeData      = bvhLeafNodeData;
-        pOffsets->clusterList0         = clustersList0;
-        pOffsets->clusterList1         = clustersList1;
-        pOffsets->numClusterList0      = numClusterList0;
-        pOffsets->numClusterList1      = numClusterList1;
-        pOffsets->internalNodesIndex0  = internalNodesIndex0;
-        pOffsets->internalNodesIndex1  = internalNodesIndex1;
-        pOffsets->neighbourIndices     = neighbourIndices;
-        pOffsets->currentState         = currentState;
-        pOffsets->atomicFlagsPloc      = atomicFlagsPloc;
-        pOffsets->clusterOffsets       = clusterOffsets;
-        pOffsets->sceneBounds          = sceneBounds;
-        pOffsets->mortonCodes          = mortonCodes;
-        pOffsets->mortonCodesSorted    = mortonCodesSorted;
-        pOffsets->primIndicesSorted    = primIndicesSorted;
-        pOffsets->primIndicesSortedSwap= primIndicesSortedSwap;
-        pOffsets->propagationFlags     = propagationFlags;
-        pOffsets->histogram            = histogram;
-        pOffsets->tempKeys             = tempKeys;
-        pOffsets->tempVals             = tempVals;
-        pOffsets->dynamicBlockIndex    = dynamicBlockIndex;
-        pOffsets->atomicFlags          = atomicFlags;
-        pOffsets->distributedPartSums  = distributedPartSums;
-        pOffsets->qbvhGlobalStack      = qbvhGlobalStack;
-        pOffsets->qbvhGlobalStackPtrs  = qbvhGlobalStackPtrs;
-        pOffsets->debugCounters        = debugCounters;
-        pOffsets->numBatches           = numBatches;
-        pOffsets->batchIndices         = batchIndices;
-        pOffsets->indexBufferInfo      = indexBufferInfo;
-    }
-
-    // Return maxSize which now contains the total scratch size.
-    return maxSize;
-}
-
-// =====================================================================================================================
-// Calculates the update scratch buffer offsets and returns the total update scratch memory size
-uint32 GpuBvhBuilder::CalculateUpdateScratchBufferInfo(
-    RayTracingScratchDataOffsets* pOffsets)
-{
-    uint32 runningOffset = 0;
-    //-----------------------------------------------------------------------------------------------------------//
-    //  Update Scratch Data layout
-    //
-    //-------------- Type: All ----------------------------------------------------------------------------------//
-    // PropagationFlags        (uint32 PropagationFlags[NumPrimitives])
-    // UpdateStackPointer      uint32
-    // UpdateStackElements     uint32[NumPrimitives]
-    //-----------------------------------------------------------------------------------------------------------//
-    RayTracingScratchDataOffsets offsets = {};
-
-    // Allocate space for the node flags
-    offsets.propagationFlags = runningOffset;
-    runningOffset +=
-        m_buildConfig.numLeafNodes * sizeof(uint32);
-
-    // Allocate space for update stack
-    offsets.updateStack = runningOffset;
-
-    // Update stack pointer
-    runningOffset += sizeof(uint32);
-
-    // Update stack elements. Note, for a worst case tree, each leaf node enqueues a single parent
-    // node pointer for updating
-    runningOffset += m_buildConfig.numLeafNodes * sizeof(uint32);
-
-    if (pOffsets != nullptr)
-    {
-        memcpy(pOffsets, &offsets, sizeof(offsets));
-    }
-
-    return runningOffset;
-}
-
-// =====================================================================================================================
-// Check if need to force fp16 mode off
-// Returns True if need to force the setting off, false otherwise.
-static bool ForceDisableFp16BoxNodes(
-    const AccelStructBuildInputs& buildArgs,
-    const DeviceSettings&         deviceSettings)
-{
-    const bool allowUpdate = buildArgs.flags & AccelStructBuildFlag::AccelStructBuildFlagAllowUpdate;
-    const bool allowCompaction = buildArgs.flags & AccelStructBuildFlag::AccelStructBuildFlagAllowCompaction;
-
-    // Disable fp16 mode if
-    // 1-) AllowUpdate set when not allowed by panel setting
-    // 2-) TLAS
-    // 3-) AllowCompaction not set when required by panel setting
-    // Otherwise, respect the fp16 mode passed in from device settings
-    const bool forceFp16BoxOff = (buildArgs.type == AccelStructType::TopLevel) ||
-        ((deviceSettings.allowFp16BoxNodesInUpdatableBvh == false) && allowUpdate) ||
-        (deviceSettings.fp16BoxNodesRequireCompaction && (allowCompaction == false));
-
-    return forceFp16BoxOff;
-}
-
-// =====================================================================================================================
-// Returns True if triangle compression should be enabled based on the current build flags and settings.
-static bool AutoSelectTriangleCompressMode(
-    const AccelStructBuildInputs& buildArgs,
-    const DeviceSettings& deviceSettings)
-{
-    const bool allowCompaction = Util::TestAnyFlagSet(buildArgs.flags, AccelStructBuildFlagAllowCompaction);
-    const bool isFastTrace = Util::TestAnyFlagSet(buildArgs.flags, AccelStructBuildFlagPreferFastTrace);
-    const bool isFastBuild = Util::TestAnyFlagSet(buildArgs.flags, AccelStructBuildFlagPreferFastBuild);
-    const bool isDefaultBuild = (isFastTrace == false) && (isFastBuild == false);
-
-    bool enableTriCompression = false;
-
-    switch (deviceSettings.triangleCompressionAutoMode)
-    {
-    case TriangleCompressionAutoMode::Disabled:
-        break;
-    case TriangleCompressionAutoMode::AlwaysEnabled:
-        enableTriCompression = true;
-        break;
-    case TriangleCompressionAutoMode::DefaultBuild:
-        enableTriCompression = isDefaultBuild || isFastTrace;
-        break;
-    case TriangleCompressionAutoMode::FastTrace:
-        enableTriCompression = isFastTrace;
-        break;
-    case TriangleCompressionAutoMode::Compaction:
-        enableTriCompression = allowCompaction;
-        break;
-    case TriangleCompressionAutoMode::DefaultBuildWithCompaction:
-        enableTriCompression = (isDefaultBuild || isFastTrace) && allowCompaction;
-        break;
-    case TriangleCompressionAutoMode::FastTraceWithCompaction:
-        enableTriCompression = isFastTrace && allowCompaction;
-        break;
-    case TriangleCompressionAutoMode::DefaultBuildOrCompaction:
-        enableTriCompression = isDefaultBuild || isFastTrace || allowCompaction;
-        break;
-    case TriangleCompressionAutoMode::FastTraceOrCompaction:
-        enableTriCompression = isFastTrace || allowCompaction;
-        break;
-    default:
-        break;
-    }
-
-    return enableTriCompression == true;
-}
-
-// =====================================================================================================================
-// If DeviceSettings has Auto Select Triangles or Updatable Fp16 Box Nodes enabled, test to select or turn off in build.
-void BvhBuilder::UpdateBuildConfig()
-{
-    m_buildConfig.fp16BoxNodesInBlasMode = ForceDisableFp16BoxNodes(m_buildArgs.inputs, m_deviceSettings) ?
-        Fp16BoxNodesInBlasMode::NoNodes : m_deviceSettings.fp16BoxNodesInBlasMode;
-
-    m_buildConfig.triangleCompressionMode = AutoSelectTriangleCompressMode(m_buildArgs.inputs, m_deviceSettings) ?
-        TriangleCompressionMode::Pair : TriangleCompressionMode::None;
-}
-
-// =====================================================================================================================
-// Initialize buildConfig
-void BvhBuilder::InitBuildConfig(
-    const AccelStructBuildInfo& buildArgs) // Input build args
-{
-    m_buildConfig = {};
-    uint32 primitiveCount = CalculateRayTracingAABBCount(buildArgs.inputs);
-
-    if (Util::TestAnyFlagSet(buildArgs.inputs.flags, AccelStructBuildFlagPreferFastTrace))
-    {
-        m_buildConfig.buildMode = m_deviceSettings.bvhBuildModeFastTrace;
-        m_buildConfig.cpuBuildMode = m_deviceSettings.bvhCpuBuildModeFastTrace;
-    }
-    else if (Util::TestAnyFlagSet(buildArgs.inputs.flags, AccelStructBuildFlagPreferFastBuild))
-    {
-        m_buildConfig.buildMode = m_deviceSettings.bvhBuildModeFastBuild;
-        m_buildConfig.cpuBuildMode = m_deviceSettings.bvhCpuBuildModeFastBuild;
-    }
-    else
-    {
-        m_buildConfig.buildMode = m_deviceSettings.bvhBuildModeDefault;
-        m_buildConfig.cpuBuildMode = m_deviceSettings.bvhCpuBuildModeDefault;
-    }
-
-    m_buildConfig.numPrimitives = primitiveCount;
-    m_buildConfig.numLeafNodes = primitiveCount;
-    m_buildConfig.rebraidType = m_deviceSettings.rebraidType;
-    m_buildConfig.topLevelBuild = buildArgs.inputs.type == AccelStructType::TopLevel;
-    m_buildConfig.geometryType = GetGeometryType(buildArgs.inputs);
-    UpdateBuildConfig();
-    m_buildConfig.triangleCompressionMode = (buildArgs.inputs.type == AccelStructType::BottomLevel &&
-                                            m_buildConfig.geometryType == GeometryType::Triangles) ?
-                                            m_buildConfig.triangleCompressionMode :
-                                            TriangleCompressionMode::None;
-
-    m_buildConfig.bvhBuilderNodeSortType = m_deviceSettings.bvhBuilderNodeSortType;
-    m_buildConfig.bvhBuilderNodeSortHeuristic = m_deviceSettings.bvhBuilderNodeSortHeuristic;
 }
 
 // =====================================================================================================================
@@ -1254,20 +624,20 @@ void Device::WriteCapturedBvh(
 
         if (result == Pal::Result::Success)
         {
-            result = ClientAllocateGpuMemory(m_info, sizeInBytes, &gpuMem, &destGpuVa, &pMappedData);
+            result = m_clientCb.pfnAllocateGpuMemory(m_info, sizeInBytes, &gpuMem, &destGpuVa, &pMappedData);
         }
 
         if (result == Pal::Result::Success)
         {
             AccelStructCopyInfo copyInfo = {};
-            copyInfo.mode = GpuRt::AccelStructCopyMode::Serialize;
+            copyInfo.mode = AccelStructCopyMode::Serialize;
             copyInfo.dstAccelStructAddr.gpu = destGpuVa;
 
             // BLAS list for copying
-            Util::Vector<Pal::gpusize, 8, GpuRt::Device> blasList(this);
+            Util::Vector<Pal::gpusize, 8, Internal::Device> blasList(this);
 
             // Hash map for logging unique BLASs
-            Util::HashSet<Pal::gpusize, GpuRt::Device> blas(8, this);
+            Util::HashSet<Pal::gpusize, Internal::Device> blas(8, this);
             result = blas.Init();
             if (result == Pal::Result::Success)
             {
@@ -1280,7 +650,7 @@ void Device::WriteCapturedBvh(
                     ClientCmdContextHandle context = nullptr;
                     Pal::ICmdBuffer* pCmdBuffer = nullptr;
 
-                    result = ClientAcquireCmdContext(m_info, &context, &pCmdBuffer);
+                    result = m_clientCb.pfnAcquireCmdContext(m_info, &context, &pCmdBuffer);
 
                     if (result != Pal::Result::Success)
                     {
@@ -1290,7 +660,7 @@ void Device::WriteCapturedBvh(
 
                     CopyAccelStruct(pCmdBuffer, copyInfo);
 
-                    result = ClientFlushCmdContext(context);
+                    result = m_clientCb.pfnFlushCmdContext(context);
 
                     if (result != Pal::Result::Success)
                     {
@@ -1332,7 +702,7 @@ void Device::WriteCapturedBvh(
 
                 if (pMappedData != nullptr)
                 {
-                    ClientFreeGpuMem(m_info, gpuMem);
+                    m_clientCb.pfnFreeGpuMem(m_info, gpuMem);
                 }
 
                 if (result == Pal::Result::Success)
@@ -1359,7 +729,7 @@ void Device::WriteCapturedBvh(
                             ClientCmdContextHandle context = nullptr;
                             Pal::ICmdBuffer* pCmdBuffer = nullptr;
 
-                            result = ClientAcquireCmdContext(m_info, &context, &pCmdBuffer);
+                            result = m_clientCb.pfnAcquireCmdContext(m_info, &context, &pCmdBuffer);
 
                             if (result != Pal::Result::Success)
                             {
@@ -1367,7 +737,7 @@ void Device::WriteCapturedBvh(
                                 break;
                             }
 
-                            result = ClientAllocateGpuMemory(m_info, sizeInBytes, &gpuMem, &destGpuVa, &pMappedData);
+                            result = m_clientCb.pfnAllocateGpuMemory(m_info, sizeInBytes, &gpuMem, &destGpuVa, &pMappedData);
 
                             if (result != Pal::Result::Success)
                             {
@@ -1378,18 +748,18 @@ void Device::WriteCapturedBvh(
 
                             CopyBufferRaw(pCmdBuffer, destGpuVa, gpuVa, sizeInDwords);
 
-                            result = ClientFlushCmdContext(context);
+                            result = m_clientCb.pfnFlushCmdContext(context);
 
                             if (result != Pal::Result::Success)
                             {
                                 // Failed to submit command buffer
-                                ClientFreeGpuMem(m_info, gpuMem);
+                                m_clientCb.pfnFreeGpuMem(m_info, gpuMem);
                                 break;
                             }
 
                             WriteAccelStructChunk(pTraceSource, gpuVa, 1, pMappedData, sizeInBytes);
 
-                            ClientFreeGpuMem(m_info, gpuMem);
+                            m_clientCb.pfnFreeGpuMem(m_info, gpuMem);
                         }
                     }
                 }
@@ -1437,7 +807,7 @@ void Device::WriteAccelStructChunk(
     // Write Accel data to the TraceChunkInfo
     GpuUtil::TraceChunkInfo info = {};
 
-    GpuRt::RawAccelStructRdfChunkHeader header = {};
+    RawAccelStructRdfChunkHeader header = {};
     header.accelStructBaseVaLo = Util::LowPart(gpuVa);
     header.accelStructBaseVaHi = Util::HighPart(gpuVa);
     header.metaHeaderOffset    = 0;
@@ -1449,7 +819,7 @@ void Device::WriteAccelStructChunk(
     header.flags.blas   = isBlas;
 
     const char chunkId[] = "RawAccelStruct";
-    Util::Strncpy(info.id, chunkId, Util::StringLength(chunkId));
+    Util::Strncpy(info.id, chunkId, sizeof(info.id));
 
     info.version           = GPURT_ACCEL_STRUCT_VERSION;
     info.headerSize        = sizeof(GpuRt::RawAccelStructRdfChunkHeader);
@@ -1475,19 +845,6 @@ void Device::NotifyTlasBuild(
 }
 
 // =====================================================================================================================
-void Device::GetAccelStructPrebuildInfo(
-    const AccelStructBuildInputs& buildInfo,
-    AccelStructPrebuildInfo*      pPrebuildInfo)
-{
-    GpuBvhBuilder builder(nullptr,
-        this,
-        *m_info.pDeviceProperties,
-        m_info.deviceSettings);
-
-    builder.GetAccelerationStructurePrebuildInfo(buildInfo, pPrebuildInfo);
-}
-
-// =====================================================================================================================
 void Device::GetSerializedAccelStructVersion(
     const void*                 pData,
     uint64_t*                   pVersion)
@@ -1510,6 +867,44 @@ void Device::GetSerializedAccelStructVersion(
         serializedHeaderSize + *pMetadataSizeInBytes));
 
     *pVersion = static_cast<uint64>(pHeader->uuidHi) << 32 | pHeader->uuidLo;
+}
+
+// =====================================================================================================================
+DataDriverMatchingIdentifierStatus Device::CheckSerializedAccelStructVersion(
+    const DataDriverMatchingIdentifier* pIdentifier)
+{
+    PAL_ASSERT(pIdentifier != nullptr);
+
+    const uint32 amdGUID[4] =
+    {
+        GPURT_AMD_GUID_0,
+        GPURT_AMD_GUID_1,
+        GPURT_AMD_GUID_2,
+        GPURT_AMD_GUID_3
+    };
+
+    DataDriverMatchingIdentifierStatus status = DataDriverMatchingIdentifierStatus::CompatibleWithDevice;
+    if (memcmp(pIdentifier->driverOpaqueGUID, amdGUID, sizeof(amdGUID)) != 0)
+    {
+        status = DataDriverMatchingIdentifierStatus::Unrecognized;
+    }
+    else
+    {
+        // driverOpaqueVersioningData:
+        //  0 - 31: uuidLo
+        // 32 - 63: uuidHi
+        // 64 - 79: GPURT_ACCEL_STRUCT_MINOR_VERSION
+        // 80 - 95: GPURT_ACCEL_STRUCT_MAJOR_VERSION
+        // 96 -127: 0
+        uint64 uuid = *(reinterpret_cast<const uint64*>(pIdentifier->driverOpaqueVersioningData));
+        uint32 version = *(reinterpret_cast<const uint32*>(pIdentifier->driverOpaqueVersioningData + sizeof(uint64)));
+        if ((uuid != m_info.deviceSettings.accelerationStructureUUID) ||
+            ((version >> 16) != GPURT_ACCEL_STRUCT_MAJOR_VERSION))
+        {
+            status = DataDriverMatchingIdentifierStatus::IncompatibleVersion;
+        }
+    }
+    return status;
 }
 
 // =====================================================================================================================
@@ -1574,7 +969,7 @@ Pal::Result Device::GetAccelStructPostBuildSize(
 
     Pal::Result result = Pal::Result::Unsupported;
 
-    result = ClientAllocateGpuMemory(
+    result = m_clientCb.pfnAllocateGpuMemory(
         m_info,
         allocationSizeInBytes,
         &gpuMem,
@@ -1594,13 +989,13 @@ Pal::Result Device::GetAccelStructPostBuildSize(
         ClientCmdContextHandle context = nullptr;
         Pal::ICmdBuffer* pCmdBuffer = nullptr;
 
-        result = ClientAcquireCmdContext(m_info, &context, &pCmdBuffer);
+        result = m_clientCb.pfnAcquireCmdContext(m_info, &context, &pCmdBuffer);
 
         if (result == Pal::Result::Success)
         {
             EmitAccelStructPostBuildInfo(pCmdBuffer, postBuildInfo);
 
-            result = ClientFlushCmdContext(context);
+            result = m_clientCb.pfnFlushCmdContext(context);
 
             if (result == Pal::Result::Success)
             {
@@ -1625,7 +1020,7 @@ Pal::Result Device::GetAccelStructPostBuildSize(
         // Failed to allocate memory
     }
 
-    ClientFreeGpuMem(m_info, gpuMem);
+    m_clientCb.pfnFreeGpuMem(m_info, gpuMem);
     return result;
 }
 
@@ -1636,6 +1031,10 @@ void Device::BuildAccelStruct(
 )
 {
     DeviceSettings deviceSettings;
+    ClientCallbacks clientCb = {};
+
+    SetUpClientCallbacks(&clientCb);
+
     deviceSettings = m_info.deviceSettings;
 
     if (pCmdBuffer != nullptr)
@@ -1645,6 +1044,7 @@ void Device::BuildAccelStruct(
         GpuBvhBuilder builder(pCmdBuffer,
                               this,
                               *m_info.pDeviceProperties,
+                              clientCb,
                               deviceSettings);
 
         builder.BuildRaytracingAccelerationStructure(buildInfo);
@@ -1655,6 +1055,7 @@ void Device::BuildAccelStruct(
     {
         CpuBvhBuilder builder(this,
                               *m_info.pDeviceProperties,
+                              clientCb,
                               deviceSettings);
 
         builder.BuildRaytracingAccelerationStructure(buildInfo);
@@ -1668,6 +1069,10 @@ void Device::EmitAccelStructPostBuildInfo(
 )
 {
     DeviceSettings deviceSettings;
+    ClientCallbacks clientCb = {};
+
+    SetUpClientCallbacks(&clientCb);
+
     deviceSettings = m_info.deviceSettings;
 
     if (pCmdBuffer != nullptr)
@@ -1677,6 +1082,7 @@ void Device::EmitAccelStructPostBuildInfo(
         GpuBvhBuilder builder(pCmdBuffer,
                               this,
                               *m_info.pDeviceProperties,
+                              clientCb,
                               deviceSettings);
 
         builder.EmitAccelerationStructurePostBuildInfo(postBuildInfo);
@@ -1687,6 +1093,7 @@ void Device::EmitAccelStructPostBuildInfo(
     {
         CpuBvhBuilder builder(this,
                               *m_info.pDeviceProperties,
+                              clientCb,
                               deviceSettings);
 
         builder.EmitAccelerationStructurePostBuildInfo(postBuildInfo);
@@ -1700,6 +1107,10 @@ void Device::CopyAccelStruct(
 )
 {
     DeviceSettings deviceSettings;
+    ClientCallbacks clientCb = {};
+
+    SetUpClientCallbacks(&clientCb);
+
     deviceSettings = m_info.deviceSettings;
 
     if (pCmdBuffer != nullptr)
@@ -1709,6 +1120,7 @@ void Device::CopyAccelStruct(
         GpuBvhBuilder builder(pCmdBuffer,
                               this,
                               *m_info.pDeviceProperties,
+                              clientCb,
                               deviceSettings);
 
         builder.CopyAccelerationStructure(copyInfo);
@@ -1719,6 +1131,7 @@ void Device::CopyAccelStruct(
     {
         CpuBvhBuilder builder(this,
                               *m_info.pDeviceProperties,
+                              clientCb,
                               deviceSettings);
 
         builder.CopyAccelerationStructure(copyInfo);
@@ -1840,13 +1253,13 @@ void Device::PushRGPMarker(
 
     va_end(args);
 
-    ClientInsertRGPMarker(pCmdBuffer, strBuffer, true);
+    m_clientCb.pfnInsertRGPMarker(pCmdBuffer, strBuffer, true);
 }
 
 // =====================================================================================================================
 void Device::PopRGPMarker(Pal::ICmdBuffer* pCmdBuffer)
 {
-    ClientInsertRGPMarker(pCmdBuffer, nullptr, false);
+    m_clientCb.pfnInsertRGPMarker(pCmdBuffer, nullptr, false);
 }
 
 // =====================================================================================================================
@@ -1863,4 +1276,53 @@ void Device::OutputPipelineName(
     pCmdBuffer->CmdCommentString(buildShaderInfo);
 }
 #endif
-};
+}   // namespace Internal
+} // namespace GpuRt
+
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 28
+// Backward compatibility function. Remove this once we've completely removed the client facing Device wrapper class.
+namespace GpuRt
+{
+
+// =====================================================================================================================
+Device::Device()
+    :
+    m_pDeviceImpl(nullptr)
+{
+}
+
+// =====================================================================================================================
+Device::~Device()
+{
+    if (m_pDeviceImpl)
+    {
+        m_pDeviceImpl->Destroy();
+        PAL_SAFE_FREE(m_pDeviceImpl, &m_allocator);
+    }
+}
+
+// =====================================================================================================================
+Pal::Result Device::Init(
+    const DeviceInitInfo& info)
+{
+    Pal::Result result = Pal::Result::ErrorOutOfMemory;
+
+    void* pMemory = PAL_MALLOC(GetDeviceSize(), &m_allocator, Util::AllocObject);
+    if (pMemory)
+    {
+        InitInternalClientCallbacks(&m_clientCb);
+
+        result = CreateDevice(info, m_clientCb, pMemory, &m_pDeviceImpl);
+    }
+
+    if (result != Pal::Result::Success)
+    {
+        m_pDeviceImpl->Destroy();
+        PAL_SAFE_FREE(m_pDeviceImpl, &m_allocator);
+    }
+
+    return result;
+}
+
+} // namespace GpuRt
+#endif

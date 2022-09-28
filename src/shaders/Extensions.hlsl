@@ -177,6 +177,7 @@ __decl uint AmdTraceRayGetHwSimdId() DUMMY_UINT_FUNC
 __decl uint AmdTraceRayGetHwSeId() DUMMY_UINT_FUNC
 __decl uint AmdTraceRayGetTriangleCompressionMode() DUMMY_UINT_FUNC
 __decl uint AmdTraceRayGetBoxSortHeuristicMode() DUMMY_UINT_FUNC
+__decl uint2 AmdTraceRayMakePC(uint pcVaLow) DUMMY_UINT2_FUNC
 
 //=====================================================================================================================
 // Ref: GpuRt::Device::GetStaticPipelineFlags
