@@ -148,8 +148,7 @@ void CopyFp32BoxNode(
     uint srcOffsetDataInternalNodes,
     uint srcMetadataSizeInBytes,
     uint dstOffsetDataInternalNodes,
-    uint dstMetadataSizeInBytes,
-    bool isHalfBoxNode32)
+    uint dstMetadataSizeInBytes)
 {
     const uint srcInternalNodeDataOffset = srcOffsetDataInternalNodes + nodeOffset;
     const uint dstInternalNodeDataOffset = dstOffsetDataInternalNodes + nodeOffset;
@@ -181,16 +180,12 @@ void CopyFp32BoxNode(
     DstBuffer.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET, node.bbox0_max);
     DstBuffer.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB1_MIN_OFFSET, node.bbox1_min);
     DstBuffer.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB1_MAX_OFFSET, node.bbox1_max);
-
-    if (isHalfBoxNode32 == false)
-    {
-        DstBuffer.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB2_MIN_OFFSET, node.bbox2_min);
-        DstBuffer.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB2_MAX_OFFSET, node.bbox2_max);
-        DstBuffer.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB3_MIN_OFFSET, node.bbox3_min);
-        DstBuffer.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB3_MAX_OFFSET, node.bbox3_max);
-        DstBuffer.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, node.flags);
-        DstBuffer.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_NUM_PRIM_OFFSET, node.numPrimitives);
-    }
+    DstBuffer.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB2_MIN_OFFSET, node.bbox2_min);
+    DstBuffer.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB2_MAX_OFFSET, node.bbox2_max);
+    DstBuffer.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB3_MIN_OFFSET, node.bbox3_min);
+    DstBuffer.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB3_MAX_OFFSET, node.bbox3_max);
+    DstBuffer.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, node.flags);
+    DstBuffer.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_NUM_PRIM_OFFSET, node.numPrimitives);
 
     const uint srcNodePointer = PackNodePointer(NODE_TYPE_BOX_FLOAT32, srcInternalNodeDataOffset - srcMetadataSizeInBytes);
     const uint dstNodePointer = PackNodePointer(NODE_TYPE_BOX_FLOAT32, dstInternalNodeDataOffset - dstMetadataSizeInBytes);
@@ -206,8 +201,7 @@ void CopyInteriorNodesTraversingUpwards(
     uint srcOffsetDataInternalNodes,
     uint srcMetadataSizeInBytes,
     uint dstOffsetDataInternalNodes,
-    uint dstMetadataSizeInBytes,
-    bool containHalfBoxNode32)
+    uint dstMetadataSizeInBytes)
 {
     // Load parent triangle/procedural node's parent
     uint parentNodePointer = ReadParentPointer(SrcBuffer,
@@ -252,15 +246,11 @@ void CopyInteriorNodesTraversingUpwards(
             }
             else
             {
-                const bool isHalfBoxNode32 = (containHalfBoxNode32   == true) &&
-                                             (parentChildPointers[2] == INVALID_IDX) &&
-                                             (parentChildPointers[3] == INVALID_IDX);
                 CopyFp32BoxNode(parentNodeOffset - sizeof(AccelStructHeader),
                                 srcOffsetDataInternalNodes,
                                 srcMetadataSizeInBytes,
                                 dstOffsetDataInternalNodes,
-                                dstMetadataSizeInBytes,
-                                isHalfBoxNode32);
+                                dstMetadataSizeInBytes);
             }
 
             // Load the next parent pointer
@@ -302,6 +292,10 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
     const uint triangleCompressionMode =
         (srcHeader.info >> ACCEL_STRUCT_HEADER_INFO_TRI_COMPRESS_SHIFT) & ACCEL_STRUCT_HEADER_INFO_TRI_COMPRESS_MASK;
 
+    const uint enableFusedInstanceNode =
+            (srcHeader.info >> ACCEL_STRUCT_HEADER_INFO_FUSED_INSTANCE_NODE_FLAGS_SHIFT) &
+                ACCEL_STRUCT_HEADER_INFO_FUSED_INSTANCE_NODE_FLAGS_MASK;
+
     AccelStructOffsets dstOffsets;
     const uint dstSizeInBytes = CalcCompactedSize(srcHeader,
                                                   type,
@@ -340,7 +334,6 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
     const uint dstOffsetDataGeometryInfo  = dstOffsets.geometryInfo      + dstMetadataSizeInBytes;
     const uint dstOffsetDataPrimNodePtrs  = dstOffsets.primNodePtrs      + dstMetadataSizeInBytes;
 
-    const bool containHalfBoxNode32   = (srcHeader.numInternalHalfNodesFp32 > 0);
     const uint fp16BoxNodesInBlasMode =
         (srcHeader.info >> ACCEL_STRUCT_HEADER_INFO_FP16_BOXNODE_IN_BLAS_MODE_SHIFT) & ACCEL_STRUCT_HEADER_INFO_FP16_BOXNODE_IN_BLAS_MODE_MASK;
 
@@ -351,8 +344,7 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
     // 16-bit internal nodes only apply to BLAS
     if (type == BOTTOM_LEVEL)
     {
-        if ((containHalfBoxNode32   == true) ||
-            (fp16BoxNodesInBlasMode == LEAF_NODES_IN_BLAS_AS_FP16) ||
+        if ((fp16BoxNodesInBlasMode == LEAF_NODES_IN_BLAS_AS_FP16) ||
             (fp16BoxNodesInBlasMode == MIXED_NODES_IN_BLAS_AS_FP16))
         {
             // Because interior box nodes are mixed (fp16 and fp32), each thread traverses up the tree from leaf nodes
@@ -385,8 +377,7 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
                                                    srcOffsetDataInternalNodes,
                                                    srcMetadataSizeInBytes,
                                                    dstOffsetDataInternalNodes,
-                                                   dstMetadataSizeInBytes,
-                                                   containHalfBoxNode32);
+                                                   dstMetadataSizeInBytes);
             }
         }
         else if (fp16BoxNodesInBlasMode == NO_NODES_IN_BLAS_AS_FP16)
@@ -398,8 +389,7 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
                                 srcOffsetDataInternalNodes,
                                 srcMetadataSizeInBytes,
                                 dstOffsetDataInternalNodes,
-                                dstMetadataSizeInBytes,
-                                false);
+                                dstMetadataSizeInBytes);
             }
         }
         else
@@ -411,8 +401,7 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
                                 srcOffsetDataInternalNodes,
                                 srcMetadataSizeInBytes,
                                 dstOffsetDataInternalNodes,
-                                dstMetadataSizeInBytes,
-                                false);
+                                dstMetadataSizeInBytes);
             }
             // Write out the rest as fp16
             for (uint nodeIndex = globalId; nodeIndex < srcHeader.numInternalNodesFp16; nodeIndex += ShaderConstants.numThreads)
@@ -428,34 +417,14 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
     }
     else // TOP_LEVEL
     {
-        if (containHalfBoxNode32 == true)
+        for (uint nodeIndex = globalId; nodeIndex < srcHeader.numInternalNodesFp32; nodeIndex += ShaderConstants.numThreads)
         {
-            for (uint nodeIndex = globalId; nodeIndex < srcHeader.numLeafNodes; nodeIndex += ShaderConstants.numThreads)
-            {
-                const uint nodeOffset        = nodeIndex * sizeof(InstanceNode);
-                const uint srcNodeDataOffset = srcOffsetDataLeafNodes + nodeOffset;
-                const uint srcNodePointer    = PackNodePointer(NODE_TYPE_USER_NODE_INSTANCE, srcOffsets.leafNodes + nodeOffset);
-
-                CopyInteriorNodesTraversingUpwards(srcNodePointer,
-                                                    srcOffsetDataInternalNodes,
-                                                    srcMetadataSizeInBytes,
-                                                    dstOffsetDataInternalNodes,
-                                                    dstMetadataSizeInBytes,
-                                                    containHalfBoxNode32);
-            }
-        }
-        else
-        {
-            for (uint nodeIndex = globalId; nodeIndex < srcHeader.numInternalNodesFp32; nodeIndex += ShaderConstants.numThreads)
-            {
-                const uint nodeOffset = nodeIndex * sizeof(Float32BoxNode);
-                CopyFp32BoxNode(nodeOffset,
-                                srcOffsetDataInternalNodes,
-                                srcMetadataSizeInBytes,
-                                dstOffsetDataInternalNodes,
-                                dstMetadataSizeInBytes,
-                                false);
-            }
+            const uint nodeOffset = nodeIndex * sizeof(Float32BoxNode);
+            CopyFp32BoxNode(nodeOffset,
+                            srcOffsetDataInternalNodes,
+                            srcMetadataSizeInBytes,
+                            dstOffsetDataInternalNodes,
+                            dstMetadataSizeInBytes);
         }
     }
 
@@ -464,7 +433,7 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
     {
         for (uint nodeIndex = globalId; nodeIndex < srcHeader.numLeafNodes; nodeIndex += ShaderConstants.numThreads)
         {
-            const uint nodeOffset         = nodeIndex * sizeof(InstanceNode);
+            const uint nodeOffset         = nodeIndex * GetBvhNodeSizeLeaf(PrimitiveType::Instance, enableFusedInstanceNode);
             const uint srcNodeDataOffset  = srcOffsetDataLeafNodes + nodeOffset;
             const uint dstNodeDataOffset  = dstOffsetDataLeafNodes + nodeOffset;
 

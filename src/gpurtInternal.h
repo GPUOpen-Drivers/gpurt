@@ -75,9 +75,10 @@ constexpr uint32 DefaultThreadGroupSize = 64;
 
 enum EncodeFlags : uint32
 {
-    EncodeFlagArrayOfPointers = 1,
-    EncodeFlagUpdateInPlace   = 2,
-    EncodeFlagRebraidEnabled  = 4,
+    EncodeFlagArrayOfPointers   = 0x00000001,
+    EncodeFlagUpdateInPlace     = 0x00000002,
+    EncodeFlagRebraidEnabled    = 0x00000004,
+    EncodeFlagFusedInstanceNode = 0x00000010,
 };
 
 struct RadixSortConfig

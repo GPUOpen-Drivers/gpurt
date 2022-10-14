@@ -49,31 +49,66 @@ struct PairCompressionArgs
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer  ResultMetadata : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer  ScratchBuffer  : register(u2);
 
+#define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
+groupshared uint SharedMem[MAX_LDS_ELEMENTS];
+
 #endif
 
 //=====================================================================================================================
 #define PAIR_BATCH_SIZE MAX_COLLAPSED_TRIANGLES
 
-//=====================================================================================================================
-struct FaceData
-{
-    uint vOff;   // Used to specify the vertex rotation of the triangle (used for barycentrics)
-    uint scratchNodeIndex;
-};
+#define LDS_OFFSET_BATCH_INDICES 0
+#define LDS_OFFSET_STACK         PAIR_BATCH_SIZE
+#define LDS_STRIDE               (PAIR_BATCH_SIZE * 2)
 
 //=====================================================================================================================
 // Quad is a symbolic representation of a pair of triangles compressed in a single node that share an edge.
 struct Quad
 {
-    uint     inds[3];
-    FaceData f[2];
-    uint     geometryIndex;
+    uint scratchNodeIndexAndOffset[2];
 };
 
 //=====================================================================================================================
 // This array is declared as a static global in order to avoid it being duplicated multiple times in scratch memory.
 static Quad quadArray[PAIR_BATCH_SIZE];
-static uint batchIndices[PAIR_BATCH_SIZE];
+
+//=====================================================================================================================
+void WriteBatchIndex(uint localId, uint index, uint data)
+{
+    const uint offset = (localId * LDS_STRIDE) + LDS_OFFSET_BATCH_INDICES + index;
+    SharedMem[offset] = data;
+}
+//=====================================================================================================================
+uint ReadBatchIndex(uint localId, uint index)
+{
+    const uint offset = (localId * LDS_STRIDE) + LDS_OFFSET_BATCH_INDICES + index;
+    return SharedMem[offset];
+}
+
+//=====================================================================================================================
+void WriteStack(uint localId, uint index, uint data)
+{
+    const uint offset = (localId * LDS_STRIDE) + LDS_OFFSET_STACK + index;
+    SharedMem[offset] = data;
+}
+//=====================================================================================================================
+uint ReadStack(uint localId, uint index)
+{
+    const uint offset = (localId * LDS_STRIDE) + LDS_OFFSET_STACK + index;
+    return SharedMem[offset];
+}
+
+//=====================================================================================================================
+uint GetQuadScratchNodeIndex(in uint packedNodeIndex)
+{
+    return (packedNodeIndex & 0x3fffffff);
+}
+
+//=====================================================================================================================
+uint GetQuadScratchNodeVertexOffset(in uint packedNodeIndex)
+{
+    return (packedNodeIndex >> 30);
+}
 
 //=====================================================================================================================
 // Get face indices from 16-bit index buffer
@@ -170,6 +205,7 @@ uint UpdateLeafNodeCounters(uint numLeafNodesOffset, uint numLeafNodes)
 
 //=====================================================================================================================
 void WriteCompressedNodes(
+    uint localId,
     uint scratchNodesScratchOffset,
     uint quadIndex)
 {
@@ -183,46 +219,47 @@ void WriteCompressedNodes(
     // This step iterates through all of the quads after compression and writes out the triangle nodes.
     for (int x = 0; x < quadIndex; ++x)
     {
-        const Quad n = quadArray[x];
+        const Quad quad = quadArray[x];
 
         uint pairScratchIndices[2] = { INVALID_IDX, INVALID_IDX };
-        uint keptIndex = n.f[0].scratchNodeIndex;
+        uint keptIndex = GetQuadScratchNodeIndex(quad.scratchNodeIndexAndOffset[0]);
 
-        if (n.f[1].scratchNodeIndex != INVALID_IDX)
+        if (quad.scratchNodeIndexAndOffset[1] != INVALID_IDX)
         {
-            pairScratchIndices[0] = n.f[1].scratchNodeIndex;
-            pairScratchIndices[1] = n.f[0].scratchNodeIndex;
+            pairScratchIndices[0] = GetQuadScratchNodeIndex(quad.scratchNodeIndexAndOffset[1]);
+            pairScratchIndices[1] = GetQuadScratchNodeIndex(quad.scratchNodeIndexAndOffset[0]);
 
-            batchIndices[numEliminated] = n.f[0].scratchNodeIndex;
+            WriteBatchIndex(localId, numEliminated, GetQuadScratchNodeIndex(quad.scratchNodeIndexAndOffset[0]));
             numEliminated++;
 
-            keptIndex = n.f[1].scratchNodeIndex;
+            keptIndex = GetQuadScratchNodeIndex(quad.scratchNodeIndexAndOffset[1]);
         }
 
-        batchIndices[PAIR_BATCH_SIZE - 1 - x] = keptIndex;
+        WriteBatchIndex(localId, PAIR_BATCH_SIZE - 1 - x, keptIndex);
 
-        // Get the geometry info for this node.
-        const uint geometryInfoOffset = header.offsets.geometryInfo + (n.geometryIndex * sizeof(GeometryInfo));
-        const GeometryInfo geometryInfo = ResultBuffer.Load<GeometryInfo>(geometryInfoOffset);
-        const uint geometryFlags = ExtractGeometryInfoFlags(geometryInfo.geometryFlagsAndNumPrimitives);
+        const uint quadScratchIndex = GetQuadScratchNodeIndex(quad.scratchNodeIndexAndOffset[0]);
+        const ScratchNode triangleNode = FetchScratchNode(ScratchBuffer, scratchNodesScratchOffset, quadScratchIndex);
+        const uint geometryFlags = triangleNode.flags;
+
         const uint numFaces = 2;
 
         uint triangleId = 0;
         uint i;
         for (i = 0; i < numFaces; ++i)
         {
-            if (n.f[i].scratchNodeIndex != INVALID_IDX)
+            if (quad.scratchNodeIndexAndOffset[i] != INVALID_IDX)
             {
-                triangleId = WriteTriangleIdField(triangleId, i, n.f[i].vOff, geometryFlags);
+                triangleId = WriteTriangleIdField(
+                    triangleId, i, GetQuadScratchNodeVertexOffset(quad.scratchNodeIndexAndOffset[i]), geometryFlags);
             }
         }
 
         for (i = 0; i < numFaces; ++i)
         {
-            if (n.f[i].scratchNodeIndex != INVALID_IDX)
+            if (quad.scratchNodeIndexAndOffset[i] != INVALID_IDX)
             {
                 const uint scratchNodeOffset = scratchNodesScratchOffset +
-                                               (n.f[i].scratchNodeIndex * sizeof(ScratchNode));
+                                               (GetQuadScratchNodeIndex(quad.scratchNodeIndexAndOffset[i]) * sizeof(ScratchNode));
 
                 // Store triangle type and triangle Id
                 const uint triangleTypeAndId = (triangleId << 3) | i;
@@ -285,6 +322,7 @@ bool CompareVertices(
 
 //=====================================================================================================================
 uint EncodeTwoTrianglesPerNodeQBVHCompression(
+    uint                localId,
     uint                batchSize,
     PairCompressionArgs args)
 {
@@ -295,7 +333,7 @@ uint EncodeTwoTrianglesPerNodeQBVHCompression(
     // Loop over every triangle in the triangle group to compress into quads.
     for (uint batchIndex = 0; batchIndex < batchSize; batchIndex++)
     {
-        const uint scratchIndex = batchIndices[batchIndex];
+        const uint scratchIndex = ReadBatchIndex(localId, batchIndex);
 
         const ScratchNode node = FetchScratchNode(ScratchBuffer, args.scratchNodesScratchOffset, scratchIndex);
 
@@ -313,40 +351,43 @@ uint EncodeTwoTrianglesPerNodeQBVHCompression(
         uint bestQuad        = quadIndex;
         uint indOff          = 0;
         uint ind[numIndices] = { faceIndices.x, faceIndices.y, faceIndices.z };
+        uint vtxOff          = 0;
 
         // This loop is used to find the Quad in the quadArray that the current triangle compresses the best into.
         for (uint n = 0; n < quadIndex; ++n)
         {
-            if (quadArray[n].f[1].scratchNodeIndex != INVALID_IDX)
+            if (quadArray[n].scratchNodeIndexAndOffset[1] != INVALID_IDX)
             {
                 continue;
             }
+
+            const uint quadScratchIndex = GetQuadScratchNodeIndex(quadArray[n].scratchNodeIndexAndOffset[0]);
+            const ScratchNode triangleNode = FetchScratchNode(ScratchBuffer, args.scratchNodesScratchOffset, quadScratchIndex);
 
             // Do not compress triangles from different geometries
-            if (geometryIndex != quadArray[n].geometryIndex)
+            if (geometryIndex != triangleNode.right_or_geometryIndex)
             {
                 continue;
             }
 
-            const uint quadScratchIndex = quadArray[n].f[0].scratchNodeIndex;
+            const uint3 quadFaceIndices = FetchFaceIndices(triangleNode.left_or_primIndex_or_instIndex, indexBufferInfo);
 
             for (int i = 0; i < numIndices; i++)
             {
                 const uint indexOffset0 = i % numIndices;
                 const uint indexOffset1 = (i + 1) % numIndices;
 
-                const uint index0 = quadArray[n].inds[indexOffset0];
-                const uint index1 = quadArray[n].inds[indexOffset1];
+                const uint index0 = quadFaceIndices[indexOffset0];
+                const uint index1 = quadFaceIndices[indexOffset1];
 
                 // Compare all three matching vertex conditions with triangle 0
                 if (CompareVertices(ind[2], index0, scratchIndex, quadScratchIndex, 2, indexOffset0, args))
                 {
                     if (CompareVertices(ind[1], index1, scratchIndex, quadScratchIndex, 1, indexOffset1, args))
                     {
-                        quadArray[n].f[1].vOff = 1;
-
                         bestQuad = n;
                         indOff   = i;
+                        vtxOff   = 1;
                         break;
                     }
                 }
@@ -355,10 +396,9 @@ uint EncodeTwoTrianglesPerNodeQBVHCompression(
                 {
                     if (CompareVertices(ind[0], index1, scratchIndex, quadScratchIndex, 0, indexOffset1, args))
                     {
-                        quadArray[n].f[1].vOff = 2;
-
                         bestQuad = n;
                         indOff   = i;
+                        vtxOff   = 2;
                         break;
                     }
                 }
@@ -367,10 +407,9 @@ uint EncodeTwoTrianglesPerNodeQBVHCompression(
                 {
                     if (CompareVertices(ind[2], index1, scratchIndex, quadScratchIndex, 2, indexOffset1, args))
                     {
-                        quadArray[n].f[1].vOff = 0;
-
                         bestQuad = n;
                         indOff   = i;
+                        vtxOff   = 0;
                         break;
                     }
                 }
@@ -385,35 +424,35 @@ uint EncodeTwoTrianglesPerNodeQBVHCompression(
         if (bestQuad == quadIndex)
         {
             // There wasn't a good quad, so allocate a new one and default initialize it.
-            quadArray[bestQuad].inds[0]   = ind[0];
-            quadArray[bestQuad].inds[1]   = ind[1];
-            quadArray[bestQuad].inds[2]   = ind[2];
-            quadArray[bestQuad].f[0].vOff = 0;
-
-            quadArray[bestQuad].f[0].scratchNodeIndex = scratchIndex;
-            quadArray[bestQuad].f[1].scratchNodeIndex = INVALID_IDX;
-            quadArray[bestQuad].geometryIndex         = geometryIndex;
+            quadArray[bestQuad].scratchNodeIndexAndOffset[0] = scratchIndex;
+            quadArray[bestQuad].scratchNodeIndexAndOffset[1] = INVALID_IDX;
 
             quadIndex++;
         }
         else
         {
+            uint vtxOff0 = 0;
+
             if (indOff == 0)
             {
                 // Rotate triangle 0 once
-                quadArray[bestQuad].f[0].vOff = 1;
+                vtxOff0 = 1;
             }
             else if (indOff == 2)
             {
                 // Rotate triangle 0 twice
-                quadArray[bestQuad].f[0].vOff = 2;
+                vtxOff0 = 2;
             }
 
-            quadArray[bestQuad].f[1].scratchNodeIndex = scratchIndex;
+            quadArray[bestQuad].scratchNodeIndexAndOffset[0]  =
+                quadArray[bestQuad].scratchNodeIndexAndOffset[0] | (vtxOff0 << 30);
+
+            quadArray[bestQuad].scratchNodeIndexAndOffset[1]  =
+                scratchIndex | (vtxOff << 30);
         }
     }
 
-    WriteCompressedNodes(args.scratchNodesScratchOffset, quadIndex);
+    WriteCompressedNodes(localId, args.scratchNodesScratchOffset, quadIndex);
 
     // Return the number of result nodes
     return quadIndex;
@@ -448,6 +487,7 @@ BoundingBox FetchScratchNodeBoundingBoxPair(
 //=====================================================================================================================
 void PairCompressionImpl(
     uint                globalId,
+    uint                localId,
     PairCompressionArgs args)
 {
     const uint numBatches = ScratchBuffer.Load(args.numBatchesScratchOffset);
@@ -461,21 +501,20 @@ void PairCompressionImpl(
     const uint numActivePrims = ResultBuffer.Load(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
 
     uint batchSize = 0;
-
-    uint stack[PAIR_BATCH_SIZE];
-    stack[0] = batchRootIndex;
     uint stackPtr = 1;
+
+    WriteStack(localId, 0, batchRootIndex);
 
     // Gather the scratch node indices of the primitives in the batch.
     while (stackPtr > 0)
     {
         stackPtr--;
-        const uint index = stack[stackPtr];
+        const uint index = ReadStack(localId, stackPtr);
 
         // Handle leaf-only batch
         if (IsLeafNode(index, numActivePrims))
         {
-            batchIndices[batchSize] = index;
+            WriteBatchIndex(localId, batchSize, index);
             batchSize++;
         }
         else
@@ -490,30 +529,36 @@ void PairCompressionImpl(
 
             if (IsLeafNode(right, numActivePrims))
             {
-                batchIndices[batchSize] = right;
+                WriteBatchIndex(localId, batchSize, right);
                 batchSize++;
             }
             else
             {
-                stack[stackPtr] = right;
+                WriteStack(localId, stackPtr, right);
                 stackPtr++;
             }
 
             if (IsLeafNode(left, numActivePrims))
             {
-                batchIndices[batchSize] = left;
+                WriteBatchIndex(localId, batchSize, left);
                 batchSize++;
             }
             else
             {
-                stack[stackPtr] = left;
+                WriteStack(localId, stackPtr, left);
                 stackPtr++;
             }
         }
     }
 
+    // Wait for batches to be written to groupshared memory
+    GroupMemoryBarrierWithGroupSync();
+
     // Compress batch and write out BVH4 nodes
-    const uint numNodes = EncodeTwoTrianglesPerNodeQBVHCompression(batchSize, args);
+    const uint numNodes = EncodeTwoTrianglesPerNodeQBVHCompression(localId, batchSize, args);
+
+    // Wait for batches to be updated in groupshared memory by WriteCompressedNodes()
+    GroupMemoryBarrierWithGroupSync();
 
     uint currentBatchRootIndex = batchRootIndex;
 
@@ -524,7 +569,7 @@ void PairCompressionImpl(
         DeviceMemoryBarrier();
 
         // Batch Indices now contains the scratch node indices which will no longer be directly linked in the BVH.
-        const uint eliminatedIndex = batchIndices[i];
+        const uint eliminatedIndex = ReadBatchIndex(localId, i);
 
         const ScratchNode eliminatedNode = FetchScratchNode(ScratchBuffer,
                                                             args.scratchNodesScratchOffset,
@@ -565,7 +610,7 @@ void PairCompressionImpl(
 
     // Refit the batch subtree to reflect the new topology.
     uint keepIndex = PAIR_BATCH_SIZE - 1;
-    uint nodeIndex = batchIndices[keepIndex];
+    uint nodeIndex = ReadBatchIndex(localId, keepIndex);
     keepIndex--;
 
     while (nodeIndex != currentBatchRootIndex)
@@ -585,7 +630,7 @@ void PairCompressionImpl(
         {
             // If the flag was 0 set it to 1 and continue to the next leaf node. The iteration handling the second
             // child will handle this node.
-            nodeIndex = batchIndices[keepIndex];
+            nodeIndex = ReadBatchIndex(localId, keepIndex);
             keepIndex--;
 
             continue;
@@ -654,8 +699,9 @@ void PairCompressionImpl(
 [numthreads(BUILD_THREADGROUP_SIZE, 1, 1)]
 //=====================================================================================================================
 void PairCompression(
-    uint globalThreadId : SV_DispatchThreadID)
+    uint globalThreadId : SV_DispatchThreadID,
+    uint localThreadId : SV_GroupThreadID)
 {
-    PairCompressionImpl(globalThreadId, (PairCompressionArgs)ShaderConstants);
+    PairCompressionImpl(globalThreadId, localThreadId, (PairCompressionArgs)ShaderConstants);
 }
 #endif

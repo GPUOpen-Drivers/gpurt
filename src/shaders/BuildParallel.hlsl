@@ -24,7 +24,7 @@
  **********************************************************************************************************************/
 #include "BuildCommon.hlsl"
 
-#define RootSig "RootConstants(num32BitConstants=53, b0),"\
+#define RootSig "RootConstants(num32BitConstants=89, b0),"\
                 "CBV(b1),"\
                 "UAV(u0),"\
                 "UAV(u1),"\
@@ -99,6 +99,8 @@ struct ScratchOffsets
 
 struct Constants
 {
+    uint resultBufferAddrLo;
+    uint resultBufferAddrHi;
     uint numPrimitives;
     uint numThreadGroups;
     uint tsBudgetPerTriangle;
@@ -108,9 +110,11 @@ struct Constants
     uint rebraidFactor;
     uint numMortonSizeBits;
     float reservedFloat;
+    uint numLeafNodes;
+    uint padding1;
 
     // Warning: following struct will be 4 dword aligned according to HLSL CB packing rules.
-
+    AccelStructHeader header;
     ScratchOffsets offsets; // Scratch buffer layout
 };
 
@@ -136,8 +140,10 @@ struct Constants
 [[vk::constant_id(BUILD_SETTINGS_DATA_FAST_BUILD_THRESHOLD_ID)]]                   uint fastBuildThreshold            = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_BVH_BUILDER_NODE_SORT_TYPE_ID)]]             uint bvhBuilderNodeSortType        = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_BVH_BUILDER_NODE_SORT_HEURISTIC_ID)]]        uint bvhBuilderNodeSortHeuristic   = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_HALF_BOX_NODE_32_ID)]]                uint enableHalfBoxNode32           = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_FUSED_INSTANCE_NODE_ID)]]             uint enableFusedInstanceNode       = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_SAH_QBVH_ID)]]                               uint sahQbvh                       = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_TS_PRIORITY_ID)]]                            float tsPriority                   = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_ID)]]                   uint noCopySortedNodes             = 0;
 
 static const BuildSettingsData Settings = {
     topLevelBuild,
@@ -160,8 +166,10 @@ static const BuildSettingsData Settings = {
     fastBuildThreshold,
     bvhBuilderNodeSortType,
     bvhBuilderNodeSortHeuristic,
-    enableHalfBoxNode32,
+    enableFusedInstanceNode,
     sahQbvh,
+    tsPriority,
+    noCopySortedNodes,
 };
 
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer ResultBuffer       : register(u0);
@@ -209,6 +217,14 @@ void WaitForTasksToFinish(
 #include "PairCompression.hlsl"
 #include "Rebraid.hlsl"
 #include "MergeSort.hlsl"
+
+//======================================================================================================================
+uint CalculateBvhNodesOffset(uint numActivePrims)
+{
+    return (Settings.enableTopDownBuild == false) && Settings.noCopySortedNodes ?
+        ShaderConstants.offsets.bvhNodes + (ShaderConstants.numLeafNodes - numActivePrims) * SCRATCH_NODE_SIZE :
+        ShaderConstants.offsets.bvhNodes;
+}
 
 //======================================================================================================================
 void GenerateMortonCodes(
@@ -271,7 +287,8 @@ void SortScratchLeaves(
 //======================================================================================================================
 void BuildBvhLinear(
     uint globalId,
-    uint numActivePrims)
+    uint numActivePrims,
+    uint numPrimitives)
 {
     const uint numInternalNodes = numActivePrims - 1;
 
@@ -280,9 +297,11 @@ void BuildBvhLinear(
         SplitInternalNodeLbvh(
             nodeIndex,
             numActivePrims,
-            ShaderConstants.offsets.bvhNodes,
+            CalculateBvhNodesOffset(numActivePrims),
+            ShaderConstants.offsets.primIndicesSorted,
             ShaderConstants.offsets.mortonCodesSorted,
-            Settings.useMortonCode30);
+            Settings.useMortonCode30,
+            Settings.noCopySortedNodes);
     }
 }
 
@@ -303,9 +322,11 @@ void RefitBounds(
             primIndex,
             numActivePrims,
             ShaderConstants.offsets.propagationFlags,
-            ShaderConstants.offsets.bvhNodes,
+            CalculateBvhNodesOffset(numActivePrims),
+            ShaderConstants.offsets.primIndicesSorted,
             Settings.doCollapse,
             Settings.doTriangleSplitting,
+            Settings.noCopySortedNodes,
 
             EnablePairCompression(),
             Settings.enablePairCostCheck,
@@ -370,7 +391,7 @@ void BuildBvhPloc(
     BuildPlocArgs plocArgs;
 
     plocArgs.numThreads                     = GetNumThreads();
-    plocArgs.scratchNodesScratchOffset      = ShaderConstants.offsets.bvhNodes;
+    plocArgs.scratchNodesScratchOffset      = CalculateBvhNodesOffset(numActivePrims);
     plocArgs.clusterList0ScratchOffset      = ShaderConstants.offsets.clusterList0;
     plocArgs.clusterList1ScratchOffset      = ShaderConstants.offsets.clusterList1;
     plocArgs.neighbourIndicesScratchOffset  = ShaderConstants.offsets.neighborIndices;
@@ -386,6 +407,9 @@ void BuildBvhPloc(
     plocArgs.plocRadius                     = Settings.plocRadius;
     plocArgs.flags                          = BuildModeFlags();
     plocArgs.splitBoxesByteOffset           = ShaderConstants.offsets.splitBoxes;
+    plocArgs.primIndicesSortedScratchOffset = ShaderConstants.offsets.primIndicesSorted;
+    plocArgs.numLeafNodes                   = ShaderConstants.numLeafNodes;
+    plocArgs.noCopySortedNodes              = Settings.noCopySortedNodes;
 
     BuildBvhPlocImpl(globalId, localId, groupId, numActivePrims, plocArgs);
 }
@@ -436,36 +460,40 @@ void BuildBvhTD(
 
     BuildBVHTDImpl(globalId, localId, groupId, args);
 }
+
 //======================================================================================================================
 void PairCompression(
-    uint globalId)
+    uint globalId,
+    uint localId,
+    uint numActivePrims)
 {
     const uint buildInfo  = ResultBuffer.Load(ACCEL_STRUCT_HEADER_INFO_OFFSET);
     const uint buildFlags = (buildInfo >> ACCEL_STRUCT_HEADER_INFO_FLAGS_SHIFT) & ACCEL_STRUCT_HEADER_INFO_FLAGS_MASK;
 
     PairCompressionArgs args;
 
-    args.scratchNodesScratchOffset    = ShaderConstants.offsets.bvhNodes;
+    args.scratchNodesScratchOffset    = CalculateBvhNodesOffset(numActivePrims);
     args.numBatchesScratchOffset      = ShaderConstants.offsets.numBatches;
     args.batchIndicesScratchOffset    = ShaderConstants.offsets.batchIndices;
     args.indexBufferInfoScratchOffset = ShaderConstants.offsets.indexBufferInfo;
     args.flagsScratchOffset           = ShaderConstants.offsets.propagationFlags;
     args.buildFlags                   = buildFlags;
 
-    PairCompressionImpl(globalId, args);
+    PairCompressionImpl(globalId, localId, args);
 }
 
 //======================================================================================================================
 void InitBuildQbvh(
     uint globalId,
-    uint numPrimitives)
+    uint numPrimitives,
+    uint numActivePrims)
 {
     BuildQbvhArgs qbvhArgs;
 
     qbvhArgs.numPrimitives               = numPrimitives;
     qbvhArgs.metadataSizeInBytes         = ResultMetadata.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
     qbvhArgs.numThreads                  = GetNumThreads();
-    qbvhArgs.scratchNodesScratchOffset   = ShaderConstants.offsets.bvhNodes;
+    qbvhArgs.scratchNodesScratchOffset   = CalculateBvhNodesOffset(numActivePrims);
     qbvhArgs.qbvhStackScratchOffset      = ShaderConstants.offsets.qbvhStack;
     qbvhArgs.stackPtrsScratchOffset      = ShaderConstants.offsets.stackPtrs;
     qbvhArgs.splitBoxesByteOffset        = ShaderConstants.offsets.splitBoxes;
@@ -476,7 +504,7 @@ void InitBuildQbvh(
     qbvhArgs.topDownBuild                = 0;
     qbvhArgs.bvhBuilderNodeSortType      = Settings.bvhBuilderNodeSortType;
     qbvhArgs.bvhBuilderNodeSortHeuristic = Settings.bvhBuilderNodeSortHeuristic;
-    qbvhArgs.enableHalfBoxNode32         = Settings.enableHalfBoxNode32;
+    qbvhArgs.enableFusedInstanceNode     = Settings.enableFusedInstanceNode;
     qbvhArgs.sahQbvh                     = Settings.sahQbvh;
 
     if (!Settings.topLevelBuild)
@@ -495,14 +523,15 @@ void InitBuildQbvh(
 void BuildQbvh(
     uint globalId,
     uint localId,
-    uint numPrimitives)
+    uint numPrimitives,
+    uint numActivePrims)
 {
     BuildQbvhArgs qbvhArgs;
 
     qbvhArgs.numPrimitives               = numPrimitives;
     qbvhArgs.metadataSizeInBytes         = ResultMetadata.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
     qbvhArgs.numThreads                  = GetNumThreads();
-    qbvhArgs.scratchNodesScratchOffset   = ShaderConstants.offsets.bvhNodes;
+    qbvhArgs.scratchNodesScratchOffset   = CalculateBvhNodesOffset(numActivePrims);
     qbvhArgs.qbvhStackScratchOffset      = ShaderConstants.offsets.qbvhStack;
     qbvhArgs.stackPtrsScratchOffset      = ShaderConstants.offsets.stackPtrs;
     qbvhArgs.splitBoxesByteOffset        = ShaderConstants.offsets.splitBoxes;
@@ -513,7 +542,7 @@ void BuildQbvh(
     qbvhArgs.topDownBuild                = Settings.rebraidType != RebraidType::Off;
     qbvhArgs.bvhBuilderNodeSortType      = Settings.bvhBuilderNodeSortType;
     qbvhArgs.bvhBuilderNodeSortHeuristic = Settings.bvhBuilderNodeSortHeuristic;
-    qbvhArgs.enableHalfBoxNode32         = Settings.enableHalfBoxNode32;
+    qbvhArgs.enableFusedInstanceNode     = Settings.enableFusedInstanceNode;
     qbvhArgs.sahQbvh                     = Settings.sahQbvh;
 
     if (!Settings.topLevelBuild)
@@ -648,12 +677,21 @@ void BuildBvh(
                 writeDebugCounter(COUNTER_MORTON_SORT_OFFSET);
                 // Note there is an implicit sync on the last pass of the sort
 
-                BEGIN_TASK(ShaderConstants.numThreadGroups);
+                if (Settings.noCopySortedNodes == false)
+                {
+                    BEGIN_TASK(ShaderConstants.numThreadGroups);
 
-                SortScratchLeaves(globalId, numActivePrims);
+                    SortScratchLeaves(globalId, numActivePrims);
 
-                END_TASK(ShaderConstants.numThreadGroups);
-                writeDebugCounter(COUNTER_SORTLEAF_OFFSET);
+                    END_TASK(ShaderConstants.numThreadGroups);
+                    writeDebugCounter(COUNTER_SORTLEAF_OFFSET);
+                }
+                // If noCopySortedNodes is on, the unsorted leaves will stay where the
+                // Encode step put them. On top of that, if TS or Rebraid is also on,
+                // there might be a gap between the last inner node and the first leaf
+                // if we place the root of the tree at ShaderConstants.offsets.bvhNodes.
+                // To avoid that gap, the root is moved forward by numLeafNodes - numActivePrims
+                // nodes from this point onwards.
 
                 if (Settings.buildMode == BUILD_MODE_PLOC)
                 {
@@ -664,7 +702,7 @@ void BuildBvh(
                 {
                     BEGIN_TASK(ShaderConstants.numThreadGroups);
 
-                    BuildBvhLinear(globalId, numActivePrims);
+                    BuildBvhLinear(globalId, numActivePrims, numPrimitives);
 
                     END_TASK(ShaderConstants.numThreadGroups);
                     writeDebugCounter(COUNTER_BUILDLBVH_OFFSET);
@@ -692,7 +730,7 @@ void BuildBvh(
 
                 BEGIN_TASK(RoundUpQuotient(numBatches, BUILD_THREADGROUP_SIZE));
 
-                PairCompression(globalId);
+                PairCompression(globalId, localId, numActivePrims);
 
                 END_TASK(RoundUpQuotient(numBatches, BUILD_THREADGROUP_SIZE));
             }
@@ -717,7 +755,7 @@ void BuildBvh(
     {
         BEGIN_TASK(ShaderConstants.numThreadGroups);
 
-        InitBuildQbvh(globalId, numPrimitives);
+        InitBuildQbvh(globalId, numPrimitives, numActivePrims);
 
         END_TASK(ShaderConstants.numThreadGroups);
         writeDebugCounter(COUNTER_INITQBVH_OFFSET);
@@ -727,7 +765,7 @@ void BuildBvh(
 
         BEGIN_TASK(RoundUpQuotient(CalcNumQBVHInternalNodes(numNodesToProcess), BUILD_THREADGROUP_SIZE));
 
-        BuildQbvh(globalId, localId, numPrimitives);
+        BuildQbvh(globalId, localId, numPrimitives, numActivePrims);
 
         END_TASK(RoundUpQuotient(CalcNumQBVHInternalNodes(numNodesToProcess), BUILD_THREADGROUP_SIZE));
         writeDebugCounter(COUNTER_BUILDQBVH_OFFSET);

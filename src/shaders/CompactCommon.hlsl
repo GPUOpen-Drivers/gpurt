@@ -48,12 +48,11 @@ uint CalcCompactedSize(
     if (accelStructType == BOTTOM_LEVEL)
     {
         internalNodeSize = srcHeader.numInternalNodesFp32 * boxNodeSize +
-                           srcHeader.numInternalHalfNodesFp32 * sizeof(Float32BoxNode) / 2 +
                            srcHeader.numInternalNodesFp16 * sizeof(Float16BoxNode);
         runningOffset += internalNodeSize;
 
         offsets.leafNodes = runningOffset;
-        leafNodeSize = srcHeader.numLeafNodes * GetBvhNodeSizeLeaf(srcHeader.geometryType);
+        leafNodeSize = srcHeader.numLeafNodes * GetBvhNodeSizeLeaf(srcHeader.geometryType, 0);
         runningOffset += leafNodeSize;
 
         offsets.geometryInfo = runningOffset;
@@ -64,13 +63,16 @@ uint CalcCompactedSize(
     }
     else
     {
+        const uint enableFusedInstanceNode =
+            (srcHeader.info >> ACCEL_STRUCT_HEADER_INFO_FUSED_INSTANCE_NODE_FLAGS_SHIFT) &
+                ACCEL_STRUCT_HEADER_INFO_FUSED_INSTANCE_NODE_FLAGS_MASK;
+
         // TLAS always uses 32-bit internal nodes
-        internalNodeSize = srcHeader.numInternalNodesFp32 * boxNodeSize +
-                           srcHeader.numInternalHalfNodesFp32 * sizeof(Float32BoxNode) / 2;
+        internalNodeSize = srcHeader.numInternalNodesFp32 * boxNodeSize;
         runningOffset += internalNodeSize;
 
         offsets.leafNodes = runningOffset;
-        leafNodeSize = srcHeader.numLeafNodes * GetBvhNodeSizeLeaf(PrimitiveType::Instance);
+        leafNodeSize = srcHeader.numLeafNodes * GetBvhNodeSizeLeaf(PrimitiveType::Instance, enableFusedInstanceNode);
         runningOffset += leafNodeSize;
 
         // Top level acceleration structures do not have geometry info.

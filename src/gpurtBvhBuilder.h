@@ -117,7 +117,7 @@ protected:
         const DeviceSettings&        deviceSettings);
 
     static uint32 GetLeafNodeSize(
-        bool topLevelBuild);
+        const DeviceSettings& settings, const BuildConfig& config);
 
     static uint32 GetNumHistogramElements(
         const RadixSortConfig& config,
@@ -275,6 +275,10 @@ private:
 
     void InitBuildConfig(
         const AccelStructBuildInfo& buildArgs);
+
+    AccelStructMetadataHeader InitAccelStructMetadataHeader();
+
+    AccelStructHeader InitAccelStructHeader();
 
     BvhBuildMode OverrideBuildMode(
         const AccelStructBuildInfo& buildInfo);

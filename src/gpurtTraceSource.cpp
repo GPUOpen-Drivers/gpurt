@@ -39,7 +39,7 @@ void AccelStructTraceSource::OnConfigUpdated(
 
     if (pConfig->GetValueByKey("enabled", &enabled))
     {
-        enabled.GetBool(&m_enabled);
+        (void)enabled.GetBool(&m_enabled);
     }
 }
 #else

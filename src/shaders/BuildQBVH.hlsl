@@ -46,7 +46,7 @@ struct BuildQbvhArgs
     uint topDownBuild;
     uint bvhBuilderNodeSortType;        // bvhBuilder node sort Type
     uint bvhBuilderNodeSortHeuristic;   // bvhBuilder node sort heuristic
-    uint enableHalfBoxNode32;
+    uint enableFusedInstanceNode;
     uint sahQbvh;                       // Apply SAH into QBVH build
     uint captureChildNumPrimsForRebraid;
 };
@@ -109,22 +109,20 @@ struct Task
 #define TASK_SIZE                                 24
 
 //=====================================================================================================================
-bool IsHalfBoxNode32(in BuildQbvhArgs args, in ScratchNode node, uint numActivePrims)
-{
-    const bool isHalfBoxNode32 = (args.enableHalfBoxNode32 == true) &&
-                                 IsBoxNode32(node.type) &&
-                                 IsLeafNode(node.left_or_primIndex_or_instIndex, numActivePrims) &&
-                                 IsLeafNode(node.right_or_geometryIndex, numActivePrims);
-    return isHalfBoxNode32;
-}
-
-//=====================================================================================================================
 bool IsMixedNodeSizes(in BuildQbvhArgs args)
 {
     const bool mixedNodeSizes = (args.fp16BoxNodesInBlasMode == LEAF_NODES_IN_BLAS_AS_FP16) ||
-                                (args.fp16BoxNodesInBlasMode == MIXED_NODES_IN_BLAS_AS_FP16) ||
-                                (args.enableHalfBoxNode32 == true);
+                                (args.fp16BoxNodesInBlasMode == MIXED_NODES_IN_BLAS_AS_FP16);
     return mixedNodeSizes;
+}
+
+//=====================================================================================================================
+uint CalcInstanceNodeOffset(
+    uint enableFusedInstanceNode,
+    uint baseInstanceNodesOffset,
+    uint index)
+{
+    return baseInstanceNodesOffset + (index * GetBvhNodeSizeInstance(enableFusedInstanceNode));
 }
 
 //=====================================================================================================================
@@ -135,10 +133,6 @@ static uint GetNum64BChunks(in BuildQbvhArgs args, in ScratchNode node, uint num
         return 0;
     }
     else if (IsBoxNode16(node.type))
-    {
-        return 1;
-    }
-    else if (IsHalfBoxNode32(args, node, numActivePrims))
     {
         return 1;
     }
@@ -266,36 +260,19 @@ uint WriteInstanceNode(
     const uint destIndex = (args.topDownBuild != 0) ? (scratchNodeIndex - args.numPrimitives + 1) : instanceIndex;
 
     {
-        nodeOffset = CalcInstanceNodeOffset(offsets.leafNodes, destIndex);
+        nodeOffset = CalcInstanceNodeOffset(args.enableFusedInstanceNode, offsets.leafNodes, destIndex);
     }
 
-    {
-        InstanceNode instanceNode;
+    instanceDesc.accelStructureAddressLo = asuint(scratchNode.sah_or_v2_or_instBasePtr.x);
+    instanceDesc.accelStructureAddressHiAndFlags = asuint(scratchNode.sah_or_v2_or_instBasePtr.y);
 
-        instanceNode.desc.InstanceContributionToHitGroupIndex_and_Flags =
-            instanceDesc.InstanceContributionToHitGroupIndex_and_Flags;
-        instanceNode.desc.InstanceID_and_Mask             = instanceDesc.InstanceID_and_Mask;
-        instanceNode.desc.accelStructureAddressLo         = asuint(scratchNode.sah_or_v2_or_instBasePtr.x);
-        instanceNode.desc.accelStructureAddressHiAndFlags = asuint(scratchNode.sah_or_v2_or_instBasePtr.y);
-
-        instanceNode.extra.Transform[0]     = instanceDesc.Transform[0];
-        instanceNode.extra.Transform[1]     = instanceDesc.Transform[1];
-        instanceNode.extra.Transform[2]     = instanceDesc.Transform[2];
-        instanceNode.extra.instanceIndex    = instanceIndex;
-        instanceNode.extra.padding0         = 0;
-        instanceNode.extra.blasMetadataSize = blasMetadataSize;
-        instanceNode.extra.blasNodePointer  = scratchNode.splitBox_or_nodePointer;
-
-        // invert matrix
-        float3x4 temp    = CreateMatrix(instanceDesc.Transform);
-        float3x4 inverse = Inverse3x4(temp);
-
-        instanceNode.desc.Transform[0] = inverse[0];
-        instanceNode.desc.Transform[1] = inverse[1];
-        instanceNode.desc.Transform[2] = inverse[2];
-
-        ResultBuffer.Store<InstanceNode>(nodeOffset, instanceNode);
-    }
+    WriteInstanceDescriptor(ResultBuffer,
+                            instanceDesc,
+                            instanceIndex,
+                            nodeOffset,
+                            blasMetadataSize,
+                            scratchNode.splitBox_or_nodePointer,
+                            args.enableFusedInstanceNode);
 
     const uint nodePointer = PackNodePointer(nodeType, nodeOffset);
     ResultBuffer.Store(offsets.primNodePtrs + (destIndex * sizeof(uint)), nodePointer);
@@ -1293,15 +1270,14 @@ void BuildQbvhImpl(
             const uint qbvhNodeType           = GetNodeType(node.type);
             const bool writeAsFp16BoxNode     = (args.fp16BoxNodesInBlasMode != NO_NODES_IN_BLAS_AS_FP16) &&
                                                 (qbvhNodeType == NODE_TYPE_BOX_FLOAT16);
-            const bool writeAsFp32HalfBoxNode = IsHalfBoxNode32(args, node, numActivePrims);
             const uint bvhNodeDstIdx          = QBVHStackPopDestIdx(args, topLevelBuild, stackIndex);
             const uint qbvhNodeAddr           = CalcQbvhInternalNodeOffset(bvhNodeDstIdx, true);
             const uint qbvhNodePtr            = CreateBoxNodePointer(args, qbvhNodeAddr, writeAsFp16BoxNode);
 
             const uint nodeTypeToAccum =
                    (writeAsFp16BoxNode ? ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP16_NODES_OFFSET
-                                       : (writeAsFp32HalfBoxNode ? ACCEL_STRUCT_HEADER_NUM_INTERNAL_HALF_FP32_NODES_OFFSET
-                                                                 : ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP32_NODES_OFFSET));
+                                       : ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP32_NODES_OFFSET);
+
             ResultBuffer.InterlockedAdd(nodeTypeToAccum, 1);
 
             bool doSwapLevel0 = false;
@@ -1404,17 +1380,6 @@ void BuildQbvhImpl(
                 fp16BoxNode.bbox3  = CompressBBoxToUint3(bbox[3]);
 
                 WriteFp16BoxNode(ResultBuffer, qbvhNodeAddr, fp16BoxNode);
-            }
-            else if (writeAsFp32HalfBoxNode == true)
-            {
-                ResultBuffer.Store(qbvhNodeAddr + FLOAT32_BOX_NODE_CHILD0_OFFSET, child[0]);
-                ResultBuffer.Store(qbvhNodeAddr + FLOAT32_BOX_NODE_CHILD1_OFFSET, child[1]);
-                ResultBuffer.Store(qbvhNodeAddr + FLOAT32_BOX_NODE_CHILD2_OFFSET, INVALID_IDX);
-                ResultBuffer.Store(qbvhNodeAddr + FLOAT32_BOX_NODE_CHILD3_OFFSET, INVALID_IDX);
-                ResultBuffer.Store3(qbvhNodeAddr + FLOAT32_BOX_NODE_BB0_MIN_OFFSET, asuint(bbox[0].min));
-                ResultBuffer.Store3(qbvhNodeAddr + FLOAT32_BOX_NODE_BB0_MAX_OFFSET, asuint(bbox[0].max));
-                ResultBuffer.Store3(qbvhNodeAddr + FLOAT32_BOX_NODE_BB1_MIN_OFFSET, asuint(bbox[1].min));
-                ResultBuffer.Store3(qbvhNodeAddr + FLOAT32_BOX_NODE_BB1_MAX_OFFSET, asuint(bbox[1].max));
             }
             else
             {

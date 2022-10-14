@@ -43,11 +43,7 @@
 //
 // Place this inside the function body you want to export. And ensure the name of the function is the symbol name
 // you want to export
-#if _MSVC_LANG && GPURT_BUILD_SHARED
-#define GPURT_EXPORT_UNMANGLED_SYMBOL_MSVC _Pragma("comment(linker, \"/EXPORT:\" __FUNCTION__ \"=\" __FUNCDNAME__)")
-#else
 #define GPURT_EXPORT_UNMANGLED_SYMBOL_MSVC
-#endif
 
 #if GPURT_DEVELOPER
 #if defined(__GNUC__)
@@ -219,9 +215,19 @@ uint32 Device::GetStaticPipelineFlags(
         pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::UseTreeRebraid);
     }
 
+    if (enableAccelStructTracking)
+    {
+        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::EnableAccelStructTracking);
+    }
+
     if (enableTraversalCounter)
     {
         pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::EnableTraversalCounter);
+    }
+
+    if (m_info.deviceSettings.enableFusedInstanceNode)
+    {
+        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::EnableFusedInstanceNodes);
     }
 
     return pipelineFlags;
@@ -300,6 +306,13 @@ Pal::Result Device::Init()
     GpuUtil::TraceSession* pTraceSession = pPlatform->GetTraceSession();
     pTraceSession->RegisterSource(&m_accelStructTraceSource);
 #endif
+
+    if (m_info.deviceSettings.enableFusedInstanceNode)
+    {
+        PAL_ALERT_MSG(m_info.deviceSettings.rebraidType == RebraidType::Off,
+            "Rebraid is not supported with fused instance nodes");
+        m_info.deviceSettings.rebraidType = RebraidType::Off;
+    }
 
     return result;
 }

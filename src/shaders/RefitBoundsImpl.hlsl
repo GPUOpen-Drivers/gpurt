@@ -47,8 +47,10 @@ void RefitBoundsImpl(
     uint                numActivePrims,
     uint                baseFlagsOffset,
     uint                baseScratchNodesOffset,
+    uint                sortedPrimIndicesOffset,
     uint                doCollapse,
     uint                doTriangleSplitting,
+    uint                noCopySortedNodes,
     uint                enablePairCompression,
     uint                enablePairCostCheck,
     uint                splitBoxesOffset,
@@ -67,7 +69,9 @@ void RefitBoundsImpl(
     }
 
     // Start from leaf node referenced by this thread
-    uint nodeIndex = LEAFIDX(primIndex);
+    uint nodeIndex = noCopySortedNodes ?
+        LEAFIDX(FetchSortedPrimIndex(ScratchBuffer, sortedPrimIndicesOffset, primIndex)) :
+        LEAFIDX(primIndex);
 
     uint numTris = 1;
 
@@ -123,7 +127,7 @@ void RefitBoundsImpl(
             {
                 const bool isLeafNode = IsLeafNode(rc, numActivePrims);
 
-                if (doTriangleSplitting)
+                if (doTriangleSplitting && isLeafNode)
                 {
                     bboxRightChild =
                         ScratchBuffer.Load<BoundingBox>(splitBoxesOffset +
@@ -144,7 +148,7 @@ void RefitBoundsImpl(
             {
                 const bool isLeafNode = IsLeafNode(lc, numActivePrims);
 
-                if (doTriangleSplitting)
+                if (doTriangleSplitting && isLeafNode)
                 {
                     bboxLeftChild =
                         ScratchBuffer.Load<BoundingBox>(splitBoxesOffset +
@@ -243,11 +247,11 @@ void RefitBoundsImpl(
                                  mergedBox.min,
                                  mergedBox.max);
 
-            WriteScratchNodeFlags(ScratchBuffer,
-                                  baseScratchNodesOffset,
-                                  parentNodeIndex,
-                                  leftNode,
-                                  rightNode);
+            WriteScratchNodeFlagsFromNodes(ScratchBuffer,
+                                           baseScratchNodesOffset,
+                                           parentNodeIndex,
+                                           leftNode,
+                                           rightNode);
 
             if (enableInstancePrimCount)
             {

@@ -87,6 +87,14 @@ static const BoundingBox InvalidBoundingBox =
 #define RAY_FLAG_SKIP_TRIANGLES                  0x100
 #define RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES      0x200
 
+#define PIPELINE_FLAG_BVH_COLLAPSE          0x80000000
+#define PIPELINE_FLAG_USE_RAYQUERY          0x40000000
+#define PIPELINE_FLAG_USE_REBRAID           0x20000000
+#define PIPELINE_FLAG_ENABLE_AS_TRACKING    0x10000000
+#define PIPELINE_FLAG_ENABLE_TRAVERSAL_CTR  0x08000000
+#define PIPELINE_FLAG_RESERVED              0x04000000
+#define PIPELINE_FLAG_ENABLE_FUSED_INSTANCE 0x02000000
+
 #define HIT_KIND_TRIANGLE_FRONT_FACE 0xFE
 #define HIT_KIND_TRIANGLE_BACK_FACE  0xFF
 #define HIT_KIND_EARLY_RAY_TERMINATE 0x100
@@ -120,30 +128,29 @@ static const BoundingBox InvalidBoundingBox =
 // The following functions depend on static flags
 static uint IsBvhCollapse()
 {
-    const uint BvhCollapseFlagMask = 0x80000000;
-    return (AmdTraceRayGetStaticFlags() & BvhCollapseFlagMask);
+    return (AmdTraceRayGetStaticFlags() & PIPELINE_FLAG_BVH_COLLAPSE);
 }
 static uint IsBvhRebraid()
 {
-    const uint BvhRebraidFlagMask = 1 << 27;
-    return (AmdTraceRayGetStaticFlags() & BvhRebraidFlagMask);
+    return (AmdTraceRayGetStaticFlags() & PIPELINE_FLAG_USE_REBRAID);
 }
 static uint IsUseRayQueryForTraceRays()
 {
-    const uint UseRayQueryForTraceRaysFlagMask = 0x10000000;
-    return (AmdTraceRayGetStaticFlags() & UseRayQueryForTraceRaysFlagMask);
+    return (AmdTraceRayGetStaticFlags() & PIPELINE_FLAG_USE_RAYQUERY);
 }
 static uint EnableAccelStructTracking()
 {
-    const uint EnableAccelStructTracking = 1 << 25;
-    return (AmdTraceRayGetStaticFlags() & EnableAccelStructTracking);
+    return (AmdTraceRayGetStaticFlags() & PIPELINE_FLAG_ENABLE_AS_TRACKING);
+}
+static uint EnableFusedInstanceNodes()
+{
+    return (AmdTraceRayGetStaticFlags() & PIPELINE_FLAG_ENABLE_FUSED_INSTANCE);
 }
 
 #if DEVELOPER
 static bool EnableTraversalCounter()
 {
-    const uint EnableTraversalCounter = 1 << 24;
-    return (AmdTraceRayGetStaticFlags() & EnableTraversalCounter);
+    return (AmdTraceRayGetStaticFlags() & PIPELINE_FLAG_ENABLE_TRAVERSAL_CTR);
 }
 #endif
 

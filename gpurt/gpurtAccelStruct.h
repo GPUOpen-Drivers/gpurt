@@ -45,7 +45,7 @@
 // Note this file is designed to be compilable as HLSL.
 
 #define GPURT_ACCEL_STRUCT_MAJOR_VERSION 15
-#define GPURT_ACCEL_STRUCT_MINOR_VERSION 6
+#define GPURT_ACCEL_STRUCT_MINOR_VERSION 7
 #define GPURT_ACCEL_STRUCT_VERSION       ((GPURT_ACCEL_STRUCT_MAJOR_VERSION << 16) | GPURT_ACCEL_STRUCT_MINOR_VERSION)
 
 #ifdef __cplusplus
@@ -104,7 +104,7 @@ union AccelStructHeaderInfo
         uint32 fp16BoxNodesInBlasMode : 2;  // BLAS FP16 box mode: None=0, Leaf=1, Mixed=2, All=3
         uint32 triangleSplitting      : 1;  // Enable TriangleSplitting
         uint32 rebraid                : 1;  // Enable Rebraid
-        uint32 halfBoxNode            : 1;  // Enable HalfBoxNode32
+        uint32 fusedInstanceNode      : 1;  // Enable fused instance nodes
         uint32 reserved               : 2;  // Unused bits
         uint32 flags                  : 16; // AccelStructBuildFlags
     };
@@ -151,12 +151,28 @@ struct AccelStructHeader
     uint32                 accelStructVersion;       // GPURT_ACCEL_STRUCT_VERSION
     uint32                 uuidLo;                   // Client-specific UUID (low part)
     uint32                 uuidHi;                   // Client-specific UUID (high part)
-    uint32                 numInternalHalfNodesFp32; // Number of half FP32 internal nodes in the accel struct
+    uint32                 reserved;                 // Unused bits
+#if __cplusplus
     uint32                 fp32RootBoundingBox[6];   // Root bounding box for bottom level acceleration structures
+#else
+    uint32                 fp32RootBoundingBox0;
+    uint32                 fp32RootBoundingBox1;
+    uint32                 fp32RootBoundingBox2;
+    uint32                 fp32RootBoundingBox3;
+    uint32                 fp32RootBoundingBox4;
+    uint32                 fp32RootBoundingBox5;
+#endif
     AccelStructHeaderInfo2 info2;
     uint32                 nodeFlags;                // Bottom level acceleration structure node flags.
     uint32                 compactedSizeInBytes;     // Total compacted size of the accel struct
-    uint32                 numChildPrims[4];         // Number of primitives for 4 children for rebraid
+#if __cpluslus
+    uint32                 numChildPrims[4];
+#else
+    uint32                 numChildPrims0;
+    uint32                 numChildPrims1;
+    uint32                 numChildPrims2;
+    uint32                 numChildPrims3;
+#endif
 };
 
 #ifdef __cplusplus

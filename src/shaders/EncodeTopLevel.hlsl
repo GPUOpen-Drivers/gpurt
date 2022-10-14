@@ -25,7 +25,7 @@
 #include ".\IntersectCommon.hlsl"
 #include "BuildCommon.hlsl"
 
-#define RootSig "RootConstants(num32BitConstants=9, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=11, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
@@ -36,6 +36,8 @@
 // 32 bit constants
 struct Constants
 {
+    uint metadataSizeInBytes;           // Size of the metadata header
+    uint basePrimNodePtrOffset;         // Offset of the prim node pointeres
     uint numPrimitives;                 // Number of instances
     uint leafNodeDataByteOffset;        // Leaf node data byte offset
     uint sceneBoundsByteOffset;         // Scene bounds byte offset
@@ -43,6 +45,7 @@ struct Constants
     uint baseUpdateStackScratchOffset;  // Offset of update scratch
     uint internalFlags;                 // Internal flags
     uint buildFlags;                    // Build flags
+    uint leafNodeExpansionFactor;       // Leaf node expansion factor (> 1 for rebraid)
     uint enableCentroidSceneBoundsWithSize;
 };
 
@@ -63,6 +66,12 @@ bool IsUpdateInPlace()
 bool IsRebraidEnabled()
 {
     return (ShaderConstants.internalFlags & ENCODE_FLAG_REBRAID_ENABLED);
+}
+
+//=====================================================================================================================
+bool IsFusedInstanceNode()
+{
+    return (ShaderConstants.internalFlags & ENCODE_FLAG_ENABLE_FUSED_INSTANCE_NODE);
 }
 
 //=====================================================================================================================
@@ -99,37 +108,6 @@ void WriteBoundingBoxNode(
     // type, flags, nodePointer, numPrimitivesAndDoCollapse
     data = uint4(NODE_TYPE_USER_NODE_INSTANCE, nodeFlags, rootNodePointer, 1 << 1);
     buffer.Store4(offset + SCRATCH_NODE_TYPE_OFFSET, data);
-}
-
-//=====================================================================================================================
-void UpdateInstanceDescriptor(in InstanceDesc desc, const uint index, uint instanceNodeOffset, uint metadataSize)
-{
-    {
-        InstanceNode node;
-
-        node.desc.InstanceID_and_Mask                           = desc.InstanceID_and_Mask;
-        node.desc.InstanceContributionToHitGroupIndex_and_Flags = desc.InstanceContributionToHitGroupIndex_and_Flags;
-        node.desc.accelStructureAddressLo                       = desc.accelStructureAddressLo;
-        node.desc.accelStructureAddressHiAndFlags               = desc.accelStructureAddressHiAndFlags;
-
-        node.extra.Transform[0]     = desc.Transform[0];
-        node.extra.Transform[1]     = desc.Transform[1];
-        node.extra.Transform[2]     = desc.Transform[2];
-        node.extra.instanceIndex    = index;
-        node.extra.padding0         = 0;
-        node.extra.blasMetadataSize = metadataSize;
-        node.extra.blasNodePointer  = CreateRootNodePointer();
-
-        // invert matrix
-        float3x4 temp    = CreateMatrix(desc.Transform);
-        float3x4 inverse = Inverse3x4(temp);
-
-        node.desc.Transform[0] = inverse[0];
-        node.desc.Transform[1] = inverse[1];
-        node.desc.Transform[2] = inverse[2];
-
-        ResultBuffer.Store<InstanceNode>(instanceNodeOffset, node);
-    }
 }
 
 //=====================================================================================================================
@@ -180,36 +158,41 @@ void EncodeInstances(
             desc = InstanceDescBuffer.Load<InstanceDesc>(index * INSTANCE_DESC_SIZE);
         }
 
-        const uint tlasMetadataSize = SourceBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
-
-        const uint basePrimNodePointersOffset = SourceBuffer.Load(tlasMetadataSize +
-                                                                  ACCEL_STRUCT_HEADER_OFFSETS_OFFSET +
-                                                                  ACCEL_STRUCT_OFFSETS_PRIM_NODE_PTRS_OFFSET);
+        const uint tlasMetadataSize =
+            isUpdate ? SourceBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : ShaderConstants.metadataSizeInBytes;
+        // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
+        const AccelStructOffsets offsets = SourceBuffer.Load<AccelStructOffsets>(tlasMetadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
+        const uint basePrimNodePointersOffset = isUpdate ? offsets.primNodePtrs : ShaderConstants.basePrimNodePtrOffset;
 
         const uint primNodePointerOffset = tlasMetadataSize + basePrimNodePointersOffset + (index * sizeof(uint));
 
-        const uint destScratchNodeOffset   = (index * ByteStrideScratchNode) + ShaderConstants.leafNodeDataByteOffset;
+        const uint destScratchNodeOffset = (index * ByteStrideScratchNode) + ShaderConstants.leafNodeDataByteOffset;
 
-        const uint validBlasMask  = (desc.accelStructureAddressLo | desc.accelStructureAddressHiAndFlags);
-        const uint activeInstance = (desc.InstanceID_and_Mask >> 24);
+        const uint instanceMask = (desc.InstanceID_and_Mask >> 24);
 
         const GpuVirtualAddress baseAddr = MakeGpuVirtualAddress(desc.accelStructureAddressLo,
                                                                  desc.accelStructureAddressHiAndFlags);
+        uint64_t baseAddrAccelStructHeader = 0;
+        uint numActivePrims = 0;
 
-        // If BLAS address is NULL, instance is considered "inactive". Inactive instances cannot be reactived during
-        // updates.
-        // Additionally, we deactivate instances if instance mask is set to 0 and TLAS is not updatable.
-
-        if ((validBlasMask != 0) && ((activeInstance != 0) || (allowUpdate == true)))
+        if (baseAddr != 0)
         {
-            const uint64_t baseAddrAccelStructHeader =
+            baseAddrAccelStructHeader =
                 MakeGpuVirtualAddress(LoadDwordAtAddr(baseAddr + ACCEL_STRUCT_METADATA_VA_LO_OFFSET),
                                       LoadDwordAtAddr(baseAddr + ACCEL_STRUCT_METADATA_VA_HI_OFFSET));
-
-            const uint numActivePrims =
+            numActivePrims =
                 FetchHeaderField(baseAddrAccelStructHeader, ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+        }
 
-            const uint geometryType = FetchHeaderField(baseAddrAccelStructHeader, ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET);
+        const bool deactivateNonUpdatable = (instanceMask == 0) || (numActivePrims == 0);
+
+        // If the BLAS address is NULL, the instance is inactive. Inactive instances cannot be activated during updates
+        // so we always exclude them from the build. Additionally, we deactivate instances in a non-updatable TLAS when
+        // the instance mask is 0 or there are no active primitives in the BLAS.
+        if ((baseAddr != 0) && ((deactivateNonUpdatable == false) || (allowUpdate == true)))
+        {
+            const uint geometryType =
+                FetchHeaderField(baseAddrAccelStructHeader, ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET);
 
             const uint64_t instanceBasePointer =
                 PackInstanceBasePointer(baseAddrAccelStructHeader,
@@ -238,8 +221,6 @@ void EncodeInstances(
 
             if (isUpdate == false)
             {
-                const uint numActivePrims = FetchHeaderField(baseAddrAccelStructHeader, ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
-
                 // Write scratch node
                 WriteBoundingBoxNode(ScratchBuffer,
                                         destScratchNodeOffset,
@@ -363,7 +344,13 @@ void EncodeInstances(
                     }
                 }
 
-                UpdateInstanceDescriptor(desc, index, nodeOffset, blasMetadataSize);
+                WriteInstanceDescriptor(ResultBuffer,
+                                        desc,
+                                        index,
+                                        nodeOffset,
+                                        blasMetadataSize,
+                                        CreateRootNodePointer(),
+                                        IsFusedInstanceNode());
             }
         }
         else if (isUpdate == false)
@@ -376,8 +363,12 @@ void EncodeInstances(
 
         // ClearFlags for refit and update
         {
-            const uint flagOffset = ShaderConstants.propagationFlagsScratchOffset + (index * sizeof(uint));
-            ScratchBuffer.Store(flagOffset, 0);
+            const uint stride = ShaderConstants.leafNodeExpansionFactor * sizeof(uint);
+            const uint flagOffset = ShaderConstants.propagationFlagsScratchOffset + (index * stride);
+            for (uint i = 0; i < ShaderConstants.leafNodeExpansionFactor; ++i)
+            {
+                ScratchBuffer.Store(flagOffset + (i * sizeof(uint)), 0);
+            }
         }
 
         DeviceMemoryBarrier();

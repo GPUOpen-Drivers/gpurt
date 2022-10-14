@@ -35,9 +35,9 @@
 //=====================================================================================================================
 namespace PrimitiveType
 {
-    static const uint Triangle  = 0;
-    static const uint AABB      = 1;
-    static const uint Instance  = 2;
+    static const uint Triangle      = 0;
+    static const uint AABB          = 1;
+    static const uint Instance      = 2;
 }
 #else
 //=====================================================================================================================
@@ -324,7 +324,7 @@ union RayTracingAccelStructBuildInfo
         uint fp16BoxNodesInBlasMode     : 2;  /// fp16BoxNodesInBlasMode
         uint triangleSplitting          : 1;  /// enable TriangleSplitting
         uint rebraid                    : 1;  /// enable Rebraid
-        uint halfBoxNode                : 1;  /// enable HalfBoxNode32
+        uint fusedInstanceNode          : 1;  /// Acceleration structure uses fused instance nodes
         uint reserved                   : 2;  /// Unused bits
         uint flags                      : 16; /// AccelStructBuildFlags
     };
@@ -347,8 +347,8 @@ union RayTracingAccelStructBuildInfo
 #define ACCEL_STRUCT_HEADER_INFO_TRIANGLE_SPLITTING_FLAGS_MASK      0x1
 #define ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_SHIFT                12
 #define ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_MASK                 0x1
-#define ACCEL_STRUCT_HEADER_INFO_HALF_BOX_NODE_FLAGS_SHIFT          13
-#define ACCEL_STRUCT_HEADER_INFO_HALF_BOX_NODE_FLAGS_MASK           0x1
+#define ACCEL_STRUCT_HEADER_INFO_FUSED_INSTANCE_NODE_FLAGS_SHIFT    13
+#define ACCEL_STRUCT_HEADER_INFO_FUSED_INSTANCE_NODE_FLAGS_MASK     0x1
 #define ACCEL_STRUCT_HEADER_INFO_FLAGS_SHIFT                        16
 #define ACCEL_STRUCT_HEADER_INFO_FLAGS_MASK                         0xffff
 
@@ -388,12 +388,20 @@ struct AccelStructHeader
     uint               version;                 // GPURT version
     uint               uuidLo;                  // Compatibility info - uuidLo
     uint               uuidHi;                  // Compatibility info - uuidHi
-    uint               numInternalHalfNodesFp32;// Number of half fp32 internal nodes used by the acceleration structure
-    uint               fp32RootBoxNode[6];      // Root Float32BoxNode for bottom level acceleration structures
+    uint               reserved;                // Reserved bits
+    uint               fp32RootBoxNode0;        // Root Float32BoxNode for bottom level acceleration structures
+    uint               fp32RootBoxNode1;
+    uint               fp32RootBoxNode2;
+    uint               fp32RootBoxNode3;
+    uint               fp32RootBoxNode4;
+    uint               fp32RootBoxNode5;
     uint               info2;                   // Acceleration structure information
     uint               nodeFlags;               // BLAS node flags
     uint               compactedSizeInBytes;    // Total compacted size of the accel struct
-    uint               numChildPrims[4];        // Number of primitives for 4 children for rebraid
+    uint               numChildPrims0;          // Number of primitives for 4 children for rebraid
+    uint               numChildPrims1;
+    uint               numChildPrims2;
+    uint               numChildPrims3;
 };
 
 #define ACCEL_STRUCT_HEADER_SIZE                               128
@@ -412,8 +420,8 @@ struct AccelStructHeader
 #define ACCEL_STRUCT_HEADER_VERSION_OFFSET                      ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET               + 4
 #define ACCEL_STRUCT_HEADER_UUID_LO_OFFSET                      ACCEL_STRUCT_HEADER_VERSION_OFFSET                      + 4
 #define ACCEL_STRUCT_HEADER_UUID_HI_OFFSET                      ACCEL_STRUCT_HEADER_UUID_LO_OFFSET                      + 4
-#define ACCEL_STRUCT_HEADER_NUM_INTERNAL_HALF_FP32_NODES_OFFSET ACCEL_STRUCT_HEADER_UUID_HI_OFFSET                      + 4
-#define ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET                ACCEL_STRUCT_HEADER_NUM_INTERNAL_HALF_FP32_NODES_OFFSET + 4
+#define ACCEL_STRUCT_HEADER_RESERVED_OFFSET                     ACCEL_STRUCT_HEADER_UUID_HI_OFFSET                      + 4
+#define ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET                ACCEL_STRUCT_HEADER_RESERVED_OFFSET                     + 4
 #define ACCEL_STRUCT_HEADER_INFO_2_OFFSET                       ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET                + 24
 #define ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET                   ACCEL_STRUCT_HEADER_INFO_2_OFFSET                       + 4
 #define ACCEL_STRUCT_HEADER_COMPACTED_BYTE_SIZE_OFFSET          ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET                   + 4
@@ -439,7 +447,7 @@ static_assert(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET               == offseto
 static_assert(ACCEL_STRUCT_HEADER_VERSION_OFFSET                      == offsetof(AccelStructHeader, version),               "");
 static_assert(ACCEL_STRUCT_HEADER_UUID_LO_OFFSET                      == offsetof(AccelStructHeader, uuidLo),               "");
 static_assert(ACCEL_STRUCT_HEADER_UUID_HI_OFFSET                      == offsetof(AccelStructHeader, uuidHi),               "");
-static_assert(ACCEL_STRUCT_HEADER_NUM_INTERNAL_HALF_FP32_NODES_OFFSET == offsetof(AccelStructHeader, numInternalHalfNodesFp32), "");
+static_assert(ACCEL_STRUCT_HEADER_RESERVED_OFFSET                     == offsetof(AccelStructHeader, reserved),             "");
 static_assert(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET                == offsetof(AccelStructHeader, fp32RootBoxNode),      "");
 static_assert(ACCEL_STRUCT_HEADER_INFO_2_OFFSET                       == offsetof(AccelStructHeader, info2),                "");
 static_assert(ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET                   == offsetof(AccelStructHeader, nodeFlags),            "");
@@ -1067,15 +1075,25 @@ static_assert(INSTANCE_EXTRA_XFORM_OFFSET        == offsetof(InstanceExtraData, 
 #endif
 
 //=====================================================================================================================
+struct FusedInstanceNode
+{
+    InstanceDesc      desc;
+    InstanceExtraData extra;
+    Float32BoxNode    blasRootNode;
+};
+
+//=====================================================================================================================
 struct InstanceNode
 {
     InstanceDesc      desc;
     InstanceExtraData extra;
 };
 
-#define INSTANCE_NODE_DESC_OFFSET  0
-#define INSTANCE_NODE_EXTRA_OFFSET 64
-#define INSTANCE_NODE_SIZE         128
+#define INSTANCE_NODE_DESC_OFFSET       0
+#define INSTANCE_NODE_EXTRA_OFFSET      64
+#define INSTANCE_NODE_SIZE              128
+#define FUSED_INSTANCE_NODE_ROOT_OFFSET INSTANCE_NODE_SIZE
+#define FUSED_INSTANCE_NODE_SIZE        256
 
 #ifdef __cplusplus
 static_assert(INSTANCE_NODE_SIZE == sizeof(InstanceNode), "InstanceNode structure mismatch");
@@ -1212,9 +1230,9 @@ static uint GetBvhNodeSizeProcedural()
 
 //=====================================================================================================================
 // Get leaf instance node size in bytes
-static uint GetBvhNodeSizeInstance()
+static uint GetBvhNodeSizeInstance(in uint enableFusedInstanceNode)
 {
-    return INSTANCE_NODE_SIZE;
+    return (enableFusedInstanceNode == 0) ? INSTANCE_NODE_SIZE : FUSED_INSTANCE_NODE_SIZE;
 }
 
 //=====================================================================================================================
@@ -1227,7 +1245,8 @@ static uint GetBvhNodeSizeInternal()
 //=====================================================================================================================
 // Get internal BVH node size in bytes
 static uint GetBvhNodeSizeLeaf(
-    uint primitiveType)
+    uint primitiveType,
+    uint enableFusedInstanceNode)
 {
     uint sizeInBytes = 0;
     switch (primitiveType)
@@ -1239,7 +1258,7 @@ static uint GetBvhNodeSizeLeaf(
         sizeInBytes = GetBvhNodeSizeProcedural();
         break;
     case PrimitiveType::Instance:
-        sizeInBytes = GetBvhNodeSizeInstance();
+        sizeInBytes = GetBvhNodeSizeInstance(enableFusedInstanceNode);
         break;
     }
 
@@ -1304,25 +1323,6 @@ static uint CalcBvhNodeSizeInternal(
     const uint sizeInBytes = (FLOAT16_BOX_NODE_SIZE * numBox16Nodes) +
                              (FLOAT32_BOX_NODE_SIZE * numBox32Nodes);
     return sizeInBytes;
-}
-
-//=====================================================================================================================
-static uint CalcBvhNodeSizeLeaf(uint primitiveType, uint numPrimitives)
-{
-    return numPrimitives * GetBvhNodeSizeLeaf(primitiveType);
-}
-
-//=====================================================================================================================
-static uint CalcBvhNodeSize(uint primitiveType, uint numPrimitives)
-{
-    return CalcBvhNodeSizeInternal(numPrimitives) +
-           CalcBvhNodeSizeLeaf(primitiveType, numPrimitives);
-}
-
-//=====================================================================================================================
-static uint CalcBvhNodeOffsetLeaf(uint primitiveType, uint numPrimitives)
-{
-    return CalcBvhNodeSizeInternal(numPrimitives);
 }
 
 //=====================================================================================================================
@@ -1726,8 +1726,10 @@ struct BuildSettingsData
     uint fastBuildThreshold;
     uint bvhBuilderNodeSortType;
     uint bvhBuilderNodeSortHeuristic;
-    uint enableHalfBoxNode32;
+    uint enableFusedInstanceNode;
     uint sahQbvh;
+    float tsPriority;
+    uint noCopySortedNodes;
 };
 
 #define BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_OFFSET                        0
@@ -1750,9 +1752,11 @@ struct BuildSettingsData
 #define BUILD_SETTINGS_DATA_FAST_BUILD_THRESHOLD_OFFSET                   68
 #define BUILD_SETTINGS_DATA_BVH_BUILDER_NODE_SORT_TYPE_OFFSET             72
 #define BUILD_SETTINGS_DATA_BVH_BUILDER_NODE_SORT_HEURISTIC_OFFSET        76
-#define BUILD_SETTINGS_DATA_ENABLE_HALF_BOX_NODE_32_OFFSET                80
+#define BUILD_SETTINGS_DATA_ENABLE_FUSED_INSTANCE_NODE_OFFSET             80
 #define BUILD_SETTINGS_DATA_SAH_QBVH_OFFSET                               84
-#define BUILD_SETTINGS_DATA_SIZE                                          88
+#define BUILD_SETTINGS_DATA_TS_PRIORITY_OFFSET                            88
+#define BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_OFFSET                   92
+#define BUILD_SETTINGS_DATA_SIZE                                          96
 
 #define BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_ID                        (BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_OFFSET / sizeof(uint))
 #define BUILD_SETTINGS_DATA_BUILD_MODE_ID                             (BUILD_SETTINGS_DATA_BUILD_MODE_OFFSET  / sizeof(uint))
@@ -1774,8 +1778,10 @@ struct BuildSettingsData
 #define BUILD_SETTINGS_DATA_FAST_BUILD_THRESHOLD_ID                   (BUILD_SETTINGS_DATA_FAST_BUILD_THRESHOLD_OFFSET / sizeof(uint))
 #define BUILD_SETTINGS_DATA_BVH_BUILDER_NODE_SORT_TYPE_ID             (BUILD_SETTINGS_DATA_BVH_BUILDER_NODE_SORT_TYPE_OFFSET / sizeof(uint))
 #define BUILD_SETTINGS_DATA_BVH_BUILDER_NODE_SORT_HEURISTIC_ID        (BUILD_SETTINGS_DATA_BVH_BUILDER_NODE_SORT_HEURISTIC_OFFSET / sizeof(uint))
-#define BUILD_SETTINGS_DATA_ENABLE_HALF_BOX_NODE_32_ID                (BUILD_SETTINGS_DATA_ENABLE_HALF_BOX_NODE_32_OFFSET / sizeof(uint))
+#define BUILD_SETTINGS_DATA_ENABLE_FUSED_INSTANCE_NODE_ID             (BUILD_SETTINGS_DATA_ENABLE_FUSED_INSTANCE_NODE_OFFSET / sizeof(uint))
 #define BUILD_SETTINGS_DATA_SAH_QBVH_ID                               (BUILD_SETTINGS_DATA_SAH_QBVH_OFFSET / sizeof(uint))
+#define BUILD_SETTINGS_DATA_TS_PRIORITY_ID                            (BUILD_SETTINGS_DATA_TS_PRIORITY_OFFSET / sizeof(uint))
+#define BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_ID                   (BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_OFFSET / sizeof(uint))
 
 #ifdef __cplusplus
 static_assert(BUILD_SETTINGS_DATA_SIZE                                          == sizeof(BuildSettingsData), "BuildSettingsData structure header mismatch");
@@ -1797,8 +1803,10 @@ static_assert(BUILD_SETTINGS_DATA_ENABLE_MERGE_SORT_OFFSET                      
 static_assert(BUILD_SETTINGS_DATA_FAST_BUILD_THRESHOLD_OFFSET                   == offsetof(BuildSettingsData, fastBuildThreshold), "");
 static_assert(BUILD_SETTINGS_DATA_BVH_BUILDER_NODE_SORT_TYPE_OFFSET             == offsetof(BuildSettingsData, bvhBuilderNodeSortType), "");
 static_assert(BUILD_SETTINGS_DATA_BVH_BUILDER_NODE_SORT_HEURISTIC_OFFSET        == offsetof(BuildSettingsData, bvhBuilderNodeSortHeuristic), "");
-static_assert(BUILD_SETTINGS_DATA_ENABLE_HALF_BOX_NODE_32_OFFSET                == offsetof(BuildSettingsData, enableHalfBoxNode32), "");
+static_assert(BUILD_SETTINGS_DATA_ENABLE_FUSED_INSTANCE_NODE_OFFSET             == offsetof(BuildSettingsData, enableFusedInstanceNode), "");
 static_assert(BUILD_SETTINGS_DATA_SAH_QBVH_OFFSET                               == offsetof(BuildSettingsData, sahQbvh), "");
+static_assert(BUILD_SETTINGS_DATA_TS_PRIORITY_OFFSET                            == offsetof(BuildSettingsData, tsPriority), "");
+static_assert(BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_OFFSET                   == offsetof(BuildSettingsData, noCopySortedNodes), "");
 #endif
 
 #define BUILD_MODE_LINEAR   0
@@ -1825,9 +1833,10 @@ static uint CalcNumQBVHNodes(uint numPrimitives)
 #define SAH_COST_TRIANGLE_INTERSECTION       1.5
 #define SAH_COST_AABBB_INTERSECTION          1
 
-#define ENCODE_FLAG_ARRAY_OF_POINTERS        1
-#define ENCODE_FLAG_UPDATE_IN_PLACE          2
-#define ENCODE_FLAG_REBRAID_ENABLED          4
+#define ENCODE_FLAG_ARRAY_OF_POINTERS          0x00000001
+#define ENCODE_FLAG_UPDATE_IN_PLACE            0x00000002
+#define ENCODE_FLAG_REBRAID_ENABLED            0x00000004
+#define ENCODE_FLAG_ENABLE_FUSED_INSTANCE_NODE 0x00000010
 
 //=====================================================================================================================
 struct IntersectionResult

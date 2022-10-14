@@ -25,7 +25,7 @@
 #include ".\Common.hlsl"
 #include ".\BuildCommon.hlsl"
 
-#define RootSig "RootConstants(num32BitConstants=24, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=27, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
@@ -39,6 +39,7 @@
 // 32 bit constants
 struct Constants
 {
+    uint metadataSizeInBytes;           // Size of the metadata header
     uint NumPrimitives;                 // Number of primitives
     uint LeafNodeDataByteOffset;        // Leaf node data byte offset
     uint PrimitiveOffset;               // Primitive Offset
@@ -50,13 +51,15 @@ struct Constants
     uint IndexBufferFormat;             // Index buffer format
     uint GeometryBufferStrideInBytes;   // Vertex buffer stride in bytes
     uint GeometryIndex;                 // Index of the geometry description that owns this node
+    uint BaseGeometryInfoOffset;        // Base offset for the geometry info
+    uint BasePrimNodePtrOffset;         // Base offset for the prim nodes
     uint BuildFlags;                    // DDI acceleration structure build flags
     uint isUpdateInPlace;               // Is update in place
     uint GeometryFlags;                 // Geometry flags (D3D12_RAYTRACING_GEOMETRY_FLAGS)
     uint VertexBufferFormat;            // Vertex buffer format
     uint vertexCount;                   // Vertex count
     uint DestLeafByteOffset;            // Offset to this geometry's location in the dest leaf node buffer
-    uint TotalNumPrimitives;            // Number of primitives in the entire acceleration structure
+    uint LeafNodeExpansionFactor;       // Leaf node expansion factor (> 1 for triangle splitting)
     uint TriangleCompressionMode;       // Triangle Compression mode
     uint IndexBufferInfoScratchOffset;
     uint IndexBufferVaLo;
@@ -825,13 +828,21 @@ void WriteScratchTriangleNode(
 uint ComputePrimitiveOffset()
 {
     uint primitiveOffset = 0;
-    const uint metadataSize = SourceBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
-    const AccelStructHeader header = SourceBuffer.Load<AccelStructHeader>(metadataSize);
+
+    const uint metadataSize = IsUpdate(ShaderConstants.BuildFlags) ?
+                              SourceBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : ShaderConstants.metadataSizeInBytes;
+
+    // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
+    const AccelStructOffsets offsets =
+        SourceBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
+
+    const uint baseGeometryInfoOffset =
+        IsUpdate(ShaderConstants.BuildFlags) ? offsets.geometryInfo : ShaderConstants.BaseGeometryInfoOffset;
 
     for (uint geomIdx = 0; geomIdx < ShaderConstants.GeometryIndex; ++geomIdx)
     {
         const uint geometryInfoOffset =
-            metadataSize + header.offsets.geometryInfo +
+            metadataSize + baseGeometryInfoOffset +
             (geomIdx * GEOMETRY_INFO_SIZE);
 
         GeometryInfo info;
@@ -859,12 +870,18 @@ void WriteGeometryInfo(
             (IsUpdate(ShaderConstants.BuildFlags) &&
              (ShaderConstants.isUpdateInPlace == false)))
         {
-            const uint metadataSize = SourceBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
+            const uint metadataSize = IsUpdate(ShaderConstants.BuildFlags) ?
+                SourceBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : ShaderConstants.metadataSizeInBytes;
 
-            const AccelStructHeader header = SourceBuffer.Load<AccelStructHeader>(metadataSize);
+            // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
+            const AccelStructOffsets offsets =
+                SourceBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
+
+            const uint baseGeometryInfoOffset =
+                IsUpdate(ShaderConstants.BuildFlags) ? offsets.geometryInfo : ShaderConstants.BaseGeometryInfoOffset;
 
             const uint geometryInfoOffset =
-                metadataSize + header.offsets.geometryInfo +
+                metadataSize + baseGeometryInfoOffset +
                 (ShaderConstants.GeometryIndex * GEOMETRY_INFO_SIZE);
 
             GeometryInfo info;
@@ -1248,16 +1265,18 @@ void EncodeTriangleNodes(
     uint primitiveIndex = globalThreadId.x;
     if (primitiveIndex < numPrimitives)
     {
-        const uint metadataSize = SourceBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
+        const uint metadataSize = IsUpdate(ShaderConstants.BuildFlags) ?
+            SourceBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : ShaderConstants.metadataSizeInBytes;
 
-        AccelStructOffsets offsets =
-            SourceBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
+        // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
+        const AccelStructOffsets offsets = SourceBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
 
-        const uint numLeafNodesOffset = metadataSize + ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET;
+        const uint basePrimNodePtr =
+            IsUpdate(ShaderConstants.BuildFlags) ? offsets.primNodePtrs : ShaderConstants.BasePrimNodePtrOffset;
 
         const uint flattenedPrimitiveIndex = primitiveOffset + primitiveIndex;
         const uint primNodePointerOffset =
-            metadataSize + offsets.primNodePtrs + (flattenedPrimitiveIndex * sizeof(uint));
+            metadataSize + basePrimNodePtr + (flattenedPrimitiveIndex * sizeof(uint));
 
         // Fetch face indices from index buffer
         uint3 faceIndices = FetchFaceIndices(IndexBuffer,
@@ -1326,6 +1345,7 @@ void EncodeTriangleNodes(
 
             if (ShaderConstants.TriangleCompressionMode != PAIR_TRIANGLE_COMPRESSION)
             {
+                const uint numLeafNodesOffset = metadataSize + ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET;
                 UpdateLeafNodeCounters(numLeafNodesOffset, 1);
             }
 
@@ -1404,8 +1424,12 @@ void EncodeTriangleNodes(
 
         // ClearFlags for refit and update
         {
-            const uint flagOffset = ShaderConstants.PropagationFlagsScratchOffset + (flattenedPrimitiveIndex * sizeof(uint));
-            ScratchBuffer.Store(flagOffset, 0);
+            const uint stride = ShaderConstants.LeafNodeExpansionFactor * sizeof(uint);
+            const uint flagOffset = ShaderConstants.PropagationFlagsScratchOffset + (flattenedPrimitiveIndex * stride);
+            for (uint i = 0; i < ShaderConstants.LeafNodeExpansionFactor; ++i)
+            {
+                ScratchBuffer.Store(flagOffset + (i * sizeof(uint)), 0);
+            }
         }
 
         IncrementTaskCounter();
@@ -1516,10 +1540,15 @@ void EncodeAABBNodes(
     uint primitiveIndex = globalThreadId.x;
     if (primitiveIndex < ShaderConstants.NumPrimitives)
     {
-        const uint metadataSize = SourceBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
+        const uint metadataSize =
+            IsUpdate(ShaderConstants.BuildFlags) ? SourceBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : ShaderConstants.metadataSizeInBytes;
 
-        const AccelStructHeader  header  = SourceBuffer.Load<AccelStructHeader>(metadataSize);
-        const AccelStructOffsets offsets = header.offsets;
+        // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
+        const AccelStructOffsets offsets =
+            SourceBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
+
+        const uint basePrimNodePtr =
+            IsUpdate(ShaderConstants.BuildFlags) ? offsets.primNodePtrs : ShaderConstants.BasePrimNodePtrOffset;
 
         // Get bounds for this thread
         const BoundingBox boundingBox = FetchBoundingBoxData(GeometryBuffer,
@@ -1527,7 +1556,7 @@ void EncodeAABBNodes(
                                                              ShaderConstants.GeometryBufferStrideInBytes);
 
         const uint primNodePointerOffset =
-            metadataSize + offsets.primNodePtrs + ((primitiveOffset + primitiveIndex) * sizeof(uint));
+            metadataSize + basePrimNodePtr + ((primitiveOffset + primitiveIndex) * sizeof(uint));
 
         if (IsUpdate(ShaderConstants.BuildFlags))
         {

@@ -73,21 +73,13 @@ enum class StaticPipelineFlag : uint32
     SkipTriangles                 = 0x100,        // Always skip triangle node intersections
     SkipProceduralPrims           = 0x200,        // Always skip procedural node intersections
     BvhCollapse                   = (1u << 31),   // Enable BVH collapse
-    UseRayQuery                   = (1u << 28),   // Use RayQuery for TraceRays
-    UseTreeRebraid                = (1u << 27),   // Use Tree Rebraid for TraceRays
-    EnableAccelStructTracking     = (1u << 25),   // Enable logging of TLAS addresses using AccelStructTracker
-    EnableTraversalCounter        = (1u << 24),   // Enable Traversal counters
+    UseRayQuery                   = (1u << 30),   // Use RayQuery for TraceRays
+    UseTreeRebraid                = (1u << 29),   // Use Tree Rebraid for TraceRays
+    EnableAccelStructTracking     = (1u << 28),   // Enable logging of TLAS addresses using AccelStructTracker
+    EnableTraversalCounter        = (1u << 27),   // Enable Traversal counters
+    Reserved                      = (1u << 26),
+    EnableFusedInstanceNodes      = (1u << 25),   // Enable fused instance nodes
 };
-
-// A bitmask of all bits in the static pipeline flags.
-constexpr uint32 StaticPipelineFlagsAll =
-    static_cast<uint32>(StaticPipelineFlag::SkipTriangles) |
-    static_cast<uint32>(StaticPipelineFlag::SkipProceduralPrims) |
-    static_cast<uint32>(StaticPipelineFlag::BvhCollapse) |
-    static_cast<uint32>(StaticPipelineFlag::UseRayQuery) |
-    static_cast<uint32>(StaticPipelineFlag::UseTreeRebraid) |
-    static_cast<uint32>(StaticPipelineFlag::EnableAccelStructTracking) |
-    static_cast<uint32>(StaticPipelineFlag::EnableTraversalCounter);
 
 // TODO #gpurt: Abstract these?  Some of these probably should come from PAL device properties
 
@@ -106,6 +98,9 @@ constexpr size_t RayTracingQBVH16NodeSize = 64;
 
 // Byte size of a instance node
 constexpr size_t RayTracingInstanceNodeSize = 128;
+
+// Byte size of a fused instance node
+constexpr size_t RayTracingFusedInstanceNodeSize = 256;
 
 // Max stride between shader records
 constexpr uint32 RayTraceMaxShaderRecordByteStride   = 4096;
@@ -720,6 +715,7 @@ struct DeviceSettings
     TriangleCompressionAutoMode triangleCompressionAutoMode;
     float                       triangleSplittingFactor;
     uint32                      tsBudgetPerTriangle;
+    float                       tsPriority;
 
     RebraidType                 rebraidType;                          // Tree rebraid in TLAS
     uint32                      rebraidFactor;                        // Rebraid factor
@@ -740,7 +736,7 @@ struct DeviceSettings
 
     struct
     {
-        uint32 enableHalfBoxNode32 : 1;
+        uint32 enableFusedInstanceNode : 1;
         uint32 enableMortonCode30 : 1;
         uint32 enableVariableBitsMortonCodes : 1;
         uint32 enableParallelUpdate : 1;
@@ -763,6 +759,7 @@ struct DeviceSettings
         uint32 sahQbvh : 1;                                 // Apply SAH into QBVH build.
         uint32 allowFp16BoxNodesInUpdatableBvh : 1;         // Allow box node in updatable bvh.
         uint32 fp16BoxNodesRequireCompaction : 1;           // Compaction is set or not.
+        uint32 noCopySortedNodes : 1;                       // Disable CopyUnsortedScratchLeafNode()
     };
 
     uint64                      accelerationStructureUUID;            // Acceleration Structure UUID
@@ -1112,8 +1109,10 @@ struct CompileTimeBuildSettings
     uint32 fastBuildThreshold;
     uint32 bvhBuilderNodeSortType;
     uint32 bvhBuilderNodeSortHeuristic;
-    uint32 enableHalfBoxNode32;
+    uint32 enableFusedInstanceNode;
     uint32 sahQbvh;
+    float  tsPriority;
+    uint32 noCopySortedNodes;
 };
 
 // Map key for map of internal pipelines
@@ -1474,22 +1473,14 @@ class IDevice;
 // =====================================================================================================================
 // Create GPURT device
 //
-#if GPURT_BUILD_SHARED
-typedef Pal::Result (GPURT_API_ENTRY* PFN_CreateDevice)(
-#else
 Pal::Result GPURT_API_ENTRY CreateDevice(
-#endif
     const DeviceInitInfo&  info,
     const ClientCallbacks& callbacks,
     void*            const pMemory,
     IDevice**        const ppDevice);
 
 // =====================================================================================================================
-#if GPURT_BUILD_SHARED
-typedef size_t (GPURT_API_ENTRY* PFN_GetDeviceSize)();
-#else
 size_t GPURT_API_ENTRY GetDeviceSize();
-#endif
 
 // =====================================================================================================================
 // Get GPURT shader library data
@@ -1498,11 +1489,7 @@ size_t GPURT_API_ENTRY GetDeviceSize();
 //
 // @return Shader code for the shader library
 //
-#if GPURT_BUILD_SHARED
-typedef PipelineShaderCode (GPURT_API_ENTRY* PFN_GetShaderLibraryCode)(
-#else
 PipelineShaderCode GPURT_API_ENTRY GetShaderLibraryCode(
-#endif
     ShaderLibraryFeatureFlags flags);
 
 // =====================================================================================================================

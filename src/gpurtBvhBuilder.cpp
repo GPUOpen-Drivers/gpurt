@@ -197,13 +197,14 @@ uint32 BvhBuilder::GetNumHistogramElements(
 // =====================================================================================================================
 // Helper function to determine leaf nodes size
 uint32 BvhBuilder::GetLeafNodeSize(
-    bool topLevelBuild)
+    const DeviceSettings& settings,
+    const BuildConfig&    config)
 {
     uint32 size = 0;
 
-    if (topLevelBuild)
+    if (config.topLevelBuild)
     {
-        size = RayTracingInstanceNodeSize;
+        size = settings.enableFusedInstanceNode ? RayTracingFusedInstanceNodeSize : RayTracingInstanceNodeSize;
     }
     else
     {
@@ -244,19 +245,8 @@ uint32 BvhBuilder::CalcMetadataSizeInBytes(
 // Static helper function that calculates the size of the buffer for internal nodes
 uint32 BvhBuilder::CalculateInternalNodesSize()
 {
-    const bool enableHalfBoxNode32 = m_deviceSettings.enableHalfBoxNode32;
     const uint32 leafAabbCount = m_buildConfig.numLeafNodes;
     const uint32 numInternalNodes = CalcNumQBVHInternalNodes(leafAabbCount);
-
-    // When half f32 box node is enabled, the worst case QBVH has all the internal nodes with 3 children.
-    // Thus, the worst case QBVH internal node calculation is as follows
-    //
-    // nodeCount = lastLevelNodeCount * (1/3 + 1/9 + 1/27 + 1/81 + ... + (1/3)^n)
-    // nodeCount = lastLevelNodeCount/2, when n = +inf
-    //
-    // We need at least 1 internal node.
-    //
-    const uint32 numInternalNodesHalfBoxNode32 = Util::Max(1u, leafAabbCount / 2);
 
     uint32 numBox16Nodes = 0;
     uint32 numBox32Nodes = 0;
@@ -264,7 +254,7 @@ uint32 BvhBuilder::CalculateInternalNodesSize()
     {
     case Fp16BoxNodesInBlasMode::NoNodes:
         // All nodes are fp32
-        numBox32Nodes = enableHalfBoxNode32 ? numInternalNodesHalfBoxNode32 : numInternalNodes;
+        numBox32Nodes = numInternalNodes;
         break;
 
     case Fp16BoxNodesInBlasMode::LeafNodes:
@@ -276,7 +266,7 @@ uint32 BvhBuilder::CalculateInternalNodesSize()
     case Fp16BoxNodesInBlasMode::MixedNodes:
         // Conservative estimate: no fp32 nodes could be converted to fp16
         // BVH storage savings realized after compaction copy
-        numBox32Nodes = enableHalfBoxNode32 ? numInternalNodesHalfBoxNode32 : numInternalNodes;
+        numBox32Nodes = numInternalNodes;
         break;
 
     case Fp16BoxNodesInBlasMode::AllNodes:
@@ -300,7 +290,7 @@ uint32 BvhBuilder::CalculateInternalNodesSize()
 // Static helper function that calculates the size of the buffer for leaf nodes
 uint32 BvhBuilder::CalculateLeafNodesSize()
 {
-    return m_buildConfig.numLeafNodes * GetLeafNodeSize(m_buildConfig.topLevelBuild);
+    return m_buildConfig.numLeafNodes * GetLeafNodeSize(m_deviceSettings, m_buildConfig);
 }
 
 // =====================================================================================================================
@@ -562,7 +552,13 @@ uint32 GpuBvhBuilder::CalculateScratchBufferInfo(
 
     // Propagation flags
     const uint32 propagationFlags = runningOffset;
-    runningOffset += aabbCount * sizeof(uint32);
+
+    // Round up to multiple of primitive count. Encode* clears the flags based on the expansion factor which
+    // must be a multiple of numPrimitives.
+    const uint32 propagationFlagSlotCount =
+        (m_buildConfig.numPrimitives == 0) ? 0 : Util::RoundUpToMultiple(aabbCount, m_buildConfig.numPrimitives);
+
+    runningOffset += propagationFlagSlotCount * sizeof(uint32);
 
     uint32 triangleSplitState = 0xFFFFFFFF;
     uint32 triangleSplitBoxes = 0xFFFFFFFF;
@@ -642,6 +638,16 @@ uint32 GpuBvhBuilder::CalculateScratchBufferInfo(
         runningOffset += RayTracingStateRebraidBuildSize;
     }
 
+    uint32 primIndicesSorted = 0xFFFFFFFF;
+
+    if (m_deviceSettings.noCopySortedNodes)
+    {
+        // Sorted primitive indices buffer size. This array must be available for
+        // the next passes when noCopySortedNodes is enabled.
+        primIndicesSorted = runningOffset;
+        runningOffset += aabbCount * sizeof(uint32);
+    }
+
     uint32 maxSize = runningOffset;
 
     const uint32 passOffset = runningOffset;
@@ -650,11 +656,10 @@ uint32 GpuBvhBuilder::CalculateScratchBufferInfo(
 
     runningOffset = passOffset;
 
-    uint32 bvhLeafNodeData = 0xFFFFFFFF;
+    uint32 bvhLeafNodeData = 0xFFFFFFFF; // Unsorted leaf buffer
     uint32 sceneBounds = 0xFFFFFFFF;
     uint32 mortonCodes = 0xFFFFFFFF;
     uint32 mortonCodesSorted = 0xFFFFFFFF;
-    uint32 primIndicesSorted = 0xFFFFFFFF;
     uint32 primIndicesSortedSwap = 0xFFFFFFFF;
     uint32 histogram = 0xFFFFFFFF;
     uint32 tempKeys = 0xFFFFFFFF;
@@ -668,9 +673,18 @@ uint32 GpuBvhBuilder::CalculateScratchBufferInfo(
     uint32 refOffsets = 0xFFFFFFFF;
     uint32 tdBins = 0xFFFFFFFF;
 
-    // Scratch data for storing unsorted leaf nodes
-    bvhLeafNodeData = runningOffset;
-    runningOffset += aabbCount * RayTracingScratchNodeSize;
+    if (m_deviceSettings.noCopySortedNodes)
+    {
+        // Scratch data for storing unsorted leaf nodes. No additional memory is
+        // used, so runningOffset doesn't need to be updated.
+        bvhLeafNodeData = bvhNodeData + (m_buildConfig.numLeafNodes - 1) * RayTracingScratchNodeSize;
+    }
+    else
+    {
+        // Additional scratch data for storing unsorted leaf nodes
+        bvhLeafNodeData = runningOffset;
+        runningOffset += aabbCount * RayTracingScratchNodeSize;
+    }
 
     uint32 triangleSplitRefs0 = 0xFFFFFFFF;
     uint32 triangleSplitRefs1 = 0xFFFFFFFF;
@@ -717,9 +731,13 @@ uint32 GpuBvhBuilder::CalculateScratchBufferInfo(
         mortonCodesSorted = runningOffset;
         runningOffset += aabbCount * dataSize;
 
-        // Sorted primitive indices buffer size
-        primIndicesSorted = runningOffset;
-        runningOffset += aabbCount * sizeof(uint32);
+        if (m_deviceSettings.noCopySortedNodes == false)
+        {
+            // Sorted primitive indices buffer size. This array goes away after this pass
+            // if noCopySortedNodes is disabled
+            primIndicesSorted = runningOffset;
+            runningOffset += aabbCount * sizeof(uint32);
+        }
 
         // Merge Sort
         if (m_deviceSettings.enableMergeSort)
@@ -877,8 +895,8 @@ uint32 GpuBvhBuilder::CalculateScratchBufferInfo(
             (intNodeTypes != Fp16BoxNodesInBlasMode::AllNodes);
         const bool intNodeTypesMixInBlas = intNodeTypesMix &&
             (m_buildArgs.inputs.type == AccelStructType::BottomLevel);
-        const uint32 stackEntrySize = ((intNodeTypesMixInBlas ||
-            m_deviceSettings.enableHalfBoxNode32) ? 2u : 1u);
+
+        uint32 stackEntrySize = intNodeTypesMixInBlas ? 2u : 1u;
 
         runningOffset += maxStackEntry * stackEntrySize * sizeof(uint32);
     }
@@ -1135,6 +1153,64 @@ void GpuBvhBuilder::InitBuildConfig(
 
     m_buildConfig.numMortonSizeBits = m_deviceSettings.numMortonSizeBits;
 }
+// =====================================================================================================================
+AccelStructMetadataHeader GpuBvhBuilder::InitAccelStructMetadataHeader()
+{
+    AccelStructMetadataHeader metaHeader = {};
+    // Make sure the address for empty top levels is 0 so we avoid tracing them. Set a valid address for empty bottom
+    // levels so the top level build can still read the bottom level header.
+    const bool emptyTopLevel = (m_buildConfig.topLevelBuild) && (m_buildConfig.numPrimitives == 0);
+
+    metaHeader.addressLo    = emptyTopLevel ? 0 : Util::LowPart(ResultBufferBaseVa());
+    metaHeader.addressHi    = emptyTopLevel ? 0 : Util::HighPart(ResultBufferBaseVa());
+    metaHeader.sizeInBytes  = m_metadataSizeInBytes;
+
+    return metaHeader;
+}
+
+// =====================================================================================================================
+AccelStructHeader GpuBvhBuilder::InitAccelStructHeader()
+{
+    const uint32 accelStructSize = CalculateResultBufferInfo(&m_resultOffsets, &m_metadataSizeInBytes);
+
+    AccelStructHeader header = {};
+    AccelStructHeaderInfo info = {};
+
+    info.type                       = static_cast<uint32>(m_buildArgs.inputs.type);
+    info.buildType                  = static_cast<uint32>(AccelStructBuilderType::Gpu);
+    info.mode                       = m_buildSettings.buildMode;
+    info.triCompression             = static_cast<uint32>(m_buildConfig.triangleCompressionMode);
+    info.fp16BoxNodesInBlasMode     = static_cast<uint32>(m_buildConfig.fp16BoxNodesInBlasMode);
+    info.triangleSplitting          = m_buildConfig.triangleSplitting;
+    info.rebraid                    = m_buildConfig.rebraidType != RebraidType::Off;
+    info.fusedInstanceNode          = m_deviceSettings.enableFusedInstanceNode;
+    info.flags                      = m_buildArgs.inputs.flags;
+
+    AccelStructHeaderInfo2 info2 = {};
+
+    header.info                     = info;
+    header.info2                    = info2;
+    header.accelStructVersion       = GPURT_ACCEL_STRUCT_VERSION;
+    header.metadataSizeInBytes      = m_metadataSizeInBytes;
+    header.sizeInBytes              = accelStructSize;
+    header.numPrimitives            = m_buildConfig.numLeafNodes;
+    header.numDescs                 = m_buildArgs.inputs.inputElemCount;
+    header.geometryType             = static_cast<uint32>(m_buildConfig.geometryType);
+    header.uuidLo                   = Util::LowPart(m_deviceSettings.accelerationStructureUUID);
+    header.uuidHi                   = Util::HighPart(m_deviceSettings.accelerationStructureUUID);
+
+    if (m_buildConfig.topLevelBuild)
+    {
+        header.numLeafNodes = m_buildArgs.inputs.inputElemCount;
+    }
+
+    header.offsets.internalNodes    = m_resultOffsets.internalNodes;
+    header.offsets.leafNodes        = m_resultOffsets.leafNodes;
+    header.offsets.geometryInfo     = m_resultOffsets.geometryInfo;
+    header.offsets.primNodePtrs     = m_resultOffsets.primNodePtrs;
+
+    return header;
+}
 
 // =====================================================================================================================
 // Executes the encode triangle nodes shader
@@ -1171,8 +1247,15 @@ void GpuBvhBuilder::EncodeTriangleNodes(
     PAL_ASSERT(pDesc->vertexFormat != VertexFormat::Invalid);
     uint32 vertexFormat = static_cast<uint32>(pDesc->vertexFormat);
 
+    // Round up to multiple of primitive count. Encode* clears the flags based on the expansion factor which
+    // must be a multiple of numPrimitives.
+    const uint32 leafNodeExpansionFactor =
+        (m_buildConfig.numPrimitives == 0) ?
+            0 : Util::RoundUpQuotient(m_buildConfig.numLeafNodes, m_buildConfig.numPrimitives);
+
     const EncodeNodes::Constants shaderConstants =
     {
+        m_metadataSizeInBytes,
         primitiveCount,
         m_scratchOffsets.bvhLeafNodeData,
         primitiveOffset,
@@ -1184,13 +1267,15 @@ void GpuBvhBuilder::EncodeTriangleNodes(
         indexFormat,
         static_cast<uint32>(pDesc->vertexBufferByteStride),
         geometryIndex,
+        m_resultOffsets.geometryInfo,
+        m_resultOffsets.primNodePtrs,
         static_cast<uint32>(m_buildArgs.inputs.flags),
         IsUpdateInPlace(),
         static_cast<uint32>(geometryFlags),
         vertexFormat,
         pDesc->vertexCount,
         static_cast<uint32>(resultLeafOffset),
-        m_buildConfig.numLeafNodes,
+        leafNodeExpansionFactor,
         static_cast<uint32>(m_buildConfig.triangleCompressionMode),
         m_scratchOffsets.indexBufferInfo,
         Util::LowPart(indexBufferGpuVa),
@@ -1261,6 +1346,7 @@ void GpuBvhBuilder::EncodeAABBNodes(
 {
     const EncodeNodes::Constants shaderConstants =
     {
+        m_metadataSizeInBytes,
         primitiveCount,
         m_scratchOffsets.bvhLeafNodeData,
         primitiveOffset,
@@ -1272,6 +1358,8 @@ void GpuBvhBuilder::EncodeAABBNodes(
         static_cast<uint32>(IndexFormat::Unknown),
         static_cast<uint32>(pDesc->aabbByteStride),
         geometryIndex,
+        m_resultOffsets.geometryInfo,
+        m_resultOffsets.primNodePtrs,
         static_cast<uint32>(m_buildArgs.inputs.flags),
         IsUpdateInPlace(),
         static_cast<uint32>(geometryFlags),
@@ -1338,10 +1426,19 @@ void GpuBvhBuilder::EncodeInstances(
     const uint32 internalFlags =
         ((descLayout == InputElementLayout::ArrayOfPointers) ? EncodeFlagArrayOfPointers : 0) |
         (IsUpdateInPlace() ? EncodeFlagUpdateInPlace : 0) |
-        (m_buildConfig.rebraidType != RebraidType::Off ? EncodeFlagRebraidEnabled : 0);
+        (m_buildConfig.rebraidType != RebraidType::Off ? EncodeFlagRebraidEnabled : 0) |
+        (m_deviceSettings.enableFusedInstanceNode ? EncodeFlagFusedInstanceNode : 0);
+
+    // Round up to multiple of primitive count. Encode* clears the flags based on the expansion factor which
+    // must be a multiple of numPrimitives.
+    const uint32 leafNodeExpansionFactor =
+        (m_buildConfig.numPrimitives == 0) ?
+            0 : Util::RoundUpQuotient(m_buildConfig.numLeafNodes, m_buildConfig.numPrimitives);
 
     const EncodeInstances::Constants shaderConstants =
     {
+        m_metadataSizeInBytes,
+        m_resultOffsets.primNodePtrs,
         numDesc,
         m_scratchOffsets.bvhLeafNodeData,
         m_scratchOffsets.sceneBounds,
@@ -1349,6 +1446,7 @@ void GpuBvhBuilder::EncodeInstances(
         m_scratchOffsets.updateStack,
         internalFlags,
         m_buildArgs.inputs.flags,
+        leafNodeExpansionFactor,
         false
     };
 
@@ -1512,57 +1610,10 @@ void GpuBvhBuilder::InitAccelerationStructure(
         WriteImmediateData(ScratchBufferBaseVa() + m_scratchOffsets.sceneBounds, sceneBounds);
     }
 
-    AccelStructMetadataHeader metaHeader = {};
+    WriteImmediateData(HeaderBufferBaseVa(), InitAccelStructMetadataHeader());
+    WriteImmediateData(ResultBufferBaseVa(), InitAccelStructHeader());
 
-    // Make sure the address for empty top levels is 0 so we avoid tracing them. Set a valid address for empty bottom
-    // levels so the top level build can still read the bottom level header.
-    const bool emptyTopLevel =
-        (m_buildConfig.topLevelBuild) && (m_buildConfig.numPrimitives == 0);
-
-    metaHeader.addressLo   = emptyTopLevel ? 0 : Util::LowPart(ResultBufferBaseVa());
-    metaHeader.addressHi   = emptyTopLevel ? 0 : Util::HighPart(ResultBufferBaseVa());
-    metaHeader.sizeInBytes = m_metadataSizeInBytes;
-
-    WriteImmediateData(HeaderBufferBaseVa(), metaHeader);
-    AccelStructHeaderInfo info = {};
-
-    info.type                     = static_cast<uint32>(m_buildArgs.inputs.type);
-    info.buildType                = static_cast<uint32>(AccelStructBuilderType::Gpu);
-    info.mode                     = m_buildSettings.buildMode;
-    info.triCompression           = static_cast<uint32>(m_buildConfig.triangleCompressionMode);
-    info.fp16BoxNodesInBlasMode   = static_cast<uint32>(m_buildConfig.fp16BoxNodesInBlasMode);
-    info.triangleSplitting        = m_buildConfig.triangleSplitting;
-    info.rebraid                  = m_buildConfig.rebraidType != RebraidType::Off;
-    info.halfBoxNode              = m_deviceSettings.enableHalfBoxNode32;
-    info.flags                    = m_buildArgs.inputs.flags;
-
-    AccelStructHeaderInfo2 info2 = {};
-
-    AccelStructHeader header = {};
-
-    header.info                = info;
-    header.info2               = info2;
-    header.accelStructVersion  = GPURT_ACCEL_STRUCT_VERSION;
-    header.metadataSizeInBytes = m_metadataSizeInBytes;
-    header.sizeInBytes         = accelStructSize;
-    header.numPrimitives       = m_buildConfig.numLeafNodes;
-    header.numDescs            = m_buildArgs.inputs.inputElemCount;
-    header.geometryType        = static_cast<uint32>(m_buildConfig.geometryType);
-    header.uuidLo              = Util::LowPart(m_deviceSettings.accelerationStructureUUID);
-    header.uuidHi              = Util::HighPart(m_deviceSettings.accelerationStructureUUID);
-
-    // The leaf node count for bottom levels is initialized to zero and incremented during the build
-    if (m_buildConfig.topLevelBuild)
-    {
-        header.numLeafNodes = m_buildArgs.inputs.inputElemCount;
-    }
-
-    header.offsets.internalNodes = m_resultOffsets.internalNodes;
-    header.offsets.leafNodes     = m_resultOffsets.leafNodes;
-    header.offsets.geometryInfo  = m_resultOffsets.geometryInfo;
-    header.offsets.primNodePtrs  = m_resultOffsets.primNodePtrs;
-
-    WriteImmediateData(ResultBufferBaseVa(), header);
+    ResetTaskCounter(HeaderBufferBaseVa());
 
     // reset taskQueue counters
     ResetTaskQueueCounters(m_scratchOffsets.currentState);
@@ -1763,8 +1814,8 @@ void GpuBvhBuilder::OutputBuildInfo()
     {
         char infoString[MaxInfoStrLength];
         Util::Strncat(buildShaderInfo, MaxInfoStrLength, ", TriangleSplitting");
-        Util::Snprintf(infoString, MaxInfoStrLength, ", TriangleSplittingBudgetPerTriangle:%d",
-            m_deviceSettings.tsBudgetPerTriangle);
+        Util::Snprintf(infoString, MaxInfoStrLength, ", TriangleSplittingBudgetPerTriangle:%d, TriangleSplittingPriority:%f",
+            m_deviceSettings.tsBudgetPerTriangle, m_deviceSettings.tsPriority);
         Util::Strncat(buildShaderInfo, MaxInfoStrLength, infoString);
     }
 
@@ -1840,9 +1891,17 @@ void GpuBvhBuilder::InitBuildSettings()
     m_buildSettings.bvhBuilderNodeSortType       = static_cast<uint32>(m_buildConfig.bvhBuilderNodeSortType);
     m_buildSettings.bvhBuilderNodeSortHeuristic  = static_cast<uint32>(m_buildConfig.bvhBuilderNodeSortHeuristic);
 
-    m_buildSettings.enableHalfBoxNode32          = m_deviceSettings.enableHalfBoxNode32;
+    m_buildSettings.enableFusedInstanceNode      = m_deviceSettings.enableFusedInstanceNode;
     m_buildSettings.sahQbvh                      = m_deviceSettings.sahQbvh;
 
+    m_buildSettings.tsPriority                   = m_deviceSettings.tsPriority;
+    // Force priority to 1 if the client set it to 0
+    if (m_buildSettings.tsPriority <= 0.f)
+    {
+        m_buildSettings.tsPriority = 1.0f;
+    }
+
+    m_buildSettings.noCopySortedNodes  = m_deviceSettings.noCopySortedNodes;
     m_buildSettings.radixSortScanLevel = m_buildConfig.radixSortScanLevel;
 
     uint32 emitBufferCount = 0;
@@ -2072,7 +2131,7 @@ void GpuBvhBuilder::BuildRaytracingAccelerationStructure(
     {
         uint64 resultLeafOffset = 0;
 
-        const uint64 leafNodeSize = GetLeafNodeSize(m_buildConfig.topLevelBuild);
+        const uint64 leafNodeSize = GetLeafNodeSize(m_deviceSettings, m_buildConfig);
 
         if (m_buildConfig.topLevelBuild == false)
         {
@@ -2805,8 +2864,13 @@ void GpuBvhBuilder::Barrier()
     if (m_deviceSettings.enableAcquireReleaseInterface)
     {
         Pal::AcquireReleaseInfo acqRelInfo = {};
+#if PAL_CLIENT_INTERFACE_MAJOR_VERSION >= 767
+        acqRelInfo.srcGlobalStageMask  = Pal::PipelineStageCs;
+        acqRelInfo.dstGlobalStageMask  = Pal::PipelineStageCs;
+#else
         acqRelInfo.srcStageMask        = Pal::PipelineStageCs;
         acqRelInfo.dstStageMask        = Pal::PipelineStageCs;
+#endif
         acqRelInfo.srcGlobalAccessMask = Pal::CoherShader;
         acqRelInfo.dstGlobalAccessMask = Pal::CoherShader;
 
@@ -2915,7 +2979,8 @@ void GpuBvhBuilder::BuildBVH()
         m_scratchOffsets.bvhLeafNodeData,
         m_scratchOffsets.mortonCodesSorted,
         m_scratchOffsets.primIndicesSorted,
-        m_deviceSettings.enableMortonCode30
+        m_deviceSettings.enableMortonCode30,
+        m_deviceSettings.noCopySortedNodes,
     };
 
     // Set shader constants
@@ -3023,6 +3088,9 @@ void GpuBvhBuilder::BuildBVHPLOC()
         BuildModeFlags(),
         m_scratchOffsets.triangleSplitBoxes,
         m_deviceSettings.plocRadius,
+        m_scratchOffsets.primIndicesSorted,
+        m_buildConfig.numLeafNodes,
+        m_deviceSettings.noCopySortedNodes,
     };
 
     ResetTaskCounter(HeaderBufferBaseVa());
@@ -3162,7 +3230,7 @@ void GpuBvhBuilder::BuildQBVH()
         0,
         m_buildSettings.bvhBuilderNodeSortType,
         m_buildSettings.bvhBuilderNodeSortHeuristic,
-        m_buildSettings.enableHalfBoxNode32,
+        m_buildSettings.enableFusedInstanceNode,
         m_buildSettings.sahQbvh,
         0,
     };
@@ -3238,7 +3306,7 @@ void GpuBvhBuilder::BuildQBVHTop()
         m_buildConfig.topDownBuild,
         m_buildSettings.bvhBuilderNodeSortType,
         m_buildSettings.bvhBuilderNodeSortHeuristic,
-        m_buildSettings.enableHalfBoxNode32,
+        m_buildSettings.enableFusedInstanceNode,
         m_buildSettings.sahQbvh,
         0,
     };
@@ -3299,7 +3367,9 @@ void GpuBvhBuilder::RefitBounds()
         m_deviceSettings.enablePairCompressionCostCheck,
         m_scratchOffsets.triangleSplitBoxes,
         m_scratchOffsets.numBatches,
-        m_scratchOffsets.batchIndices
+        m_scratchOffsets.batchIndices,
+        m_deviceSettings.noCopySortedNodes,
+        m_scratchOffsets.primIndicesSorted,
     };
 
     uint32 entryOffset = 0;
@@ -3595,11 +3665,19 @@ void GpuBvhBuilder::BuildParallel()
 
     BuildParallel::Constants shaderConstants = {};
 
+    // Make sure the address for empty top levels is 0 so we avoid tracing them. Set a valid address for empty bottom
+    // levels so the top level build can still read the bottom level header.
+    const bool emptyTopLevel = (m_buildConfig.topLevelBuild) && (m_buildConfig.numPrimitives == 0);
+
+    shaderConstants.resultBufferAddrLo      = emptyTopLevel ? 0 : Util::LowPart(ResultBufferBaseVa());
+    shaderConstants.resultBufferAddrHi      = emptyTopLevel ? 0 : Util::HighPart(ResultBufferBaseVa());
     shaderConstants.numThreadGroups         = numThreadGroups;
     shaderConstants.numPrimitives           = m_buildConfig.numPrimitives;
     shaderConstants.tsBudgetPerTriangle     = m_deviceSettings.tsBudgetPerTriangle;
     shaderConstants.maxNumPrimitives        = NumPrimitivesAfterSplit(m_buildConfig.numPrimitives, m_deviceSettings.triangleSplittingFactor);
     shaderConstants.rebraidFactor           = m_deviceSettings.rebraidFactor;
+    shaderConstants.numLeafNodes            = m_buildConfig.numLeafNodes;
+    shaderConstants.header                  = InitAccelStructHeader();
 
     if (m_buildConfig.topLevelBuild)
     {

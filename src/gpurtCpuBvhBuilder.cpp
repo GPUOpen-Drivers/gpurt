@@ -571,10 +571,9 @@ CpuBvhBuilder::CpuBvhBuilder(
 void CpuBvhBuilder::InitBuildConfig(
     const AccelStructBuildInfo& buildArgs)
 {
-
     BvhBuilder::InitBuildConfig(buildArgs);
 
-    m_cpuConfig.leafNodeSize = GetLeafNodeSize(m_buildConfig.topLevelBuild);
+    m_cpuConfig.leafNodeSize = GetLeafNodeSize(m_deviceSettings, m_buildConfig);
     // TODO #gpurt: Handling mixed types of interior box nodes needs trickier computation for size of the result buffer
     //   root node is always fp32 (regardless of fp16 mode)
     //   fp16mode == leaves: all leaf nodes are fp16, others are fp32
@@ -1336,7 +1335,6 @@ uint32 CpuBvhBuilder::CalcCompactedSize(
     if (pSrcHeader->info.type == static_cast<uint32>(AccelStructType::BottomLevel))
     {
         internalNodeSize = pSrcHeader->numInternalNodesFp32 * sizeof(Float32BoxNode) +
-                           pSrcHeader->numInternalHalfNodesFp32 * sizeof(Float32BoxNode) / 2 +
                            pSrcHeader->numInternalNodesFp16 * sizeof(Float16BoxNode);
         runningOffset   += internalNodeSize;
 
@@ -1354,8 +1352,7 @@ uint32 CpuBvhBuilder::CalcCompactedSize(
     else
     {
         // TLAS always uses 32-bit internal nodes
-        internalNodeSize = pSrcHeader->numInternalNodesFp32 * sizeof(Float32BoxNode) +
-                           pSrcHeader->numInternalHalfNodesFp32 * sizeof(Float32BoxNode) / 2;
+        internalNodeSize = pSrcHeader->numInternalNodesFp32 * sizeof(Float32BoxNode);
         runningOffset   += internalNodeSize;
 
         pDstOffsets->leafNodes = runningOffset;

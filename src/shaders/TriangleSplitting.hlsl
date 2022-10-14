@@ -634,7 +634,8 @@ void TriangleSplittingImpl(
 
                         const float surfaceArea = ComputeBoxSurfaceArea(bbox);
 
-                        priority = surfaceArea - Aideal;
+                        // priority = surfaceArea - Aideal;
+                        priority = pow(surfaceArea - Aideal, Settings.tsPriority);
 
                         const float waveSum = WaveActiveSum(priority);
 

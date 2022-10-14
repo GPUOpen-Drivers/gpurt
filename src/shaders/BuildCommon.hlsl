@@ -580,7 +580,7 @@ uint SetNodeFlagsField(uint nodeFlags, uint childFlags, uint childIndex)
 }
 
 //=====================================================================================================================
-void WriteScratchNodeFlags(
+void WriteScratchNodeFlagsFromNodes(
     RWByteAddressBuffer buffer,
     uint                baseScratchNodesOffset,
     uint                nodeIndex,
@@ -596,6 +596,32 @@ void WriteScratchNodeFlags(
 
     const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
     buffer.Store<uint>(nodeOffset + SCRATCH_NODE_FLAGS_OFFSET, nodeFlags);
+}
+
+//=====================================================================================================================
+void WriteScratchNodeFlags(
+    RWByteAddressBuffer buffer,
+    uint                baseScratchNodesOffset,
+    uint                nodeIndex,
+    uint                nodeFlags)
+{
+    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
+    buffer.Store<uint>(nodeOffset + SCRATCH_NODE_FLAGS_OFFSET, nodeFlags);
+}
+
+//=====================================================================================================================
+void WriteParentScratchNodeFlags(
+    RWByteAddressBuffer buffer,
+    uint                baseScratchNodesOffset,
+    uint                nodeIndex,
+    uint                flags,
+    bool                isLeft)
+{
+    uint nodeFlags = 0;
+    nodeFlags = SetNodeFlagsField(nodeFlags, flags, !isLeft);
+
+    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
+    buffer.InterlockedOr(nodeOffset + SCRATCH_NODE_FLAGS_OFFSET, nodeFlags);
 }
 
 //=====================================================================================================================
@@ -776,14 +802,6 @@ uint CalcQbvhInternalNodeIndex(uint offset, bool useFp16BoxNodesInBlas)
 
     return useFp16BoxNodesInBlas ? (offset >> QBVH_NODE_16_STRIDE_SHIFT)
                                  : (offset >> QBVH_NODE_32_STRIDE_SHIFT);
-}
-
-//=====================================================================================================================
-uint CalcInstanceNodeOffset(
-    uint baseInstanceNodesOffset,
-    uint index)
-{
-    return baseInstanceNodesOffset + (index * INSTANCE_NODE_SIZE);
 }
 
 //=====================================================================================================================
@@ -1275,6 +1293,123 @@ static Float32BoxNode FetchFloat32BoxNode(
     fp32BoxNode.padding3      = d7.w;
 
     return fp32BoxNode;
+}
+
+//=====================================================================================================================
+void WriteInstanceDescriptor(
+    RWByteAddressBuffer dstBuffer,
+    in InstanceDesc     desc,
+    in uint             index,
+    in uint             instanceNodeOffset,
+    in uint             metadataSize,
+    in uint             blasRootNodePointer,
+    in bool             isFusedInstanceNode)
+{
+    {
+        InstanceNode node;
+
+        node.desc.InstanceID_and_Mask                           = desc.InstanceID_and_Mask;
+        node.desc.InstanceContributionToHitGroupIndex_and_Flags = desc.InstanceContributionToHitGroupIndex_and_Flags;
+        node.desc.accelStructureAddressLo                       = desc.accelStructureAddressLo;
+        node.desc.accelStructureAddressHiAndFlags               = desc.accelStructureAddressHiAndFlags;
+
+        node.extra.Transform[0]     = desc.Transform[0];
+        node.extra.Transform[1]     = desc.Transform[1];
+        node.extra.Transform[2]     = desc.Transform[2];
+        node.extra.instanceIndex    = index;
+        node.extra.padding0         = 0;
+        node.extra.blasMetadataSize = metadataSize;
+        node.extra.blasNodePointer  = blasRootNodePointer;
+
+        // invert matrix
+        float3x4 temp    = CreateMatrix(desc.Transform);
+        float3x4 inverse = Inverse3x4(temp);
+
+        node.desc.Transform[0] = inverse[0];
+        node.desc.Transform[1] = inverse[1];
+        node.desc.Transform[2] = inverse[2];
+
+        dstBuffer.Store<InstanceNode>(instanceNodeOffset, node);
+
+        // Write bottom-level root box node into fused instance node
+        if (isFusedInstanceNode)
+        {
+            const GpuVirtualAddress address =
+                GetInstanceAddr(desc.accelStructureAddressLo, desc.accelStructureAddressHiAndFlags);
+
+            Float32BoxNode blasRootNode = FetchFloat32BoxNode(address, CreateRootNodePointer());
+
+            // Child 0
+            BoundingBox transformedBounds = (BoundingBox)0;
+            transformedBounds.min = blasRootNode.bbox0_min;
+            transformedBounds.max = blasRootNode.bbox0_max;
+
+            transformedBounds = TransformBoundingBox(transformedBounds, desc.Transform);
+
+            blasRootNode.bbox0_min = transformedBounds.min;
+            blasRootNode.bbox0_max = transformedBounds.max;
+
+            // Child 1
+            if (blasRootNode.child1 != INVALID_IDX)
+            {
+                transformedBounds.min = blasRootNode.bbox1_min;
+                transformedBounds.max = blasRootNode.bbox1_max;
+
+                transformedBounds = TransformBoundingBox(transformedBounds, desc.Transform);
+
+                blasRootNode.bbox1_min = transformedBounds.min;
+                blasRootNode.bbox1_max = transformedBounds.max;
+            }
+
+            // Child 2
+            if (blasRootNode.child2 != INVALID_IDX)
+            {
+                transformedBounds.min = blasRootNode.bbox2_min;
+                transformedBounds.max = blasRootNode.bbox2_max;
+
+                transformedBounds = TransformBoundingBox(transformedBounds, desc.Transform);
+
+                blasRootNode.bbox2_min = transformedBounds.min;
+                blasRootNode.bbox2_max = transformedBounds.max;
+            }
+
+            // Child 3
+            if (blasRootNode.child3 != INVALID_IDX)
+            {
+                transformedBounds.min = blasRootNode.bbox3_min;
+                transformedBounds.max = blasRootNode.bbox3_max;
+
+                transformedBounds = TransformBoundingBox(transformedBounds, desc.Transform);
+
+                blasRootNode.bbox3_min = transformedBounds.min;
+                blasRootNode.bbox3_max = transformedBounds.max;
+            }
+
+            const uint fusedBoxNodeOffset = instanceNodeOffset + FUSED_INSTANCE_NODE_ROOT_OFFSET;
+
+            // The DXC compiler fails validation due to undefined writes to UAV if we use the templated Store
+            // instruction. Unrolling the stores works around this issue.
+#if 0
+            dstBuffer.Store<Float32BoxNode>(fusedBoxNodeOffset, blasRootNode);
+#else
+            dstBuffer.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD0_OFFSET, blasRootNode.child0);
+            dstBuffer.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD1_OFFSET, blasRootNode.child1);
+            dstBuffer.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD2_OFFSET, blasRootNode.child2);
+            dstBuffer.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD3_OFFSET, blasRootNode.child3);
+
+            dstBuffer.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET, blasRootNode.bbox0_min);
+            dstBuffer.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET, blasRootNode.bbox0_max);
+            dstBuffer.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB1_MIN_OFFSET, blasRootNode.bbox1_min);
+            dstBuffer.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB1_MAX_OFFSET, blasRootNode.bbox1_max);
+            dstBuffer.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB2_MIN_OFFSET, blasRootNode.bbox2_min);
+            dstBuffer.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB2_MAX_OFFSET, blasRootNode.bbox2_max);
+            dstBuffer.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB3_MIN_OFFSET, blasRootNode.bbox3_min);
+            dstBuffer.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB3_MAX_OFFSET, blasRootNode.bbox3_max);
+
+            dstBuffer.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, blasRootNode.flags);
+#endif
+        }
+    }
 }
 
 //=====================================================================================================================

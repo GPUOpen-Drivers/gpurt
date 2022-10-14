@@ -25,7 +25,7 @@
 #include "IntersectCommon.hlsl"
 #include "BuildCommon.hlsl"
 
-#define RootSig "RootConstants(num32BitConstants=10, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=13, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
@@ -45,6 +45,8 @@ struct Constants
     uint  SplitBoxesByteOffset;
     uint  NumBatchesScratchOffset;
     uint  BatchIndicesScratchOffset;
+    uint  NoCopySortedNodes;
+    uint  sortedPrimIndicesOffset;
 };
 
 //=====================================================================================================================
@@ -71,8 +73,10 @@ void RefitBounds(
                         numActivePrims,
                         ShaderConstants.FlagsScratchOffset,
                         ShaderConstants.ScratchNodesScratchOffset,
+                        ShaderConstants.sortedPrimIndicesOffset,
                         ShaderConstants.DoCollapse,
                         ShaderConstants.DoTriangleSplitting,
+                        ShaderConstants.NoCopySortedNodes,
                         ShaderConstants.EnablePairCompression,
                         ShaderConstants.EnablePairCostCheck,
                         ShaderConstants.SplitBoxesByteOffset,

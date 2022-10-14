@@ -64,6 +64,9 @@ struct BuildPlocArgs
     uint  flags;
     uint  splitBoxesByteOffset;
     uint  plocRadius;
+    uint  primIndicesSortedScratchOffset;
+    uint  numLeafNodes;
+    uint  noCopySortedNodes;
 };
 
 #define PLOC_RADIUS_MAX         10
@@ -83,7 +86,7 @@ struct BuildPlocArgs
 #include "Common.hlsl"
 #include "BuildCommon.hlsl"
 
-#define RootSig "RootConstants(num32BitConstants=16, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=19, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
@@ -356,7 +359,7 @@ void InitPLOC(
     const uint internalNodesIndexOffset = args.currentStateScratchOffset + STATE_PLOC_INTERNAL_NODES_INDEX_OFFSET;
     const uint clusterListIndexOffset   = args.currentStateScratchOffset + STATE_PLOC_CLUSTER_LIST_INDEX_OFFSET;
     const uint numClustersAllocOffset   = args.currentStateScratchOffset + STATE_PLOC_NUM_CLUSTERS_ALLOC_OFFSET;
-    const uint numInternalNodes = numActivePrims - 1;
+    const uint numInternalNodes         = numActivePrims - 1;
 
     uint i = 0;
 
@@ -372,7 +375,9 @@ void InitPLOC(
 
     for (i = globalId; i < numActivePrims; i += args.numThreads)
     {
-        WriteClusterList(args, 0, i, numInternalNodes + i);
+        const uint primIndex = args.noCopySortedNodes ?
+            FetchSortedPrimIndex(ScratchBuffer, args.primIndicesSortedScratchOffset, i) : i;
+        WriteClusterList(args, 0, i, numInternalNodes + primIndex);
     }
 
     const uint numStages = RoundUpQuotient(numActivePrims + args.plocRadius, BUILD_THREADGROUP_SIZE);
@@ -646,7 +651,7 @@ void FindNearestNeighbour(
                 mergedBox.min,
                 mergedBox.max);
 
-            WriteScratchNodeFlags(ScratchBuffer,
+            WriteScratchNodeFlagsFromNodes(ScratchBuffer,
                 args.scratchNodesScratchOffset,
                 mergedNodeIndex,
                 leftNode,

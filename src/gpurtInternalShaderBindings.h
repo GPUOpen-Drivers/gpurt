@@ -33,6 +33,7 @@ namespace EncodeNodes
 {
     struct Constants
     {
+        uint32 metadataSizeInBytes;           // Size of the Metadata Header
         uint32 numPrimitives;                 // Number of primitives
         uint32 leafNodeDataByteOffset;        // Leaf node data byte offset
         uint32 primitiveDataByteOffset;       // Scratch data byte offset
@@ -44,13 +45,15 @@ namespace EncodeNodes
         uint32 indexBufferFormat;             // Index buffer format
         uint32 geometryBufferStrideInBytes;   // Vertex buffer stride in bytes
         uint32 geometryIndex;                 // Index of the geometry description that owns this node
+        uint32 baseGeometryInfoOffset;        // Base offset of the geometry info
+        uint32 basePrimNodePtrOffset;         // Base offset for the prim node ptrs
         uint32 buildFlags;                    // Acceleration structure build flags
         uint32 isUpdateInPlace;               // Is update in place
         uint32 geometryFlags;                 // Geometry flags (GpuRt::GeometryFlags)
         uint32 vertexBufferFormat;            // Vertex buffer format
         uint32 vertexCount;                   // Vertex count
         uint32 destLeafNodeOffset;            // Offset of leaf nodes in destination buffer
-        uint32 totalNumPrimitives;            // Number of primitives in the entire acceleration structure
+        uint32 leafNodeExpansionFactor;       // Leaf node expansion factor (> 1 for triangle splitting)
         uint32 triangleCompressionMode;       // Triangle node compression mode
         uint32 indexBufferInfoScratchOffset;
         uint32 indexBufferGpuVaLo;
@@ -72,6 +75,7 @@ namespace BuildBVH
         uint32 mortonCodesSortedScratchOffset;
         uint32 primIndicesSortedScratchOffset;
         uint32 useMortonCode30;
+        uint32 noCopySortedNodes;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
@@ -97,6 +101,9 @@ namespace BuildBVHPLOC
         uint32 flags;
         uint32 splitBoxesByteOffset;
         uint32 plocRadius;
+        uint32 primIndicesSortedScratchOffset;
+        uint32 numLeafNodes;
+        uint32 noCopySortedNodes;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
@@ -177,7 +184,7 @@ namespace BuildQBVH
         uint32 bvhBuilderNodeSortType;           // bvhBuilder node sort
         uint32 bvhBuilderNodeSortHeuristic;
 
-        uint32 enableHalfBoxNode32;
+        uint32 enableFusedInstanceNode;
         uint32 sahQbvh;                          // Apply SAH into QBVH build
 
         uint32 captureChildNumPrimsForRebraid;
@@ -214,6 +221,8 @@ namespace EncodeInstances
 {
     struct Constants
     {
+        uint32 metadataSizeInBytes;           // Size of the metadata header
+        uint32 basePrimNodePtrOffset;         // Base Offset to the Prim Nodes
         uint32 numDescs;                      // Number of desc
         uint32 leafNodeDataByteOffset;        // Leaf node data byte offset
         uint32 sceneBoundsByteOffset;         // Scene bounds byte offset
@@ -221,6 +230,7 @@ namespace EncodeInstances
         uint32 baseUpdateStackScratchOffset;  // Update stack byte offset
         uint32 internalFlags;                 // Flags
         uint32 buildFlags;                    // Build flags
+        uint32 leafNodeExpansionFactor;       // Number of leaf nodes per primitive
         uint32 enableCentroidSceneBoundsWithSize;
     };
 
@@ -242,6 +252,8 @@ namespace RefitBounds
         uint32 splitBoxesByteOffset;
         uint32 numBatchesScratchOffset;
         uint32 batchIndicesScratchOffset;
+        uint32 noCopySortedNodes;
+        uint32 sortedPrimIndicesOffset;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
@@ -351,6 +363,8 @@ namespace BuildParallel
 
     struct Constants
     {
+        uint32 resultBufferAddrLo;
+        uint32 resultBufferAddrHi;
         uint32 numPrimitives;
         uint32 numThreadGroups;
         uint32 tsBudgetPerTriangle;
@@ -360,8 +374,11 @@ namespace BuildParallel
         uint32 rebraidFactor;
         uint32 numMortonSizeBits;
         float reservedFloat;
+        uint32 numLeafNodes;
+        uint32 padding1;
 
         // Align the following struct to 4 dwords due to HLSL constant buffer packing rules
+        AccelStructHeader header;
         ScratchOffsets offsets;
     };
 

@@ -167,7 +167,6 @@ void UpdateQBVHImpl(
             ResultBuffer.Store(metadataSize + ACCEL_STRUCT_HEADER_NUM_DESCS_OFFSET,               header.numDescs);
             ResultBuffer.Store(metadataSize + ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET,           header.geometryType);
             ResultBuffer.Store(metadataSize + ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP32_NODES_OFFSET, header.numInternalNodesFp32);
-            ResultBuffer.Store(metadataSize + ACCEL_STRUCT_HEADER_NUM_INTERNAL_HALF_FP32_NODES_OFFSET, header.numInternalHalfNodesFp32);
             ResultBuffer.Store(metadataSize + ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP16_NODES_OFFSET, header.numInternalNodesFp16);
             ResultBuffer.Store(metadataSize + ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET,          header.numLeafNodes);
             ResultBuffer.Store(metadataSize + ACCEL_STRUCT_HEADER_COMPACTED_BYTE_SIZE_OFFSET,     header.compactedSizeInBytes);

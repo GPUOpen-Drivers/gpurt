@@ -26,7 +26,7 @@
 #include "Common.hlsl"
 #include "BuildCommon.hlsl"
 
-#define RootSig "RootConstants(num32BitConstants=6, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=7, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL)"
@@ -41,6 +41,7 @@ struct InputArgs
     uint MortonCodesSortedScratchOffset;
     uint PrimIndicesSortedScratchOffset;
     uint UseMortonCode30;
+    uint NoCopySortedNodes;
 };
 
 [[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
@@ -184,8 +185,10 @@ void SplitInternalNodeLbvh(
     uint nodeIndex,
     uint numActivePrims,
     uint scratchNodesOffset,
+    uint sortedPrimIndicesOffset,
     uint sortedMortonCodesOffset,
-    uint useMortonCode30)
+    uint useMortonCode30,
+    uint noCopySortedNodes)
 {
     // Find span occupied by the current node
     const uint2 range = FindSpan(nodeIndex, numActivePrims, sortedMortonCodesOffset, useMortonCode30);
@@ -194,15 +197,18 @@ void SplitInternalNodeLbvh(
     const uint split = FindSplit(range, numActivePrims, sortedMortonCodesOffset, useMortonCode30);
 
     // Create child nodes if needed
-    const uint c1idx = (split == range.x)     ? LEAFIDX(split)     : NODEIDX(split);
-    const uint c2idx = (split + 1 == range.y) ? LEAFIDX(split + 1) : NODEIDX(split + 1);
-
+    const uint splitIdx1 = noCopySortedNodes  ? LEAFIDX(FetchSortedPrimIndex(ScratchBuffer, sortedPrimIndicesOffset, split))     : LEAFIDX(split);
+    const uint splitIdx2 = noCopySortedNodes  ? LEAFIDX(FetchSortedPrimIndex(ScratchBuffer, sortedPrimIndicesOffset, split + 1)) : LEAFIDX(split + 1);
+    const uint c1idx = (split == range.x)     ? splitIdx1 : NODEIDX(split);
+    const uint c2idx = (split + 1 == range.y) ? splitIdx2 : NODEIDX(split + 1);
     const uint c1ScratchNodeOffset = CalcScratchNodeOffset(scratchNodesOffset, c1idx);
     const uint c2ScratchNodeOffset = CalcScratchNodeOffset(scratchNodesOffset, c2idx);
 
+    // update the parent pointer of each child
     ScratchBuffer.Store(c1ScratchNodeOffset + SCRATCH_NODE_PARENT_OFFSET, NODEIDX(nodeIndex));
     ScratchBuffer.Store(c2ScratchNodeOffset + SCRATCH_NODE_PARENT_OFFSET, NODEIDX(nodeIndex));
 
+    // calculate the byte offset of the current node
     const uint scratchNodeOffset = CalcScratchNodeOffset(scratchNodesOffset, NODEIDX(nodeIndex));
 
     ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_LEFT_OFFSET,  c1idx);
@@ -280,7 +286,7 @@ void BuildBVH(
     if (numActivePrims > 0)
     {
         // Initialise leaf nodes with sorted node data. Copy from LeafAABB to InternalAABB leaf section.
-        if (globalId < numActivePrims)
+        if (globalId < numActivePrims && (ShaderConstants.NoCopySortedNodes == false))
         {
             CopyUnsortedScratchLeafNode(
                 globalId,
@@ -301,8 +307,10 @@ void BuildBVH(
                 globalId,
                 numActivePrims,
                 ShaderConstants.BvhNodeDataScratchOffset,
+                ShaderConstants.PrimIndicesSortedScratchOffset,
                 ShaderConstants.MortonCodesSortedScratchOffset,
-                ShaderConstants.UseMortonCode30);
+                ShaderConstants.UseMortonCode30,
+                ShaderConstants.NoCopySortedNodes);
         }
 #endif
     }

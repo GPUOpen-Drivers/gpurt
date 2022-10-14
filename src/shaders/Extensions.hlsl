@@ -34,6 +34,10 @@
 __decl uint AmdExtD3DShaderIntrinsics_LoadDwordAtAddr(
     uint gpuVaLoBits, uint gpuVaHiBits, uint offset) DUMMY_UINT_FUNC
 
+__decl uint AmdExtLaneIndex() DUMMY_UINT_FUNC
+
+__decl uint AmdExtLaneCount() DUMMY_UINT_FUNC
+
 __decl uint2 AmdExtD3DShaderIntrinsics_LoadDwordAtAddrx2(
     uint gpuVaLoBits, uint gpuVaHiBits, uint offset) DUMMY_UINT2_FUNC
 
