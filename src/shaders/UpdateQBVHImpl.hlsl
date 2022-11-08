@@ -119,12 +119,39 @@ void UpdateRootBoundingBox(
 }
 
 //=====================================================================================================================
+// Return a node to begin updating. Invalid nodes and TRIANGLE_1 are forced to the root node, which will trigger
+// the thread to allocate a new node.
+uint FetchNodeForUpdate(
+    uint primIndex)
+{
+    const uint metadataSize = SourceBuffer.Load<AccelStructMetadataHeader>(0).sizeInBytes;
+
+    const AccelStructOffsets offsets =
+        SourceBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
+
+    const uint primNodePointerOffset = metadataSize + offsets.primNodePtrs + (primIndex * sizeof(uint));
+
+    const uint primNodePointer = SourceBuffer.Load(primNodePointerOffset);
+
+    uint nodeToUpdate = CreateRootNodePointer();
+
+    if ((primNodePointer != INVALID_NODE) && (GetNodeType(primNodePointer) != NODE_TYPE_TRIANGLE_1))
+    {
+        nodeToUpdate = primNodePointer;
+    }
+
+    return (GetNodeType(primNodePointer) != NODE_TYPE_TRIANGLE_1) ? primNodePointer : INVALID_NODE;
+}
+
+//=====================================================================================================================
 void UpdateQBVHImpl(
     uint                globalID,
     RWByteAddressBuffer ResultBuffer,
     RWByteAddressBuffer ScratchBuffer,
     RWByteAddressBuffer SourceBuffer,
-    uint                baseFlagsOffset)
+    uint                baseFlagsOffset,
+    uint                numWorkItems,
+    uint                numThreads)
 {
     const AccelStructMetadataHeader metadata = SourceBuffer.Load<AccelStructMetadataHeader>(0);
     const uint metadataSize = metadata.sizeInBytes;
@@ -180,6 +207,14 @@ void UpdateQBVHImpl(
         }
     }
 
+    if (globalID >= numWorkItems)
+    {
+        return;
+    }
+
+#if UPDATE_ENCODES_PRIMS
+    uint nodePointer = FetchNodeForUpdate(globalID);
+#else
     // initialise node pointer from stack
     uint offset = GetUpdateStackOffset(ShaderConstants.baseUpdateStackScratchOffset, globalID);
     uint nodePointer = ScratchBuffer.Load(offset);
@@ -189,6 +224,7 @@ void UpdateQBVHImpl(
     {
         UpdateRootBoundingBox(ResultBuffer, metadataSize);
     }
+#endif
 
     // Choice to decode parent pointer into node index using fp16. Mixing interior node types
     // relies on fp16 node size chunks for decoding (only in BLAS)
@@ -196,101 +232,135 @@ void UpdateQBVHImpl(
                                      (ShaderConstants.fp16BoxNodesInBlasMode != NO_NODES_IN_BLAS_AS_FP16);
 
     // Build tree up until we hit root node
-    while (nodePointer != rootNodePointer)
+    while (1)
     {
-        // Move to parent node
+        if (nodePointer == rootNodePointer)
+        {
+            // Pick the next node to process
+            uint nextIndex;
+            ScratchBuffer.InterlockedAdd(UPDATE_SCRATCH_TASK_COUNT_OFFSET, 1, nextIndex);
+            // Skip the initial set of nodes processed when the shader launches
+            nextIndex += numThreads;
+
+            if (nextIndex < numWorkItems)
+            {
+#if UPDATE_ENCODES_PRIMS
+                nodePointer = FetchNodeForUpdate(globalID);
+#else
+                offset = GetUpdateStackOffset(ShaderConstants.baseUpdateStackScratchOffset, nextIndex);
+                nodePointer = ScratchBuffer.Load(offset);
+#endif
+            }
+            else
+            {
+                // Nothing left to do
+                break;
+            }
+        }
+
+        // Primitive was inactive in the initial build. Ignore it and continue.
+        if (nodePointer == INVALID_IDX)
+        {
+            nodePointer = rootNodePointer;
+            continue;
+        }
+
         const uint parentNodePointer = ReadParentPointer(SourceBuffer,
                                                          metadataSize,
                                                          ExtractNodePointerCollapse(nodePointer));
 
-        const uint parentNodeOffset = metadataSize + ExtractNodePointerOffset(parentNodePointer);
-        const uint childPointers[4] = SourceBuffer.Load<uint[4]>(parentNodeOffset);
-
-        // find child index
-        uint childIdx = 0;
-
-        // There is always at least one valid child node
-        uint numValidChildren = 0;
-
-        for (uint i = 0; i < 4; i++)
+        if (IsBoxNode(nodePointer))
         {
-            if (childPointers[i] != INVALID_IDX)
+            const uint parentNodeOffset = metadataSize + ExtractNodePointerOffset(parentNodePointer);
+            const uint childPointers[4] = SourceBuffer.Load<uint[4]>(parentNodeOffset);
+
+            // find child index
+            uint childIdx = 0;
+
+            // There is always at least one valid child node
+            uint numValidChildren = 0;
+
+            for (uint i = 0; i < 4; i++)
             {
-                // Skip leaves as they are handled at Encode
-                if (IsBoxNode(childPointers[i]))
+                if (childPointers[i] != INVALID_IDX)
                 {
-                    numValidChildren++;
-                }
-
-                if (childPointers[i] == nodePointer)
-                {
-                    childIdx = i;
-                }
-            }
-        }
-
-        UpdateChildBoundingBox(ResultBuffer, metadataSize, parentNodePointer, nodePointer, childIdx);
-
-        if (ShaderConstants.isUpdateInPlace == false)
-        {
-            WriteParentPointer(ResultBuffer,
-                               metadataSize,
-                               ExtractNodePointerCollapse(nodePointer),
-                               parentNodePointer);
-        }
-
-        // Ensure the child bounding box write is done
-        DeviceMemoryBarrier();
-
-        uint originalFlagValue = SignalParentNode(baseFlagsOffset, parentNodePointer, decodeNodePtrAsFp16);
-
-        if (originalFlagValue < (numValidChildren - 1))
-        {
-            // If this is not the last valid child, bail out.
-            return;
-        }
-        else
-        {
-            if (ShaderConstants.isUpdateInPlace == false)
-            {
-                ResultBuffer.Store<uint[4]>(parentNodeOffset, childPointers);
-
-                const uint sourceFlags = SourceBuffer.Load(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET);
-                ResultBuffer.Store(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, sourceFlags);
-            }
-
-            if (type == TOP_LEVEL)
-            {
-                // Read node flags from parent. Note, instance nodes update their relevant flag bits at EncodeTopLevel
-                uint parentNodeFlags = ResultBuffer.Load(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET);
-
-                for (uint i = 0; i < 4; i++)
-                {
-                    // Note this also returns false for INVALID_IDX
-                    if (IsBoxNode32(childPointers[i]))
+                    // Skip leaves as they are handled during Encode
+                    if (IsBoxNode(childPointers[i]))
                     {
-                        const uint childOffset = metadataSize + ExtractNodePointerOffset(childPointers[i]);
-                        const uint childFlags  = ResultBuffer.Load(childOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET);
+                        numValidChildren++;
+                    }
 
-                        const uint flags0 = ExtractNodeFlagsField(childFlags, 0);
-                        const uint flags1 = ExtractNodeFlagsField(childFlags, 1);
-                        const uint flags2 = ExtractNodeFlagsField(childFlags, 2);
-                        const uint flags3 = ExtractNodeFlagsField(childFlags, 3);
-
-                        const uint mergedNodeFlags = flags0 & flags1 & flags2 & flags3;
-
-                        parentNodeFlags = ClearNodeFlagsField(parentNodeFlags, i);
-                        parentNodeFlags = SetNodeFlagsField(parentNodeFlags, mergedNodeFlags, i);
+                    if (childPointers[i] == nodePointer)
+                    {
+                        childIdx = i;
                     }
                 }
-
-                ResultBuffer.Store(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, parentNodeFlags);
             }
 
-            // The last child of the root node updates the root bounding box in the header
-            if (parentNodePointer == rootNodePointer)
+            UpdateChildBoundingBox(ResultBuffer, metadataSize, parentNodePointer, nodePointer, childIdx);
+
+            if (ShaderConstants.isUpdateInPlace == false)
             {
-                UpdateRootBoundingBox(ResultBuffer, metadataSize);
+                WriteParentPointer(ResultBuffer,
+                                   metadataSize,
+                                   ExtractNodePointerCollapse(nodePointer),
+                                   parentNodePointer);
+            }
+
+            // Ensure the child bounding box write is done
+            DeviceMemoryBarrier();
+
+            uint originalFlagValue = SignalParentNode(baseFlagsOffset, parentNodePointer, decodeNodePtrAsFp16);
+
+            if (originalFlagValue < (numValidChildren - 1))
+            {
+                // Allocate new node on next iteration
+                nodePointer = rootNodePointer;
+                continue;
+            }
+            else
+            {
+                if (ShaderConstants.isUpdateInPlace == false)
+                {
+                    ResultBuffer.Store<uint[4]>(parentNodeOffset, childPointers);
+
+                    const uint sourceFlags = SourceBuffer.Load(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET);
+                    ResultBuffer.Store(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, sourceFlags);
+                }
+
+                if (type == TOP_LEVEL)
+                {
+                    // Read node flags from parent. Note, instance nodes update their relevant flag bits at EncodeTopLevel
+                    uint parentNodeFlags = ResultBuffer.Load(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET);
+
+                    for (uint i = 0; i < 4; i++)
+                    {
+                        // Note this also returns false for INVALID_IDX
+                        if (IsBoxNode32(childPointers[i]))
+                        {
+                            const uint childOffset = metadataSize + ExtractNodePointerOffset(childPointers[i]);
+                            const uint childFlags  = ResultBuffer.Load(childOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET);
+
+                            const uint flags0 = ExtractNodeFlagsField(childFlags, 0);
+                            const uint flags1 = ExtractNodeFlagsField(childFlags, 1);
+                            const uint flags2 = ExtractNodeFlagsField(childFlags, 2);
+                            const uint flags3 = ExtractNodeFlagsField(childFlags, 3);
+
+                            const uint mergedNodeFlags = flags0 & flags1 & flags2 & flags3;
+
+                            parentNodeFlags = ClearNodeFlagsField(parentNodeFlags, i);
+                            parentNodeFlags = SetNodeFlagsField(parentNodeFlags, mergedNodeFlags, i);
+                        }
+                    }
+
+                    ResultBuffer.Store(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, parentNodeFlags);
+                }
+
+                // The last child of the root node updates the root bounding box in the header
+                if (parentNodePointer == rootNodePointer)
+                {
+                    UpdateRootBoundingBox(ResultBuffer, metadataSize);
+                }
             }
         }
 

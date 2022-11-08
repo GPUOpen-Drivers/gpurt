@@ -49,10 +49,12 @@ struct BuildQbvhArgs
     uint enableFusedInstanceNode;
     uint sahQbvh;                       // Apply SAH into QBVH build
     uint captureChildNumPrimsForRebraid;
+    uint enableSAHCost;
+    uint enableEarlyPairCompression;
 };
 
 #if NO_SHADER_ENTRYPOINT == 0
-#define RootSig "RootConstants(num32BitConstants=20, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=21, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
@@ -71,7 +73,6 @@ struct BuildQbvhArgs
 
 #define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
 groupshared uint SharedMem[MAX_LDS_ELEMENTS];
-groupshared uint SharedIndex;
 #endif
 
 // Number of child nodes in LDS
@@ -87,6 +88,17 @@ bool DoCollapse(BuildQbvhArgs args)
 bool DoTriSplitting(BuildQbvhArgs args)
 {
     return (args.flags & BUILD_FLAGS_TRIANGLE_SPLITTING);
+}
+
+//======================================================================================================================
+bool EnableLatePairCompression(
+    in uint triangleCompressionMode,
+    in bool topLevelBuild,
+    in bool enableEarlyPairCompression)
+{
+    return (triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
+           (topLevelBuild == false) &&
+           (enableEarlyPairCompression == false);
 }
 
 //=====================================================================================================================
@@ -221,7 +233,25 @@ static void InitBuildQbvhImpl(
 void InitBuildQBVH(
     uint globalId : SV_DispatchThreadID)
 {
-    InitBuildQbvhImpl(globalId, (BuildQbvhArgs)ShaderConstants);
+    const AccelStructHeader header        = ResultBuffer.Load<AccelStructHeader>(0);
+    const uint              type          = (header.info & ACCEL_STRUCT_HEADER_INFO_TYPE_MASK);
+    const bool              topLevelBuild = (type == TOP_LEVEL);
+
+    BuildQbvhArgs args = (BuildQbvhArgs)ShaderConstants;
+
+    // Rebraid is not supported in non-parallel path. numLeafNodes is always equal to numActivePrims.
+    //
+    args.numPrimitives = header.numActivePrims;
+
+    // With pair compression enabled, numLeafNodes represents the actual primitive count
+    if (EnableLatePairCompression(ShaderConstants.triangleCompressionMode,
+                                  topLevelBuild,
+                                  ShaderConstants.enableEarlyPairCompression))
+    {
+        args.numPrimitives = header.numLeafNodes;
+    }
+
+    InitBuildQbvhImpl(globalId, args);
 }
 #endif
 
@@ -356,11 +386,14 @@ uint WritePrimitiveNode(
         // For PAIR_TRIANGLE_COMPRESSION, the other node is not linked in the BVH tree, so we need to find it and
         // store it as well if it exists.
         if ((args.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
-            (scratchNode.numPrimitivesAndDoCollapse != INVALID_IDX))
+            (scratchNode.splitBox_or_nodePointer != INVALID_IDX) &&
+            // TODO: When EarlyPairCompression is ON, will actually need to fetch paired triangle from a different
+            // scratch offset. Thus this will be updated once the EarlyPairCompression is implemented.
+            (args.enableEarlyPairCompression == false))
         {
             const ScratchNode otherNode = FetchScratchNode(ScratchBuffer,
                                                            args.scratchNodesScratchOffset,
-                                                           scratchNode.numPrimitivesAndDoCollapse);
+                                                           scratchNode.splitBox_or_nodePointer);
             const uint otherNodeType = GetNodeType(otherNode.type);
 
             const float3 otherVerts[3] = { otherNode.bbox_min_or_v0,
@@ -416,11 +449,14 @@ BoundingBox GetScratchNodeBoundingBoxTS(
                                                node.sah_or_v2_or_instBasePtr);
 
             if ((args.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
-                (node.numPrimitivesAndDoCollapse != INVALID_IDX))
+                (node.splitBox_or_nodePointer != INVALID_IDX) &&
+                // TODO: When EarlyPairCompression is ON, will actually need to fetch paired triangle from a different
+                // scratch offset. Thus this will be updated once the EarlyPairCompression is implemented.
+                (args.enableEarlyPairCompression == false))
             {
                 const ScratchNode otherNode = FetchScratchNode(ScratchBuffer,
                                                                args.scratchNodesScratchOffset,
-                                                               node.numPrimitivesAndDoCollapse);
+                                                               node.splitBox_or_nodePointer);
                 const BoundingBox otherBbox = GenerateTriangleBoundingBox(otherNode.bbox_min_or_v0,
                                                                           otherNode.bbox_max_or_v1,
                                                                           otherNode.sah_or_v2_or_instBasePtr);
@@ -612,7 +648,8 @@ void SortChildren(
     in    uint          numPrimitives[4],
     inout uint          childNodePtr[4],
     inout BoundingBox   bbox[4],
-    inout uint          nodeFlags[4])
+    inout uint          nodeFlags[4],
+    inout float4        cost)
 {
     const uint sortHeuristic = args.bvhBuilderNodeSortHeuristic;
 
@@ -622,6 +659,8 @@ void SortChildren(
     uint  sortedChildNodePtr[4];
     uint  sortedNodeFlags[4];
     BoundingBox sortedBbox[4];
+
+    float sortedCost[4];
 
     for (uint idx = 0; idx < 4; ++idx)
     {
@@ -686,10 +725,12 @@ void SortChildren(
             sortedChildNodePtr[idx] = childNodePtr[sortedIdx[idx]];
             sortedBbox[idx]         = bbox[sortedIdx[idx]];
             sortedNodeFlags[idx]    = nodeFlags[sortedIdx[idx]];
+            sortedCost[idx]         = cost[sortedIdx[idx]];
         }
         else
         {
             sortedChildNodePtr[idx] = INVALID_NODE;
+            sortedCost[idx]         = 0;
         }
     }
 
@@ -698,6 +739,7 @@ void SortChildren(
         childNodePtr[idx] = sortedChildNodePtr[idx];
         bbox[idx]         = sortedBbox[idx];
         nodeFlags[idx]    = sortedNodeFlags[idx];
+        cost[idx]         = sortedCost[idx];
     }
 }
 
@@ -792,7 +834,8 @@ static void PullUpLeftChildren(
     inout uint               child[4],
     inout BoundingBox        bbox[4],
     inout uint               nodeFlags[4],
-    inout uint               numPrimitives[4])
+    inout uint               numPrimitives[4],
+    inout float4             cost)
 {
     bool doSwapLevel1Left = false;
 
@@ -816,11 +859,20 @@ static void PullUpLeftChildren(
         {
             numPrimitives[0] = FetchScratchNodeNumPrimitives(ScratchBuffer,
                                                              args.scratchNodesScratchOffset,
-                                                             level0LeftChildNode.left_or_primIndex_or_instIndex) >> 1;
+                                                             level0LeftChildNode.left_or_primIndex_or_instIndex,
+                                                             IsLeafNode(level0LeftChildNode.left_or_primIndex_or_instIndex,
+                                                                        numActivePrims));
 
             numPrimitives[1] = FetchScratchNodeNumPrimitives(ScratchBuffer,
                                                              args.scratchNodesScratchOffset,
-                                                             level0LeftChildNode.right_or_geometryIndex) >> 1;
+                                                             level0LeftChildNode.right_or_geometryIndex,
+                                                             IsLeafNode(level0LeftChildNode.right_or_geometryIndex,
+                                                                        numActivePrims));
+
+            cost[0] = IsLeafNode(level0LeftChildNode.left_or_primIndex_or_instIndex, numActivePrims) ?
+                      FetchScratchLeafNodeCost(c00) : FetchScratchInternalNodeCost(c00);
+            cost[1] = IsLeafNode(level0LeftChildNode.right_or_geometryIndex, numActivePrims) ?
+                      FetchScratchLeafNodeCost(c01) : FetchScratchInternalNodeCost(c01);
         }
 
         const uint idx_c00 = use2levelSort ? ((doSwapLevel0 ? numRightChildren : 0) + (doSwapLevel1Left ? 1 : 0)) : 0;
@@ -844,7 +896,13 @@ static void PullUpLeftChildren(
         {
             numPrimitives[0] = FetchScratchNodeNumPrimitives(ScratchBuffer,
                                                              args.scratchNodesScratchOffset,
-                                                             node.left_or_primIndex_or_instIndex) >> 1;
+                                                             node.left_or_primIndex_or_instIndex,
+                                                             true);
+
+            cost[0] = FetchScratchNodeCost(ScratchBuffer,
+                                           args.scratchNodesScratchOffset,
+                                           node.left_or_primIndex_or_instIndex,
+                                           true);
         }
 
         const uint idx_c0 = use2levelSort ? (doSwapLevel0 ? numRightChildren : 0) : 0;
@@ -876,7 +934,8 @@ static void PullUpRightChildren(
     inout uint               child[4],
     inout BoundingBox        bbox[4],
     inout uint               nodeFlags[4],
-    inout uint               numPrimitives[4])
+    inout uint               numPrimitives[4],
+    inout float4             cost)
 {
     bool doSwapLevel1Right = false;
 
@@ -901,12 +960,19 @@ static void PullUpRightChildren(
             numPrimitives[numLeftChildren] =
                 FetchScratchNodeNumPrimitives(ScratchBuffer,
                                               args.scratchNodesScratchOffset,
-                                              level0RightChildNode.left_or_primIndex_or_instIndex) >> 1;
+                                              level0RightChildNode.left_or_primIndex_or_instIndex,
+                                              IsLeafNode(level0RightChildNode.left_or_primIndex_or_instIndex, numActivePrims));
 
             numPrimitives[numLeftChildren + 1] =
                 FetchScratchNodeNumPrimitives(ScratchBuffer,
                                               args.scratchNodesScratchOffset,
-                                              level0RightChildNode.right_or_geometryIndex) >> 1;
+                                              level0RightChildNode.right_or_geometryIndex,
+                                              IsLeafNode(level0RightChildNode.right_or_geometryIndex, numActivePrims));
+
+            cost[numLeftChildren] = IsLeafNode(level0RightChildNode.left_or_primIndex_or_instIndex, numActivePrims) ?
+                                    FetchScratchLeafNodeCost(c10) : FetchScratchInternalNodeCost(c10);
+            cost[numLeftChildren + 1] = IsLeafNode(level0RightChildNode.right_or_geometryIndex, numActivePrims) ?
+                                        FetchScratchLeafNodeCost(c11) : FetchScratchInternalNodeCost(c11);
         }
 
         const uint idx_c10 = use2levelSort ? ((doSwapLevel0 ? 0 : numLeftChildren) + (doSwapLevel1Right ? 1 : 0)) : numLeftChildren;
@@ -930,7 +996,10 @@ static void PullUpRightChildren(
         {
             numPrimitives[numLeftChildren] = FetchScratchNodeNumPrimitives(ScratchBuffer,
                                                                            args.scratchNodesScratchOffset,
-                                                                           node.right_or_geometryIndex) >> 1;
+                                                                           node.right_or_geometryIndex,
+                                                                           true);
+
+            cost[numLeftChildren] = FetchScratchNodeCost(ScratchBuffer, args.scratchNodesScratchOffset, node.right_or_geometryIndex, true);
         }
 
         const uint idx_c1 = use2levelSort ? (doSwapLevel0 ? 0 : numLeftChildren) : numLeftChildren;
@@ -957,7 +1026,9 @@ static void PullUpChildren(
     inout uint                    child[4],
     inout BoundingBox             bbox[4],
     inout uint                    flags[4],
-    inout uint                    numPrimitives[4])
+    inout uint                    numPrimitives[4],
+    inout float4                  cost,
+    in    uint                    numActivePrims)
 {
     [unroll]
     for (uint i = 0; i < 4; i++)
@@ -968,7 +1039,15 @@ static void PullUpChildren(
         {
             if (use4waySort || args.captureChildNumPrimsForRebraid)
             {
-                numPrimitives[i] = FetchScratchNodeNumPrimitives(ScratchBuffer, args.scratchNodesScratchOffset, primIndex) >> 1;
+                numPrimitives[i] = FetchScratchNodeNumPrimitives(ScratchBuffer,
+                                                                 args.scratchNodesScratchOffset,
+                                                                 primIndex,
+                                                                 IsLeafNode(primIndex, numActivePrims));
+
+                cost[i] = FetchScratchNodeCost(ScratchBuffer,
+                                               args.scratchNodesScratchOffset,
+                                               primIndex,
+                                               IsLeafNode(primIndex, numActivePrims));
             }
 
             const ScratchNode n = FetchScratchNode(ScratchBuffer, args.scratchNodesScratchOffset, primIndex);
@@ -1053,18 +1132,13 @@ static void ApplyHeuristic(
 void BuildQbvhImpl(
     uint          globalId,
     uint          localId,
+    uint          numActivePrims,
     BuildQbvhArgs args,
     bool          topLevelBuild)  // Compile time flag indicating whether this is top or bottom level build
 {
     // Load acceleration structure header
     const AccelStructHeader  header  = ResultBuffer.Load<AccelStructHeader>(0);
     const AccelStructOffsets offsets = header.offsets;
-
-    const uint numActivePrims    = header.numActivePrims;
-    const uint numLeafNodes      = header.numLeafNodes;
-    const uint numNodesToProcess = (args.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) ?
-                                   numLeafNodes :
-                                   numActivePrims;
 
     const ScratchNodeResourceInfo resourceInfo =
     {
@@ -1096,13 +1170,13 @@ void BuildQbvhImpl(
                            INVALID_IDX);
 
         // Generate box node with a leaf reference in child index 0 for single primitive acceleration structure
-        if (numNodesToProcess == 1)
+        if (args.numPrimitives == 1)
         {
             uint destIndex = 0;
             const uint childNodePtr =
                 ProcessNode(args, topLevelBuild, rootScratchNode, 0, destIndex, rootNodePtr, offsets);
 
-            const uint numPrimitives = (rootScratchNode.numPrimitivesAndDoCollapse >> 1);
+            const uint numPrimitives = 1;
 
             Float32BoxNode fp32BoxNode = (Float32BoxNode)0;
             fp32BoxNode.child0        = childNodePtr;
@@ -1121,7 +1195,16 @@ void BuildQbvhImpl(
             }
 
             ResultBuffer.Store(ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP32_NODES_OFFSET, 1);
-            ResultBuffer.Store4(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET, uint4(numPrimitives, 0, 0, 0));
+
+            if (args.enableSAHCost)
+            {
+                const float4 childCosts = float4(0, 0, 0, 0);
+                ResultBuffer.Store<float4>(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET, childCosts);
+            }
+            else
+            {
+                ResultBuffer.Store4(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET, uint4(numPrimitives, 0, 0, 0));
+            }
 
             return;
         }
@@ -1131,7 +1214,7 @@ void BuildQbvhImpl(
     const uint stackIndex = globalId;
 
     // Skip threads that do not map to valid internal nodes
-    if (stackIndex >= CalcNumQBVHInternalNodes(numNodesToProcess))
+    if (stackIndex >= CalcNumQBVHInternalNodes(args.numPrimitives))
     {
         return;
     }
@@ -1157,7 +1240,7 @@ void BuildQbvhImpl(
         const uint numLeafsDone = ScratchBuffer.Load(args.stackPtrsScratchOffset + STACK_PTRS_NUM_LEAFS_DONE_OFFSET);
 
         // Check if we've processed all leaves or have internal nodes on the stack
-        if ((numLeafsDone >= numNodesToProcess) || isDone)
+        if ((numLeafsDone >= args.numPrimitives) || isDone)
         {
             break;
         }
@@ -1296,6 +1379,8 @@ void BuildQbvhImpl(
             // Temporary data used for four-way sort
             uint numPrimitives[4] = { 0, 0, 0, 0 };
 
+            float4 cost = float4(0, 0, 0, 0);
+
             if (args.sahQbvh)
             {
                 // Pull up the nodes chosen by SAH to be the new children in QBVH
@@ -1309,7 +1394,9 @@ void BuildQbvhImpl(
                                child,
                                bbox,
                                nodeFlags,
-                               numPrimitives);
+                               numPrimitives,
+                               cost,
+                               numActivePrims);
             }
             else
             {
@@ -1332,7 +1419,8 @@ void BuildQbvhImpl(
                                    child,
                                    bbox,
                                    nodeFlags,
-                                   numPrimitives);
+                                   numPrimitives,
+                                   cost);
 
                 const uint numLeftChildren = IsLeafNode(node.left_or_primIndex_or_instIndex, numActivePrims) ? 1 : 2;
 
@@ -1352,12 +1440,13 @@ void BuildQbvhImpl(
                                     child,
                                     bbox,
                                     nodeFlags,
-                                    numPrimitives);
+                                    numPrimitives,
+                                    cost);
             }
 
             if (use4waySort)
             {
-                SortChildren(args, numPrimitives, child, bbox, nodeFlags);
+                SortChildren(args, numPrimitives, child, bbox, nodeFlags, cost);
             }
 
             // Combine the node flags
@@ -1397,7 +1486,7 @@ void BuildQbvhImpl(
                 fp32BoxNode.bbox3_min      = bbox[3].min;
                 fp32BoxNode.bbox3_max      = bbox[3].max;
                 fp32BoxNode.flags          = combinedNodeFlags;
-                fp32BoxNode.numPrimitives  = (node.numPrimitivesAndDoCollapse >> 1);
+                fp32BoxNode.numPrimitives  = FetchScratchNodeNumPrimitives(node, false);
 
                 {
                     WriteBoxNode(ResultBuffer, qbvhNodeAddr, fp32BoxNode);
@@ -1407,10 +1496,21 @@ void BuildQbvhImpl(
             // Handle root node specific data
             if ((bvhNodeSrcIdx == 0) && args.captureChildNumPrimsForRebraid)
             {
-                ResultBuffer.Store(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET, numPrimitives[0]);
-                ResultBuffer.Store(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 4, numPrimitives[1]);
-                ResultBuffer.Store(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 8, numPrimitives[2]);
-                ResultBuffer.Store(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 12, numPrimitives[3]);
+                // store the actual SAH cost rather than the number of primitives
+                if (args.enableSAHCost)
+                {
+                    ResultBuffer.Store<float>(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET, cost[0]);
+                    ResultBuffer.Store<float>(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 4, cost[1]);
+                    ResultBuffer.Store<float>(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 8, cost[2]);
+                    ResultBuffer.Store<float>(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 12, cost[3]);
+                }
+                else
+                {
+                    ResultBuffer.Store(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET, numPrimitives[0]);
+                    ResultBuffer.Store(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 4, numPrimitives[1]);
+                    ResultBuffer.Store(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 8, numPrimitives[2]);
+                    ResultBuffer.Store(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 12, numPrimitives[3]);
+                }
             }
 
             // Converting this to an explict 'break' causes an infinite loop.
@@ -1438,23 +1538,34 @@ void BuildQBVH(
     const uint              type          = (header.info & ACCEL_STRUCT_HEADER_INFO_TYPE_MASK);
     const bool              topLevelBuild = (type == TOP_LEVEL);
 
-    const uint numNodesToProcess = (ShaderConstants.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) ?
-                                   header.numLeafNodes :
-                                   header.numActivePrims;
+    BuildQbvhArgs args = (BuildQbvhArgs)ShaderConstants;
+
+    // Read active primitive count from header
+    args.numPrimitives = header.numActivePrims;
+
+    // With pair compresssion enabled, the leaf node count in header represents actual valid
+    // primitives
+    if (EnableLatePairCompression(ShaderConstants.triangleCompressionMode,
+                                  topLevelBuild,
+                                  ShaderConstants.enableEarlyPairCompression))
+    {
+        args.numPrimitives = header.numLeafNodes;
+    }
 
     uint numTasksWait = 0;
     uint waveId       = 0;
 
     INIT_TASK;
 
-    BEGIN_TASK(RoundUpQuotient(CalcNumQBVHInternalNodes(numNodesToProcess), BUILD_THREADGROUP_SIZE));
+    BEGIN_TASK(RoundUpQuotient(CalcNumQBVHInternalNodes(args.numPrimitives), BUILD_THREADGROUP_SIZE));
 
     BuildQbvhImpl(globalId,
                   localId,
-                  (BuildQbvhArgs)ShaderConstants,
+                  header.numActivePrims,
+                  args,
                   topLevelBuild);
 
-    END_TASK(RoundUpQuotient(CalcNumQBVHInternalNodes(numNodesToProcess), BUILD_THREADGROUP_SIZE));
+    END_TASK(RoundUpQuotient(CalcNumQBVHInternalNodes(args.numPrimitives), BUILD_THREADGROUP_SIZE));
 
     if (topLevelBuild)
     {
@@ -1499,22 +1610,34 @@ void BuildQBVHCollapse(
     uint localId = localIdIn;
     uint groupId = groupIdIn;
 
-    const AccelStructHeader header   = ResultBuffer.Load<AccelStructHeader>(0);
-    const uint numActivePrims        = header.numActivePrims;
-    const uint numNodesToProcess     = (ShaderConstants.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) ?
-                                       header.numLeafNodes :
-                                       numActivePrims;
+    const AccelStructHeader header        = ResultBuffer.Load<AccelStructHeader>(0);
+    const uint              type          = (header.info & ACCEL_STRUCT_HEADER_INFO_TYPE_MASK);
+    const bool              topLevelBuild = (type == TOP_LEVEL);
+
+    BuildQbvhArgs args = (BuildQbvhArgs)ShaderConstants;
+
+    // Read active primitive count from header
+    args.numPrimitives = header.numActivePrims;
+
+    // With pair compresssion enabled, the leaf node count in header represents actual valid
+    // primitives
+    if (EnableLatePairCompression(ShaderConstants.triangleCompressionMode,
+                                  topLevelBuild,
+                                  ShaderConstants.enableEarlyPairCompression))
+    {
+        args.numPrimitives = header.numLeafNodes;
+    }
 
     uint numTasksWait = 0;
     uint waveId       = 0;
 
     INIT_TASK;
 
-    BEGIN_TASK(RoundUpQuotient(CalcNumQBVHInternalNodes(numNodesToProcess), BUILD_THREADGROUP_SIZE));
+    BEGIN_TASK(RoundUpQuotient(CalcNumQBVHInternalNodes(args.numPrimitives), BUILD_THREADGROUP_SIZE));
 
-    BuildQbvhCollapseImpl(globalId, (BuildQbvhArgs)ShaderConstants);
+    BuildQbvhCollapseImpl(globalId, header.numActivePrims, args);
 
-    END_TASK(RoundUpQuotient(CalcNumQBVHInternalNodes(numNodesToProcess), BUILD_THREADGROUP_SIZE));
+    END_TASK(RoundUpQuotient(CalcNumQBVHInternalNodes(args.numPrimitives), BUILD_THREADGROUP_SIZE));
 
     BEGIN_TASK(1);
 

@@ -28,7 +28,7 @@
 namespace GpuRt
 {
 
-#include "pipelines/g_internal_shaders.h"
+#include <pipelines/g_internal_shaders.h>
 
 #define ArraySize(x) (sizeof(x) / sizeof((x)[0]))
 
@@ -88,7 +88,8 @@ const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsTyp
     PIPELINE_BUILD_INFO(DeserializeAS),
     PIPELINE_BUILD_INFO(InitExecuteIndirect),
     PIPELINE_BUILD_INFO(PairCompression),
-    PIPELINE_BUILD_INFO(MergeSort)
+    PIPELINE_BUILD_INFO(MergeSort),
+    PIPELINE_BUILD_INFO(Update),
 };
 
 #undef PIPELINE_BUILD_INFO

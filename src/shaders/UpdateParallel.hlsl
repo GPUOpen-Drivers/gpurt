@@ -74,20 +74,19 @@ void WaitForTasksToFinish(uint numTasksWait)
 [RootSignature(RootSig)]
 [numthreads(BUILD_THREADGROUP_SIZE, 1, 1)]
 void UpdateParallel(
-    in uint3 globalThreadId : SV_DispatchThreadID)
+    in uint globalThreadId : SV_DispatchThreadID)
 {
     // Waiting for EncodeNodes/EncodeTopLevel to finish encoding the leaves/primitives
     WaitForTasksToFinish(ShaderConstants.numPrimitives);
 
     // Fetch number of nodes to process
-    uint numWorkItems = ScratchBuffer.Load(ShaderConstants.baseUpdateStackScratchOffset);
+    uint numWorkItems = ScratchBuffer.Load(UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET);
 
-    for (uint i = globalThreadId.x; i < numWorkItems; i += ShaderConstants.numThreads)
-    {
-        UpdateQBVHImpl(i,
-                       ResultBuffer,
-                       ScratchBuffer,
-                       SourceBuffer,
-                       ShaderConstants.propagationFlagsScratchOffset);
-    }
+    UpdateQBVHImpl(globalThreadId,
+                   ResultBuffer,
+                   ScratchBuffer,
+                   SourceBuffer,
+                   ShaderConstants.propagationFlagsScratchOffset,
+                   numWorkItems,
+                   ShaderConstants.numThreads);
 }

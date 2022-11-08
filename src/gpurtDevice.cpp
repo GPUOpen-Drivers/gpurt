@@ -62,7 +62,7 @@
 namespace GpuRt
 {
 
-#include "pipelines/g_internal_shaders.h"
+#include <pipelines/g_internal_shaders.h>
 
 //=====================================================================================================================
 // Enumeration for supported intrinsic functions in GPURT
@@ -173,6 +173,56 @@ PipelineShaderCode GPURT_API_ENTRY GetShaderLibraryCode(
 #undef CHOOSE_SHADER
 
     return code;
+}
+
+//=====================================================================================================================
+// Maps Pal::RayTracingIpLevel to the appropriate function table.
+Pal::Result GPURT_API_ENTRY QueryRayTracingEntryFunctionTable(
+    const Pal::RayTracingIpLevel   rayTracingIpLevel,
+    EntryFunctionTable* const      pEntryFunctionTable)
+{
+    Pal::Result result = Pal::Result::Success;
+
+    const char* const* ppFuncTable = nullptr;
+    switch (rayTracingIpLevel)
+    {
+        case Pal::RayTracingIpLevel::RtIp1_0:
+        case Pal::RayTracingIpLevel::RtIp1_1:
+            ppFuncTable = FunctionTableRTIP1_1;
+            break;
+        case Pal::RayTracingIpLevel::None:
+        default:
+            result = Pal::Result::ErrorInvalidValue;
+            PAL_ASSERT_ALWAYS();
+            break;
+    }
+
+    if (ppFuncTable)
+    {
+        pEntryFunctionTable->traceRay.pTraceRay =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::TraceRay)];
+        pEntryFunctionTable->traceRay.pTraceRayUsingHitToken =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::TraceRayUsingHitToken)];
+        pEntryFunctionTable->traceRay.pTraceRayUsingRayQuery =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::TraceRayUsingRayQuery)];
+
+        pEntryFunctionTable->rayQuery.pTraceRayInline =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::TraceRayInline)];
+        pEntryFunctionTable->rayQuery.pProceed =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::RayQueryProceed)];
+
+        pEntryFunctionTable->intrinsic.pGetInstanceID =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::GetInstanceID)];
+        pEntryFunctionTable->intrinsic.pGetInstanceIndex =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::GetInstanceIndex)];
+        pEntryFunctionTable->intrinsic.pGetObjectToWorldTransform =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::GetObjectToWorldTransform)];
+        pEntryFunctionTable->intrinsic.pGetWorldToObjectTransform =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::GetWorldToObjectTransform)];
+
+    }
+
+    return result;
 }
 
 namespace Internal {
@@ -301,17 +351,21 @@ Pal::Result Device::Init()
     result = m_pipelineMap.Init();
     *m_info.pAccelStructTracker = {};
 
+    Pal::DeviceProperties props = {};
+    m_info.pPalDevice->GetProperties(&props);
+
+    m_bufferSrdSizeDw = props.gfxipProperties.srdSizes.bufferView / sizeof(uint32);
+
 #if PAL_BUILD_RDF
     Pal::IPlatform* pPlatform = m_info.pPalPlatform;
     GpuUtil::TraceSession* pTraceSession = pPlatform->GetTraceSession();
     pTraceSession->RegisterSource(&m_accelStructTraceSource);
 #endif
 
-    if (m_info.deviceSettings.enableFusedInstanceNode)
+    // Merged encode/build only works with parallel build
+    if (m_info.deviceSettings.enableParallelBuild == false)
     {
-        PAL_ALERT_MSG(m_info.deviceSettings.rebraidType == RebraidType::Off,
-            "Rebraid is not supported with fused instance nodes");
-        m_info.deviceSettings.rebraidType = RebraidType::Off;
+        m_info.deviceSettings.enableMergedEncodeBuild = false;
     }
 
     return result;
@@ -323,48 +377,7 @@ Pal::Result Device::QueryRayTracingEntryFunctionTable(
     const Pal::RayTracingIpLevel   rayTracingIpLevel,
     EntryFunctionTable* const      pEntryFunctionTable)
 {
-    Pal::Result result = Pal::Result::Success;
-
-    const char* const* ppFuncTable = nullptr;
-    switch (rayTracingIpLevel)
-    {
-        case Pal::RayTracingIpLevel::RtIp1_0:
-        case Pal::RayTracingIpLevel::RtIp1_1:
-            ppFuncTable = FunctionTableRTIP1_1;
-            break;
-        case Pal::RayTracingIpLevel::None:
-        default:
-            result = Pal::Result::ErrorInvalidValue;
-            PAL_ASSERT_ALWAYS();
-            break;
-    }
-
-    if (ppFuncTable)
-    {
-        pEntryFunctionTable->traceRay.pTraceRay =
-            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::TraceRay)];
-        pEntryFunctionTable->traceRay.pTraceRayUsingHitToken =
-            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::TraceRayUsingHitToken)];
-        pEntryFunctionTable->traceRay.pTraceRayUsingRayQuery =
-            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::TraceRayUsingRayQuery)];
-
-        pEntryFunctionTable->rayQuery.pTraceRayInline =
-            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::TraceRayInline)];
-        pEntryFunctionTable->rayQuery.pProceed =
-            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::RayQueryProceed)];
-
-        pEntryFunctionTable->intrinsic.pGetInstanceID =
-            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::GetInstanceID)];
-        pEntryFunctionTable->intrinsic.pGetInstanceIndex =
-            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::GetInstanceIndex)];
-        pEntryFunctionTable->intrinsic.pGetObjectToWorldTransform =
-            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::GetObjectToWorldTransform)];
-        pEntryFunctionTable->intrinsic.pGetWorldToObjectTransform =
-            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::GetWorldToObjectTransform)];
-
-    }
-
-    return result;
+    return GpuRt::QueryRayTracingEntryFunctionTable(rayTracingIpLevel, pEntryFunctionTable);
 }
 
 // =====================================================================================================================
@@ -421,47 +434,43 @@ Pal::IPipeline* Device::GetInternalPipeline(
 
             NodeMapping nodes[MaxInternalPipelineNodes];
 
-            uint32 nodeOffset = 0;
-            uint32 uavCount   = 0;
-            uint32 cbvCount   = 0;
+            uint32 nodeOffset       = 0;
+            uint32 uavCount         = 0;
+            uint32 uavBindingCount  = 0;
+            uint32 cbvCount         = 0;
+            uint32 cbvBindingCount  = 0;
 
             for (uint32 nodeIndex = 0; nodeIndex < pPipelineBuildInfo->nodeCount; ++nodeIndex)
             {
                 // Make sure we haven't exceeded our maximum number of nodes.
                 PAL_ASSERT(nodeIndex < MaxInternalPipelineNodes);
-
                 nodes[nodeIndex] = pPipelineBuildInfo->pNodes[nodeIndex];
-
                 // These must be defined:
                 const NodeType nodeType = pPipelineBuildInfo->pNodes[nodeIndex].type;
                 const uint32 nodeSize = nodes[nodeIndex].dwSize;
-
                 PAL_ASSERT(nodeSize > 0);
-
                 // These are calculated dynamically below into a tightly-packed top-level resource representation
                 PAL_ASSERT(nodes[nodeIndex].dwOffset == 0);
                 PAL_ASSERT(nodes[nodeIndex].srdStartIndex == 0);
                 PAL_ASSERT(nodes[nodeIndex].srdStride == 0);
                 PAL_ASSERT(nodes[nodeIndex].logicalId == 0);
-
                 nodes[nodeIndex].dwOffset  = nodeOffset;
                 nodes[nodeIndex].srdStride = nodeSize;
-
                 // Descriptor sets are assigned as follows:
                 // 0  Root UAVs
                 // 1  Root constants and CBVs
                 // 2+ Desciptor tables (UAV or CBV)
                 uint32 tableSet = 2;
-
                 switch (nodeType)
                 {
                 case NodeType::Constant:
                 case NodeType::ConstantBuffer:
                     nodes[nodeIndex].logicalId     = cbvCount + ReservedLogicalIdCount;
-                    nodes[nodeIndex].srdStartIndex = cbvCount;
-                    nodes[nodeIndex].binding       = cbvCount;
+                    nodes[nodeIndex].srdStartIndex = cbvBindingCount;
+                    nodes[nodeIndex].binding       = cbvBindingCount;
                     nodes[nodeIndex].descSet       = 1;
                     cbvCount++;
+                    cbvBindingCount++;
                     break;
                 case NodeType::ConstantBufferTable:
                     nodes[nodeIndex].logicalId     = cbvCount + ReservedLogicalIdCount;
@@ -472,10 +481,11 @@ Pal::IPipeline* Device::GetInternalPipeline(
                     break;
                 case NodeType::Uav:
                     nodes[nodeIndex].logicalId     = uavCount + ReservedLogicalIdCount;
-                    nodes[nodeIndex].srdStartIndex = uavCount;
-                    nodes[nodeIndex].binding       = uavCount;
+                    nodes[nodeIndex].srdStartIndex = uavBindingCount;
+                    nodes[nodeIndex].binding       = uavBindingCount;
                     nodes[nodeIndex].descSet       = 0;
                     uavCount++;
+                    uavBindingCount++;
                     break;
                 case NodeType::UavTable:
                 case NodeType::TypedUavTable:
@@ -484,10 +494,10 @@ Pal::IPipeline* Device::GetInternalPipeline(
                     nodes[nodeIndex].binding       = 0;
                     nodes[nodeIndex].descSet       = tableSet++;
                     uavCount++;
+                    break;
                 default:
                     PAL_ASSERT_ALWAYS();
                 }
-
                 nodeOffset += nodeSize;
             }
 
@@ -511,7 +521,7 @@ Pal::IPipeline* Device::GetInternalPipeline(
                 nodes[lastNodeIndex].dwSize        = 2;
                 nodes[lastNodeIndex].dwOffset      = nodeOffset;
                 nodes[lastNodeIndex].logicalId     = cbvCount + ReservedLogicalIdCount;
-                nodes[lastNodeIndex].srdStartIndex = cbvCount;
+                nodes[lastNodeIndex].srdStartIndex = cbvBindingCount;
                 nodes[lastNodeIndex].srdStride     = nodes[lastNodeIndex].dwSize;
 
                 // Set binding and descSet to irrelevant value to avoid messing up the resource mapping for Vulkan.
@@ -971,6 +981,10 @@ Pal::Result Device::GetAccelStructPostBuildSize(
     case GpuRt::AccelStructPostBuildInfoType::CurrentSize:
         infoSize = sizeof(AccelStructPostBuildInfoCurrentSizeDesc);
         break;
+    case GpuRt::AccelStructPostBuildInfoType::BottomLevelASPointerCount:
+        // This mode is not used with this function
+        PAL_ASSERT_ALWAYS();
+        break;
     }
 
     uint64 sizeInBytes = 0;
@@ -1175,9 +1189,15 @@ void Device::InitExecuteIndirect(
     pCmdBuffer->CmdBindPipeline(bindParams);
 
     const uint32 threadGroupDim = 8;
+#if PAL_CLIENT_INTERFACE_MAJOR_VERSION < 771
     pCmdBuffer->CmdDispatch(Util::RoundUpQuotient(maxDispatchCount, threadGroupDim),
                             Util::RoundUpQuotient(pipelineCount, threadGroupDim),
                             1);
+#else
+    pCmdBuffer->CmdDispatch({ Util::RoundUpQuotient(maxDispatchCount, threadGroupDim),
+                              Util::RoundUpQuotient(pipelineCount, threadGroupDim),
+                              1});
+#endif
 
     pCmdBuffer->CmdRestoreComputeState(Pal::ComputeStateAll);
 }
@@ -1218,8 +1238,11 @@ void Device::CopyBufferRaw(
     uint32 dispatchSize = Util::RoundUpQuotient(numDwords, DefaultThreadGroupSize);
 
     RGP_PUSH_MARKER(pCmdBuffer, "Copy Buffer");
-
+#if PAL_CLIENT_INTERFACE_MAJOR_VERSION < 771
     pCmdBuffer->CmdDispatch(dispatchSize, 1, 1);
+#else
+    pCmdBuffer->CmdDispatch({ dispatchSize, 1, 1 });
+#endif
 
     RGP_POP_MARKER(pCmdBuffer);
 }
@@ -1249,6 +1272,17 @@ uint32 Device::WriteBufferVa(
 {
     const uint32 entries[] = { Util::LowPart(virtualAddress), Util::HighPart(virtualAddress) };
     return WriteUserDataEntries(pCmdBuffer, entries, GPURT_ARRAY_SIZE(entries), entryOffset);
+}
+
+// =====================================================================================================================
+// Creates one or more Typed Buffer View SRDs on the device.
+void Device::CreateTypedBufferViewSrds(
+    uint32                     count,
+    const Pal::BufferViewInfo* pBufferViewInfo,
+    void* pOut)
+{
+    const Pal::IDevice* pDevice = m_info.pPalDevice;
+    pDevice->CreateTypedBufferViewSrds(count, pBufferViewInfo, pOut);
 }
 
 #if GPURT_DEVELOPER

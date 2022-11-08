@@ -265,8 +265,8 @@ void WriteCompressedNodes(
                 const uint triangleTypeAndId = (triangleId << 3) | i;
                 ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_TYPE_OFFSET, triangleTypeAndId);
 
-                // Repurpose the num prims field for saving the index of the other node in the pair.
-                ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET,
+                // Repurpose the node pointer for saving the index of the other node in the pair.
+                ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_NODE_POINTER_OFFSET,
                                     pairScratchIndices[i]);
             }
         }
@@ -470,11 +470,11 @@ BoundingBox FetchScratchNodeBoundingBoxPair(
     BoundingBox bbox = GetScratchNodeBoundingBox(scratchNode);
 
     // If this is a pair, get the other triangle's bounding box and merge.
-    if (IsLeafNode(nodeIndex, numActivePrims) && (scratchNode.numPrimitivesAndDoCollapse != INVALID_IDX))
+    if (IsLeafNode(nodeIndex, numActivePrims) && (scratchNode.splitBox_or_nodePointer != INVALID_IDX))
     {
         const ScratchNode otherNode = FetchScratchNode(buffer,
                                                        baseScratchNodesOffset,
-                                                       scratchNode.numPrimitivesAndDoCollapse);
+                                                       scratchNode.splitBox_or_nodePointer);
         const BoundingBox otherBbox = GetScratchNodeBoundingBox(otherNode);
 
         bbox.min = min(bbox.min, otherBbox.min);

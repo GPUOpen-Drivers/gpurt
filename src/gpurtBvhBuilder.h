@@ -37,6 +37,11 @@ namespace GpuRt
 
 using Pal::gpusize;
 
+namespace EncodeNodes
+{
+struct Constants;
+}
+
 // =====================================================================================================================
 // Helper class used by GPURT to perform various BVH operations like building, copying, etc.
 class BvhBuilder
@@ -101,6 +106,7 @@ protected:
         // bvhBuilder NodeSort Heuristics
         BvhBuilderNodeSortType          bvhBuilderNodeSortType;
         BvhBuilderNodeSortHeuristic     bvhBuilderNodeSortHeuristic;
+        SceneBoundsCalculation          sceneCalcType;
         bool                            topLevelBuild;
         bool                            triangleSplitting;            // Triangle Splitting Enabled
         bool                            collapse;                     // Collapse Enabled
@@ -108,6 +114,9 @@ protected:
                                                                       // and has top down enabled or rebraid
         // Top down build in TLAS (topDownAllowed && prim count is not larger than max count)
         bool                            topDownBuild;
+        bool                            noCopySortedNodes;
+        bool                            needEncodeDispatch;
+        bool                            enableEarlyPairCompression;
     };
 
     BvhBuilder(
@@ -240,7 +249,7 @@ public:
     void EmitAccelerationStructurePostBuildInfo(
         const AccelStructPostBuildInfo& postBuildInfo);
 
-    void EmitASCurrentType(
+    void EmitASCurrentSize(
         const AccelStructPostBuildInfo& postBuildInfo);
 
     void EmitASCompactedType(
@@ -293,6 +302,27 @@ private:
 
     // Updates an existing acceleration structure and stores it in a result buffer
     void UpdateAccelerationStructure();
+
+    void EmitPostBuildInfo(
+        uint32 resultDataSize);
+
+    Pal::BufferViewInfo AllocGeometryConstants(
+        const Geometry& geometry,
+        uint32  geometryIndex,
+        uint32* pPrimitiveOffset,
+        uint32  stride,
+        uint32  vertexCompCount,
+        uint64* pIbVa);
+
+    uint32 WriteBufferSrdTable(
+        const Pal::BufferViewInfo* pBufferViews,
+        uint32                     count,
+        bool                       typedBuffer,
+        uint32                     entryOffset);
+
+    uint32 WriteTriangleGeometrySrdTables(uint32 entryOffset);
+
+    void EncodeUpdate();
 
     void GenerateMortonCodes();
 
@@ -375,6 +405,8 @@ private:
         uint32 numElems);
 
     // Helper functions
+    void Dispatch(
+        uint32 numGroups);
 
     void BindPipeline(InternalRayTracingCsType type);
 
@@ -443,6 +475,23 @@ private:
 
     void ResetTaskQueueCounters(
         uint32 offset);
+
+    Pal::BufferViewInfo SetupVertexBuffer(
+        const GeometryTriangles& desc,
+        uint32* pStride,
+        uint32* pVertexCompCount) const;
+
+    uint32 WriteVertexBufferTable(
+        const GeometryTriangles* pDesc,
+        EncodeNodes::Constants*  pEncodeConstants,
+        uint32                   entryoffset);
+
+    uint32 WriteAabbGeometryTable(
+        const GeometryAabbs* pAabbGeometry,
+        uint32*              pStrideConstant,
+        uint32               userDataOffset);
+
+    uint32 GetLeafNodeExpansion() const;
 
 #if GPURT_DEVELOPER
     // Driver generated RGP markers are only added in internal builds because they expose details about the

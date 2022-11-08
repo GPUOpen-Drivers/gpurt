@@ -54,7 +54,6 @@ struct Constants
 
 #define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
 groupshared int SharedMem[MAX_LDS_ELEMENTS];
-groupshared uint SharedIndex;
 #endif
 
 //=====================================================================================================================

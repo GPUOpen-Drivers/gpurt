@@ -86,36 +86,63 @@ void SerializeAS(in uint3 globalThreadId : SV_DispatchThreadID)
 
         if (type == TOP_LEVEL)
         {
-            const uint basePrimNodePtrsOffset = metadataSizeInBytes + header.offsets.primNodePtrs;
-
             // 3 - NumBottomLevelAccelerationStructurePointersAfterHeader
             DstBuffer.Store2(SERIALIZED_AS_HEADER_NUM_BLAS_PTRS_OFFSET, uint2(header.numDescs, 0));
-
-            // Bottom tree GPUVAs after header (SERIALIZED_AS_HEADER_SIZE)
-            for (uint i = 0; i < header.numDescs; i++)
-            {
-                const uint currentInstNodePtrOffset  = basePrimNodePtrsOffset + (i * NODE_PTR_SIZE);
-                const uint currentInstNodePtr        = SrcBuffer.Load(currentInstNodePtrOffset);
-
-                uint64_t gpuVA = 0;
-
-                if (currentInstNodePtr != INVALID_IDX)
-                {
-                    const uint currentInstNodeOffset = metadataSizeInBytes +
-                                                       ExtractNodePointerOffset(currentInstNodePtr);
-
-                    // Fetch acceleration structure base address in TLAS instance
-                    gpuVA = FetchApiInstanceBaseAddress(SrcBuffer, currentInstNodeOffset);
-                }
-
-                // Write original BLAS address to destination buffer
-                DstBuffer.Store<uint64_t>((i * GPUVA_SIZE) + SERIALIZED_AS_HEADER_SIZE, gpuVA);
-            }
         }
         else
         {
             // 3 - NumBottomLevelAccelerationStructurePointersAfterHeader
             DstBuffer.Store<uint64_t>(SERIALIZED_AS_HEADER_NUM_BLAS_PTRS_OFFSET, 0);
+        }
+    }
+
+    if (type == TOP_LEVEL)
+    {
+        // Bottom tree GPUVAs after header (SERIALIZED_AS_HEADER_SIZE)
+        const uint basePrimNodePtrsOffset = metadataSizeInBytes + header.offsets.primNodePtrs;
+
+        // Loop over active primitives since there may be more or less valid instances than the original API
+        // instance count when rebraid is enabled.
+        const uint rebraid =
+            (header.info >> ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_SHIFT) &
+                ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_MASK;
+
+        const uint numInstances = (rebraid != 0) ? header.numActivePrims : header.numDescs;
+
+        for (uint i = globalID; i < numInstances; i += BUILD_THREADGROUP_SIZE * ShaderConstants.numWaves)
+        {
+            const uint currentInstNodePtrOffset = basePrimNodePtrsOffset + (i * NODE_PTR_SIZE);
+            const uint currentInstNodePtr = SrcBuffer.Load(currentInstNodePtrOffset);
+
+            // Note, without rebraid the instance nodes are in API order with deactivated instances
+            // indicated by an invalid node pointer.
+            uint32_t apiInstanceIndex = i;
+
+            uint64_t gpuVa = 0ull;
+
+            // Skip inactive instances which have their node pointers set to invalid. Note, these only appear with
+            // rebraid disabled
+            if (currentInstNodePtr != INVALID_IDX)
+            {
+                const uint currentInstNodeOffset = metadataSizeInBytes + ExtractNodePointerOffset(currentInstNodePtr);
+
+                // Fetch acceleration structure base address in TLAS instance
+                gpuVa = FetchApiInstanceBaseAddress(SrcBuffer, currentInstNodeOffset);
+
+                // Fetch API instance index from instance node. With rebraid enabled the instance node pointers
+                // in memory are in sorted order with no deactivated instances in between. The re-braided instances
+                // are mixed in this array so we need to read the instance index from memory to account for
+                // all API instances. There is some duplication here since we may have multiple leaf nodes
+                // pointing to same instance but Serialize performance is not of great concern.
+                apiInstanceIndex =
+                    SrcBuffer.Load(currentInstNodeOffset + INSTANCE_NODE_EXTRA_OFFSET + INSTANCE_EXTRA_INDEX_OFFSET);
+            }
+
+            if (apiInstanceIndex < header.numDescs)
+            {
+                // Write original BLAS address to destination buffer
+                DstBuffer.Store<uint64_t>((apiInstanceIndex * sizeof(uint64_t)) + SERIALIZED_AS_HEADER_SIZE, gpuVa);
+            }
         }
     }
 

@@ -45,7 +45,7 @@
 // Note this file is designed to be compilable as HLSL.
 
 #define GPURT_ACCEL_STRUCT_MAJOR_VERSION 15
-#define GPURT_ACCEL_STRUCT_MINOR_VERSION 7
+#define GPURT_ACCEL_STRUCT_MINOR_VERSION 8
 #define GPURT_ACCEL_STRUCT_VERSION       ((GPURT_ACCEL_STRUCT_MAJOR_VERSION << 16) | GPURT_ACCEL_STRUCT_MINOR_VERSION)
 
 #ifdef __cplusplus
@@ -80,12 +80,13 @@ struct AccelStructMetadataHeader
     uint32 addressLo;           // Address of acceleration structure data section (low bits)
     uint32 addressHi;           // Address of acceleration structure data section (high bits)
     uint32 sizeInBytes;         // Metadata size in bytes (including this header)
-    uint32 taskCounter;         // Task counter for dispatch-wide spin loop synchronization
+    uint32 reserved0;           // Reserved
+    uint32 taskCounter;         // Task counter for dispatch-wide spin loop sync. Align to 8 bytes so taskCounter and
+                                // numTasksDone can be reset in one 64 bit CP write.
     uint32 numTasksDone;        // Number of tasks done
-    uint32 loopTaskCounter;     // Task counter for dispatch-wide spin loop synchronization in dynamic loop
-    uint32 numLoopTasksDone;    // Number of tasks done in the dynamic loop
-    uint32 loop2TaskCounter;    // Task counter for dispatch-wide spin loop synchronization in dynamic loop
-    uint32 numLoop2TasksDone;   // Number of tasks done in the dynamic loop
+    uint32 reserved1;           // Reserved
+    uint32 reserved2;           // Reserved
+    uint32 reserved3;           // Reserved
 };
 
 #ifdef __cplusplus
@@ -165,6 +166,9 @@ struct AccelStructHeader
     AccelStructHeaderInfo2 info2;
     uint32                 nodeFlags;                // Bottom level acceleration structure node flags.
     uint32                 compactedSizeInBytes;     // Total compacted size of the accel struct
+
+    // if enableSAHCost is enabled,
+    // this can be also used to store the actual SAH cost rather than the number of primitives
 #if __cpluslus
     uint32                 numChildPrims[4];
 #else

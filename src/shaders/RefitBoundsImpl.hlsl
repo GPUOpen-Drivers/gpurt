@@ -29,19 +29,6 @@
 //
 
 //=====================================================================================================================
-void WriteScratchNodeCollapseInfo(
-    uint  baseScratchNodesOffset,
-    uint  nodeIndex,
-    float cost,
-    uint  numPrimitivesAndDoCollapse)
-{
-    const uint nodeOffset = baseScratchNodesOffset + (nodeIndex * SCRATCH_NODE_SIZE);
-
-    ScratchBuffer.Store<float>(nodeOffset + SCRATCH_NODE_COST_OFFSET, cost);
-    ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET, numPrimitivesAndDoCollapse);
-}
-
-//=====================================================================================================================
 void RefitBoundsImpl(
     uint                primIndex,
     uint                numActivePrims,
@@ -60,6 +47,8 @@ void RefitBoundsImpl(
     float               fp16BoxModeMixedSaThreshold,
     uint                reservedUint1,
     uint                reservedUint2,
+    uint                reservedUint3,
+    int4                reservedUint4,
     uint                enableInstancePrimCount)
 {
     if (enablePairCompression && (primIndex == 0) && (numActivePrims == 1))
@@ -138,9 +127,7 @@ void RefitBoundsImpl(
                     bboxRightChild = GetScratchNodeBoundingBox(rightNode);
                 }
 
-                const float surfaceArea = rightNode.sah_or_v2_or_instBasePtr.y;
-                const float cost = isLeafNode ? Ct : rightNode.sah_or_v2_or_instBasePtr.x;
-                rightCost = surfaceArea * cost;
+                rightCost = isLeafNode ? FetchScratchLeafNodeCost(rightNode) : FetchScratchInternalNodeCost(rightNode);
                 numMortonCells += isLeafNode ? 1 : rightNode.splitBox_or_nodePointer;
             }
 
@@ -159,9 +146,7 @@ void RefitBoundsImpl(
                     bboxLeftChild = GetScratchNodeBoundingBox(leftNode);
                 }
 
-                const float surfaceArea = leftNode.sah_or_v2_or_instBasePtr.y;
-                const float cost = isLeafNode ? Ct : leftNode.sah_or_v2_or_instBasePtr.x;
-                leftCost = surfaceArea * cost;
+                leftCost = isLeafNode ? FetchScratchLeafNodeCost(leftNode) : FetchScratchInternalNodeCost(leftNode);
                 numMortonCells += isLeafNode ? 1 : leftNode.splitBox_or_nodePointer;
             }
 
@@ -184,6 +169,9 @@ void RefitBoundsImpl(
                                         parentNodeIndex,
                                         mergedBoxSurfaceArea);
 
+            float bestCost = leftCost + rightCost + Ci * mergedBoxSurfaceArea;
+            bool isCollapsed = false;
+
             if (doCollapse || enablePairCompression)
             {
                 const float splitCost    = Ci + leftCost / mergedBoxSurfaceArea + rightCost / mergedBoxSurfaceArea;
@@ -201,11 +189,6 @@ void RefitBoundsImpl(
                     (numTris > MAX_COLLAPSED_TRIANGLES) ||
                     (enablePairCompression && ((collapseBothSides == false) || (parentNodeIndex == 0))))
                 {
-                    WriteScratchNodeCollapseInfo(baseScratchNodesOffset,
-                                                 parentNodeIndex,
-                                                 splitCost,
-                                                 numTris << 1);
-
                     if (enablePairCompression)
                     {
                         if (leftCollapse)
@@ -221,19 +204,13 @@ void RefitBoundsImpl(
                 }
                 else
                 {
-                    WriteScratchNodeCollapseInfo(baseScratchNodesOffset,
-                                                 parentNodeIndex,
-                                                 collapseCost,
-                                                 (numTris << 1) | 1);
+                    bestCost = collapseCost * mergedBoxSurfaceArea;
+                    isCollapsed = true;
                 }
             }
-            else
-            {
-                WriteScratchNodeNumPrimitives(ScratchBuffer,
-                                              baseScratchNodesOffset,
-                                              parentNodeIndex,
-                                              numTris << 1);
-            }
+
+            WriteScratchNodeCost(ScratchBuffer, baseScratchNodesOffset, parentNodeIndex, bestCost, false);
+            WriteScratchNodeNumPrimitives(ScratchBuffer, baseScratchNodesOffset, parentNodeIndex, numTris, isCollapsed);
 
             // Decide on what type of interior box node the parent should be
             // and write the type into scratch

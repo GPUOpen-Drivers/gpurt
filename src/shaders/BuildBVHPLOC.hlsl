@@ -99,7 +99,6 @@ struct BuildPlocArgs
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer  : register(u2);
 
 groupshared int SharedMem[(2 * PLOC_RADIUS_MAX + BUILD_THREADGROUP_SIZE) * LDS_AABB_STRIDE];
-groupshared uint SharedIndex;
 
 #include "RadixSort/ScanExclusiveInt4DLBCommon.hlsl"
 
@@ -302,12 +301,12 @@ uint2 BeginTask(const uint localId, const BuildPlocArgs args)
 
     if (localId == 0)
     {
-        ScratchBuffer.InterlockedAdd(taskCounterOffset, 1, SharedIndex);
+        ScratchBuffer.InterlockedAdd(taskCounterOffset, 1, SharedMem[0]);
     }
 
     GroupMemoryBarrierWithGroupSync();
 
-    const uint index = SharedIndex;
+    const uint index = SharedMem[0];
 
     // wait till there are valid tasks to do
     do
@@ -670,47 +669,33 @@ void FindNearestNeighbour(
             const bool enableCollapse        = (args.flags & BUILD_FLAGS_COLLAPSE);
             const bool enablePairCompression = (args.flags & BUILD_FLAGS_PAIR_COMPRESSION);
 
+            uint numLeft = FetchScratchNodeNumPrimitives(ScratchBuffer,
+                                                         args.scratchNodesScratchOffset,
+                                                         leftNodeIndex,
+                                                         IsLeafNode(leftNodeIndex, numActivePrims));
+            uint numRight = FetchScratchNodeNumPrimitives(ScratchBuffer,
+                                                         args.scratchNodesScratchOffset,
+                                                         rightNodeIndex,
+                                                         IsLeafNode(rightNodeIndex, numActivePrims));
+
+            // Ct is the cost of intersecting triangle
+            // Ci is the cost of interecting bbox
+            const float Ct = SAH_COST_TRIANGLE_INTERSECTION;
+            const float Ci = SAH_COST_AABBB_INTERSECTION;
+
+            float leftCost = FetchScratchNodeCost(ScratchBuffer, args.scratchNodesScratchOffset, leftNodeIndex,
+                                                  IsLeafNode(leftNodeIndex, numActivePrims));
+
+            float rightCost = FetchScratchNodeCost(ScratchBuffer, args.scratchNodesScratchOffset, rightNodeIndex,
+                                                   IsLeafNode(rightNodeIndex, numActivePrims));
+
+            float bestCost = leftCost + rightCost + Ci * mergedBoxSurfaceArea;
+            bool isCollapsed = false;
+
+            const uint numTris = numLeft + numRight;
+
             if (enableCollapse || enablePairCompression)
             {
-                // Ct is the cost of intersecting triangle
-                // Ci is the cost of interecting bbox
-                const float Ct = SAH_COST_TRIANGLE_INTERSECTION;
-                const float Ci = SAH_COST_AABBB_INTERSECTION;
-
-                float leftCost;
-                float rightCost;
-
-                uint numLeft;
-                uint numRight;
-
-                const float surfaceAreaLeft = ComputeBoxSurfaceArea(aabbLeft);
-
-                if (IsLeafNode(leftNodeIndex, numActivePrims))
-                {
-                    leftCost = surfaceAreaLeft * Ct;
-                }
-                else
-                {
-                    leftCost = surfaceAreaLeft *
-                        FetchScratchNodeCost(ScratchBuffer, args.scratchNodesScratchOffset, leftNodeIndex);
-                }
-
-                const float surfaceAreaRight = ComputeBoxSurfaceArea(aabbRight);
-
-                if (IsLeafNode(rightNodeIndex, numActivePrims))
-                {
-                    rightCost = surfaceAreaRight * Ct;
-                }
-                else
-                {
-                    rightCost = surfaceAreaRight *
-                        FetchScratchNodeCost(ScratchBuffer, args.scratchNodesScratchOffset, rightNodeIndex);
-                }
-
-                numLeft = FetchScratchNodeNumPrimitives(ScratchBuffer, args.scratchNodesScratchOffset, leftNodeIndex) >> 1;
-                numRight = FetchScratchNodeNumPrimitives(ScratchBuffer, args.scratchNodesScratchOffset, rightNodeIndex) >> 1;
-
-                const uint  numTris      = numLeft + numRight;
                 const float splitCost    = Ci + leftCost / mergedBoxSurfaceArea + rightCost / mergedBoxSurfaceArea;
                 const float collapseCost = Ct * numTris;
                 const bool  useCostCheck = enableCollapse || (args.flags & BUILD_FLAGS_PAIR_COST_CHECK);
@@ -721,16 +706,11 @@ void FindNearestNeighbour(
                                                IsLeafNode(rightNodeIndex, numActivePrims);
                 const bool collapseBothSides = leftCollapse && rightCollapse;
 
-                uint numPrimAndCollapse = numTris << 1;
-                float cost;
-
                 // Limit number of triangles collapsed in a single bounding box to MAX_COLLAPSED_TRIANGLES
                 if ((useCostCheck && (collapseCost > splitCost)) ||
                     (numTris > MAX_COLLAPSED_TRIANGLES) ||
                     (enablePairCompression && ((collapseBothSides == false) || (mergedNodeIndex == 0))))
                 {
-                    cost = splitCost;
-
                     if (enablePairCompression)
                     {
                         if (leftCollapse)
@@ -752,38 +732,14 @@ void FindNearestNeighbour(
                 }
                 else // do collapse
                 {
-                    numPrimAndCollapse |= 1;
-
-                    cost = collapseCost;
+                    bestCost = collapseCost * mergedBoxSurfaceArea;
+                    isCollapsed = true;
                 }
 
-                WriteScratchNodeNumPrimitives(ScratchBuffer,
-                    args.scratchNodesScratchOffset,
-                    mergedNodeIndex,
-                    numPrimAndCollapse);
-
-                WriteScratchNodeCost(ScratchBuffer,
-                    args.scratchNodesScratchOffset,
-                    mergedNodeIndex,
-                    cost);
-
             }
-            else
-            {
-                // need to do this if
-                // 1-) it's just triangle splitting because QBVH Collapse needs this data to figure out
-                // where to put the leaf nodes
-                // 2-) NodeSort is enabled
-                uint numLeft = FetchScratchNodeNumPrimitives(ScratchBuffer, args.scratchNodesScratchOffset, leftNodeIndex) >> 1;
-                uint numRight = FetchScratchNodeNumPrimitives(ScratchBuffer, args.scratchNodesScratchOffset, rightNodeIndex) >> 1;
 
-                const uint numTris = numLeft + numRight;
-
-                WriteScratchNodeNumPrimitives(ScratchBuffer,
-                    args.scratchNodesScratchOffset,
-                    mergedNodeIndex,
-                    numTris << 1);
-            }
+            WriteScratchNodeCost(ScratchBuffer, args.scratchNodesScratchOffset, mergedNodeIndex, bestCost, false);
+            WriteScratchNodeNumPrimitives(ScratchBuffer, args.scratchNodesScratchOffset, mergedNodeIndex, numTris, isCollapsed);
 
             ScratchBuffer.Store(leftNodeOffset + SCRATCH_NODE_PARENT_OFFSET, mergedNodeIndex);
             ScratchBuffer.Store(rightNodeOffset + SCRATCH_NODE_PARENT_OFFSET, mergedNodeIndex);

@@ -43,6 +43,7 @@ static IntersectionResult TraceRay(
                                               ray,
                                               rayId,
                                               earlyTerminateThreshold);
+
         default: return (IntersectionResult) 0;
     }
 }

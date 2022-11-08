@@ -128,11 +128,11 @@ uint WritePrimitiveNodeCollapse(
         // For PAIR_TRIANGLE_COMPRESSION, the other node is not linked in the BVH tree, so we need to find it and
         // store it as well if it exists.
         if ((args.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
-            (node.numPrimitivesAndDoCollapse != INVALID_IDX))
+            (node.splitBox_or_nodePointer != INVALID_IDX))
         {
             const ScratchNode otherNode = FetchScratchNode(ScratchBuffer,
                                                            args.scratchNodesScratchOffset,
-                                                           node.numPrimitivesAndDoCollapse);
+                                                           node.splitBox_or_nodePointer);
             const uint otherNodeType = GetNodeType(otherNode.type);
 
             const float3 otherVerts[3] = { otherNode.bbox_min_or_v0,
@@ -235,11 +235,13 @@ void WriteQbvhInternalNodeBbox(
 void WriteQbvhInternalNodeNumPrimitives(
     in ScratchNode scratchNode,             ///< Node whose bbox to write out
     in uint        qbvhNodeAddr,            ///< Base address of the (parent) node being written
-    in bool        writeAsFp16BoxNode)      ///< Flag whether to write this interior node as fp16
+    in bool        writeAsFp16BoxNode,      ///< Flag whether to write this interior node as fp16
+    in bool        isLeaf)
 {
     if (writeAsFp16BoxNode == false)
     {
-        ResultBuffer.Store(qbvhNodeAddr + FLOAT32_BOX_NODE_NUM_PRIM_OFFSET, scratchNode.numPrimitivesAndDoCollapse >> 1);
+        const uint numPrims = FetchScratchNodeNumPrimitives(scratchNode, isLeaf);
+        ResultBuffer.Store(qbvhNodeAddr + FLOAT32_BOX_NODE_NUM_PRIM_OFFSET, numPrims);
     }
 }
 
@@ -258,6 +260,7 @@ void WriteQbvhInternalNodeFlags(
 //=====================================================================================================================
 void BuildQbvhCollapseImpl(
     uint          globalId,
+    uint          numActivePrims,
     BuildQbvhArgs args)
 {
     // Each stack item stores data for writes to linear QBVH memory, indexed by stack index
@@ -266,8 +269,6 @@ void BuildQbvhCollapseImpl(
     // Load acceleration structure header
     const AccelStructHeader header = ResultBuffer.Load<AccelStructHeader>(0);
 
-    const uint numActivePrims        = header.numActivePrims;
-    const uint numNodesToProcess     = (args.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) ? header.numLeafNodes : numActivePrims;
     const AccelStructOffsets offsets = header.offsets;
 
     const uint baseQbvhStackOffset = args.qbvhStackScratchOffset;
@@ -287,8 +288,8 @@ void BuildQbvhCollapseImpl(
         const uint numLeafsDone = ScratchBuffer.Load(args.stackPtrsScratchOffset + STACK_PTRS_NUM_LEAFS_DONE_OFFSET);
 
         // Check if we've processed all leaves or have internal nodes on the stack
-        if ((numLeafsDone >= numNodesToProcess) ||
-            (stackIndex >= CalcNumQBVHInternalNodes(numNodesToProcess)) ||
+        if ((numLeafsDone >= args.numPrimitives) ||
+            (stackIndex >= CalcNumQBVHInternalNodes(args.numPrimitives)) ||
             isDone)
         {
             break;
@@ -430,7 +431,7 @@ void BuildQbvhCollapseImpl(
 
                     ResultBuffer.Store(qbvhNodeAddr + FLOAT32_BOX_NODE_CHILD0_OFFSET, ptr);
 
-                    WriteQbvhInternalNodeNumPrimitives(node, qbvhNodeAddr, writeAsFp16BoxNode);
+                    WriteQbvhInternalNodeNumPrimitives(node, qbvhNodeAddr, writeAsFp16BoxNode, true);
 
                     WriteQbvhInternalNodeFlags(CalcNodeFlags(node), qbvhNodeAddr, writeAsFp16BoxNode);
                 }
@@ -445,7 +446,7 @@ void BuildQbvhCollapseImpl(
                 ResultBuffer.InterlockedAdd(nodeTypeToAccum, 1);
             }
 
-            WriteQbvhInternalNodeNumPrimitives(node, qbvhNodeAddr, writeAsFp16BoxNode);
+            WriteQbvhInternalNodeNumPrimitives(node, qbvhNodeAddr, writeAsFp16BoxNode, false);
 
             if (args.flags & BUILD_FLAGS_COLLAPSE)
             {

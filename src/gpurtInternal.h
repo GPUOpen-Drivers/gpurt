@@ -184,10 +184,6 @@ const uint32 ReservedLogicalIdCount = 1;
 // Array of internal pipeline source code
 extern const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsType::Count)];
 
-extern uint32 CalculateRayTracingAABBCount(
-    const AccelStructBuildInputs& buildInfo,
-    const ClientCallbacks&        clientCb);
-
 // =====================================================================================================================
 // Calculate acceleration structure internal node count for QBVH
 inline uint32 CalcNumQBVHInternalNodes(
@@ -240,6 +236,15 @@ static uint64 GetInternalPsoHash(
 
     return hash.u64All;
 }
+
+//=====================================================================================================================
+// different ways to encode the scene bounds used to generate morton codes
+enum class SceneBoundsCalculation : uint32
+{
+    BasedOnGeometry = 0,
+    BasedOnGeometryWithSize,
+    BasedOnCentroidWithSize
+};
 
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 28
 // =====================================================================================================================
@@ -480,6 +485,23 @@ public:
         Pal::gpusize     virtualAddress,
         uint32           entryOffset);
 
+    // Creates one or more typed buffer view shader resource descriptors
+    //
+    // @param [in]  count           Number of buffer view SRDs to create; size of the pBufferViewInfo array.
+    // @param [in]  pBufferViewInfo Array of buffer view descriptions directing SRD construction.
+    // @param [out] pOut            Client-provided space where opaque, hardware-specific SRD data is written.
+    void CreateTypedBufferViewSrds(
+        uint32                     count,
+        const Pal::BufferViewInfo* pBufferViewInfo,
+        void*                      pOut);
+
+    Pal::IDevice* GetPalDevice() const { return m_info.pPalDevice; };
+
+    const DeviceInitInfo& GetInitInfo() const { return m_info; }
+
+    // Returns size in DWORDs of a buffer view SRD
+    uint32 GetBufferSrdSizeDw() const { return m_bufferSrdSizeDw; };
+
 #if GPURT_DEVELOPER
     // Driver generated RGP markers are only added in internal builds because they expose details about the
     // construction of acceleration structure.
@@ -507,6 +529,7 @@ protected:
     Util::Mutex                              m_traceBvhLock;
     bool                                     m_isTraceActive;
     GpuRt::AccelStructTraceSource            m_accelStructTraceSource;
+    uint32                                   m_bufferSrdSizeDw;
     ClientCallbacks                          m_clientCb;
 };
 }  // namespace Internal

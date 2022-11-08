@@ -37,6 +37,7 @@ struct RebraidArgs
     uint atomicFlagsScratchOffset;
     uint encodeArrayOfPointers;
     uint enableCentroidSceneBoundsWithSize;
+    uint enableSAHCost;
 };
 
 #define REBRAID_KEYS_PER_THREAD         4
@@ -64,12 +65,12 @@ uint2 BeginTaskRB(const uint localId, uint taskQueueOffset)
 {
     if (localId == 0)
     {
-        ScratchBuffer.InterlockedAdd(taskQueueOffset + STATE_TASK_QUEUE_TASK_COUNTER_OFFSET, 1, SharedIndex);
+        ScratchBuffer.InterlockedAdd(taskQueueOffset + STATE_TASK_QUEUE_TASK_COUNTER_OFFSET, 1, SharedMem[0]);
     }
 
     GroupMemoryBarrierWithGroupSync();
 
-    const uint index = SharedIndex;
+    const uint index = SharedMem[0];
 
     // wait till there are valid tasks to do
     do
@@ -558,14 +559,29 @@ void RebraidImpl(
                             desc = InstanceDescBuffer.Load<InstanceDesc>(leaf.left_or_primIndex_or_instIndex * INSTANCE_DESC_SIZE);
                         }
 
+                        float4 cost;
+
+                        if (args.enableSAHCost)
+                        {
+                            const float transformFactor = FetchScratchLeafNodeCost(leaf);
+
+                            cost[0] = transformFactor * asfloat(FetchHeaderField(address, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET));
+                            cost[1] = transformFactor * asfloat(FetchHeaderField(address, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 4));
+                            cost[2] = transformFactor * asfloat(FetchHeaderField(address, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 8));
+                            cost[3] = transformFactor * asfloat(FetchHeaderField(address, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 12));
+                        }
+
                         if (open[keyIndex])
                         {
                             uint4 numPrims;
 
-                            numPrims[0] = FetchHeaderField(address, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET);
-                            numPrims[1] = FetchHeaderField(address, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 4);
-                            numPrims[2] = FetchHeaderField(address, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 8);
-                            numPrims[3] = FetchHeaderField(address, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 12);
+                            if (args.enableSAHCost == false)
+                            {
+                                numPrims[0] = FetchHeaderField(address, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET);
+                                numPrims[1] = FetchHeaderField(address, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 4);
+                                numPrims[2] = FetchHeaderField(address, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 8);
+                                numPrims[3] = FetchHeaderField(address, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 12);
+                            }
 
                             const Float32BoxNode node = FetchFloat32BoxNode(address, rootNodePointer);
 
@@ -578,7 +594,15 @@ void RebraidImpl(
                             ScratchBuffer.Store<float3>(scratchNodeOffset + SCRATCH_NODE_BBOX_MIN_OFFSET, temp.min);
                             ScratchBuffer.Store<float3>(scratchNodeOffset + SCRATCH_NODE_BBOX_MAX_OFFSET, temp.max);
                             ScratchBuffer.Store<uint>(scratchNodeOffset + SCRATCH_NODE_NODE_POINTER_OFFSET, node.child0);
-                            ScratchBuffer.Store<uint>(scratchNodeOffset + SCRATCH_NODE_INSTANCE_NUM_PRIMS_OFFSET, numPrims[0]);
+
+                            if (args.enableSAHCost == false)
+                            {
+                                ScratchBuffer.Store<uint>(scratchNodeOffset + SCRATCH_NODE_INSTANCE_NUM_PRIMS_OFFSET, numPrims[0]);
+                            }
+                            else
+                            {
+                                WriteScratchNodeCost(ScratchBuffer, args.bvhLeafNodeDataScratchOffset, i, cost[0], true);
+                            }
 
                             if (args.enableCentroidSceneBoundsWithSize)
                             {
@@ -600,7 +624,15 @@ void RebraidImpl(
                                 const uint writeIndex = args.numPrimitives + prevSum + localKeys[keyIndex] + numSiblings;
 
                                 leaf.splitBox_or_nodePointer = node.child1;
-                                leaf.sah_or_v2_or_instBasePtr.z = asfloat(numPrims[1]);
+
+                                if (args.enableSAHCost == false)
+                                {
+                                    leaf.sah_or_v2_or_instBasePtr.z = asfloat(numPrims[1]);
+                                }
+                                else
+                                {
+                                    leaf.numPrimitivesAndDoCollapse = asuint(cost[1]);
+                                }
 
                                 ScratchBuffer.Store<ScratchNode>(args.bvhLeafNodeDataScratchOffset
                                                                  + writeIndex * sizeof(ScratchNode), leaf);
@@ -625,7 +657,15 @@ void RebraidImpl(
                                 const uint writeIndex = args.numPrimitives + prevSum + localKeys[keyIndex] + numSiblings;
 
                                 leaf.splitBox_or_nodePointer = node.child2;
-                                leaf.sah_or_v2_or_instBasePtr.z = asfloat(numPrims[2]);
+
+                                if (args.enableSAHCost == false)
+                                {
+                                    leaf.sah_or_v2_or_instBasePtr.z = asfloat(numPrims[2]);
+                                }
+                                else
+                                {
+                                    leaf.numPrimitivesAndDoCollapse = asuint(cost[2]);
+                                }
 
                                 ScratchBuffer.Store<ScratchNode>(args.bvhLeafNodeDataScratchOffset
                                                                  + writeIndex * sizeof(ScratchNode), leaf);
@@ -650,7 +690,15 @@ void RebraidImpl(
                                 const uint writeIndex = args.numPrimitives + prevSum + localKeys[keyIndex] + numSiblings;
 
                                 leaf.splitBox_or_nodePointer = node.child3;
-                                leaf.sah_or_v2_or_instBasePtr.z = asfloat(numPrims[3]);
+
+                                if (args.enableSAHCost == false)
+                                {
+                                    leaf.sah_or_v2_or_instBasePtr.z = asfloat(numPrims[3]);
+                                }
+                                else
+                                {
+                                    leaf.numPrimitivesAndDoCollapse = asuint(cost[3]);
+                                }
 
                                 ScratchBuffer.Store<ScratchNode>(args.bvhLeafNodeDataScratchOffset
                                                                  + writeIndex * sizeof(ScratchNode), leaf);
@@ -669,6 +717,24 @@ void RebraidImpl(
                             ScratchBuffer.Store<uint>(scratchNodeOffset +
                                                       SCRATCH_NODE_NODE_POINTER_OFFSET,
                                                       CreateRootNodePointer());
+
+                            if (args.enableSAHCost)
+                            {
+                                float costSum = 0;
+
+                                for (uint c = 0; c < 4; c++)
+                                {
+                                    costSum += cost[c];
+                                }
+
+                                const BoundingBox aabb = GetScratchNodeBoundingBox(leaf);
+
+                                const float surfaceArea = ComputeBoxSurfaceArea(aabb);
+
+                                costSum += SAH_COST_AABBB_INTERSECTION * surfaceArea;
+
+                                WriteScratchNodeCost(ScratchBuffer, args.bvhLeafNodeDataScratchOffset, i, costSum, true);
+                            }
                         }
                     }
 

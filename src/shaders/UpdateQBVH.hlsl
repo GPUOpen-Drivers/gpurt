@@ -61,7 +61,7 @@ void UpdateQBVH(
     in uint3 globalThreadId : SV_DispatchThreadID)
 {
     // Fetch number of nodes to process
-    uint numWorkItems = ScratchBuffer.Load(ShaderConstants.baseUpdateStackScratchOffset);
+    uint numWorkItems = ScratchBuffer.Load(UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET);
 
     if (globalThreadId.x >= numWorkItems)
     {
@@ -72,5 +72,7 @@ void UpdateQBVH(
                    ResultBuffer,
                    ScratchBuffer,
                    SourceBuffer,
-                   ShaderConstants.propagationFlagsScratchOffset);
+                   ShaderConstants.propagationFlagsScratchOffset,
+                   numWorkItems,
+                   numWorkItems);
 }

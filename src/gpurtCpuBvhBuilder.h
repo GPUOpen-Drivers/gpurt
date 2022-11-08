@@ -75,6 +75,10 @@ public:
 
     void EmitASSerializationType(const AccelStructPostBuildInfo& postBuildInfo);
 
+    void EmitASCurrentSize(const AccelStructPostBuildInfo& postBuildInfo);
+
+    void EmitASBottomLevelAsPointerCount(const AccelStructPostBuildInfo& postBuildInfo);
+
     void EmitASCompactedType(const AccelStructPostBuildInfo& postBuildInfo);
 
     uint32 CalcCompactedSize(

@@ -1319,6 +1319,45 @@ void CpuBvhBuilder::EmitASSerializationType(
 }
 
 // =====================================================================================================================
+// Emits current size post-build properties for a set of acceleration structures.
+// This enables applications to know the output resource requirements for performing acceleration structure
+// operations via CopyRaytracingAccelerationStructure()
+void CpuBvhBuilder::EmitASCurrentSize(
+    const AccelStructPostBuildInfo& postBuildInfo) // Postbuild info
+{
+    const AccelStructMetadataHeader* pMeta =
+        static_cast<const AccelStructMetadataHeader*>(postBuildInfo.pSrcAccelStructCpuAddrs);
+
+    const AccelStructHeader* pHeader =
+        static_cast<const AccelStructHeader*>(
+            Util::VoidPtrInc(postBuildInfo.pSrcAccelStructCpuAddrs,
+                pMeta->sizeInBytes));
+
+    uint32 sizeInBytes = pHeader->sizeInBytes;
+    memcpy(postBuildInfo.desc.postBuildBufferAddr.pCpu, &sizeInBytes, sizeof(uint32));
+}
+
+// =====================================================================================================================
+// Emits blas count post-build properties for a set of acceleration structures.
+// This enables applications to know the output resource requirements for performing acceleration structure
+// operations via CopyRaytracingAccelerationStructure()
+void CpuBvhBuilder::EmitASBottomLevelAsPointerCount(
+    const AccelStructPostBuildInfo& postBuildInfo) // Postbuild info
+{
+    const AccelStructMetadataHeader* pMeta =
+        static_cast<const AccelStructMetadataHeader*>(postBuildInfo.pSrcAccelStructCpuAddrs);
+
+    const AccelStructHeader* pHeader =
+        static_cast<const AccelStructHeader*>(
+            Util::VoidPtrInc(postBuildInfo.pSrcAccelStructCpuAddrs,
+                pMeta->sizeInBytes));
+
+    uint32 bottomLevelASPointersCount = (pHeader->info.type == static_cast<uint32>(AccelStructType::TopLevel)) ?
+                                        pHeader->numPrimitives : 0;
+    memcpy(postBuildInfo.desc.postBuildBufferAddr.pCpu, &bottomLevelASPointersCount, sizeof(uint32));
+}
+
+// =====================================================================================================================
 uint32 CpuBvhBuilder::CalcCompactedSize(
     const AccelStructHeader* pSrcHeader,
     AccelStructDataOffsets*  pDstOffsets,
@@ -1934,6 +1973,14 @@ void CpuBvhBuilder::EmitAccelerationStructurePostBuildInfo(
 
     case AccelStructPostBuildInfoType::CompactedSize:
         EmitASCompactedType(postBuildInfo);
+        break;
+
+    case AccelStructPostBuildInfoType::CurrentSize:
+        EmitASCurrentSize(postBuildInfo);
+        break;
+
+    case AccelStructPostBuildInfoType::BottomLevelASPointerCount:
+        EmitASBottomLevelAsPointerCount(postBuildInfo);
         break;
 
     default:

@@ -861,6 +861,7 @@ uint2 BeginTaskTD(const uint localId, TDArgs args)
     const uint endPhaseIndexOffset   = args.TdTaskCounterScratchOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET;
     const uint phaseOffset           = args.TdTaskCounterScratchOffset + STATE_TASK_QUEUE_PHASE_OFFSET;
 
+#if NO_SHADER_ENTRYPOINT == 0
     if (localId == 0)
     {
         ScratchBuffer.InterlockedAdd(taskCounterOffset, 1, SharedIndex);
@@ -869,6 +870,17 @@ uint2 BeginTaskTD(const uint localId, TDArgs args)
     GroupMemoryBarrierWithGroupSync();
 
     const uint index = SharedIndex;
+#else
+    // BuildParallel path
+    if (localId == 0)
+    {
+        ScratchBuffer.InterlockedAdd(taskCounterOffset, 1, SharedMem[0]);
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+
+    const uint index = SharedMem[0];
+#endif
 
     // wait till there are valid tasks to do
     do

@@ -156,7 +156,9 @@ void CopyUnsortedScratchLeafNode(
     uint bvhNodesBaseOffset,
     uint centroidBoxesScratchOffset,
     uint gridPosOffset,
-    uint reservedUint)
+    uint reservedUint0,
+    bool reservedUint1,
+    uint4 reservedUint2)
 {
     // Store leaf node bounding boxes
     const uint nodeIndex = FetchSortedPrimIndex(ScratchBuffer, sortedPrimIndicesOffset, primIndex);
@@ -296,6 +298,8 @@ void BuildBVH(
                 ShaderConstants.BvhNodeDataScratchOffset,
                 0,
                 0,
+                0,
+                false,
                 0);
         }
 

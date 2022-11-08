@@ -188,6 +188,26 @@ enum BvhBuilderNodeSortType : uint
 };
 #endif
 
+#ifdef AMD_VULKAN_GLSLANG
+//=====================================================================================================================
+///@note Enum is a reserved keyword in glslang. To workaround this limitation, define static constants to replace the
+///      HLSL enums that follow for compatibility.
+//=====================================================================================================================
+namespace SceneBoundsCalculation
+{
+    static const uint SceneBoundsBasedOnGeometry = 0x0;
+    static const uint SceneBoundsBasedOnGeometryWithSize = 0x1;
+    static const uint SceneBoundsBasedOnCentroidWithSize = 0x2;
+}
+#else
+enum SceneBoundsCalculation : uint
+{
+    SceneBoundsBasedOnGeometry = 0x0,
+    SceneBoundsBasedOnGeometryWithSize = 0x1,
+    SceneBoundsBasedOnCentroidWithSize = 0x2
+};
+#endif
+
 //=====================================================================================================================
 // Options for where FP16 box nodes are created within BLAS for QBVH
 #define NO_NODES_IN_BLAS_AS_FP16           0
@@ -254,37 +274,43 @@ struct UintBoundingBox4
     uint4 max;
 };
 
+struct PackedUintBoundingBox4
+{
+    uint64_t min;
+    uint64_t max;
+};
+
 //=====================================================================================================================
 struct AccelStructMetadataHeader
 {
     uint addressLo;   // Address of acceleration structure data section (low bits)
     uint addressHi;   // Address of acceleration structure data section (high bits)
     uint sizeInBytes; // Metadata size in bytes for tooling purposes (including this header)
+    uint reserved0;
     uint taskCounter; // Task counter for dispatch-wide spin loop synchronization
     uint numTasksDone;// Number of tasks done
-    uint loopTaskCounter;
-    uint numLoopTasksDone;
-    uint loop2TaskCounter;
-    uint numLoop2TasksDone;
+    uint reserved1;
+    uint reserved2;
+    uint reserved3;
 };
 
-#define ACCEL_STRUCT_METADATA_VA_LO_OFFSET                  0
-#define ACCEL_STRUCT_METADATA_VA_HI_OFFSET                  4
-#define ACCEL_STRUCT_METADATA_SIZE_OFFSET                   8
-#define ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET           12
-#define ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET         16
-#define ACCEL_STRUCT_METADATA_LOOP_TASK_COUNTER_OFFSET      20
-#define ACCEL_STRUCT_METADATA_NUM_LOOP_TASKS_DONE_OFFSET    24
-#define ACCEL_STRUCT_METADATA_LOOP2_TASK_COUNTER_OFFSET     28
-#define ACCEL_STRUCT_METADATA_NUM_LOOP2_TASKS_DONE_OFFSET   32
-#define ACCEL_STRUCT_METADATA_HEADER_SIZE                   36
+#define ACCEL_STRUCT_METADATA_VA_LO_OFFSET              0
+#define ACCEL_STRUCT_METADATA_VA_HI_OFFSET              4
+#define ACCEL_STRUCT_METADATA_SIZE_OFFSET               8
+#define ACCEL_STRUCT_METADATA_RESERVED_0                12
+#define ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET       16
+#define ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET     20
+#define ACCEL_STRUCT_METADATA_RESERVED_1                24
+#define ACCEL_STRUCT_METADATA_RESERVED_2                28
+#define ACCEL_STRUCT_METADATA_RESERVED_3                32
+#define ACCEL_STRUCT_METADATA_HEADER_SIZE               36
 
 #ifdef __cplusplus
-static_assert(ACCEL_STRUCT_METADATA_HEADER_SIZE                 == sizeof(AccelStructMetadataHeader), "Acceleration structure header mismatch");
-static_assert(ACCEL_STRUCT_METADATA_VA_LO_OFFSET                == offsetof(AccelStructMetadataHeader, addressLo), "");
-static_assert(ACCEL_STRUCT_METADATA_VA_HI_OFFSET                == offsetof(AccelStructMetadataHeader, addressHi), "");
-static_assert(ACCEL_STRUCT_METADATA_SIZE_OFFSET                 == offsetof(AccelStructMetadataHeader, sizeInBytes), "");
-static_assert(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET         == offsetof(AccelStructMetadataHeader, taskCounter), "");
+static_assert(ACCEL_STRUCT_METADATA_HEADER_SIZE         == sizeof(AccelStructMetadataHeader), "Acceleration structure header mismatch");
+static_assert(ACCEL_STRUCT_METADATA_VA_LO_OFFSET        == offsetof(AccelStructMetadataHeader, addressLo), "");
+static_assert(ACCEL_STRUCT_METADATA_VA_HI_OFFSET        == offsetof(AccelStructMetadataHeader, addressHi), "");
+static_assert(ACCEL_STRUCT_METADATA_SIZE_OFFSET         == offsetof(AccelStructMetadataHeader, sizeInBytes), "");
+static_assert(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET == offsetof(AccelStructMetadataHeader, taskCounter), "");
 #endif
 
 //=====================================================================================================================
@@ -448,11 +474,11 @@ static_assert(ACCEL_STRUCT_HEADER_VERSION_OFFSET                      == offseto
 static_assert(ACCEL_STRUCT_HEADER_UUID_LO_OFFSET                      == offsetof(AccelStructHeader, uuidLo),               "");
 static_assert(ACCEL_STRUCT_HEADER_UUID_HI_OFFSET                      == offsetof(AccelStructHeader, uuidHi),               "");
 static_assert(ACCEL_STRUCT_HEADER_RESERVED_OFFSET                     == offsetof(AccelStructHeader, reserved),             "");
-static_assert(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET                == offsetof(AccelStructHeader, fp32RootBoxNode),      "");
+static_assert(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET                == offsetof(AccelStructHeader, fp32RootBoxNode0),     "");
 static_assert(ACCEL_STRUCT_HEADER_INFO_2_OFFSET                       == offsetof(AccelStructHeader, info2),                "");
 static_assert(ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET                   == offsetof(AccelStructHeader, nodeFlags),            "");
 static_assert(ACCEL_STRUCT_HEADER_COMPACTED_BYTE_SIZE_OFFSET          == offsetof(AccelStructHeader, compactedSizeInBytes), "");
-static_assert(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET              == offsetof(AccelStructHeader, numChildPrims),        "");
+static_assert(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET              == offsetof(AccelStructHeader, numChildPrims0),       "");
 #endif
 
 //=====================================================================================================================
@@ -1658,6 +1684,11 @@ struct IndexBufferInfo
 #define INDEX_BUFFER_INFO_FORMAT_OFFSET      12
 
 //=====================================================================================================================
+// Update scratch memory fields
+#define UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET 0
+#define UPDATE_SCRATCH_TASK_COUNT_OFFSET        4
+
+//=====================================================================================================================
 // Layout sans header
 struct RayTracingResultBufferLayout
 {
@@ -1730,6 +1761,11 @@ struct BuildSettingsData
     uint sahQbvh;
     float tsPriority;
     uint noCopySortedNodes;
+    uint enableSAHCost;
+    uint useGrowthInLTD;
+    uint doEncode;
+    uint ltdPackCentroids;
+    uint enableEarlyPairCompression;
 };
 
 #define BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_OFFSET                        0
@@ -1756,7 +1792,12 @@ struct BuildSettingsData
 #define BUILD_SETTINGS_DATA_SAH_QBVH_OFFSET                               84
 #define BUILD_SETTINGS_DATA_TS_PRIORITY_OFFSET                            88
 #define BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_OFFSET                   92
-#define BUILD_SETTINGS_DATA_SIZE                                          96
+#define BUILD_SETTINGS_DATA_ENABLE_SAH_COST_OFFSET                        96
+#define BUILD_SETTINGS_DATA_USE_GROWTH_IN_LTD_OFFSET                      100
+#define BUILD_SETTINGS_DATA_DO_ENCODE                                     104
+#define BUILD_SETTINGS_DATA_LTD_PACK_CENTROIDS_OFFSET                     108
+#define BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_OFFSET          112
+#define BUILD_SETTINGS_DATA_SIZE                                          116
 
 #define BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_ID                        (BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_OFFSET / sizeof(uint))
 #define BUILD_SETTINGS_DATA_BUILD_MODE_ID                             (BUILD_SETTINGS_DATA_BUILD_MODE_OFFSET  / sizeof(uint))
@@ -1782,6 +1823,11 @@ struct BuildSettingsData
 #define BUILD_SETTINGS_DATA_SAH_QBVH_ID                               (BUILD_SETTINGS_DATA_SAH_QBVH_OFFSET / sizeof(uint))
 #define BUILD_SETTINGS_DATA_TS_PRIORITY_ID                            (BUILD_SETTINGS_DATA_TS_PRIORITY_OFFSET / sizeof(uint))
 #define BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_ID                   (BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_OFFSET / sizeof(uint))
+#define BUILD_SETTINGS_DATA_ENABLE_SAH_COST_ID                        (BUILD_SETTINGS_DATA_ENABLE_SAH_COST_OFFSET / sizeof(uint))
+#define BUILD_SETTINGS_DATA_USE_GROWTH_IN_LTD_ID                      (BUILD_SETTINGS_DATA_USE_GROWTH_IN_LTD_OFFSET / sizeof(uint))
+#define BUILD_SETTINGS_DATA_DO_ENCODE_ID                              (BUILD_SETTINGS_DATA_DO_ENCODE / sizeof(uint))
+#define BUILD_SETTINGS_DATA_LTD_PACK_CENTROIDS_ID                     (BUILD_SETTINGS_DATA_LTD_PACK_CENTROIDS_OFFSET / sizeof(uint))
+#define BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_ID          (BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_OFFSET / sizeof(uint))
 
 #ifdef __cplusplus
 static_assert(BUILD_SETTINGS_DATA_SIZE                                          == sizeof(BuildSettingsData), "BuildSettingsData structure header mismatch");
@@ -1807,6 +1853,11 @@ static_assert(BUILD_SETTINGS_DATA_ENABLE_FUSED_INSTANCE_NODE_OFFSET             
 static_assert(BUILD_SETTINGS_DATA_SAH_QBVH_OFFSET                               == offsetof(BuildSettingsData, sahQbvh), "");
 static_assert(BUILD_SETTINGS_DATA_TS_PRIORITY_OFFSET                            == offsetof(BuildSettingsData, tsPriority), "");
 static_assert(BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_OFFSET                   == offsetof(BuildSettingsData, noCopySortedNodes), "");
+static_assert(BUILD_SETTINGS_DATA_ENABLE_SAH_COST_OFFSET                        == offsetof(BuildSettingsData, enableSAHCost), "");
+static_assert(BUILD_SETTINGS_DATA_USE_GROWTH_IN_LTD_OFFSET                      == offsetof(BuildSettingsData, useGrowthInLTD), "");
+static_assert(BUILD_SETTINGS_DATA_DO_ENCODE                                     == offsetof(BuildSettingsData, doEncode), "");
+static_assert(BUILD_SETTINGS_DATA_LTD_PACK_CENTROIDS_OFFSET                     == offsetof(BuildSettingsData, ltdPackCentroids), "");
+static_assert(BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_OFFSET          == offsetof(BuildSettingsData, enableEarlyPairCompression), "");
 #endif
 
 #define BUILD_MODE_LINEAR   0

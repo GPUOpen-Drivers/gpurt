@@ -53,6 +53,7 @@ set(gpurtHlsl
     DecodeCommon.hlsl
     DeserializeAS.hlsl
     EmitAS.hlsl
+    EncodeCommon.hlsl
     EncodeNodes.hlsl
     EncodeTopLevel.hlsl
     Extensions.hlsl
@@ -73,6 +74,7 @@ set(gpurtHlsl
     TraceRay1_1.hlsl
     TraceRayCommon.hlsl
     TriangleSplitting.hlsl
+    Update.hlsl
     UpdateParallel.hlsl
     UpdateQBVH.hlsl
     UpdateQBVHImpl.hlsl

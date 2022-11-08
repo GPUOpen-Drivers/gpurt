@@ -330,6 +330,7 @@ uint64_t CalculateMortonCode64(in float3 p)
 //=====================================================================================================================
 bool IsNodeActive(ScratchNode node)
 {
+    // Inactive nodes force v0.x to NaN during encode
     return !isnan(node.bbox_min_or_v0.x);
 }
 
@@ -629,22 +630,46 @@ void WriteScratchNodeNumPrimitives(
     RWByteAddressBuffer buffer,
     uint                baseScratchNodesOffset,
     uint                nodeIndex,
-    uint                numPrimitivesAndDoCollapse)
+    uint                numPrimitives,
+    bool                doCollapse)
 {
     const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
 
-    buffer.Store(nodeOffset + SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET, numPrimitivesAndDoCollapse);
+    buffer.Store(nodeOffset + SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET, numPrimitives << 1 | doCollapse);
 }
 
 //=====================================================================================================================
 uint FetchScratchNodeNumPrimitives(
     RWByteAddressBuffer buffer,
     uint                baseScratchNodesOffset,
-    uint                nodeIndex)
+    uint                nodeIndex,
+    bool                isLeaf)
 {
     const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
 
-    return buffer.Load(nodeOffset + SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET);
+    if (isLeaf)
+    {
+        return 1;
+    }
+    else
+    {
+        return buffer.Load(nodeOffset + SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET) >> 1;
+    }
+}
+
+//=====================================================================================================================
+uint FetchScratchNodeNumPrimitives(
+    ScratchNode         node,
+    bool                isLeaf)
+{
+    if (isLeaf)
+    {
+        return 1;
+    }
+    else
+    {
+        return node.numPrimitivesAndDoCollapse >> 1;
+    }
 }
 
 //=====================================================================================================================
@@ -652,22 +677,42 @@ void WriteScratchNodeCost(
     RWByteAddressBuffer buffer,
     uint  baseScratchNodesOffset,
     uint  nodeIndex,
-    float cost)
+    float cost,
+    bool  isLeaf)
 {
     const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
 
-    buffer.Store<float>(nodeOffset + SCRATCH_NODE_COST_OFFSET, cost);
+    const uint offset = nodeOffset + (isLeaf ? SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET
+                                             : SCRATCH_NODE_COST_OFFSET);
+
+    buffer.Store<float>(offset, cost);
 }
 
 //=====================================================================================================================
 float FetchScratchNodeCost(
     RWByteAddressBuffer buffer,
     uint  baseScratchNodesOffset,
-    uint  nodeIndex)
+    uint  nodeIndex,
+    bool  isLeaf)
 {
     const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
 
-    return buffer.Load<float>(nodeOffset + SCRATCH_NODE_COST_OFFSET);
+    const uint offset = nodeOffset + (isLeaf ? SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET
+                                             : SCRATCH_NODE_COST_OFFSET);
+
+    return buffer.Load<float>(offset);
+}
+
+//=====================================================================================================================
+float FetchScratchInternalNodeCost(ScratchNode node)
+{
+    return node.sah_or_v2_or_instBasePtr.x;
+}
+
+//=====================================================================================================================
+float FetchScratchLeafNodeCost(ScratchNode node)
+{
+    return asfloat(node.numPrimitivesAndDoCollapse);
 }
 
 //=====================================================================================================================
@@ -759,6 +804,106 @@ void WriteMortonCode64(RWByteAddressBuffer buffer, uint mortonCodesOffset, uint 
 {
     const uint offset = mortonCodesOffset + (primitiveIndex << 3);
     buffer.Store<uint64_t>(offset, code);
+}
+
+//=====================================================================================================================
+uint64_t PackUint32x4ToUint64(uint4 v, uint4 numBits)
+{
+    uint64_t r = uint64_t(v[3]);
+    r = ((r << numBits[2]) | uint64_t(v[2]));
+    r = ((r << numBits[1]) | uint64_t(v[1]));
+    r = ((r << numBits[0]) | uint64_t(v[0]));
+    return r;
+}
+
+//=====================================================================================================================
+uint4 UnpackUint64ToUint32x4(uint64_t v, uint4 numBits)
+{
+    uint4 r;
+    r[0] = uint(v & ((1ULL << numBits[0]) - 1));
+    v >>= numBits[0];
+    r[1] = uint(v & ((1ULL << numBits[1]) - 1));
+    v >>= numBits[1];
+    r[2] = uint(v & ((1ULL << numBits[2]) - 1));
+    v >>= numBits[2];
+    r[3] = uint(v);
+    return r;
+}
+
+//=====================================================================================================================
+UintBoundingBox4 FetchCentroidBox(
+    RWByteAddressBuffer buffer,
+    uint baseOffset,
+    uint nodeIndex,
+    uint4 numBits,
+    bool pack,
+    uint numActivePrims)
+{
+    UintBoundingBox4 box;
+
+    if (pack)
+    {
+        if (IS_LEAF(nodeIndex))
+        {
+            // Leaf nodes don't need to have box.max stored, because it will always be
+            // box.min + 1. See WriteCentroidBox() for details.
+            const uint baseLeafOffset = (numActivePrims - 1) * sizeof(PackedUintBoundingBox4);
+            const uint leafOffset = sizeof(uint64_t) * LEAF_OFFSET(nodeIndex);
+            uint64_t boxMin = buffer.Load<uint64_t>(baseOffset + baseLeafOffset + leafOffset);
+            box.min = UnpackUint64ToUint32x4(boxMin, numBits);
+            box.max = box.min + 1;
+        }
+        else
+        {
+            PackedUintBoundingBox4 packedBox;
+
+            packedBox = buffer.Load<PackedUintBoundingBox4>(baseOffset + nodeIndex * sizeof(PackedUintBoundingBox4));
+            box.min = UnpackUint64ToUint32x4(packedBox.min, numBits);
+            box.max = UnpackUint64ToUint32x4(packedBox.max, numBits) + 1;
+        }
+    }
+    else
+    {
+        box = buffer.Load<UintBoundingBox4>(baseOffset + nodeIndex * sizeof(UintBoundingBox4));
+    }
+    return box;
+}
+
+//=====================================================================================================================
+void WriteCentroidBox(
+    RWByteAddressBuffer buffer,
+    uint baseOffset,
+    uint nodeIndex,
+    uint4 numBits,
+    bool pack,
+    uint numActivePrims,
+    UintBoundingBox4 box)
+{
+    if (pack)
+    {
+        if (IS_LEAF(nodeIndex))
+        {
+            // Leaf nodes don't need to have box.max stored, because it will always be
+            // box.min + 1, so we only store box.min in this case. But the inner nodes
+            // still need to store both min and max.
+            const uint baseLeafOffset = (numActivePrims - 1) * sizeof(PackedUintBoundingBox4);
+            const uint leafOffset = sizeof(uint64_t) * LEAF_OFFSET(nodeIndex);
+            uint64_t boxMin = PackUint32x4ToUint64(box.min, numBits);
+            buffer.Store<uint64_t>(baseOffset + baseLeafOffset + leafOffset, boxMin);
+        }
+        else
+        {
+            PackedUintBoundingBox4 packedBox;
+
+            packedBox.min = PackUint32x4ToUint64(box.min, numBits);
+            packedBox.max = PackUint32x4ToUint64(box.max - 1, numBits);
+            buffer.Store<PackedUintBoundingBox4>(baseOffset + nodeIndex * sizeof(PackedUintBoundingBox4), packedBox);
+        }
+    }
+    else
+    {
+        buffer.Store<UintBoundingBox4>(baseOffset + nodeIndex * sizeof(UintBoundingBox4), box);
+    }
 }
 
 //=====================================================================================================================
@@ -1122,6 +1267,14 @@ void UpdateCentroidSceneBoundsWithSize(RWByteAddressBuffer scratchBuffer, uint b
 }
 
 //=====================================================================================================================
+void UpdateSceneBoundsWithSize(RWByteAddressBuffer scratchBuffer, uint byteOffset, BoundingBox boundingBox)
+{
+    UpdateSceneBounds(scratchBuffer, byteOffset, boundingBox);
+
+    UpdateSceneSize(scratchBuffer, byteOffset + 24, ComputeBoxSurfaceArea(boundingBox));
+}
+
+//=====================================================================================================================
 BoundingBox FetchSceneBounds(
     RWByteAddressBuffer scratchBuffer,
     uint                sceneBoundsOffset)
@@ -1180,8 +1333,7 @@ uint GetUpdateStackOffset(
     uint baseUpdateStackScratchOffset,
     uint stackIdx)
 {
-    // The update stack memory follows the stack pointer DWORD and each element is a DWORD
-    return baseUpdateStackScratchOffset + sizeof(uint) + (stackIdx * sizeof(uint));
+    return baseUpdateStackScratchOffset + (stackIdx * sizeof(uint));
 }
 
 //=====================================================================================================================
@@ -1191,7 +1343,7 @@ void PushNodeToUpdateStack(
     uint                parentNodePointer)
 {
     uint stackPtr;
-    scratchBuffer.InterlockedAdd(baseUpdateStackScratchOffset, 1, stackPtr);
+    scratchBuffer.InterlockedAdd(UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET, 1, stackPtr);
 
     uint offset = GetUpdateStackOffset(baseUpdateStackScratchOffset, stackPtr);
     scratchBuffer.Store(offset, parentNodePointer);
@@ -1337,7 +1489,50 @@ void WriteInstanceDescriptor(
             const GpuVirtualAddress address =
                 GetInstanceAddr(desc.accelStructureAddressLo, desc.accelStructureAddressHiAndFlags);
 
-            Float32BoxNode blasRootNode = FetchFloat32BoxNode(address, CreateRootNodePointer());
+            Float32BoxNode blasRootNode = (Float32BoxNode)0;
+
+            if (IsBoxNode32(blasRootNodePointer))
+            {
+                blasRootNode = FetchFloat32BoxNode(address, blasRootNodePointer);
+            }
+            else if (IsBoxNode16(blasRootNodePointer))
+            {
+                blasRootNode = FetchFloat16BoxNodeAsFp32(address, blasRootNodePointer);
+            }
+            else
+            {
+                // Procedural or triangle node
+                //
+                // Note, we only rebraid one level of the BLAS, the parent pointer is guaranteed to be the
+                // root node pointer.
+                blasRootNode = FetchFloat32BoxNode(address, CreateRootNodePointer());
+
+                // Copy triangle box data from root node
+                if (blasRootNode.child1 == blasRootNodePointer)
+                {
+                    blasRootNode.bbox0_min = blasRootNode.bbox1_min;
+                    blasRootNode.bbox0_max = blasRootNode.bbox1_max;
+                }
+                if (blasRootNode.child2 == blasRootNodePointer)
+                {
+                    blasRootNode.bbox0_min = blasRootNode.bbox2_min;
+                    blasRootNode.bbox0_max = blasRootNode.bbox2_max;
+                }
+                if (blasRootNode.child3 == blasRootNodePointer)
+                {
+                    blasRootNode.bbox0_min = blasRootNode.bbox3_min;
+                    blasRootNode.bbox0_max = blasRootNode.bbox3_max;
+                }
+
+                // Disable all other child nodes
+                blasRootNode.child0 = blasRootNodePointer;
+                blasRootNode.child1 = INVALID_IDX;
+                blasRootNode.child2 = INVALID_IDX;
+                blasRootNode.child3 = INVALID_IDX;
+            }
+
+            // Transform child boxes
+            //
 
             // Child 0
             BoundingBox transformedBounds = (BoundingBox)0;
@@ -1385,6 +1580,12 @@ void WriteInstanceDescriptor(
                 blasRootNode.bbox3_max = transformedBounds.max;
             }
 
+            // Clear flags in box node. During traversal the pointer flags are not updated at the time of
+            // fused instance intersection. It is better to disable node culling for this intersection
+            // than using accurate pointer flags (which requires an early fetch prior to intersection)
+            //
+            blasRootNode.flags = 0;
+
             const uint fusedBoxNodeOffset = instanceNodeOffset + FUSED_INSTANCE_NODE_ROOT_OFFSET;
 
             // The DXC compiler fails validation due to undefined writes to UAV if we use the templated Store
@@ -1413,21 +1614,289 @@ void WriteInstanceDescriptor(
 }
 
 //=====================================================================================================================
+uint64_t CalculateVariableBitsMortonCode64(float3 sceneExtent,
+                                           float3 normalizedPos,
+                                           uint numSizeBits,
+                                           out uint3 values,
+                                           out uint numAxisBits,
+                                           out uint4 numMortonBitsPerAxis)
+{
+    uint numMortonBits = 62;
+
+    if (numSizeBits > 0)
+    {
+        numMortonBits -= numSizeBits;
+    }
+
+    numMortonBitsPerAxis = uint4(0, 0, 0, numSizeBits);
+    int3 numBits = 0;
+    int3 numPrebits;
+    int3 startAxis;
+
+    // find the largest start axis
+    // and how many prebits are needed between largest and two other axes
+    if (sceneExtent.x < sceneExtent.y)
+    {
+        if (sceneExtent.x < sceneExtent.z)
+        {
+            if (sceneExtent.y < sceneExtent.z)
+            {
+                // z, y, x
+                startAxis[0] = 2;
+                numPrebits[0] = log2(sceneExtent.z / sceneExtent.y);
+
+                startAxis[1] = 1;
+                numPrebits[1] = log2(sceneExtent.y / sceneExtent.x);
+
+                startAxis[2] = 0;
+                numPrebits[2] = log2(sceneExtent.z / sceneExtent.x);
+            }
+            else
+            {
+                // y, z, x
+                startAxis[0] = 1;
+                numPrebits[0] = log2(sceneExtent.y / sceneExtent.z);
+
+                startAxis[1] = 2;
+                numPrebits[1] = log2(sceneExtent.z / sceneExtent.x);
+
+                startAxis[2] = 0;
+                numPrebits[2] = log2(sceneExtent.y / sceneExtent.x);
+            }
+        }
+        else
+        {
+            // y, x, z
+            startAxis[0] = 1;
+            numPrebits[0] = log2(sceneExtent.y / sceneExtent.x);
+
+            startAxis[1] = 0;
+            numPrebits[1] = log2(sceneExtent.x / sceneExtent.z);
+
+            startAxis[2] = 2;
+            numPrebits[2] = log2(sceneExtent.y / sceneExtent.z);
+        }
+    }
+    else
+    {
+        if (sceneExtent.y < sceneExtent.z)
+        {
+            if (sceneExtent.x < sceneExtent.z)
+            {
+                // z, x, y
+                startAxis[0] = 2;
+                numPrebits[0] = log2(sceneExtent.z / sceneExtent.x);
+
+                startAxis[1] = 0;
+                numPrebits[1] = log2(sceneExtent.x / sceneExtent.y);
+
+                startAxis[2] = 1;
+                numPrebits[2] = log2(sceneExtent.z / sceneExtent.y);
+            }
+            else
+            {
+                // x, z, y
+                startAxis[0] = 0;
+                numPrebits[0] = log2(sceneExtent.x / sceneExtent.z);
+
+                startAxis[1] = 2;
+                numPrebits[1] = log2(sceneExtent.z / sceneExtent.y);
+
+                startAxis[2] = 1;
+                numPrebits[2] = log2(sceneExtent.x / sceneExtent.y);
+            }
+        }
+        else
+        {
+            // x, y, z
+            startAxis[0] = 0;
+            numPrebits[0] = log2(sceneExtent.x / sceneExtent.y);
+
+            startAxis[1] = 1;
+            numPrebits[1] = log2(sceneExtent.y / sceneExtent.z);
+
+            startAxis[2] = 2;
+            numPrebits[2] = log2(sceneExtent.x / sceneExtent.z);
+        }
+    }
+
+    if (sceneExtent[startAxis[2]] == 0)
+    {
+        numPrebits[1] = 0;
+        numPrebits[2] = 0;
+    }
+
+    // say x > y > z
+    // prebits[0] = 3
+    // prebits[1] = 2
+    // if swap == 1
+    // xxx xy xy x yxz yxz ...
+    // if swap == 0
+    // xxx xy xy xyz xyz ...
+    int swap = numPrebits[2] > (numPrebits[0] + numPrebits[1]) ? 1 : 0;
+
+    numPrebits[0] = min(numPrebits[0], numMortonBits);
+    numPrebits[1] = min(numPrebits[1] * 2, numMortonBits - numPrebits[0]) / 2;
+
+    int numPrebitsSum = numPrebits[0] + numPrebits[1] * 2;
+
+    if (numPrebitsSum != numMortonBits)
+    {
+        numPrebitsSum += swap;
+    }
+    else
+    {
+        swap = 0;
+    }
+
+    // the scene might be 2D so check for the smallest axis
+    numBits[2] = (sceneExtent[startAxis[2]] != 0) ? max(0, (numMortonBits - numPrebitsSum) / 3) : 0;
+
+    if (swap > 0)
+    {
+        numBits[0] = max(0, (numMortonBits - numBits[2] - numPrebitsSum) / 2 + numPrebits[1] + numPrebits[0] + 1);
+        numBits[1] = numMortonBits - numBits[0] - numBits[2];
+    }
+    else
+    {
+        numBits[1] = max(0, (numMortonBits - numBits[2] - numPrebitsSum) / 2 + numPrebits[1]);
+        numBits[0] = numMortonBits - numBits[1] - numBits[2];
+    }
+
+    const int delta = numBits[0] - 31; // clamp axis values to avoid overflow of a uint
+
+    if (delta > 0)
+    {
+        numBits[0] -= delta;
+
+        numPrebits[0] = min(numPrebits[0], numBits[0]);
+
+        if (numBits[0] == numPrebits[0])
+            swap = 0;
+
+        numBits[1] = max(0, numBits[1] - delta);
+
+        numPrebits[1] = min(numPrebits[1], numBits[1]);
+
+        numBits[2] = max(0, numBits[2] - delta);
+
+        numPrebitsSum = numPrebits[0] + numPrebits[1] * 2 + swap;
+    }
+
+    numAxisBits = numBits[2] + numBits[1] + numBits[0];
+
+    uint64_t mortonCode = 0;
+    uint64_t3 axisCode;
+
+    // based on the number of bits, calculate each code per axis
+    [unroll]
+    for (uint a = 0; a < 3; a++)
+    {
+        axisCode[a] = min(max(uint(normalizedPos[startAxis[a]] * (1UL << numBits[a])), 0), (1UL << numBits[a]) - 1);
+        numMortonBitsPerAxis[startAxis[a]] = numBits[a];
+    }
+
+    values[startAxis[0]] = uint(axisCode[0]);
+    values[startAxis[1]] = uint(axisCode[1]);
+    values[startAxis[2]] = uint(axisCode[2]);
+
+    uint delta0 = 0;
+    uint delta1 = 0;
+
+    // if there are prebits, set them in the morton code:
+    // if swap == 1
+    // [xxx xy xy x] yxz yxz ...
+    // if swap == 0
+    // [xxx xy xy xyz] xyz ...
+    if (numPrebitsSum > 0)
+    {
+        numBits[0] -= numPrebits[0];
+        mortonCode = axisCode[0] & (((1ULL << numPrebits[0]) - 1) << numBits[0]);
+        mortonCode >>= numBits[0];
+
+        mortonCode <<= numPrebits[1] * 2;
+        numBits[0] -= numPrebits[1];
+        numBits[1] -= numPrebits[1];
+        uint64_t temp0 = axisCode[0] & (((1ULL << numPrebits[1]) - 1) << numBits[0]);
+        temp0 >>= numBits[0];
+        temp0 = ExpandBits2D64(temp0);
+
+        uint64_t temp1 = axisCode[1] & (((1ULL << numPrebits[1]) - 1) << numBits[1]);
+        temp1 >>= numBits[1];
+        temp1 = ExpandBits2D64(temp1);
+
+        mortonCode |= temp0 * 2 + temp1;
+
+        if (swap > 0)
+        {
+            mortonCode <<= 1;
+            numBits[0] -= 1;
+            uint64_t temp = axisCode[0] & (1ULL << numBits[0]);
+            temp >>= numBits[0];
+            mortonCode |= temp;
+        }
+
+        mortonCode <<= numBits[0] + numBits[1] + numBits[2];
+
+        axisCode[0] &= ((1ULL << numBits[0]) - 1);
+        axisCode[1] &= ((1ULL << numBits[1]) - 1);
+
+        if (swap > 0)
+        {
+            uint64_t temp = axisCode[0];
+            axisCode[0] = axisCode[1];
+            axisCode[1] = temp;
+
+            uint temp2 = numBits[0];
+            numBits[0] = numBits[1];
+            numBits[1] = temp2;
+        }
+    }
+
+    // 2D case, just use xy xy xy...
+    if (numBits[2] == 0)
+    {
+        [unroll]
+        for (int r = 0; r < 2; r++)
+        {
+            axisCode[r] = ExpandBits2D64(axisCode[r]);
+        }
+
+        uint delta = numBits[0] - numBits[1];
+
+        mortonCode |= (axisCode[0] << (1 - delta)) + (axisCode[1] << delta);
+    }
+    else // 3D case, just use if swap == 0 xyz xyz xyz..., if swap == 1 yxz yxz yxz...
+    {
+        int i;
+        [unroll]
+        for (i = 0; i < 3; i++)
+        {
+            axisCode[i] = (axisCode[i] > 0) ? ExpandBits64(axisCode[i]) : 0;
+        }
+
+        uint delta = numBits[0] - numBits[1];
+        uint delta2 = numBits[0] - numBits[2];
+
+        mortonCode |= (((axisCode[0] << (1 - delta)) + (axisCode[1] << (2 * delta))) << (1 - delta2)) +
+                      (axisCode[2] << ((1 + (1 - delta)) * delta2));
+    }
+
+    return mortonCode;
+}
+
+//=====================================================================================================================
 // Task Counter Macros
 // INIT_TASK is used at the beginning of a shader to allow for waves to atomically fetch and task index
 // BEGIN_TASK is used at the start of a pass that needs to be completed before the next pass
 // END_TASK is used at the end of of a pass that makes sure the task is completed before moving onto the next pass
-//
-// INIT_LOOP_TASK is used at the beginning of a dynamic loop to allow for waves to atomically fetch and task index
-// BEGIN_LOOP_TASK is used at the start of a pass that needs to be completed before the next pass inside a dynamic loop
-// END_LOOP_TASK is used at the end of of a pass that makes sure the task is completed before moving onto the next pass
 //=====================================================================================================================
 #define INIT_TASK           if(localId == 0)\
                             {\
-                                ResultMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 1, SharedIndex);\
+                                ResultMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 1, SharedMem[0]);\
                             }\
                             GroupMemoryBarrierWithGroupSync();\
-                            waveId = SharedIndex;
+                            waveId = SharedMem[0];
 
 #define BEGIN_TASK(n)       while((waveId >= numTasksWait) && (waveId < (numTasksWait + n)))\
                             {\
@@ -1437,68 +1906,14 @@ void WriteInstanceDescriptor(
 #define END_TASK(n)             DeviceMemoryBarrierWithGroupSync();\
                                 if(localId == 0)\
                                 {\
-                                    ResultMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 1, SharedIndex);\
+                                    ResultMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 1, SharedMem[0]);\
                                     ResultMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET, 1);\
                                 }\
                                 GroupMemoryBarrierWithGroupSync();\
-                                waveId = SharedIndex;\
+                                waveId = SharedMem[0];\
                             }\
                             numTasksWait += n;\
                             do\
                             {\
                                 DeviceMemoryBarrier();\
                             } while (ResultMetadata.Load(ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET) < numTasksWait);
-
-#define INIT_LOOP_TASK      if(localId == 0)\
-                            {\
-                                ResultMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_LOOP_TASK_COUNTER_OFFSET, 1, SharedIndex);\
-                            }\
-                            GroupMemoryBarrierWithGroupSync();\
-                            waveId2 = SharedIndex;
-
-#define BEGIN_LOOP_TASK(n)  while((waveId2 >= numTasksWait2) && (waveId2 < (numTasksWait2 + n)))\
-                            {\
-                                uint globalId = (waveId2 - numTasksWait2) * BUILD_THREADGROUP_SIZE + localId;\
-                                uint groupId = (waveId2 - numTasksWait2);
-
-#define END_LOOP_TASK(n)        DeviceMemoryBarrierWithGroupSync();\
-                                if(localId == 0)\
-                                {\
-                                    ResultMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_LOOP_TASK_COUNTER_OFFSET, 1, SharedIndex);\
-                                    ResultMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_NUM_LOOP_TASKS_DONE_OFFSET, 1);\
-                                }\
-                                GroupMemoryBarrierWithGroupSync();\
-                                waveId2 = SharedIndex;\
-                            }\
-                            numTasksWait2 += n;\
-                            do\
-                            {\
-                                DeviceMemoryBarrier();\
-                            } while ((ResultMetadata.Load(ACCEL_STRUCT_METADATA_NUM_LOOP_TASKS_DONE_OFFSET) < numTasksWait2));
-
-#define INIT_LOOP_TASK2     if(localId == 0)\
-                            {\
-                                ResultMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_LOOP2_TASK_COUNTER_OFFSET, 1, SharedIndex);\
-                            }\
-                            GroupMemoryBarrierWithGroupSync();\
-                            waveId3 = SharedIndex;
-
-#define BEGIN_LOOP_TASK2(n) while((waveId3 >= numTasksWait3) && (waveId3 < (numTasksWait3 + n)))\
-                            {\
-                                uint globalId = (waveId3 - numTasksWait3) * BUILD_THREADGROUP_SIZE + localId;\
-                                uint groupId = (waveId3 - numTasksWait3);
-
-#define END_LOOP_TASK2(n)       DeviceMemoryBarrierWithGroupSync();\
-                                if(localId == 0)\
-                                {\
-                                    ResultMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_LOOP2_TASK_COUNTER_OFFSET, 1, SharedIndex);\
-                                    ResultMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_NUM_LOOP2_TASKS_DONE_OFFSET, 1);\
-                                }\
-                                GroupMemoryBarrierWithGroupSync();\
-                                waveId3 = SharedIndex;\
-                            }\
-                            numTasksWait3 += n;\
-                            do\
-                            {\
-                                DeviceMemoryBarrier();\
-                            } while ((ResultMetadata.Load(ACCEL_STRUCT_METADATA_NUM_LOOP2_TASKS_DONE_OFFSET) < numTasksWait3));

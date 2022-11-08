@@ -293,6 +293,7 @@ enum class InternalRayTracingCsType : uint32
     InitExecuteIndirect,
     PairCompression,
     MergeSort,
+    Update,
     Count
 };
 
@@ -570,7 +571,8 @@ enum BuildModeFlags : uint32
     BuildModeCollapse               = 1,
     BuildModeTriangleSplitting      = 2,
     BuildModePairCompression        = 4,
-    BuildModePairCostCheck          = 8
+    BuildModePairCostCheck          = 8,
+    BuildModeEarlyPairCompression   = 16
 };
 
 // Acceleration structure build-time information about the acceleration structure's indirect buffers
@@ -633,10 +635,11 @@ struct AccelStructBuildInputs
 // This enum describes what kind of postbuild information to emit.
 enum class AccelStructPostBuildInfoType : uint32
 {
-    CompactedSize       = 0x0, // Size of the accel struct after compaction.
-    ToolsVisualization  = 0x1, // Space required to decode the acceleration structure into tools visualized form.
-    Serialization       = 0x2, // Space required to serialize an acceleration structure
-    CurrentSize         = 0x3  // Current space required by an acceleration structure
+    CompactedSize               = 0x0, // Size of the accel struct after compaction.
+    ToolsVisualization          = 0x1, // Space required to decode the acceleration structure into tools visualized form.
+    Serialization               = 0x2, // Space required to serialize an acceleration structure
+    CurrentSize                 = 0x3, // Current space required by an acceleration structure
+    BottomLevelASPointerCount   = 0x4  // Count of bottom-level acceleration structure pointers
 };
 
 // Description for a post build info event emission.
@@ -760,9 +763,15 @@ struct DeviceSettings
         uint32 allowFp16BoxNodesInUpdatableBvh : 1;         // Allow box node in updatable bvh.
         uint32 fp16BoxNodesRequireCompaction : 1;           // Compaction is set or not.
         uint32 noCopySortedNodes : 1;                       // Disable CopyUnsortedScratchLeafNode()
+        uint32 enableSAHCost : 1;                           // Use more accurate SAH cost
+        uint32 useGrowthInLTD : 1;                          // Use growth in the calculation of ltd quality factor;
+        uint32 enableMergedEncodeUpdate : 1;                // Combine encode and update in one dispatch
+        uint32 enableMergedEncodeBuild : 1;                 // Combine encode and build in one dispatch
+        uint32 ltdPackCentroids : 1;
+        uint32 enableEarlyPairCompression : 1;              // Enable pair triangle compression in early (Encode) phase
     };
 
-    uint64                      accelerationStructureUUID;            // Acceleration Structure UUID
+    uint64                      accelerationStructureUUID;  // Acceleration Structure UUID
 
     uint32                      numMortonSizeBits;
 
@@ -1113,6 +1122,11 @@ struct CompileTimeBuildSettings
     uint32 sahQbvh;
     float  tsPriority;
     uint32 noCopySortedNodes;
+    uint32 enableSAHCost;
+    uint32 useGrowthInLTD;
+    uint32 doEncode;
+    uint32 ltdPackCentroids;
+    uint32 enableEarlyPairCompression;
 };
 
 // Map key for map of internal pipelines
@@ -1491,6 +1505,17 @@ size_t GPURT_API_ENTRY GetDeviceSize();
 //
 PipelineShaderCode GPURT_API_ENTRY GetShaderLibraryCode(
     ShaderLibraryFeatureFlags flags);
+
+// =====================================================================================================================
+// Returns GPURT shader library function table for input ray tracing IP level.
+//
+// @param rayTracingIpLevel   [in]  Pal IP level
+// @param pEntryFunctionTable [out] Requested function table, if found
+//
+// @return whether the function table was found successfully
+Pal::Result GPURT_API_ENTRY QueryRayTracingEntryFunctionTable(
+    const Pal::RayTracingIpLevel   rayTracingIpLevel,
+    EntryFunctionTable* const      pEntryFunctionTable);
 
 // =====================================================================================================================
 // GPURT device

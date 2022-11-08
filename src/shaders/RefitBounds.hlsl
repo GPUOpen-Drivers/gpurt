@@ -86,6 +86,8 @@ void RefitBounds(
                         ShaderConstants.Fp16BoxModeMixedSaThresh,
                         0,
                         false,
+                        false,
+                        0,
                         false);
     }
 }

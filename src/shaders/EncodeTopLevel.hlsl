@@ -46,7 +46,7 @@ struct Constants
     uint internalFlags;                 // Internal flags
     uint buildFlags;                    // Build flags
     uint leafNodeExpansionFactor;       // Leaf node expansion factor (> 1 for rebraid)
-    uint enableCentroidSceneBoundsWithSize;
+    uint sceneBoundsCalculationType;
 };
 
 //=====================================================================================================================
@@ -83,7 +83,8 @@ void WriteBoundingBoxNode(
     uint                nodeFlags,
     uint                instanceBasePointerLo,
     uint                instanceBasePointerHi,
-    uint                numActivePrims)
+    uint                numActivePrims,
+    float               cost)
 {
     uint4 data;
 
@@ -106,7 +107,7 @@ void WriteBoundingBoxNode(
     const uint rootNodePointer = IsRebraidEnabled() ? 0 : CreateRootNodePointer();
 
     // type, flags, nodePointer, numPrimitivesAndDoCollapse
-    data = uint4(NODE_TYPE_USER_NODE_INSTANCE, nodeFlags, rootNodePointer, 1 << 1);
+    data = uint4(NODE_TYPE_USER_NODE_INSTANCE, nodeFlags, rootNodePointer, asuint(cost));
     buffer.Store4(offset + SCRATCH_NODE_TYPE_OFFSET, data);
 }
 
@@ -204,9 +205,38 @@ void EncodeInstances(
 
             // calc transformed AABB
             BoundingBox boundingBox;
+
+            float cost = 0;
+
             if (numActivePrims != 0)
             {
                 boundingBox = GenerateInstanceBoundingBox(instanceBasePointer, desc.Transform);
+
+                const uint64_t instanceBaseAddr = GetInstanceAddr(LowPart(instanceBasePointer), HighPart(instanceBasePointer));
+
+                const uint4 d0 = LoadDwordAtAddrx4(instanceBaseAddr + ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET);
+                const uint2 d1 = LoadDwordAtAddrx2(instanceBaseAddr + ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET + 0x10);
+
+                BoundingBox rootBbox = (BoundingBox)0;
+                rootBbox.min = asfloat(d0.xyz);
+                rootBbox.max = asfloat(uint3(d0.w, d1.xy));
+
+                float origSA = ComputeBoxSurfaceArea(rootBbox);
+                float transformedSA = ComputeBoxSurfaceArea(boundingBox);
+
+                if (IsRebraidEnabled())
+                {
+                    cost = transformedSA / origSA;
+                }
+                else
+                {
+                    for (uint c = 0; c < 4; c++)
+                    {
+                        cost += asfloat(FetchHeaderField(baseAddrAccelStructHeader, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + (4 * c)));
+                    }
+
+                    cost = (transformedSA / origSA) * cost + (transformedSA * SAH_COST_AABBB_INTERSECTION);
+                }
             }
             else if (isUpdate == false)
             {
@@ -229,18 +259,19 @@ void EncodeInstances(
                                         nodeFlags,
                                         desc.accelStructureAddressLo,
                                         desc.accelStructureAddressHiAndFlags,
-                                        numActivePrims);
+                                        numActivePrims,
+                                        cost);
 
                 if (numActivePrims != 0)
                 {
                     // Update scene bounding box
-                    if (ShaderConstants.enableCentroidSceneBoundsWithSize)
+                    if (ShaderConstants.sceneBoundsCalculationType == SceneBoundsBasedOnCentroidWithSize)
                     {
                         if (IsRebraidEnabled() == false)
                         {
                             UpdateCentroidSceneBoundsWithSize(ScratchBuffer, ShaderConstants.sceneBoundsByteOffset, boundingBox);
                         }
-                        else
+                        else // remove size as rebraid will set the size
                         {
                             const float3 centroidPoint = (0.5 * (boundingBox.max + boundingBox.min));
 
@@ -250,6 +281,10 @@ void EncodeInstances(
                                                            ShaderConstants.sceneBoundsByteOffset + rebraidSceneOffset,
                                                            centroidPoint);
                         }
+                    }
+                    else if (ShaderConstants.sceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
+                    {
+                        UpdateSceneBoundsWithSize(ScratchBuffer, ShaderConstants.sceneBoundsByteOffset, boundingBox);
                     }
                     else
                     {

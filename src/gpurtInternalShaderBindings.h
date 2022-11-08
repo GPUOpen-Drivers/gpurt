@@ -43,14 +43,15 @@ namespace EncodeNodes
         uint32 indexBufferByteOffset;         // Index buffer byte offset
         uint32 hasValidTransform;             // Has a valid transform
         uint32 indexBufferFormat;             // Index buffer format
-        uint32 geometryBufferStrideInBytes;   // Vertex buffer stride in bytes
+        uint32 geometryStride;                // Geometry buffer stride in terms of components for vertices. 0 if the
+                                              // stride is accounted for in the SRD. R32G32 elements for AABBs.
         uint32 geometryIndex;                 // Index of the geometry description that owns this node
         uint32 baseGeometryInfoOffset;        // Base offset of the geometry info
         uint32 basePrimNodePtrOffset;         // Base offset for the prim node ptrs
         uint32 buildFlags;                    // Acceleration structure build flags
         uint32 isUpdateInPlace;               // Is update in place
         uint32 geometryFlags;                 // Geometry flags (GpuRt::GeometryFlags)
-        uint32 vertexBufferFormat;            // Vertex buffer format
+        uint32 vertexComponentCount;          // Valid components in vertex buffer format
         uint32 vertexCount;                   // Vertex count
         uint32 destLeafNodeOffset;            // Offset of leaf nodes in destination buffer
         uint32 leafNodeExpansionFactor;       // Leaf node expansion factor (> 1 for triangle splitting)
@@ -58,8 +59,9 @@ namespace EncodeNodes
         uint32 indexBufferInfoScratchOffset;
         uint32 indexBufferGpuVaLo;
         uint32 indexBufferGpuVaHi;
-        uint32 enableCentroidSceneBoundsWithSize;
+        uint32 sceneBoundsCalculationType;
         uint32 enableTriangleSplitting;
+        uint32 enableEarlyPairCompression;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
@@ -188,6 +190,7 @@ namespace BuildQBVH
         uint32 sahQbvh;                          // Apply SAH into QBVH build
 
         uint32 captureChildNumPrimsForRebraid;
+        uint32 enableSAHCost;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
@@ -231,7 +234,7 @@ namespace EncodeInstances
         uint32 internalFlags;                 // Flags
         uint32 buildFlags;                    // Build flags
         uint32 leafNodeExpansionFactor;       // Number of leaf nodes per primitive
-        uint32 enableCentroidSceneBoundsWithSize;
+        uint32 sceneBoundsCalculationType;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
@@ -356,6 +359,7 @@ namespace BuildParallel
         uint32 reservedUint6;
         uint32 reservedUint7;
         uint32 reservedUint8;
+        uint32 reservedUint9;
 
         // debug
         uint32 debugCounters;
@@ -375,7 +379,7 @@ namespace BuildParallel
         uint32 numMortonSizeBits;
         float reservedFloat;
         uint32 numLeafNodes;
-        uint32 padding1;
+        uint32 numDescs;
 
         // Align the following struct to 4 dwords due to HLSL constant buffer packing rules
         AccelStructHeader header;
@@ -570,20 +574,7 @@ namespace DecodeAS
 constexpr NodeMapping EncodeTriangleNodesMapping[] =
 {
     { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
-};
-
-constexpr NodeMapping EncodeTriangleNodesCompressionMapping[] =
-{
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
+    { NodeType::TypedUavTable, 1 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
@@ -594,7 +585,7 @@ constexpr NodeMapping EncodeTriangleNodesCompressionMapping[] =
 constexpr NodeMapping EncodeTriangleNodesIndirectMapping[] =
 {
     { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
+    { NodeType::TypedUavTable, 1 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
@@ -608,7 +599,7 @@ constexpr NodeMapping EncodeTriangleNodesIndirectMapping[] =
 constexpr NodeMapping EncodeAABBNodesMapping[] =
 {
     { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
+    { NodeType::TypedUavTable, 1 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
@@ -634,10 +625,12 @@ constexpr NodeMapping BuildParallelMapping[] =
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
+    { NodeType::Uav, 2 },
+    { NodeType::ConstantBufferTable, 1 },
+    { NodeType::UavTable, 1 },
+    { NodeType::UavTable, 1 },
+    { NodeType::UavTable, 1 },
 };
-
-#define BuildParallel32Mapping BuildParallelMapping
 
 constexpr NodeMapping GenerateMortonCodesMapping[] =
 {
@@ -710,6 +703,18 @@ constexpr NodeMapping UpdateParallelMapping[] =
 };
 
 #define UpdateParallel32Mapping UpdateParallelMapping
+
+constexpr NodeMapping UpdateMapping[]
+{
+    { NodeType::Constant, UpdateParallel::NumEntries },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::ConstantBufferTable, 1 },
+    { NodeType::UavTable, 1 },
+    { NodeType::UavTable, 1 },
+    { NodeType::UavTable, 1 }
+};
 
 constexpr NodeMapping RefitBoundsMapping[] =
 {
