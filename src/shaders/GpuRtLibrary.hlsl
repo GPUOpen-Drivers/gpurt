@@ -163,7 +163,7 @@ export bool RayQueryProceed1_1(
     in    uint                    constRayFlags,
     in    uint3                   dispatchThreadId)
 {
-    return RayQueryProceedCommon(rayQuery, constRayFlags, dispatchThreadId, RTIP1_1);
+    return RayQueryProceedCommon(rayQuery, constRayFlags, dispatchThreadId, RTIP1_1, 0.0);
 }
 
 //=====================================================================================================================

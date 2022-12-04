@@ -74,7 +74,6 @@ groupshared uint SharedMem[1];
 //======================================================================================================================
 // Note, this header must be included after all resource bindings have been defined. Also, there is a strict naming
 // requirement for resources and variables. See BuildCommon.hlsl for details.
-#define UPDATE_ENCODES_PRIMS 1
 #include "UpdateQBVHImpl.hlsl"
 
 #if !AMD_VULKAN
@@ -100,7 +99,7 @@ void EncodePrimitives(
                 primitiveIndex,
                 geometryBasePrimOffset,
                 0,
-                false); // Don't write to the update stack (not used in the merged encode path).
+                true);
         }
     }
 }
@@ -129,11 +128,13 @@ void Update(
     END_TASK(numGroups);
 #endif
 
+    const uint numWorkItems = ScratchBuffer.Load(UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET);
+
     UpdateQBVHImpl(globalId,
                    ResultBuffer,
                    ScratchBuffer,
                    SourceBuffer,
                    ShaderConstants.propagationFlagsScratchOffset,
-                   ShaderConstants.numPrimitives,
+                   numWorkItems,
                    ShaderConstants.numThreads);
 }

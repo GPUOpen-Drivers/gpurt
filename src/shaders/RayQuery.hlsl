@@ -61,13 +61,16 @@ static bool RayQueryProceedCommon(
     inout_param(RayQueryInternal) rayQuery,
     in    uint                    constRayFlags,
     in    uint3                   dispatchThreadId,
-    in    uint                    rtHwVersion)
+    in    uint                    rtHwVersion,
+    in    float                   earlyTerminateThreshold)
 {
     bool continueTraversal = false;
 
     switch (rtHwVersion)
     {
-        case RTIP1_1:  continueTraversal = RayQueryProceedImpl1_1(rayQuery, constRayFlags, dispatchThreadId); break;
+        case RTIP1_1:
+            continueTraversal = RayQueryProceedImpl1_1(rayQuery, constRayFlags, earlyTerminateThreshold, dispatchThreadId);
+            break;
         default: break;
     }
 #if DEVELOPER
@@ -76,7 +79,7 @@ static bool RayQueryProceedCommon(
         if (continueTraversal == false)
         {
             const uint rayId = GetRayId(dispatchThreadId);
-            WriteDispatchCounters(rayId, rayQuery.numIterations);
+            WriteDispatchCounters(rayQuery.numIterations);
             WriteTraversalCounter(rayQuery, rayId);
 
             if (rayQuery.committed.currNodePtr != INVALID_NODE)

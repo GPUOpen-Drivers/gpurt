@@ -186,7 +186,7 @@ static void TraceRayInlineImpl1_1(
     // Shift 8-bit instance mask into upper 8-bits to align with instance mask from instance node
     rayQuery.instanceInclusionMask = (instanceMask << 24);
 
-    if (IsValidTrace(rayQuery.rayDesc, accelStruct))
+    if (IsValidTrace(rayQuery.rayDesc, accelStruct, instanceMask, rayQuery.rayFlags, 0))
     {
         LogAccelStruct(accelStruct);
 
@@ -216,6 +216,7 @@ static void TraceRayInlineImpl1_1(
 static bool RayQueryProceedImpl1_1(
     inout_param(RayQueryInternal) rayQuery,
     in    uint                    constRayFlags,
+    in    float                   earlyTerminateThreshold,
     in    uint3                   dispatchThreadId)
 {
 #if DEVELOPER
@@ -351,6 +352,8 @@ static bool RayQueryProceedImpl1_1(
         {
             rayQuery.numIterations++;
             WriteRayHistoryTokenNodePtr(rayId, rayQuery.currNodePtr);
+
+            UpdateWaveTraversalStatistics(rayQuery.currNodePtr);
         }
 #endif
         // Backup last traversed node pointer

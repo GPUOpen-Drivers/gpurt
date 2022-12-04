@@ -44,7 +44,7 @@ namespace GpuRt
 // do not require client driver changes to maintain existing functionality. GPURT assumes all structures are zero
 // initialized by the client, therefore new fields may be added in minor versions as long as zero is an acceptable
 // default value.
-#define GPURT_INTERFACE_MINOR_VERSION 9
+#define GPURT_INTERFACE_MINOR_VERSION 10
 
 // Minimum major interface version. This is the minimum interface version GPURT supports in order to support backward
 // compatibility. When it is equal to GPURT_INTERFACE_MAJOR_VERSION, only the latest interface version is supported.

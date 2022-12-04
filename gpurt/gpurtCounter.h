@@ -65,10 +65,13 @@ struct IndirectCounterMetadata
 // Per-dispatch ray tracing counter data
 struct DispatchCounterData
 {
-    uint32 numActiveRays; // Total number of rays that invoked traversal
-    uint32 numIterations; // Total number of iterations
-    uint32 minIterations; // Minimum iterations amongst all active rays
-    uint32 maxIterations; // Maximum iterations amongst all active rays
+    uint32 numActiveRays;                  // Total number of rays that invoked traversal.
+    uint32 numIterations;                  // Total number of iterations
+    uint32 minIterations;                  // Minimum iterations amongst all active rays
+    uint32 maxIterations;                  // Maximum iterations amongst all active rays
+    uint32 activeLaneCountPerIteration;    // Active lane count within a wave per traversal iteration.
+    uint32 numWaveIterations;              // Number of wave iterations.
+    uint32 maxActiveLaneCountPerIteration; // Maximum active lane count amongst unique node types for a wave iteration.
 };
 
 // ====================================================================================================================

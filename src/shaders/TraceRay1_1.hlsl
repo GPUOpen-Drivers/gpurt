@@ -196,12 +196,26 @@ static IntersectionResult TraceRayImpl1_1(
         if (EnableTraversalCounter())
         {
             WriteRayHistoryTokenNodePtr(rayId, packedNodePointer);
+
+            intersection.numIterations++;
+
+            if (IsBoxNode(packedNodePointer))
+            {
+                intersection.numRayBoxTest++;
+            }
+            else if (IsTriangleNode(packedNodePointer))
+            {
+                intersection.numRayTriangleTest++;
+            }
+            else if (IsUserNodeInstance(packedNodePointer))
+            {
+                intersection.instanceIntersections++;
+            }
+
+            UpdateWaveTraversalStatistics(packedNodePointer);
         }
 #endif
 
-#if DEVELOPER
-        intersection.numIterations++;
-#endif
         // Backup last traversed node pointer
         prevNodePtr = packedNodePointer;
 
@@ -224,13 +238,6 @@ static IntersectionResult TraceRayImpl1_1(
         // Check if it is an internal node
         if (IsBoxNode(prevNodePtr))
         {
-#if DEVELOPER
-            if (EnableTraversalCounter())
-            {
-                // Hardware ray-box test counts as one.
-                intersection.numRayBoxTest++;
-            }
-#endif
             // Determine nodes to push to stack
             if (isGoingDown)
             {
@@ -272,12 +279,6 @@ static IntersectionResult TraceRayImpl1_1(
         }
         else if (CheckHandleTriangleNode(prevNodePtr))
         {
-#if DEVELOPER
-            if (EnableTraversalCounter())
-            {
-                intersection.numRayTriangleTest++;
-            }
-#endif
             const float t_num = asfloat(intersectionResult.x);
             const float t_denom = asfloat(intersectionResult.y);
             float candidateT  = (t_num / t_denom);
@@ -520,12 +521,6 @@ static IntersectionResult TraceRayImpl1_1(
         }
         else  // NODE_TYPE_USER_NODE_INSTANCE
         {
-#if DEVELOPER
-            if (EnableTraversalCounter())
-            {
-                intersection.instanceIntersections++;
-            }
-#endif
             const InstanceDesc desc = FetchInstanceDescAddr(nodeAddr64);
 
             // Avoid branching here to delay the wait on the fetched data

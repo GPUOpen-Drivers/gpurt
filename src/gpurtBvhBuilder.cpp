@@ -1060,20 +1060,12 @@ uint32 GpuBvhBuilder::CalculateUpdateScratchBufferInfo(
     runningOffset +=
         m_buildConfig.numLeafNodes * sizeof(uint32);
 
-    if (m_buildConfig.needEncodeDispatch
-        )
-    {
-        // Allocate space for update stack
-        offsets.updateStack = runningOffset;
+    // Allocate space for update stack
+    offsets.updateStack = runningOffset;
 
-        // Update stack elements. Note, for a worst case tree, each leaf node enqueues a single parent
-        // node pointer for updating
-        runningOffset += m_buildConfig.numLeafNodes * sizeof(uint32);
-    }
-    else
-    {
-        offsets.updateStack = 0xFFFFFFFF;
-    }
+    // Update stack elements. Note, for a worst case tree, each leaf node enqueues a single parent
+    // node pointer for updating
+    runningOffset += m_buildConfig.numLeafNodes * sizeof(uint32);
 
     if (pOffsets != nullptr)
     {

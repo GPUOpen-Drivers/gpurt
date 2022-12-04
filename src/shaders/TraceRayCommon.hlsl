@@ -470,9 +470,10 @@ static uint64_t SampleGpuTimer()
 }
 
 //=====================================================================================================================
-static void WriteDispatchCounters(in uint rayId, in uint numIterations)
+static void WriteDispatchCounters(
+    in uint numIterations)
 {
-    if (LogCounters(rayId, TRACERAY_COUNTER_MODE_DISPATCH))
+    if (LogCounters(0, TRACERAY_COUNTER_MODE_DISPATCH))
     {
         const uint cnt = WaveActiveCountBits(true);
         const uint sum = WaveActiveSum(numIterations);
@@ -481,11 +482,38 @@ static void WriteDispatchCounters(in uint rayId, in uint numIterations)
 
         if (WaveIsFirstLane())
         {
-            uint offset;
-            Counters.InterlockedAdd(0x0, cnt, offset);
-            Counters.InterlockedAdd(0x4, sum, offset);
-            Counters.InterlockedMin(0x8, min, offset);
-            Counters.InterlockedMax(0xc, max, offset);
+            Counters.InterlockedAdd(0, cnt);
+            Counters.InterlockedAdd(4, sum);
+            Counters.InterlockedMin(8, min);
+            Counters.InterlockedMax(12, max);
+        }
+    }
+}
+
+//=====================================================================================================================
+static void UpdateWaveTraversalStatistics(
+    in uint nodePtr)
+{
+    if (LogCounters(0, TRACERAY_COUNTER_MODE_DISPATCH))
+    {
+        const uint activeLaneCount = WaveActiveCountBits(true);
+        uint4 laneCnt;
+        laneCnt.x = WaveActiveCountBits(IsBoxNode(nodePtr));
+        laneCnt.y = WaveActiveCountBits(IsTriangleNode(nodePtr));
+        laneCnt.z = WaveActiveCountBits(IsUserNodeInstance(nodePtr));
+        laneCnt.w = WaveActiveCountBits(IsUserNodeProcedural(nodePtr));
+
+        if (WaveIsFirstLane())
+        {
+            // activeLaneCount per iteration
+            Counters.InterlockedAdd(16, activeLaneCount);
+
+            // wave iterations
+            Counters.InterlockedAdd(20, 1);
+
+            // Max active lane count with common node type
+            const uint maxActiveLaneCnt = max(laneCnt.x, max(laneCnt.y, max(laneCnt.z, laneCnt.w)));
+            Counters.InterlockedAdd(24, maxActiveLaneCnt);
         }
     }
 }

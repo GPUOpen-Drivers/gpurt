@@ -134,7 +134,7 @@ static bool TraceRayCommon(
     }
 #endif
 
-    if (IsValidTrace(ray, accelStruct))
+    if (IsValidTrace(ray, accelStruct, instanceInclusionMask, rayFlags, AmdTraceRayGetStaticFlags()))
     {
         LogAccelStruct(accelStruct);
 
@@ -162,7 +162,7 @@ static bool TraceRayCommon(
 #if DEVELOPER
     if (EnableTraversalCounter())
     {
-        WriteDispatchCounters(rayId, result.numIterations);
+        WriteDispatchCounters(result.numIterations);
 
         uint64_t timerEnd = SampleGpuTimer();
         WriteRayHistoryTokenTimeStamp(rayId, timerEnd);
@@ -327,8 +327,8 @@ static void TraceRayUsingRayQueryCommon(uint  accelStructLo,
                          rtHwVersion);
 
     const GpuVirtualAddress accelStruct = MakeGpuVirtualAddress(accelStructLo, accelStructHi);
-    const bool isValid                  = IsValidTrace(rayQuery.rayDesc, accelStruct);
     const bool raySkipProcedural        = (rayQuery.rayFlags & RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES);
+    const bool isValid                  = IsValidTrace(rayQuery.rayDesc, accelStruct, instanceInclusionMask, rayQuery.rayFlags, AmdTraceRayGetStaticFlags());
     bool  continueTraversal             = true;
     float currentT                      = rayQuery.rayDesc.TMax;
     uint  committedHitkind              = 0;
@@ -337,7 +337,7 @@ static void TraceRayUsingRayQueryCommon(uint  accelStructLo,
     {
         LogAccelStruct(accelStruct);
 
-        while (RayQueryProceedCommon(rayQuery, constRayFlags, AmdTraceRayDispatchRaysIndex(), rtHwVersion) == true)
+        while (RayQueryProceedCommon(rayQuery, constRayFlags, AmdTraceRayDispatchRaysIndex(), rtHwVersion, 0.0) == true)
         {
             const uint instanceContribution = rayQuery.candidate.instanceContribution;
             const HitGroupInfo hitInfo      = GetHitGroupInfo(rayContributionToHitGroupIndex,

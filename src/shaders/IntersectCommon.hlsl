@@ -53,11 +53,16 @@
 //   the software intersection path).
 static bool IsValidTrace(
     RayDesc           ray,
-    GpuVirtualAddress accelStruct)
+    GpuVirtualAddress accelStruct,
+    uint              instanceInclusionMask,
+    uint              rayFlags,
+    uint              pipelineFlags)
 {
     bool valid = true;
+    const bool skipProceduralFlag = (pipelineFlags & PIPELINE_FLAG_SKIP_PROCEDURAL_PRIMITIVES) ? true : false;
+    const bool raySkipProcedural = (rayFlags & RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES) || (skipProceduralFlag == true);
 
-    if (accelStruct == 0)
+    if ((accelStruct == 0) || (instanceInclusionMask == 0))
     {
         valid = false;
     }
@@ -67,6 +72,14 @@ static bool IsValidTrace(
         valid = false;
     }
 #endif
+    if ((ray.TMin < 0) || (ray.TMin > ray.TMax) || isinf(ray.TMin))
+    {
+        valid = false;
+    }
+    if ((ray.TMin == ray.TMax) && (raySkipProcedural == true))
+    {
+        valid = false;
+    }
 
     return valid;
 }
