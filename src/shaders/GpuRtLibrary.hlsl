@@ -28,6 +28,10 @@
 
 #define RTIP1_1 1
 
+#if GPURT_BUILD_RTIP2
+#define RTIP2_0 2
+#endif
+
 // Following order matters as AccelStructTracker relies on defines from TraceRayCommon.hlsl
 #include "TraceRayCommon.hlsl"
 #include "AccelStructTracker.hlsl"
@@ -156,6 +160,129 @@ export void TraceRayUsingHitToken1_1(
                    0.0);
 }
 
+#if GPURT_BUILD_RTIP2
+//=====================================================================================================================
+// TraceRay() entry point for ray tracing IP 2.0
+export void TraceRay2_0(
+    uint  accelStructLo,
+    uint  accelStructHi,
+    uint  rayFlags,
+    uint  instanceInclusionMask,
+    uint  rayContributionToHitGroupIndex,
+    uint  multiplierForGeometryContributionToShaderIndex,
+    uint  missShaderIndex,
+    float originX,
+    float originY,
+    float originZ,
+    float tMin,
+    float dirX,
+    float dirY,
+    float dirZ,
+    float tMax)
+{
+    TraceRayCommon(accelStructLo,
+                   accelStructHi,
+                   rayFlags,
+                   instanceInclusionMask,
+                   rayContributionToHitGroupIndex,
+                   multiplierForGeometryContributionToShaderIndex,
+                   missShaderIndex,
+                   originX,
+                   originY,
+                   originZ,
+                   tMin,
+                   dirX,
+                   dirY,
+                   dirZ,
+                   tMax,
+                   0,
+                   0,
+                   true,
+                   RTIP2_0,
+                   0.0);
+}
+
+//=====================================================================================================================
+// TraceRay() entry point for ray tracing IP 2.0 (Implemented on top of RayQuery primitives)
+export void TraceRayUsingRayQuery2_0(
+    uint  accelStructLo,
+    uint  accelStructHi,
+    uint  rayFlags,
+    uint  instanceInclusionMask,
+    uint  rayContributionToHitGroupIndex,
+    uint  multiplierForGeometryContributionToShaderIndex,
+    uint  missShaderIndex,
+    float originX,
+    float originY,
+    float originZ,
+    float tMin,
+    float dirX,
+    float dirY,
+    float dirZ,
+    float tMax)
+{
+    TraceRayUsingRayQueryCommon(accelStructLo,
+                                accelStructHi,
+                                rayFlags,
+                                instanceInclusionMask,
+                                rayContributionToHitGroupIndex,
+                                multiplierForGeometryContributionToShaderIndex,
+                                missShaderIndex,
+                                originX,
+                                originY,
+                                originZ,
+                                tMin,
+                                dirX,
+                                dirY,
+                                dirZ,
+                                tMax,
+                                RTIP2_0);
+}
+
+//=====================================================================================================================
+// TraceRay() hit-token extension entry point for ray tracing IP 2.0
+export void TraceRayUsingHitToken2_0(
+    uint  accelStructLo,
+    uint  accelStructHi,
+    uint  rayFlags,
+    uint  instanceInclusionMask,
+    uint  rayContributionToHitGroupIndex,
+    uint  multiplierForGeometryContributionToShaderIndex,
+    uint  missShaderIndex,
+    float originX,
+    float originY,
+    float originZ,
+    float tMin,
+    float dirX,
+    float dirY,
+    float dirZ,
+    float tMax,
+    uint  blasPointer,
+    uint  tlasPointer)
+{
+    TraceRayCommon(accelStructLo,
+                   accelStructHi,
+                   rayFlags,
+                   instanceInclusionMask,
+                   rayContributionToHitGroupIndex,
+                   multiplierForGeometryContributionToShaderIndex,
+                   missShaderIndex,
+                   originX,
+                   originY,
+                   originZ,
+                   tMin,
+                   dirX,
+                   dirY,
+                   dirZ,
+                   tMax,
+                   blasPointer,
+                   tlasPointer,
+                   false,
+                   RTIP2_0,
+                   0.0);
+}
+#endif
+
 //=====================================================================================================================
 // RayQuery::Proceed() entry point for ray tracing IP 1.1
 export bool RayQueryProceed1_1(
@@ -165,6 +292,18 @@ export bool RayQueryProceed1_1(
 {
     return RayQueryProceedCommon(rayQuery, constRayFlags, dispatchThreadId, RTIP1_1, 0.0);
 }
+
+#if GPURT_BUILD_RTIP2
+//=====================================================================================================================
+// RayQuery::Proceed() entry point for ray tracing IP 2.0
+export bool RayQueryProceed2_0(
+    inout_param(RayQueryInternal) rayQuery,
+    in    uint                    constRayFlags,
+    in    uint3                   dispatchThreadId)
+{
+    return RayQueryProceedCommon(rayQuery, constRayFlags, dispatchThreadId, RTIP2_0, 0.0);
+}
+#endif
 
 //=====================================================================================================================
 // TraceRayInline() entry point for ray tracing IP 1.1
@@ -188,6 +327,31 @@ export void TraceRayInline1_1(
                          dispatchThreadId,
                          RTIP1_1);
 }
+
+#if GPURT_BUILD_RTIP2
+//=====================================================================================================================
+// TraceRayInline() entry point for ray tracing IP 2.0
+export void TraceRayInline2_0(
+    inout_param(RayQueryInternal) rayQuery,
+    in    uint                    accelStructLo,
+    in    uint                    accelStructHi,
+    in    uint                    constRayFlags,
+    in    uint                    rayFlags,
+    in    uint                    instanceMask,
+    in    RayDesc                 rayDesc,
+    in    uint3                   dispatchThreadId)
+{
+    TraceRayInlineCommon(rayQuery,
+                         accelStructLo,
+                         accelStructHi,
+                         constRayFlags,
+                         rayFlags,
+                         instanceMask,
+                         rayDesc,
+                         dispatchThreadId,
+                         RTIP2_0);
+}
+#endif
 
 //=====================================================================================================================
 // GPURT intrinsic for fetching instance ID from instance node

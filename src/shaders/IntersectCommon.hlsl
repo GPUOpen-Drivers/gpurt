@@ -434,7 +434,20 @@ static uint GetBoxSortingHeuristicFromRayFlags(
             // The intention is to benefit ShadowRay with BvhNodeSort
             heuristic = BoxSortHeuristic::Disabled;
         }
+#if GPURT_BUILD_RTIP2
+        else
+        {
+            // good for shadow rays with terminate on first hit
+            heuristic = BoxSortHeuristic::Largest;
+        }
+#endif
     }
+#if GPURT_BUILD_RTIP2
+    else if (mode == BoxSortHeuristic::LargestFirstOrClosestMidPoint)
+    {
+        heuristic = BoxSortHeuristic::MidPoint;
+    }
+#endif
     else
     {
         heuristic = BoxSortHeuristic::Closest;
@@ -530,6 +543,32 @@ static uint4 IntersectNode(
     float sort_key1 = s1.x;
     float sort_key2 = s2.x;
     float sort_key3 = s3.x;
+
+#if GPURT_BUILD_RTIP2
+    // Setup box sort keys for largest interval first traversal.
+    // Note: this computation causes the sort keys to be the negative size of the
+    // interval. This is because the sorting network sorts from smallest to largest key
+    // and we want the boxes to be sorted from largest
+    // interval to the smallest sized interval in this mode.
+    if (box_sort_heuristic == BoxSortHeuristic::Largest) // largest first
+    {
+        sort_key0 = s0.x-s0.y; //min_t0-max_t0
+        sort_key1 = s1.x-s1.y; //min_t1-max_t1
+        sort_key2 = s2.x-s2.y; //min_t2-max_t2
+        sort_key3 = s3.x-s3.y; //min_t3-max_t3
+    }
+    // Setup the box sort keys for the closest midpoint.
+    // Note: the full computation of midpoint is (min_of_intervals+max_of_intervals)/2,
+    // however the division by 2 is removed to save HW cost as it does not change the results of the sorting network.
+    // Also, sort keys may be negative if the midpoint occurs behind the ray origin.
+    else if (box_sort_heuristic == BoxSortHeuristic::MidPoint) // closest mid-point
+    {
+        sort_key0 = s0.z+s0.w; //min_of_intervals_t0+max_of_intervals_t0
+        sort_key1 = s1.z+s1.w; //min_of_intervals_t1+max_of_intervals_t1
+        sort_key2 = s2.z+s2.w; //min_of_intervals_t2+max_of_intervals_t2
+        sort_key3 = s3.z+s3.w; //min_of_intervals_t3+max_of_intervals_t3
+    }
+#endif
 
     //Mark out the nodes that didn't hit by setting them to the
     //INVALID_NODE.
@@ -682,9 +721,64 @@ static float2 triangle_calculate_barycentrics(float3 p, float3 v1, float3 v2, fl
     return float2(b1, b2);
 }
 
+#if GPURT_BUILD_RTIP2
+//=====================================================================================================================
+static bool IsChildEarlyCulled(uint childIndex, uint allBoxFlags, uint64_t hwNodePtr)
+{
+    const uint boxFlags = (allBoxFlags >> (childIndex * 8)) & 0xFF;
+
+    const bool subtree_only_contains_opaque =
+        (FLAG_IS_SET(boxFlags, BOX_NODE_FLAGS_ONLY_OPAQUE) ||
+         FLAG_IS_SET(hwNodePtr, NODE_POINTER_FORCE_OPAQUE)) &&
+        FLAG_IS_CLEAR(hwNodePtr, NODE_POINTER_FORCE_NON_OPAQUE);
+
+    const bool subtree_only_contains_non_opaque =
+        (FLAG_IS_SET(boxFlags, BOX_NODE_FLAGS_ONLY_NON_OPAQUE) ||
+         FLAG_IS_SET(hwNodePtr, NODE_POINTER_FORCE_NON_OPAQUE)) &&
+        FLAG_IS_CLEAR(hwNodePtr, NODE_POINTER_FORCE_OPAQUE);
+
+    const bool should_cull_subtree =
+        (subtree_only_contains_opaque     && FLAG_IS_SET(hwNodePtr, NODE_POINTER_CULL_OPAQUE)) ||
+        (subtree_only_contains_non_opaque && FLAG_IS_SET(hwNodePtr, NODE_POINTER_CULL_NON_OPAQUE)) ||
+        (FLAG_IS_SET(boxFlags, BOX_NODE_FLAGS_ONLY_TRIANGLES)  && FLAG_IS_SET(hwNodePtr, NODE_POINTER_SKIP_TRIANGLES)) ||
+        (FLAG_IS_SET(boxFlags, BOX_NODE_FLAGS_ONLY_PROCEDURAL) && FLAG_IS_SET(hwNodePtr, NODE_POINTER_SKIP_PROCEDURAL));
+
+    return should_cull_subtree;
+}
+
+//=====================================================================================================================
+static void HandleNodePtrFlags(inout_param(Float32BoxNode) node, uint64_t hwNodePtr)
+{
+    const uint boxFlags = node.flags;
+
+    if (IsChildEarlyCulled(0, boxFlags, hwNodePtr))
+    {
+        node.child0 = INVALID_NODE;
+    }
+
+    if (IsChildEarlyCulled(1, boxFlags, hwNodePtr))
+    {
+        node.child1 = INVALID_NODE;
+    }
+
+    if (IsChildEarlyCulled(2, boxFlags, hwNodePtr))
+    {
+        node.child2 = INVALID_NODE;
+    }
+
+    if (IsChildEarlyCulled(3, boxFlags, hwNodePtr))
+    {
+        node.child3 = INVALID_NODE;
+    }
+}
+#endif
 #endif
 
 #define INTERSECT_RAY_VERSION_1 1
+
+#if GPURT_BUILD_RTIP2
+#define INTERSECT_RAY_VERSION_2 2
+#endif
 
 //=====================================================================================================================
 static uint4 image_bvh64_intersect_ray_base(
@@ -703,6 +797,13 @@ static uint4 image_bvh64_intersect_ray_base(
 #if USE_HW_INTRINSIC
     uint2 address = CalculateRawBvh64NodePointer(bvhAddress, nodePointer);
 
+#if GPURT_BUILD_RTIP2
+    if (intersectRayVersion >= INTERSECT_RAY_VERSION_2)
+    {
+        address.y |= pointerFlags;
+    }
+#endif
+
     result = AmdExtD3DShaderIntrinsics_IntersectBvhNode(address,
                                                         rayExtent,
                                                         rayOrigin,
@@ -712,6 +813,14 @@ static uint4 image_bvh64_intersect_ray_base(
                                                         BOX_EXPANSION_DEFAULT_AMOUNT);
 #else
     uint64_t hwNodePtr = (bvhAddress >> 3) + nodePointer;
+
+#if GPURT_BUILD_RTIP2
+    if (intersectRayVersion >= INTERSECT_RAY_VERSION_2)
+    {
+        const uint64_t pointerFlagsU64 = pointerFlags;
+        hwNodePtr |= pointerFlagsU64 << 32;
+    }
+#endif
 
     if (IsBoxNode(nodePointer))
     {
@@ -725,6 +834,12 @@ static uint4 image_bvh64_intersect_ray_base(
         {
             node = FetchFloat32BoxNode(bvhAddress, nodePointer);
 
+#if GPURT_BUILD_RTIP2
+            if (intersectRayVersion >= INTERSECT_RAY_VERSION_2)
+            {
+                HandleNodePtrFlags(node, hwNodePtr);
+            }
+#endif
         }
 
         // Intersect ray with qbvh node
@@ -742,6 +857,14 @@ static uint4 image_bvh64_intersect_ray_base(
 
         const uint triangleId = FetchTriangleId(bvhAddress, nodePointer);
 
+#if GPURT_BUILD_RTIP2
+        if (intersectRayVersion >= INTERSECT_RAY_VERSION_2)
+        {
+            hwTriFlags = triangleId >> (GetNodeType(nodePointer) * TRIANGLE_ID_BIT_STRIDE);
+
+        }
+#endif
+
         {
             // The triangle leaf node stores face vertices
             const TriangleData tri = FetchTriangleFromNode(bvhAddress, nodePointer);
@@ -755,6 +878,47 @@ static uint4 image_bvh64_intersect_ray_base(
             SwizzleBarycentrics(result, nodePointer, triangleId);
         }
 
+#if GPURT_BUILD_RTIP2
+        if (intersectRayVersion >= INTERSECT_RAY_VERSION_2)
+        {
+            bool faceCulled = false;
+            if (!procedural)
+            {
+                // If determinant is positive and front face winding is counterclockwise or vice versa, the triangle is
+                // back facing.
+                bool frontFacingTriangle = (asfloat(result.y) >= 0.0f);
+                if (FLAG_IS_SET(hwNodePtr, NODE_POINTER_FLIP_FACEDNESS))
+                {
+                    frontFacingTriangle = !frontFacingTriangle;
+                    // The signs of t_num and t_denom are flipped when winding is flipped.
+                    // The sign of t_denom indicates front vs back face.
+                    result.x ^= 0x80000000;
+                    result.y ^= 0x80000000;
+                }
+
+                faceCulled = frontFacingTriangle ?
+                    FLAG_IS_SET(hwNodePtr, NODE_POINTER_CULL_FRONT_FACING) :
+                    FLAG_IS_SET(hwNodePtr, NODE_POINTER_CULL_BACK_FACING);
+            }
+
+            bool trianglesCulled = false;
+            {
+                trianglesCulled = FLAG_IS_SET(hwNodePtr, NODE_POINTER_SKIP_TRIANGLES);
+            }
+
+            const bool opaque =
+                FLAG_IS_SET(hwNodePtr, NODE_POINTER_FORCE_OPAQUE) ||
+                (FLAG_IS_CLEAR(hwNodePtr, NODE_POINTER_FORCE_NON_OPAQUE) &&
+                 FLAG_IS_SET(hwTriFlags, TRIANGLE_ID_OPAQUE));
+
+            const bool opaqueCulled = opaque && FLAG_IS_SET(hwNodePtr, NODE_POINTER_CULL_OPAQUE);
+
+            if (trianglesCulled || faceCulled || opaqueCulled)
+            {
+                result = uint4(asuint(INFINITY), asuint(1.0f), 0, 0);
+            }
+        }
+#endif
     }
     else
     {
@@ -780,5 +944,23 @@ static uint4 image_bvh64_intersect_ray(
         bvhAddress, nodePointer, 0, boxSortHeuristic, rayExtent, rayOrigin, rayDirection, rayDirectionInverse,
         INTERSECT_RAY_VERSION_1);
 }
+
+#if GPURT_BUILD_RTIP2
+//=====================================================================================================================
+static uint4 image_bvh64_intersect_ray_2_0(
+    GpuVirtualAddress bvhAddress,
+    uint              nodePointer,
+    uint              pointerFlags,
+    uint              boxSortHeuristic,
+    float             rayExtent,
+    float3            rayOrigin,
+    float3            rayDirection,
+    float3            rayDirectionInverse)
+{
+    return image_bvh64_intersect_ray_base(
+        bvhAddress, nodePointer, pointerFlags, boxSortHeuristic, rayExtent, rayOrigin, rayDirection, rayDirectionInverse,
+        INTERSECT_RAY_VERSION_2);
+}
+#endif
 
 #endif

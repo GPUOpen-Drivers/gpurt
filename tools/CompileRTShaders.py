@@ -272,6 +272,9 @@ def RunSpirv(outputDir, compilerPath, inShaderConfig, inShaderBasePath, inDXC, i
         if entryPoint:
             commandArgs += ['-E', entryPoint]
         commandArgs += ['-DAMD_VULKAN', '-DAMD_VULKAN_DXC', '-DAMD_VULKAN_SPV']
+#if GPURT_BUILD_RTIP2
+        commandArgs += ['-DGPURT_BUILD_RTIP2']
+#endif
 
         commandArgs += shaderDefines
         commandArgs += ['-fvk-use-scalar-layout']
@@ -293,6 +296,9 @@ def RunSpirv(outputDir, compilerPath, inShaderConfig, inShaderBasePath, inDXC, i
         commandArgs += ['--keep-uncalled']
         commandArgs += ['-Od']
         commandArgs += ['-DDEFINE_RAYDESC=1', '-DAMD_VULKAN', '-DAMD_VULKAN_GLSLANG', '-DAMD_VULKAN_SPV']
+#if GPURT_BUILD_RTIP2
+        commandArgs += ['-DGPURT_BUILD_RTIP2']
+#endif
         commandArgs += shaderDefines
 
     compileResult = InvokeSubprocess(commandArgs, outputDir, threadOutput, linuxLibraryPath=(compilerPath if inDXC else ''))

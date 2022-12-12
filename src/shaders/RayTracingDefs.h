@@ -87,6 +87,9 @@ enum PrimitiveType : uint
 #define NODE_TYPE_BOX_FLOAT16          4
 #define NODE_TYPE_BOX_FLOAT32          5
 #define NODE_TYPE_USER_NODE_INSTANCE   6
+#if GPURT_BUILD_RTIP2
+// From the HW IP 2.0 spec: '7: User Node 1 (processed as a Procedural Node for culling)'
+#endif
 #define NODE_TYPE_USER_NODE_PROCEDURAL 7
 
 //=====================================================================================================================
@@ -107,7 +110,15 @@ enum PrimitiveType : uint
 //=====================================================================================================================
 // Box sorting heuristic value
 // 0: closethit
+#if GPURT_BUILD_RTIP2
+// 1: LargestFirst
+// 2: ClosestMidpoint
+#endif
 // 3: undefined / disabled
+#if GPURT_BUILD_RTIP2
+// 4: LargestFirstOrClosest (auto select with rayFlag)
+// 5: BoxSortLargestFirstOrClosestMidPoint  (auto select with rayFlag)
+#endif
 // 6: DisabledOnAcceptFirstHit (disable if bvhNode sort is on, and rayFlag is AcceptFirstHit)
 //
 // This need to match ILC_BOX_SORT_HEURISTIC_MODE
@@ -119,14 +130,30 @@ enum PrimitiveType : uint
 namespace BoxSortHeuristic
 {
     static const uint Closest = 0x0;
+#if GPURT_BUILD_RTIP2
+    static const uint Largest                       = 0x1;
+    static const uint MidPoint                      = 0x2;
+#endif
     static const uint Disabled                      = 0x3;
+#if GPURT_BUILD_RTIP2
+    static const uint LargestFirstOrClosest         = 0x4;
+    static const uint LargestFirstOrClosestMidPoint = 0x5;
+#endif
     static const uint DisabledOnAcceptFirstHit      = 0x6;
 }
 #else
 enum BoxSortHeuristic : uint
 {
     Closest                       = 0x0,
+#if GPURT_BUILD_RTIP2
+    Largest                       = 0x1,
+    MidPoint                      = 0x2,
+#endif
     Disabled                      = 0x3,
+#if GPURT_BUILD_RTIP2
+    LargestFirstOrClosest         = 0x4,
+    LargestFirstOrClosestMidPoint = 0x5,
+#endif
     DisabledOnAcceptFirstHit      = 0x6,
 };
 #endif
@@ -542,7 +569,11 @@ struct Float32BoxNode
     float3 bbox3_min; /// Node bounding box 3 minimum bounds
     float3 bbox3_max; /// Node bounding box 3 maximum bounds
 
+#if GPURT_BUILD_RTIP2
+    uint   flags;          /// Reserved for RTIP 2.0
+#else
     uint   flags;
+#endif
     uint   numPrimitives;  /// Padding for 64-byte alignment
     uint   padding2;       /// Padding for 64-byte alignment
     uint   padding3;       /// Padding for 64-byte alignment
@@ -656,10 +687,22 @@ static_assert(FLOAT16_BOX_NODE_BB3_OFFSET    == offsetof(Float16BoxNode, bbox3),
 // Each triangle's 8-bit segment contains these fields:
 // I SRC        [1:0] Specifies which vertex in triangle 0 corresponds to the I barycentric value
 // J SRC        [3:2] Specifies which vertex in triangle 0 corresponds to the J barycentric value
+#if GPURT_BUILD_RTIP2
+// Double Sided [  4] Specifies whether triangle 0 should be treated as double sided for culling
+// Flip Winding [  5] Specifies whether triangle 0 should have its facedness flipped
+// Procedural   [  6] Specifies whether it is a procedural node
+// Opaque       [  7] Specifies whether triangle 0 should be considered as opaque
+#endif
 #define TRIANGLE_ID_BIT_STRIDE 8
 
 #define TRIANGLE_ID_I_SRC_SHIFT        0
 #define TRIANGLE_ID_J_SRC_SHIFT        2
+#if GPURT_BUILD_RTIP2
+#define TRIANGLE_ID_DOUBLE_SIDED_SHIFT 4
+#define TRIANGLE_ID_FLIP_WINDING_SHIFT 5
+#define TRIANGLE_ID_PROCEDURAL_SHIFT   6
+#define TRIANGLE_ID_OPAQUE_SHIFT       7
+#endif
 
 //=====================================================================================================================
 struct TriangleNode
@@ -728,6 +771,22 @@ union NodePointer32
     uint32_t u32;
 };
 
+#if GPURT_BUILD_RTIP2
+//=====================================================================================================================
+// Instance base pointer layout from the HW raytracing IP 2.0 spec:
+// Zero                         [ 2: 0]
+// Tree Base Address (64B index)[53: 3]
+// Force Opaque                 [   54]
+// Force Non-Opaque             [   55]
+// Disable Triangle Cull        [   56]
+// Flip Facedness               [   57]
+// Cull Back Facing Triangles   [   58]
+// Cull Front Facing Triangles  [   59]
+// Cull Opaque                  [   60]
+// Cull Non-Opaque              [   61]
+// Skip Triangles               [   62]
+// Skip Procedural              [   63]
+#endif
 union NodePointer64
 {
     struct
@@ -1058,7 +1117,11 @@ struct InstanceDesc
     uint   InstanceContributionToHitGroupIndex_and_Flags;   // 24-bit instance contribution and 8-bit flags
     uint   accelStructureAddressLo;                         // Lower part of acceleration structure base address
     uint   accelStructureAddressHiAndFlags;                 // Upper part of acceleration structure base address and
+#if GPURT_BUILD_RTIP2
+                                                            // HW raytracing IP 2.0 flags
+#else
                                                             // flags
+#endif
 };
 
 #define INSTANCE_DESC_SIZE                          64
@@ -1136,6 +1199,28 @@ static uint64_t PackUint64(uint lowBits, uint highBits)
     return addr;
 }
 
+#if GPURT_BUILD_RTIP2
+//=====================================================================================================================
+// Instance base pointer layout from the HW raytracing IP 2.0 spec:
+// Zero                         [ 2: 0]
+// Tree Base Address (64B index)[53: 3]
+// Force Opaque                 [   54]
+// Force Non-Opaque             [   55]
+// Disable Triangle Cull        [   56]
+// Flip Facedness               [   57]
+// Cull Back Facing Triangles   [   58]
+// Cull Front Facing Triangles  [   59]
+// Cull Opaque                  [   60]
+// Cull Non-Opaque              [   61]
+// Skip Triangles               [   62]
+// Skip Procedural              [   63]
+//
+// Since GPU VAs can only be 48 bits, only 42 bits of the Tree Base Address field are used:
+// Used Address                 [44: 3]
+// Unused Address               [53:45]
+//
+// Note glslang doesn't like 64-bit integer literals
+#endif
 #define INSTANCE_BASE_POINTER_ZERO_MASK           PackUint64(       0x7,        0x0) //                0x7ull
 #define INSTANCE_BASE_POINTER_ADDRESS_USED_MASK   PackUint64(0xFFFFFFF8,     0x1FFF) //     0x1FFFFFFFFFF8ull
 #define INSTANCE_BASE_POINTER_ADDRESS_UNUSED_MASK PackUint64(0x00000000,   0x3FE000) //   0x3FE00000000000ull

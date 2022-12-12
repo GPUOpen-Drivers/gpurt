@@ -25,6 +25,10 @@
 
 #include "RayQuery1_1.hlsl"
 
+#if GPURT_BUILD_RTIP2
+#include "RayQuery2_0.hlsl"
+#endif
+
 //=====================================================================================================================
 // TraceRayInline() internal
 static void TraceRayInlineCommon(
@@ -50,6 +54,18 @@ static void TraceRayInlineCommon(
                                   rayDesc,
                                   dispatchThreadId);
             break;
+#if GPURT_BUILD_RTIP2
+        case RTIP2_0:
+            TraceRayInlineImpl2_0(rayQuery,
+                                  accelStructLo,
+                                  accelStructHi,
+                                  constRayFlags,
+                                  rayFlags,
+                                  instanceMask,
+                                  rayDesc,
+                                  dispatchThreadId);
+            break;
+#endif
         default:
             break;
     }
@@ -71,6 +87,11 @@ static bool RayQueryProceedCommon(
         case RTIP1_1:
             continueTraversal = RayQueryProceedImpl1_1(rayQuery, constRayFlags, earlyTerminateThreshold, dispatchThreadId);
             break;
+#if GPURT_BUILD_RTIP2
+        case RTIP2_0:
+            continueTraversal = RayQueryProceedImpl2_0(rayQuery, constRayFlags, earlyTerminateThreshold, dispatchThreadId);
+            break;
+#endif
         default: break;
     }
 #if DEVELOPER

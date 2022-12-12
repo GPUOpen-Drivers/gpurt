@@ -9,6 +9,13 @@ RayQueryProceed1_1
 TraceRay1_1
 TraceRayUsingRayQuery1_1
 TraceRayUsingHitToken1_1
+#if GPURT_BUILD_RTIP2
+TraceRayInline2_0
+RayQueryProceed2_0
+TraceRay2_0
+TraceRayUsingRayQuery2_0
+TraceRayUsingHitToken2_0
+#endif
 RayQueryInternal
 AmdExtD3DShaderIntrinsics
 AmdExtD3DShaderIntrinsics_LoadDwordAtAddr
@@ -43,6 +50,11 @@ AmdTraceRayGetStaticFlags
 AmdTraceRayGetLdsUsage
 AmdTraceRaySetLdsUsage
 AmdTraceRayGetRayQueryCount
+#if GPURT_BUILD_RTIP2
+AmdTraceRayGetBoxSortHeuristicMode
+AmdTraceRayLdsStackStore
+AmdTraceRayLdsStackInit
+#endif
 RayQueryProceedAmdInternal
 TraceRayInlineAmdInternal
 rayQueryTerminateEXT

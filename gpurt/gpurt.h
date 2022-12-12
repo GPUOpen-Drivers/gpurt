@@ -33,6 +33,10 @@
 #include "palVector.h"
 #include "../gpurt/src/gpurtTraceSource.h"
 
+#if PAL_BUILD_GFX11
+#define GPURT_BUILD_RTIP2 1
+#endif
+
 #define GPURT_API_ENTRY PAL_STDCALL
 
 using ClientCmdContextHandle = void*;
@@ -1146,7 +1150,15 @@ struct InternalPipelineMemoryPair
 enum class BoxSortHeuristic : uint32
 {
     Closest = 0x0,
+#if GPURT_BUILD_RTIP2
+    Largest = 0x1,
+    MidPoint = 0x2,
+#endif
     Disabled = 0x3,
+#if GPURT_BUILD_RTIP2
+    LargestFirstOrClosest = 0x4,
+    LargestFirstOrClosestMidPoint = 0x5,
+#endif
     DisabledOnAcceptFirstHit = 0x6
 };
 

@@ -25,6 +25,10 @@
 
 #include "TraceRay1_1.hlsl"
 
+#if GPURT_BUILD_RTIP2
+#include "TraceRay2_0.hlsl"
+#endif
+
 //=====================================================================================================================
 static IntersectionResult TraceRay(
     in GpuVirtualAddress topLevelBvh,               ///< Top-level acceleration structure to use
@@ -43,6 +47,14 @@ static IntersectionResult TraceRay(
                                               ray,
                                               rayId,
                                               earlyTerminateThreshold);
+#if GPURT_BUILD_RTIP2
+        case RTIP2_0:  return TraceRayImpl2_0(topLevelBvh,
+                                              rayFlags,
+                                              traceRayParameters,
+                                              ray,
+                                              rayId,
+                                              earlyTerminateThreshold);
+#endif
 
         default: return (IntersectionResult) 0;
     }
@@ -60,6 +72,9 @@ static IntersectionResult IntersectRay(
     switch (rtHwVersion)
     {
         case RTIP1_1:  return IntersectRayImpl1_1(topLevelBvh, ray, blasPointer, tlasPointer, rayId);
+#if GPURT_BUILD_RTIP2
+        case RTIP2_0:  return IntersectRayImpl1_1(topLevelBvh, ray, blasPointer, tlasPointer, rayId);
+#endif
         default: return (IntersectionResult)0;
     }
 }

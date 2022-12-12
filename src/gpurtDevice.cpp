@@ -95,6 +95,23 @@ constexpr const char* FunctionTableRTIP1_1[] =
     "\01?GetWorldToObjectTransform@@YAM_KII@Z",
 };
 
+#if GPURT_BUILD_RTIP2
+//=====================================================================================================================
+// Function table for ray tracing IP2.0
+constexpr const char* FunctionTableRTIP2_0[] =
+{
+    "\01?RayQueryProceed2_0@@YA_NURayQueryInternal@@IV?$vector@I$02@@@Z",
+    "\01?TraceRayInline2_0@@YAXURayQueryInternal@@IIIIIURayDesc@@V?$vector@I$02@@@Z",
+    "\01?TraceRay2_0@@YAXIIIIIIIMMMMMMMM@Z",
+    "\01?TraceRayUsingHitToken2_0@@YAXIIIIIIIMMMMMMMMII@Z",
+    "\01?TraceRayUsingRayQuery2_0@@YAXIIIIIIIMMMMMMMM@Z",
+    "\01?GetInstanceID@@YAI_K@Z",
+    "\01?GetInstanceIndex@@YAI_K@Z",
+    "\01?GetObjectToWorldTransform@@YAM_KII@Z",
+    "\01?GetWorldToObjectTransform@@YAM_KII@Z",
+};
+#endif
+
 // =====================================================================================================================
 // Create GPURT device
 //
@@ -190,6 +207,11 @@ Pal::Result GPURT_API_ENTRY QueryRayTracingEntryFunctionTable(
         case Pal::RayTracingIpLevel::RtIp1_1:
             ppFuncTable = FunctionTableRTIP1_1;
             break;
+#if GPURT_BUILD_RTIP2
+        case Pal::RayTracingIpLevel::RtIp2_0:
+            ppFuncTable = FunctionTableRTIP2_0;
+            break;
+#endif
         case Pal::RayTracingIpLevel::None:
         default:
             result = Pal::Result::ErrorInvalidValue;
@@ -367,6 +389,14 @@ Pal::Result Device::Init()
     {
         m_info.deviceSettings.enableMergedEncodeBuild = false;
     }
+
+#if GPURT_BUILD_RTIP2
+    // Fused instance node is currently only supported on RTIP2.0
+    if (m_info.pDeviceProperties->gfxipProperties.rayTracingIp != Pal::RayTracingIpLevel::RtIp2_0)
+    {
+        m_info.deviceSettings.enableFusedInstanceNode = false;
+    }
+#endif
 
     return result;
 }
