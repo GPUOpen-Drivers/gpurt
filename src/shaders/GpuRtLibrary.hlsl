@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2021-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2021-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -59,26 +59,27 @@ export void TraceRay1_1(
     float dirZ,
     float tMax)
 {
-    TraceRayCommon(accelStructLo,
-                   accelStructHi,
-                   rayFlags,
-                   instanceInclusionMask,
-                   rayContributionToHitGroupIndex,
-                   multiplierForGeometryContributionToShaderIndex,
-                   missShaderIndex,
-                   originX,
-                   originY,
-                   originZ,
-                   tMin,
-                   dirX,
-                   dirY,
-                   dirZ,
-                   tMax,
-                   0,
-                   0,
-                   true,
-                   RTIP1_1,
-                   0.0);
+    TraceRayCommon(
+        accelStructLo,
+        accelStructHi,
+        rayFlags,
+        instanceInclusionMask,
+        rayContributionToHitGroupIndex,
+        multiplierForGeometryContributionToShaderIndex,
+        missShaderIndex,
+        originX,
+        originY,
+        originZ,
+        tMin,
+        dirX,
+        dirY,
+        dirZ,
+        tMax,
+        0,
+        0,
+        true,
+        RTIP1_1
+    );
 }
 
 //=====================================================================================================================
@@ -138,26 +139,27 @@ export void TraceRayUsingHitToken1_1(
     uint  blasPointer,
     uint  tlasPointer)
 {
-    TraceRayCommon(accelStructLo,
-                   accelStructHi,
-                   rayFlags,
-                   instanceInclusionMask,
-                   rayContributionToHitGroupIndex,
-                   multiplierForGeometryContributionToShaderIndex,
-                   missShaderIndex,
-                   originX,
-                   originY,
-                   originZ,
-                   tMin,
-                   dirX,
-                   dirY,
-                   dirZ,
-                   tMax,
-                   blasPointer,
-                   tlasPointer,
-                   false,
-                   RTIP1_1,
-                   0.0);
+    TraceRayCommon(
+        accelStructLo,
+        accelStructHi,
+        rayFlags,
+        instanceInclusionMask,
+        rayContributionToHitGroupIndex,
+        multiplierForGeometryContributionToShaderIndex,
+        missShaderIndex,
+        originX,
+        originY,
+        originZ,
+        tMin,
+        dirX,
+        dirY,
+        dirZ,
+        tMax,
+        blasPointer,
+        tlasPointer,
+        false,
+        RTIP1_1
+    );
 }
 
 #if GPURT_BUILD_RTIP2
@@ -180,26 +182,27 @@ export void TraceRay2_0(
     float dirZ,
     float tMax)
 {
-    TraceRayCommon(accelStructLo,
-                   accelStructHi,
-                   rayFlags,
-                   instanceInclusionMask,
-                   rayContributionToHitGroupIndex,
-                   multiplierForGeometryContributionToShaderIndex,
-                   missShaderIndex,
-                   originX,
-                   originY,
-                   originZ,
-                   tMin,
-                   dirX,
-                   dirY,
-                   dirZ,
-                   tMax,
-                   0,
-                   0,
-                   true,
-                   RTIP2_0,
-                   0.0);
+    TraceRayCommon(
+        accelStructLo,
+        accelStructHi,
+        rayFlags,
+        instanceInclusionMask,
+        rayContributionToHitGroupIndex,
+        multiplierForGeometryContributionToShaderIndex,
+        missShaderIndex,
+        originX,
+        originY,
+        originZ,
+        tMin,
+        dirX,
+        dirY,
+        dirZ,
+        tMax,
+        0,
+        0,
+        true,
+        RTIP2_0
+    );
 }
 
 //=====================================================================================================================
@@ -260,26 +263,27 @@ export void TraceRayUsingHitToken2_0(
     uint  blasPointer,
     uint  tlasPointer)
 {
-    TraceRayCommon(accelStructLo,
-                   accelStructHi,
-                   rayFlags,
-                   instanceInclusionMask,
-                   rayContributionToHitGroupIndex,
-                   multiplierForGeometryContributionToShaderIndex,
-                   missShaderIndex,
-                   originX,
-                   originY,
-                   originZ,
-                   tMin,
-                   dirX,
-                   dirY,
-                   dirZ,
-                   tMax,
-                   blasPointer,
-                   tlasPointer,
-                   false,
-                   RTIP2_0,
-                   0.0);
+    TraceRayCommon(
+        accelStructLo,
+        accelStructHi,
+        rayFlags,
+        instanceInclusionMask,
+        rayContributionToHitGroupIndex,
+        multiplierForGeometryContributionToShaderIndex,
+        missShaderIndex,
+        originX,
+        originY,
+        originZ,
+        tMin,
+        dirX,
+        dirY,
+        dirZ,
+        tMax,
+        blasPointer,
+        tlasPointer,
+        false,
+        RTIP2_0
+    );
 }
 #endif
 
@@ -290,7 +294,12 @@ export bool RayQueryProceed1_1(
     in    uint                    constRayFlags,
     in    uint3                   dispatchThreadId)
 {
-    return RayQueryProceedCommon(rayQuery, constRayFlags, dispatchThreadId, RTIP1_1, 0.0);
+    return RayQueryProceedCommon(
+        rayQuery,
+        constRayFlags,
+        dispatchThreadId,
+        RTIP1_1
+    );
 }
 
 #if GPURT_BUILD_RTIP2
@@ -301,7 +310,12 @@ export bool RayQueryProceed2_0(
     in    uint                    constRayFlags,
     in    uint3                   dispatchThreadId)
 {
-    return RayQueryProceedCommon(rayQuery, constRayFlags, dispatchThreadId, RTIP2_0, 0.0);
+    return RayQueryProceedCommon(
+        rayQuery,
+        constRayFlags,
+        dispatchThreadId,
+        RTIP2_0
+    );
 }
 #endif
 

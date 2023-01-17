@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -46,9 +46,9 @@ struct Constants
 
 //=====================================================================================================================
 [[vk::push_constant]] ConstantBuffer<Constants>            ShaderConstants : register(b0);
-[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer ResultBuffer    : register(u0);
+[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstMetadata     : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer   : register(u1);
-[[vk::binding(2, 0)]]                  RWByteAddressBuffer SourceBuffer    : register(u2);
+[[vk::binding(2, 0)]]                  RWByteAddressBuffer SrcBuffer       : register(u2);
 
 #include "UpdateQBVHImpl.hlsl"
 
@@ -69,9 +69,9 @@ void UpdateQBVH(
     }
 
     UpdateQBVHImpl(globalThreadId.x,
-                   ResultBuffer,
+                   DstMetadata,
                    ScratchBuffer,
-                   SourceBuffer,
+                   SrcBuffer,
                    ShaderConstants.propagationFlagsScratchOffset,
                    numWorkItems,
                    numWorkItems);

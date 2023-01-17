@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -1312,7 +1312,7 @@ float2 FetchSceneSize(
 
 //=====================================================================================================================
 TriangleData FetchTriangleFromNode(
-    RWByteAddressBuffer ResultBuffer,
+    RWByteAddressBuffer DstBuffer,
     uint                metadataSize,
     uint                nodePointer)
 {
@@ -1321,9 +1321,9 @@ TriangleData FetchTriangleFromNode(
     const uint3 vertexOffsets = CalcTriangleVertexOffsets(nodeType);
 
     TriangleData tri;
-    tri.v0 = ResultBuffer.Load<float3>(nodeOffset + vertexOffsets.x);
-    tri.v1 = ResultBuffer.Load<float3>(nodeOffset + vertexOffsets.y);
-    tri.v2 = ResultBuffer.Load<float3>(nodeOffset + vertexOffsets.z);
+    tri.v0 = DstBuffer.Load<float3>(nodeOffset + vertexOffsets.x);
+    tri.v1 = DstBuffer.Load<float3>(nodeOffset + vertexOffsets.y);
+    tri.v2 = DstBuffer.Load<float3>(nodeOffset + vertexOffsets.z);
 
     return tri;
 }
@@ -1362,14 +1362,14 @@ uint ReadParentPointer(
 
 //=====================================================================================================================
 void WriteParentPointer(
-    RWByteAddressBuffer DestBuffer,
+    RWByteAddressBuffer DstMetadata,
     in uint             metadataSizeInBytes,
     in uint             packedNodePtr,
     in uint             parentPtr)
 {
     // Store parent pointer in metadata buffer in reverse order
     const uint nodePtr = ExtractNodePointerCollapse(packedNodePtr);
-    DestBuffer.Store(metadataSizeInBytes - CalcParentPtrOffset(nodePtr), parentPtr);
+    DstMetadata.Store(metadataSizeInBytes - CalcParentPtrOffset(nodePtr), parentPtr);
 }
 
 //=====================================================================================================================
@@ -1392,20 +1392,20 @@ uint GetChildCount(GpuVirtualAddress address, uint nodePointer)
 
 //=====================================================================================================================
 void WriteBoxNode(
-    RWByteAddressBuffer ResultBuffer,
+    RWByteAddressBuffer DstBuffer,
     in uint             offset,
     in Float32BoxNode   f32BoxNode)
 {
-    ResultBuffer.Store<Float32BoxNode>(offset, f32BoxNode);
+    DstBuffer.Store<Float32BoxNode>(offset, f32BoxNode);
 }
 
 //=====================================================================================================================
 void WriteFp16BoxNode(
-    RWByteAddressBuffer ResultBuffer,
+    RWByteAddressBuffer DstBuffer,
     in uint             offset,
     in Float16BoxNode   f16BoxNode)
 {
-    ResultBuffer.Store<Float16BoxNode>(offset, f16BoxNode);
+    DstBuffer.Store<Float16BoxNode>(offset, f16BoxNode);
 }
 
 //=====================================================================================================================
@@ -1893,7 +1893,7 @@ uint64_t CalculateVariableBitsMortonCode64(float3 sceneExtent,
 //=====================================================================================================================
 #define INIT_TASK           if(localId == 0)\
                             {\
-                                ResultMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 1, SharedMem[0]);\
+                                DstMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 1, SharedMem[0]);\
                             }\
                             GroupMemoryBarrierWithGroupSync();\
                             waveId = SharedMem[0];
@@ -1906,8 +1906,8 @@ uint64_t CalculateVariableBitsMortonCode64(float3 sceneExtent,
 #define END_TASK(n)             DeviceMemoryBarrierWithGroupSync();\
                                 if(localId == 0)\
                                 {\
-                                    ResultMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 1, SharedMem[0]);\
-                                    ResultMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET, 1);\
+                                    DstMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 1, SharedMem[0]);\
+                                    DstMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET, 1);\
                                 }\
                                 GroupMemoryBarrierWithGroupSync();\
                                 waveId = SharedMem[0];\
@@ -1916,4 +1916,4 @@ uint64_t CalculateVariableBitsMortonCode64(float3 sceneExtent,
                             do\
                             {\
                                 DeviceMemoryBarrier();\
-                            } while (ResultMetadata.Load(ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET) < numTasksWait);
+                            } while (DstMetadata.Load(ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET) < numTasksWait);

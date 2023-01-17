@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -41,9 +41,9 @@
 [[vk::binding(0, 0)]] RWByteAddressBuffer         IndexBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWStructuredBuffer<float4>  TransformBuffer : register(u1);
 
-[[vk::binding(2, 0)]] RWByteAddressBuffer ResultBuffer      : register(u2);
+[[vk::binding(2, 0)]] RWByteAddressBuffer DstMetadata       : register(u2);
 [[vk::binding(3, 0)]] RWByteAddressBuffer ScratchBuffer     : register(u3);
-[[vk::binding(4, 0)]] RWByteAddressBuffer SourceBuffer      : register(u4);
+[[vk::binding(4, 0)]] RWByteAddressBuffer SrcBuffer         : register(u4);
 [[vk::binding(5, 0)]] RWByteAddressBuffer IndirectArgBuffer : register(u5);
 
 #include "EncodeCommon.hlsl"
@@ -55,7 +55,7 @@
 void IncrementTaskCounter()
 {
     DeviceMemoryBarrier();
-    ResultBuffer.InterlockedAdd(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 1);
+    DstMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 1);
 }
 
 //=====================================================================================================================
@@ -166,8 +166,8 @@ void WriteProceduralNodeBoundingBox(
 {
     const uint nodeOffset = metadataSize + ExtractNodePointerOffset(nodePointer);
 
-    ResultBuffer.Store<float3>(nodeOffset + USER_NODE_PROCEDURAL_MIN_OFFSET,bbox.min);
-    ResultBuffer.Store<float3>(nodeOffset + USER_NODE_PROCEDURAL_MAX_OFFSET,bbox.max);
+    DstMetadata.Store<float3>(nodeOffset + USER_NODE_PROCEDURAL_MIN_OFFSET,bbox.min);
+    DstMetadata.Store<float3>(nodeOffset + USER_NODE_PROCEDURAL_MAX_OFFSET,bbox.max);
 }
 
 //=====================================================================================================================
@@ -179,8 +179,8 @@ void WriteProceduralNodePrimitiveData(
     const uint nodeOffset            = metadataSize + ExtractNodePointerOffset(nodePointer);
     const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(ShaderConstants.GeometryIndex,
                                                                  ShaderConstants.GeometryFlags);
-    ResultBuffer.Store(nodeOffset + USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
-    ResultBuffer.Store(nodeOffset + USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET, primitiveIndex);
+    DstMetadata.Store(nodeOffset + USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
+    DstMetadata.Store(nodeOffset + USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET, primitiveIndex);
 }
 
 //=====================================================================================================================
@@ -212,11 +212,11 @@ void EncodeAABBNodes(
     if (primitiveIndex < ShaderConstants.NumPrimitives)
     {
         const uint metadataSize =
-            IsUpdate(ShaderConstants.BuildFlags) ? SourceBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : ShaderConstants.metadataSizeInBytes;
+            IsUpdate(ShaderConstants.BuildFlags) ? SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : ShaderConstants.metadataSizeInBytes;
 
         // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
         const AccelStructOffsets offsets =
-            SourceBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
+            SrcBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
 
         const uint basePrimNodePtr =
             IsUpdate(ShaderConstants.BuildFlags) ? offsets.primNodePtrs : ShaderConstants.BasePrimNodePtrOffset;
@@ -231,7 +231,7 @@ void EncodeAABBNodes(
 
         if (IsUpdate(ShaderConstants.BuildFlags))
         {
-            const uint nodePointer = SourceBuffer.Load(primNodePointerOffset);
+            const uint nodePointer = SrcBuffer.Load(primNodePointerOffset);
 
             // If the primitive was active during the initial build, it will have a valid primitive node pointer.
             if (nodePointer != INVALID_IDX)
@@ -242,7 +242,7 @@ void EncodeAABBNodes(
                 {
                     WriteProceduralNodePrimitiveData(metadataSize, nodePointer, primitiveIndex);
 
-                    ResultBuffer.Store(primNodePointerOffset, nodePointer);
+                    DstMetadata.Store(primNodePointerOffset, nodePointer);
                 }
 
                 PushNodeForUpdate(ShaderConstants,
@@ -262,7 +262,7 @@ void EncodeAABBNodes(
             else if (ShaderConstants.isUpdateInPlace == false)
             {
                 // For inactive primitives, just copy over the primitive node pointer.
-                ResultBuffer.Store(primNodePointerOffset, nodePointer);
+                DstMetadata.Store(primNodePointerOffset, nodePointer);
             }
         }
         else
@@ -289,10 +289,10 @@ void EncodeAABBNodes(
 
             // Store invalid prim node pointer for now during first time builds.
             // If the Procedural node is active, BuildQBVH will update it.
-            ResultBuffer.Store(primNodePointerOffset, INVALID_IDX);
+            DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
 
             const uint numLeafNodesOffset = metadataSize + ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET;
-            ResultBuffer.InterlockedAdd(numLeafNodesOffset, 1);
+            DstMetadata.InterlockedAdd(numLeafNodesOffset, 1);
         }
 
         // ClearFlags for refit and update

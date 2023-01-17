@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -41,7 +41,7 @@ struct InputArgs
 [[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
 
 //=====================================================================================================================
-[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer    DstBuffer   : register(u0);
+[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer    DstMetadata : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer                     SrcBuffer   : register(u1);
 
 //=====================================================================================================================
@@ -54,7 +54,7 @@ uint UpdateParentPointer(
     uint parentNodePointer = ReadParentPointer(SrcBuffer,
                                                srcMetadataSizeInBytes,
                                                srcNodePointer);
-    WriteParentPointer(DstBuffer,
+    WriteParentPointer(DstMetadata,
                        dstMetadataSizeInBytes,
                        dstNodePointer,
                        parentNodePointer);
@@ -88,7 +88,7 @@ void WriteParentNodeChildPointer(
                                                                   ExtractNodePointerOffset(dstNodePointer),
                                                                   collapsePrimCount);
 
-            DstBuffer.Store(parentNodeOffset + dstMetadataSizeInBytes + (childIndex * sizeof(uint)), dstPackedNodePointer);
+            DstMetadata.Store(parentNodeOffset + dstMetadataSizeInBytes + (childIndex * sizeof(uint)), dstPackedNodePointer);
             break;
         }
     }
@@ -111,28 +111,28 @@ void CopyFp16BoxNode(
     // Skip leaf child pointers because they will be updated while copying leaf nodes
     if ((node.child0 == INVALID_IDX) || IsBoxNode(node.child0))
     {
-        DstBuffer.Store(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_CHILD0_OFFSET, node.child0);
+        DstMetadata.Store(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_CHILD0_OFFSET, node.child0);
     }
 
     if ((node.child1 == INVALID_IDX) || IsBoxNode(node.child1))
     {
-        DstBuffer.Store(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_CHILD1_OFFSET, node.child1);
+        DstMetadata.Store(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_CHILD1_OFFSET, node.child1);
     }
 
     if ((node.child2 == INVALID_IDX) || IsBoxNode(node.child2))
     {
-        DstBuffer.Store(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_CHILD2_OFFSET, node.child2);
+        DstMetadata.Store(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_CHILD2_OFFSET, node.child2);
     }
 
     if ((node.child3 == INVALID_IDX) || IsBoxNode(node.child3))
     {
-        DstBuffer.Store(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_CHILD3_OFFSET, node.child3);
+        DstMetadata.Store(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_CHILD3_OFFSET, node.child3);
     }
 
-    DstBuffer.Store<uint3>(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_BB0_OFFSET, node.bbox0);
-    DstBuffer.Store<uint3>(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_BB1_OFFSET, node.bbox1);
-    DstBuffer.Store<uint3>(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_BB2_OFFSET, node.bbox2);
-    DstBuffer.Store<uint3>(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_BB3_OFFSET, node.bbox3);
+    DstMetadata.Store<uint3>(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_BB0_OFFSET, node.bbox0);
+    DstMetadata.Store<uint3>(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_BB1_OFFSET, node.bbox1);
+    DstMetadata.Store<uint3>(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_BB2_OFFSET, node.bbox2);
+    DstMetadata.Store<uint3>(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_BB3_OFFSET, node.bbox3);
 
     const uint srcNodePointer = PackNodePointer(NODE_TYPE_BOX_FLOAT16, srcInternalNodeDataOffset - srcMetadataSizeInBytes);
     const uint dstNodePointer = PackNodePointer(NODE_TYPE_BOX_FLOAT16, dstInternalNodeDataOffset - dstMetadataSizeInBytes);
@@ -158,34 +158,34 @@ void CopyFp32BoxNode(
     // Skip leaf child pointers because they will be updated while copying leaf nodes
     if ((node.child0 == INVALID_IDX) || IsBoxNode(node.child0))
     {
-        DstBuffer.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_CHILD0_OFFSET, node.child0);
+        DstMetadata.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_CHILD0_OFFSET, node.child0);
     }
 
     if ((node.child1 == INVALID_IDX) || IsBoxNode(node.child1))
     {
-        DstBuffer.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_CHILD1_OFFSET, node.child1);
+        DstMetadata.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_CHILD1_OFFSET, node.child1);
     }
 
     if ((node.child2 == INVALID_IDX) || IsBoxNode(node.child2))
     {
-        DstBuffer.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_CHILD2_OFFSET, node.child2);
+        DstMetadata.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_CHILD2_OFFSET, node.child2);
     }
 
     if ((node.child3 == INVALID_IDX) || IsBoxNode(node.child3))
     {
-        DstBuffer.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_CHILD3_OFFSET, node.child3);
+        DstMetadata.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_CHILD3_OFFSET, node.child3);
     }
 
-    DstBuffer.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET, node.bbox0_min);
-    DstBuffer.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET, node.bbox0_max);
-    DstBuffer.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB1_MIN_OFFSET, node.bbox1_min);
-    DstBuffer.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB1_MAX_OFFSET, node.bbox1_max);
-    DstBuffer.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB2_MIN_OFFSET, node.bbox2_min);
-    DstBuffer.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB2_MAX_OFFSET, node.bbox2_max);
-    DstBuffer.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB3_MIN_OFFSET, node.bbox3_min);
-    DstBuffer.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB3_MAX_OFFSET, node.bbox3_max);
-    DstBuffer.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, node.flags);
-    DstBuffer.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_NUM_PRIM_OFFSET, node.numPrimitives);
+    DstMetadata.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET, node.bbox0_min);
+    DstMetadata.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET, node.bbox0_max);
+    DstMetadata.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB1_MIN_OFFSET, node.bbox1_min);
+    DstMetadata.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB1_MAX_OFFSET, node.bbox1_max);
+    DstMetadata.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB2_MIN_OFFSET, node.bbox2_min);
+    DstMetadata.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB2_MAX_OFFSET, node.bbox2_max);
+    DstMetadata.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB3_MIN_OFFSET, node.bbox3_min);
+    DstMetadata.Store<float3>(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_BB3_MAX_OFFSET, node.bbox3_max);
+    DstMetadata.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, node.flags);
+    DstMetadata.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_NUM_PRIM_OFFSET, node.numPrimitives);
 
     const uint srcNodePointer = PackNodePointer(NODE_TYPE_BOX_FLOAT32, srcInternalNodeDataOffset - srcMetadataSizeInBytes);
     const uint dstNodePointer = PackNodePointer(NODE_TYPE_BOX_FLOAT32, dstInternalNodeDataOffset - dstMetadataSizeInBytes);
@@ -275,7 +275,7 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
 {
     const uint globalId = globalThreadId.x;
 
-    // The following code assumes the base address of SrcBuffer and DstBuffer includes the acceleration structure
+    // The following code assumes the base address of SrcBuffer and DstMetadata includes the acceleration structure
     // metadata header
 
     // Fetch acceleration structure metadata size
@@ -308,10 +308,10 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
         uint64_t dstAccelStructAddr = MakeGpuVirtualAddress(ShaderConstants.addressLo, ShaderConstants.addressHi);
         dstAccelStructAddr += dstMetadataSizeInBytes;
 
-        DstBuffer.Store<uint64_t>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, dstAccelStructAddr);
-        DstBuffer.Store<uint32_t>(ACCEL_STRUCT_METADATA_SIZE_OFFSET, dstMetadataSizeInBytes);
-        DstBuffer.Store<uint32_t>(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 0);
-        DstBuffer.Store<uint32_t>(ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET, 0);
+        DstMetadata.Store<uint64_t>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, dstAccelStructAddr);
+        DstMetadata.Store<uint32_t>(ACCEL_STRUCT_METADATA_SIZE_OFFSET, dstMetadataSizeInBytes);
+        DstMetadata.Store<uint32_t>(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 0);
+        DstMetadata.Store<uint32_t>(ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET, 0);
 
         // Acceleration structure header
         AccelStructHeader dstHeader   = srcHeader;
@@ -322,7 +322,7 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
         // RayTracing structure build info
         dstHeader.info2 |= (1 << ACCEL_STRUCT_HEADER_INFO_2_BVH_COMPACTION_FLAGS_SHIFT);
 
-        DstBuffer.Store<AccelStructHeader>(dstMetadataSizeInBytes, dstHeader);
+        DstMetadata.Store<AccelStructHeader>(dstMetadataSizeInBytes, dstHeader);
     }
 
     // Add metadata size to get to absolute data offsets in source/destination memory
@@ -439,7 +439,7 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
 
             // Copy instance node
             const InstanceNode node = SrcBuffer.Load<InstanceNode>(srcNodeDataOffset);
-            DstBuffer.Store<InstanceNode>(dstNodeDataOffset, node);
+            DstMetadata.Store<InstanceNode>(dstNodeDataOffset, node);
 
             // Top level acceleration structures do not have geometry info.
 
@@ -463,7 +463,7 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
 
             // Copy triangle node data
             const TriangleNode node = SrcBuffer.Load<TriangleNode>(srcNodeDataOffset);
-            DstBuffer.Store<TriangleNode>(dstNodeDataOffset, node);
+            DstMetadata.Store<TriangleNode>(dstNodeDataOffset, node);
 
             // Handle per-primitive data
             if (triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION)
@@ -512,7 +512,7 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
 
             // Copy procedural node
             const ProceduralNode node = SrcBuffer.Load<ProceduralNode>(srcNodeDataOffset);
-            DstBuffer.Store<ProceduralNode>(dstNodeDataOffset, node);
+            DstMetadata.Store<ProceduralNode>(dstNodeDataOffset, node);
 
             const uint srcNodePointer = PackNodePointer(NODE_TYPE_USER_NODE_PROCEDURAL, srcOffsets.leafNodes + nodeOffset);
             const uint dstNodePointer = PackNodePointer(NODE_TYPE_USER_NODE_PROCEDURAL, dstOffsets.leafNodes + nodeOffset);
@@ -534,7 +534,7 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
             const uint dstGeometryInfoOffset = dstOffsetDataGeometryInfo + (geometryIndex * sizeof(GeometryInfo));
 
             const GeometryInfo geometryInfo = SrcBuffer.Load<GeometryInfo>(srcGeometryInfoOffset);
-            DstBuffer.Store<GeometryInfo>(dstGeometryInfoOffset, geometryInfo);
+            DstMetadata.Store<GeometryInfo>(dstGeometryInfoOffset, geometryInfo);
         }
     }
 
@@ -558,6 +558,6 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
             dstNodePointer = PackLeafNodePointer(srcNodeType, dstOffsets.leafNodes + nodeOffset, collapsePrimCount);
         }
 
-        DstBuffer.Store(dstNodePtrOffset, dstNodePointer);
+        DstMetadata.Store(dstNodePtrOffset, dstNodePointer);
     }
 }

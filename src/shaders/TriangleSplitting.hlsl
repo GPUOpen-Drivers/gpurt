@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -693,8 +693,8 @@ void TriangleSplittingImpl(
 
                 const uint3 numAxisBits = CalculateVariableAxisBitCount64(sceneExtents, args.numSizeBits);
 
-                const uint basePrimNodePtrsOffset = ResultBuffer.Load(ACCEL_STRUCT_HEADER_OFFSETS_OFFSET +
-                                                                      ACCEL_STRUCT_OFFSETS_PRIM_NODE_PTRS_OFFSET);
+                const uint basePrimNodePtrsOffset = DstBuffer.Load(ACCEL_STRUCT_HEADER_OFFSETS_OFFSET +
+                                                                   ACCEL_STRUCT_OFFSETS_PRIM_NODE_PTRS_OFFSET);
 
                 for (i = globalId; i < numRefs; i += numThreads)
                 {
@@ -1012,7 +1012,7 @@ void TriangleSplittingImpl(
                                                               writeIndex);
 
                                 const uint extraPrimNodePtrOffset = basePrimNodePtrsOffset + (writeIndex * sizeof(uint));
-                                ResultBuffer.Store(extraPrimNodePtrOffset, INVALID_IDX);
+                                DstBuffer.Store(extraPrimNodePtrOffset, INVALID_IDX);
 
                             }
                             else if (ref.splitLeafBaseIndex & 0x1) // update original leaf
@@ -1055,7 +1055,7 @@ void TriangleSplittingImpl(
                                 WriteBox(args, writeIndex, ref.bbox);
 
                                 const uint extraPrimNodePtrOffset = basePrimNodePtrsOffset + (writeIndex * sizeof(uint));
-                                ResultBuffer.Store(extraPrimNodePtrOffset, INVALID_IDX);
+                                DstBuffer.Store(extraPrimNodePtrOffset, INVALID_IDX);
 
                                 UpdateSceneSize(ScratchBuffer, args.sceneBoundsByteOffset + 24, surfaceArea);
                             }
@@ -1075,7 +1075,7 @@ void TriangleSplittingImpl(
                     }
                     else
                     {
-                        ResultBuffer.InterlockedAdd(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET, numRefsAlloc/2);
+                        DstBuffer.InterlockedAdd(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET, numRefsAlloc/2);
 
                         ScratchBuffer.Store(numRefsAllocOffset, 0);
 

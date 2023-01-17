@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -77,19 +77,23 @@ static bool RayQueryProceedCommon(
     inout_param(RayQueryInternal) rayQuery,
     in    uint                    constRayFlags,
     in    uint3                   dispatchThreadId,
-    in    uint                    rtHwVersion,
-    in    float                   earlyTerminateThreshold)
+    in    uint                    rtHwVersion
+)
 {
     bool continueTraversal = false;
 
     switch (rtHwVersion)
     {
         case RTIP1_1:
-            continueTraversal = RayQueryProceedImpl1_1(rayQuery, constRayFlags, earlyTerminateThreshold, dispatchThreadId);
+            continueTraversal = RayQueryProceedImpl1_1(rayQuery,
+                                                       constRayFlags,
+                                                       dispatchThreadId);
             break;
 #if GPURT_BUILD_RTIP2
         case RTIP2_0:
-            continueTraversal = RayQueryProceedImpl2_0(rayQuery, constRayFlags, earlyTerminateThreshold, dispatchThreadId);
+            continueTraversal = RayQueryProceedImpl2_0(rayQuery,
+                                                       constRayFlags,
+                                                       dispatchThreadId);
             break;
 #endif
         default: break;

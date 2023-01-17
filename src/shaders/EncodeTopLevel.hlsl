@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -51,9 +51,9 @@ struct Constants
 
 //=====================================================================================================================
 [[vk::push_constant]] ConstantBuffer<Constants>           ShaderConstants    : register(b0);
-[[vk::binding(0, 0)]] RWByteAddressBuffer                 ResultBuffer       : register(u0);
+[[vk::binding(0, 0)]] RWByteAddressBuffer                 DstMetadata        : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer                 ScratchBuffer      : register(u1);
-[[vk::binding(2, 0)]] RWByteAddressBuffer                 SourceBuffer       : register(u2);
+[[vk::binding(2, 0)]] RWByteAddressBuffer                 SrcBuffer          : register(u2);
 [[vk::binding(3, 0)]] RWByteAddressBuffer                 InstanceDescBuffer : register(u3);
 
 //=====================================================================================================================
@@ -160,9 +160,9 @@ void EncodeInstances(
         }
 
         const uint tlasMetadataSize =
-            isUpdate ? SourceBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : ShaderConstants.metadataSizeInBytes;
+            isUpdate ? SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : ShaderConstants.metadataSizeInBytes;
         // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
-        const AccelStructOffsets offsets = SourceBuffer.Load<AccelStructOffsets>(tlasMetadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
+        const AccelStructOffsets offsets = SrcBuffer.Load<AccelStructOffsets>(tlasMetadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
         const uint basePrimNodePointersOffset = isUpdate ? offsets.primNodePtrs : ShaderConstants.basePrimNodePtrOffset;
 
         const uint primNodePointerOffset = tlasMetadataSize + basePrimNodePointersOffset + (index * sizeof(uint));
@@ -171,18 +171,32 @@ void EncodeInstances(
 
         const uint instanceMask = (desc.InstanceID_and_Mask >> 24);
 
-        const GpuVirtualAddress baseAddr = MakeGpuVirtualAddress(desc.accelStructureAddressLo,
-                                                                 desc.accelStructureAddressHiAndFlags);
+        GpuVirtualAddress baseAddr = MakeGpuVirtualAddress(desc.accelStructureAddressLo,
+                                                           desc.accelStructureAddressHiAndFlags);
         uint64_t baseAddrAccelStructHeader = 0;
         uint numActivePrims = 0;
 
         if (baseAddr != 0)
         {
             baseAddrAccelStructHeader =
-                MakeGpuVirtualAddress(LoadDwordAtAddr(baseAddr + ACCEL_STRUCT_METADATA_VA_LO_OFFSET),
-                                      LoadDwordAtAddr(baseAddr + ACCEL_STRUCT_METADATA_VA_HI_OFFSET));
-            numActivePrims =
-                FetchHeaderField(baseAddrAccelStructHeader, ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+                    MakeGpuVirtualAddress(LoadDwordAtAddr(baseAddr + ACCEL_STRUCT_METADATA_VA_LO_OFFSET),
+                                          LoadDwordAtAddr(baseAddr + ACCEL_STRUCT_METADATA_VA_HI_OFFSET));
+
+            // In some odd cases where the BLAS memory gets trampled, this is a failsafe to skip such BLAS
+            // and treat them as inactive rather than causing a page fault.
+            const uint metadataSizeInBytes = LoadDwordAtAddr(baseAddr + ACCEL_STRUCT_METADATA_SIZE_OFFSET);
+            const uint64_t expectedBaseAddr = baseAddr + metadataSizeInBytes;
+
+            if (baseAddrAccelStructHeader == expectedBaseAddr)
+            {
+                numActivePrims =
+                    FetchHeaderField(baseAddrAccelStructHeader, ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+            }
+            else
+            {
+                numActivePrims = 0;
+                baseAddr = 0ull;
+            }
         }
 
         const bool deactivateNonUpdatable = (instanceMask == 0) || (numActivePrims == 0);
@@ -294,33 +308,33 @@ void EncodeInstances(
 
                 // Store invalid prim node pointer for now during first time builds.
                 // If the instance is active, BuildQBVH will write it in.
-                ResultBuffer.Store(primNodePointerOffset, INVALID_IDX);
+                DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
             }
             else if (numActivePrims != 0)
             {
                 const uint blasMetadataSize = FetchHeaderField(baseAddrAccelStructHeader,
                                                                ACCEL_STRUCT_HEADER_METADATA_SIZE_OFFSET);
-                const uint nodePointer = SourceBuffer.Load(primNodePointerOffset);
+                const uint nodePointer = SrcBuffer.Load(primNodePointerOffset);
                 const uint nodeOffset  = tlasMetadataSize + ExtractNodePointerOffset(nodePointer);
 
                 // Fetch parent node pointer
-                const uint parentNodePointer = ReadParentPointer(SourceBuffer,
+                const uint parentNodePointer = ReadParentPointer(SrcBuffer,
                                                                  tlasMetadataSize,
                                                                  nodePointer);
 
                 // Update prim node pointer and parent pointer in out of place destination buffer
                 if (IsUpdateInPlace() == false)
                 {
-                    ResultBuffer.Store(primNodePointerOffset, nodePointer);
+                    DstMetadata.Store(primNodePointerOffset, nodePointer);
 
-                    WriteParentPointer(ResultBuffer,
+                    WriteParentPointer(DstMetadata,
                                        tlasMetadataSize,
                                        nodePointer,
                                        parentNodePointer);
                 }
 
                 const uint parentNodeOffset = tlasMetadataSize + ExtractNodePointerOffset(parentNodePointer);
-                const uint4 childPointers = SourceBuffer.Load<uint4>(parentNodeOffset);
+                const uint4 childPointers = SrcBuffer.Load<uint4>(parentNodeOffset);
 
                 // Find child index in parent (assumes child pointer 0 is always valid)
                 uint childIdx = 0;
@@ -358,14 +372,14 @@ void EncodeInstances(
                 boxNodeCount += IsBoxNode(childPointers.w) ? 1 : 0;
 
                 const uint boxOffset = childIdx * FLOAT32_BBOX_STRIDE;
-                ResultBuffer.Store<float3>(parentNodeOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET + boxOffset, boundingBox.min);
-                ResultBuffer.Store<float3>(parentNodeOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET + boxOffset, boundingBox.max);
+                DstMetadata.Store<float3>(parentNodeOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET + boxOffset, boundingBox.min);
+                DstMetadata.Store<float3>(parentNodeOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET + boxOffset, boundingBox.max);
 
                 // The instance flags can be changed in an update, so the node flags need to be updated.
                 const uint fieldMask = 0xFFu << (childIdx * BOX_NODE_FLAGS_BIT_STRIDE);
-                ResultBuffer.InterlockedAnd(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, ~fieldMask);
-                ResultBuffer.InterlockedOr(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET,
-                                            nodeFlags << (childIdx * BOX_NODE_FLAGS_BIT_STRIDE));
+                DstMetadata.InterlockedAnd(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, ~fieldMask);
+                DstMetadata.InterlockedOr(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET,
+                                          nodeFlags << (childIdx * BOX_NODE_FLAGS_BIT_STRIDE));
 
                 // If this is the first child in the parent node with all leaf children, queue parent pointer to
                 // stack in scratch memory
@@ -375,11 +389,11 @@ void EncodeInstances(
 
                     if (IsUpdateInPlace() == false)
                     {
-                        ResultBuffer.Store<uint4>(parentNodeOffset, childPointers);
+                        DstMetadata.Store<uint4>(parentNodeOffset, childPointers);
                     }
                 }
 
-                WriteInstanceDescriptor(ResultBuffer,
+                WriteInstanceDescriptor(DstMetadata,
                                         desc,
                                         index,
                                         nodeOffset,
@@ -393,7 +407,7 @@ void EncodeInstances(
             // Deactivate instance permanently by setting bbox_min_or_v0.x to NaN
             ScratchBuffer.Store(destScratchNodeOffset, asuint(NaN));
 
-            ResultBuffer.Store(primNodePointerOffset, INVALID_IDX);
+            DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
         }
 
         // ClearFlags for refit and update
@@ -407,6 +421,6 @@ void EncodeInstances(
         }
 
         DeviceMemoryBarrier();
-        ResultBuffer.InterlockedAdd(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 1);
+        DstMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 1);
     }
 }

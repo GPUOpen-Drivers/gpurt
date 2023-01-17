@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -43,11 +43,8 @@ struct InputArgs
 [[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
 
 //=====================================================================================================================
-[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstBuffer : register(u0);
-[[vk::binding(1, 0)]]                  RWByteAddressBuffer SrcBuffer : register(u1);
-
-// @note Workaround for TASK macros using ResultMetadata specifically
-#define ResultMetadata DstBuffer
+[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstMetadata : register(u0);
+[[vk::binding(1, 0)]]                  RWByteAddressBuffer SrcBuffer   : register(u1);
 
 groupshared uint SharedMem[1];
 
@@ -86,13 +83,13 @@ void DeserializeAS(
 
     BEGIN_TASK(ShaderConstants.numWaves);
 
-    // Copy from SrcBuffer->DstBuffer skipping over D3D12_SERIALIZED_ACCELERATION_STRUCTURE_HEADER and list of ptrs.
+    // Copy from SrcBuffer->DstMetadata skipping over D3D12_SERIALIZED_ACCELERATION_STRUCTURE_HEADER and list of ptrs.
     // Skip metadata header too for now since we are using the task counters and do not want to overwrite it.
     for (uint i = globalId; i < sizeInDwords; i += (ShaderConstants.numWaves * BUILD_THREADGROUP_SIZE))
     {
         const uint byteOffset = sizeof(AccelStructMetadataHeader) + (i << 2);
 
-        DstBuffer.Store(byteOffset, SrcBuffer.Load(serializedHeaderSize + byteOffset));
+        DstMetadata.Store(byteOffset, SrcBuffer.Load(serializedHeaderSize + byteOffset));
     }
 
     END_TASK(ShaderConstants.numWaves);
@@ -149,7 +146,7 @@ void DeserializeAS(
 
                 // Preserve the instance flags in the high bits of the address.
                 newGpuVa = (oldGpuVa & ~(INSTANCE_BASE_POINTER_ADDRESS_USED_MASK)) | (newGpuVa >> 3);
-                DstBuffer.Store<uint64_t>(currentInstNodeOffset + INSTANCE_DESC_VA_LO_OFFSET, newGpuVa);
+                DstMetadata.Store<uint64_t>(currentInstNodeOffset + INSTANCE_DESC_VA_LO_OFFSET, newGpuVa);
             }
         }
     }
@@ -165,19 +162,19 @@ void DeserializeAS(
         {
             if (header.numActivePrims > 0)
             {
-                DstBuffer.Store<uint64_t>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, gpuVa);
-                DstBuffer.Store(ACCEL_STRUCT_METADATA_SIZE_OFFSET,  metadataSizeInBytes);
+                DstMetadata.Store<uint64_t>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, gpuVa);
+                DstMetadata.Store(ACCEL_STRUCT_METADATA_SIZE_OFFSET,  metadataSizeInBytes);
             }
             else
             {
-                DstBuffer.Store<uint64_t>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, 0);
-                DstBuffer.Store(ACCEL_STRUCT_METADATA_SIZE_OFFSET,  0);
+                DstMetadata.Store<uint64_t>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, 0);
+                DstMetadata.Store(ACCEL_STRUCT_METADATA_SIZE_OFFSET,  0);
             }
         }
         else
         {
-            DstBuffer.Store<uint64_t>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, gpuVa);
-            DstBuffer.Store(ACCEL_STRUCT_METADATA_SIZE_OFFSET,  metadataSizeInBytes);
+            DstMetadata.Store<uint64_t>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, gpuVa);
+            DstMetadata.Store(ACCEL_STRUCT_METADATA_SIZE_OFFSET,  metadataSizeInBytes);
         }
     }
 }

@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2022-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -23,7 +23,6 @@
  *
  **********************************************************************************************************************/
 #include "IntersectCommon.hlsl"
-#define ResultMetadata ResultBuffer
 #include "BuildCommon.hlsl"
 
 #define RootSig "RootConstants(num32BitConstants=10, b0, visibility=SHADER_VISIBILITY_ALL), "\
@@ -54,9 +53,9 @@ struct InputArgs
 
 [[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
 
-[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer ResultBuffer   : register(u0);
+[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstMetadata    : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer  : register(u1);
-[[vk::binding(2, 0)]]                  RWByteAddressBuffer SourceBuffer   : register(u2);
+[[vk::binding(2, 0)]]                  RWByteAddressBuffer SrcBuffer      : register(u2);
 
 #include "EncodeCommon.hlsl"
 
@@ -131,9 +130,9 @@ void Update(
     const uint numWorkItems = ScratchBuffer.Load(UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET);
 
     UpdateQBVHImpl(globalId,
-                   ResultBuffer,
+                   DstMetadata,
                    ScratchBuffer,
-                   SourceBuffer,
+                   SrcBuffer,
                    ShaderConstants.propagationFlagsScratchOffset,
                    numWorkItems,
                    ShaderConstants.numThreads);

@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -36,24 +36,28 @@ static IntersectionResult TraceRay(
     in uint              traceRayParameters,        ///< Packed trace ray parameters
     in RayDesc           ray,                       ///< Ray to be traced
     in uint              rayId,                     ///< Ray ID for profiling
-    in uint              rtHwVersion,               ///< HW version to determine TraceRay implementation
-    in float             earlyTerminateThreshold)   ///< Early Ray Terminate Threshold
+    in uint              rtHwVersion                ///< HW version to determine TraceRay implementation
+)
 {
     switch (rtHwVersion)
     {
-        case RTIP1_1:  return TraceRayImpl1_1(topLevelBvh,
-                                              rayFlags,
-                                              traceRayParameters,
-                                              ray,
-                                              rayId,
-                                              earlyTerminateThreshold);
+        case RTIP1_1:
+        return TraceRayImpl1_1(
+            topLevelBvh,
+            rayFlags,
+            traceRayParameters,
+            ray,
+            rayId
+        );
 #if GPURT_BUILD_RTIP2
-        case RTIP2_0:  return TraceRayImpl2_0(topLevelBvh,
-                                              rayFlags,
-                                              traceRayParameters,
-                                              ray,
-                                              rayId,
-                                              earlyTerminateThreshold);
+        case RTIP2_0:
+        return TraceRayImpl2_0(
+            topLevelBvh,
+            rayFlags,
+            traceRayParameters,
+            ray,
+            rayId
+        );
 #endif
 
         default: return (IntersectionResult) 0;
@@ -99,8 +103,8 @@ static bool TraceRayCommon(
     uint  blasPointer,
     uint  tlasPointer,
     bool  traverse,
-    uint  rtHwVersion,
-    float earlyTerminateThreshold)
+    uint  rtHwVersion
+)
 {
 #if DEVELOPER
     rayFlags |= DispatchRaysInfo.ProfileRayFlags;
@@ -155,13 +159,14 @@ static bool TraceRayCommon(
 
         if (traverse)
         {
-            result = TraceRay(accelStruct,
-                              rayFlags,
-                              packedTraceParams,
-                              ray,
-                              rayId,
-                              rtHwVersion,
-                              earlyTerminateThreshold);
+            result = TraceRay(
+                accelStruct,
+                rayFlags,
+                packedTraceParams,
+                ray,
+                rayId,
+                rtHwVersion
+            );
         }
         else
         {
@@ -352,7 +357,11 @@ static void TraceRayUsingRayQueryCommon(uint  accelStructLo,
     {
         LogAccelStruct(accelStruct);
 
-        while (RayQueryProceedCommon(rayQuery, constRayFlags, AmdTraceRayDispatchRaysIndex(), rtHwVersion, 0.0) == true)
+        while (RayQueryProceedCommon(rayQuery,
+                                     constRayFlags,
+                                     AmdTraceRayDispatchRaysIndex(),
+                                     rtHwVersion
+                                     ) == true)
         {
             const uint instanceContribution = rayQuery.candidate.instanceContribution;
             const HitGroupInfo hitInfo      = GetHitGroupInfo(rayContributionToHitGroupIndex,

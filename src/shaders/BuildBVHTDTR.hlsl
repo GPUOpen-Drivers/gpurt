@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -64,8 +64,8 @@ struct TDArgs
 
 [[vk::push_constant]] ConstantBuffer<TDArgs> args : register(b0);
 
-[[vk::binding(0, 0)]]                  RWByteAddressBuffer ResultBuffer       : register(u0);
-[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer ResultMetadata     : register(u1);
+[[vk::binding(0, 0)]]                  RWByteAddressBuffer DstBuffer          : register(u0);
+[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata        : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer      : register(u2);
 [[vk::binding(3, 0)]]                  RWByteAddressBuffer InstanceDescBuffer : register(u3);
 
@@ -1047,7 +1047,7 @@ void BuildBVHTDImpl(
 #endif
                         ScratchBuffer.Store<ScratchNode>(args.BvhNodeDataScratchOffset, leafNode);
 
-                        ResultBuffer.Store(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, 1);
+                        DstBuffer.Store(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, 1);
                         AllocTasksTD(numGroups, TD_PHASE_DONE, args);
                     }
                 }
@@ -1057,9 +1057,9 @@ void BuildBVHTDImpl(
                     {
                         // This is an empty TLAS, but we didn't know it yet when we were setting up the header writes in the
                         // command buffer. Overwrite the GPU VA to 0 to properly designate the TLAS as empty.
-                        ResultMetadata.Store<GpuVirtualAddress>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, 0);
+                        DstMetadata.Store<GpuVirtualAddress>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, 0);
 
-                        ResultBuffer.Store(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, 0);
+                        DstBuffer.Store(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, 0);
 
                         AllocTasksTD(numGroups, TD_PHASE_DONE, args);
                     }
@@ -1874,7 +1874,7 @@ void BuildBVHTDImpl(
                 {
                     if (ScratchBuffer.Load(numLeavesOffset) == numRefs)
                     {
-                        ResultBuffer.Store(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, numRefs);
+                        DstBuffer.Store(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, numRefs);
 
                         AllocTasksTD(numGroups, TD_PHASE_DONE, args);
                     }
@@ -1929,14 +1929,14 @@ void BuildBVHTDImpl(
 #if USE_BVH_REBRAID
                 // initialize the extra prim node pointers to invalid
                 const uint maxNumPrimitives       = args.MaxRefCountSize;
-                const uint basePrimNodePtrsOffset = ResultBuffer.Load(ACCEL_STRUCT_HEADER_OFFSETS_OFFSET +
-                                                                      ACCEL_STRUCT_OFFSETS_PRIM_NODE_PTRS_OFFSET);
+                const uint basePrimNodePtrsOffset = DstBuffer.Load(ACCEL_STRUCT_HEADER_OFFSETS_OFFSET +
+                                                                   ACCEL_STRUCT_OFFSETS_PRIM_NODE_PTRS_OFFSET);
 
                 for (uint i = globalId + args.NumPrimitives; i < maxNumPrimitives; i += args.NumThreads)
                 {
                     const uint extraPrimNodePtrOffset = basePrimNodePtrsOffset + (i * sizeof(uint));
 
-                    ResultBuffer.Store(extraPrimNodePtrOffset, INVALID_IDX);
+                    DstBuffer.Store(extraPrimNodePtrOffset, INVALID_IDX);
                 }
 #endif
                 return;

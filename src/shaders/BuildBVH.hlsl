@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -46,9 +46,9 @@ struct InputArgs
 
 [[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
 
-[[vk::binding(0, 0)]] RWByteAddressBuffer ResultBuffer   : register(u0);
-[[vk::binding(1, 0)]] RWByteAddressBuffer ResultMetadata : register(u1);
-[[vk::binding(2, 0)]] RWByteAddressBuffer ScratchBuffer  : register(u2);
+[[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer     : register(u0);
+[[vk::binding(1, 0)]] RWByteAddressBuffer DstMetadata   : register(u1);
+[[vk::binding(2, 0)]] RWByteAddressBuffer ScratchBuffer : register(u2);
 #endif
 
 //=====================================================================================================================
@@ -269,7 +269,7 @@ void FastBuildBVH(uint globalId, uint numPrims, uint leafNodesOffset, uint bvhNo
 
         if (globalId == 0)
         {
-            ResultBuffer.Store(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, numActivePrims);
+            DstBuffer.Store(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, numActivePrims);
         }
     }
 }
@@ -283,7 +283,7 @@ void FastBuildBVH(uint globalId, uint numPrims, uint leafNodesOffset, uint bvhNo
 void BuildBVH(
     uint globalId : SV_DispatchThreadID)
 {
-    const int numActivePrims = ResultBuffer.Load(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+    const int numActivePrims = DstBuffer.Load(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
 
     if (numActivePrims > 0)
     {

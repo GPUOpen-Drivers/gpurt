@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2019-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2019-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -2134,8 +2134,6 @@ void GpuBvhBuilder::InitBuildSettings()
     m_buildSettings.noCopySortedNodes   = m_buildConfig.noCopySortedNodes;
     m_buildSettings.enableSAHCost       = m_deviceSettings.enableSAHCost;
     m_buildSettings.radixSortScanLevel  = m_buildConfig.radixSortScanLevel;
-    m_buildSettings.useGrowthInLTD      = m_deviceSettings.useGrowthInLTD;
-    m_buildSettings.ltdPackCentroids    = m_deviceSettings.ltdPackCentroids;
 
     m_buildSettings.enableEarlyPairCompression = m_buildConfig.enableEarlyPairCompression;
 

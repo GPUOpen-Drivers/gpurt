@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2021-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2021-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -45,9 +45,9 @@ struct PairCompressionArgs
 //=====================================================================================================================
 [[vk::push_constant]] ConstantBuffer<PairCompressionArgs> ShaderConstants : register(b0);
 
-[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer  ResultBuffer   : register(u0);
-[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer  ResultMetadata : register(u1);
-[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer  ScratchBuffer  : register(u2);
+[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer  DstBuffer     : register(u0);
+[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer  DstMetadata   : register(u1);
+[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer  ScratchBuffer : register(u2);
 
 #define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
 groupshared uint SharedMem[MAX_LDS_ELEMENTS];
@@ -198,7 +198,7 @@ uint3 FetchFaceIndices(
 uint UpdateLeafNodeCounters(uint numLeafNodesOffset, uint numLeafNodes)
 {
     uint currentNumNodes;
-    ResultBuffer.InterlockedAdd(numLeafNodesOffset, numLeafNodes, currentNumNodes);
+    DstBuffer.InterlockedAdd(numLeafNodesOffset, numLeafNodes, currentNumNodes);
 
     return currentNumNodes;
 }
@@ -209,7 +209,7 @@ void WriteCompressedNodes(
     uint scratchNodesScratchOffset,
     uint quadIndex)
 {
-    const AccelStructHeader header = ResultBuffer.Load<AccelStructHeader>(0);
+    const AccelStructHeader header = DstBuffer.Load<AccelStructHeader>(0);
 
     const uint numLeafNodesOffset = ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET;
     UpdateLeafNodeCounters(numLeafNodesOffset, quadIndex);
@@ -498,7 +498,7 @@ void PairCompressionImpl(
     }
 
     const uint batchRootIndex = ScratchBuffer.Load(args.batchIndicesScratchOffset + (globalId * sizeof(uint)));
-    const uint numActivePrims = ResultBuffer.Load(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+    const uint numActivePrims = DstBuffer.Load(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
 
     uint batchSize = 0;
     uint stackPtr = 1;

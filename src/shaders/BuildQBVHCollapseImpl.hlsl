@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -25,8 +25,8 @@
 //=====================================================================================================================
 // The functions defined below require the following resources defined before including this header
 //
-// RWByteAddressBuffer ResultBuffer
-// RWByteAddressBuffer ResultMetadata
+// RWByteAddressBuffer DstBuffer
+// RWByteAddressBuffer DstMetadata
 // RWByteAddressBuffer ScratchBuffer
 // RWByteAddressBuffer InstanceDescBuffer
 //
@@ -78,7 +78,7 @@ uint WritePrimitiveNodeCollapse(
 
     // Load geometry info
     const uint geometryInfoOffset = offsets.geometryInfo + (node.right_or_geometryIndex * sizeof(GeometryInfo));
-    const GeometryInfo geometryInfo = ResultBuffer.Load<GeometryInfo>(geometryInfoOffset);
+    const GeometryInfo geometryInfo = DstBuffer.Load<GeometryInfo>(geometryInfoOffset);
     const uint geometryFlags = ExtractGeometryInfoFlags(geometryInfo.geometryFlagsAndNumPrimitives);
     const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(node.right_or_geometryIndex, geometryFlags);
     const uint geometryPrimNodePtrsOffset = offsets.primNodePtrs + geometryInfo.primNodePtrsOffset;
@@ -94,10 +94,10 @@ uint WritePrimitiveNodeCollapse(
     {
         nodeOffset = offsets.leafNodes + (destLeafIndex * USER_NODE_PROCEDURAL_SIZE);
 
-        ResultBuffer.Store3(nodeOffset + USER_NODE_PROCEDURAL_MIN_OFFSET, asuint(node.bbox_min_or_v0));
-        ResultBuffer.Store3(nodeOffset + USER_NODE_PROCEDURAL_MAX_OFFSET, asuint(node.bbox_max_or_v1));
-        ResultBuffer.Store(nodeOffset + USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
-        ResultBuffer.Store(nodeOffset + USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET, node.left_or_primIndex_or_instIndex);
+        DstBuffer.Store3(nodeOffset + USER_NODE_PROCEDURAL_MIN_OFFSET, asuint(node.bbox_min_or_v0));
+        DstBuffer.Store3(nodeOffset + USER_NODE_PROCEDURAL_MAX_OFFSET, asuint(node.bbox_max_or_v1));
+        DstBuffer.Store(nodeOffset + USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
+        DstBuffer.Store(nodeOffset + USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET, node.left_or_primIndex_or_instIndex);
     }
     else
     {
@@ -105,8 +105,8 @@ uint WritePrimitiveNodeCollapse(
 
         const uint triangleId = node.type >> 3;
 
-        ResultBuffer.Store(nodeOffset + TRIANGLE_NODE_ID_OFFSET, triangleId);
-        ResultBuffer.Store(nodeOffset + TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
+        DstBuffer.Store(nodeOffset + TRIANGLE_NODE_ID_OFFSET, triangleId);
+        DstBuffer.Store(nodeOffset + TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
 
         uint3 vertexOffsets;
         if (args.triangleCompressionMode != NO_TRIANGLE_COMPRESSION)
@@ -118,12 +118,12 @@ uint WritePrimitiveNodeCollapse(
             vertexOffsets = CalcTriangleVertexOffsets(nodeType);
         }
 
-        ResultBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.x, node.bbox_min_or_v0);
-        ResultBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.y, node.bbox_max_or_v1);
-        ResultBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.z, node.sah_or_v2_or_instBasePtr);
+        DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.x, node.bbox_min_or_v0);
+        DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.y, node.bbox_max_or_v1);
+        DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.z, node.sah_or_v2_or_instBasePtr);
 
-        ResultBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + (nodeType * 4),
-                           node.left_or_primIndex_or_instIndex);
+        DstBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + (nodeType * 4),
+                        node.left_or_primIndex_or_instIndex);
 
         // For PAIR_TRIANGLE_COMPRESSION, the other node is not linked in the BVH tree, so we need to find it and
         // store it as well if it exists.
@@ -145,16 +145,16 @@ uint WritePrimitiveNodeCollapse(
                 // the vertex that goes into v0. v1, v2, and v3 were already stored by NODE_TYPE_TRIANGLE_1 above.
                 if (otherVertexOffsets[i] == 0)
                 {
-                    ResultBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET, otherVerts[i]);
+                    DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET, otherVerts[i]);
                 }
             }
 
-            ResultBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + (otherNodeType * 4),
-                               otherNode.left_or_primIndex_or_instIndex);
+            DstBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + (otherNodeType * 4),
+                            otherNode.left_or_primIndex_or_instIndex);
 
             const uint otherPrimNodePointer = PackNodePointer(otherNodeType, nodeOffset);
-            ResultBuffer.Store(geometryPrimNodePtrsOffset + (otherNode.left_or_primIndex_or_instIndex * sizeof(uint)),
-                               otherPrimNodePointer);
+            DstBuffer.Store(geometryPrimNodePtrsOffset + (otherNode.left_or_primIndex_or_instIndex * sizeof(uint)),
+                            otherPrimNodePointer);
         }
     }
 
@@ -164,8 +164,8 @@ uint WritePrimitiveNodeCollapse(
     // handle the collapsed triangle lists.
     const uint numPrims = (task.numPrimitives > 0) ? task.numPrimitives : 1;
     const uint primNodePointer = PackLeafNodePointer(nodeType, nodeOffset, numPrims);
-    ResultBuffer.Store(geometryPrimNodePtrsOffset + (node.left_or_primIndex_or_instIndex * sizeof(uint)),
-                       primNodePointer);
+    DstBuffer.Store(geometryPrimNodePtrsOffset + (node.left_or_primIndex_or_instIndex * sizeof(uint)),
+                    primNodePointer);
 
     uint collapseParentNodeAddress = CalcQbvhInternalNodeOffset((task.parentOfCollapseNodeIndex >> 2), true);
 
@@ -175,10 +175,10 @@ uint WritePrimitiveNodeCollapse(
         const uint offset = task.parentOfCollapseNodeIndex & 0x3;
 
         // update ptr to list from internal node
-        ResultBuffer.Store(collapseParentNodeAddress + boxUsedChild0Offset + offset * NODE_PTR_SIZE, primNodePointer);
+        DstBuffer.Store(collapseParentNodeAddress + boxUsedChild0Offset + offset * NODE_PTR_SIZE, primNodePointer);
 
         // parent pointer
-        WriteParentPointer(ResultMetadata,
+        WriteParentPointer(DstMetadata,
                            args.metadataSizeInBytes,
                            nodePointer,
                            PackNodePointer(boxUsedNodeType, collapseParentNodeAddress));
@@ -186,7 +186,7 @@ uint WritePrimitiveNodeCollapse(
     else if (task.parentOfCollapseNodeIndex != INVALID_IDX) // not first in the collapse list
     {
         // parent pointer
-        WriteParentPointer(ResultMetadata,
+        WriteParentPointer(DstMetadata,
                            args.metadataSizeInBytes,
                            nodePointer,
                            PackNodePointer(boxUsedNodeType, collapseParentNodeAddress));
@@ -194,7 +194,7 @@ uint WritePrimitiveNodeCollapse(
     else // no collapse
     {
         // parent pointer
-        WriteParentPointer(ResultMetadata,
+        WriteParentPointer(DstMetadata,
                            args.metadataSizeInBytes,
                            nodePointer,
                            parentPtr);
@@ -219,15 +219,15 @@ void WriteQbvhInternalNodeBbox(
         const uint3 bboxC         = CompressBBoxToUint3(bbox);
         const uint  f16BoundsSize = sizeof(uint3);
         const uint  boxOffset     = FLOAT16_BOX_NODE_BB0_OFFSET + (childIndex * f16BoundsSize);
-        ResultBuffer.Store3(qbvhNodeAddr + boxOffset, bboxC);
+        DstBuffer.Store3(qbvhNodeAddr + boxOffset, bboxC);
     }
     else
     {
         const uint f32BoundsSize = sizeof(float3) * 2;
         const uint minOffset     = FLOAT32_BOX_NODE_BB0_MIN_OFFSET + (childIndex * f32BoundsSize);
         const uint maxOffset     = minOffset + sizeof(float3);
-        ResultBuffer.Store3(qbvhNodeAddr + minOffset, asuint(bbox.min));
-        ResultBuffer.Store3(qbvhNodeAddr + maxOffset, asuint(bbox.max));
+        DstBuffer.Store3(qbvhNodeAddr + minOffset, asuint(bbox.min));
+        DstBuffer.Store3(qbvhNodeAddr + maxOffset, asuint(bbox.max));
     }
 }
 
@@ -241,7 +241,7 @@ void WriteQbvhInternalNodeNumPrimitives(
     if (writeAsFp16BoxNode == false)
     {
         const uint numPrims = FetchScratchNodeNumPrimitives(scratchNode, isLeaf);
-        ResultBuffer.Store(qbvhNodeAddr + FLOAT32_BOX_NODE_NUM_PRIM_OFFSET, numPrims);
+        DstBuffer.Store(qbvhNodeAddr + FLOAT32_BOX_NODE_NUM_PRIM_OFFSET, numPrims);
     }
 }
 
@@ -253,7 +253,7 @@ void WriteQbvhInternalNodeFlags(
 {
     if (writeAsFp16BoxNode == false)
     {
-        ResultBuffer.Store(qbvhNodeAddr + FLOAT32_BOX_NODE_FLAGS_OFFSET, nodeFlags);
+        DstBuffer.Store(qbvhNodeAddr + FLOAT32_BOX_NODE_FLAGS_OFFSET, nodeFlags);
     }
 }
 
@@ -267,7 +267,7 @@ void BuildQbvhCollapseImpl(
     uint stackIndex = globalId;
 
     // Load acceleration structure header
-    const AccelStructHeader header = ResultBuffer.Load<AccelStructHeader>(0);
+    const AccelStructHeader header = DstBuffer.Load<AccelStructHeader>(0);
 
     const AccelStructOffsets offsets = header.offsets;
 
@@ -417,11 +417,11 @@ void BuildQbvhCollapseImpl(
                 {
                     WriteQbvhInternalNodeBbox(args, node, 0, qbvhNodeAddr, false);
 
-                    ResultBuffer.Store(qbvhNodeAddr + FLOAT32_BOX_NODE_CHILD1_OFFSET, INVALID_IDX);
-                    ResultBuffer.Store(qbvhNodeAddr + FLOAT32_BOX_NODE_CHILD2_OFFSET, INVALID_IDX);
-                    ResultBuffer.Store(qbvhNodeAddr + FLOAT32_BOX_NODE_CHILD3_OFFSET, INVALID_IDX);
-                    ResultBuffer.Store(qbvhNodeAddr + FLOAT32_BOX_NODE_FLAGS_OFFSET, 0xFFFFFF00);
-                    ResultBuffer.Store(ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP32_NODES_OFFSET, 1);
+                    DstBuffer.Store(qbvhNodeAddr + FLOAT32_BOX_NODE_CHILD1_OFFSET, INVALID_IDX);
+                    DstBuffer.Store(qbvhNodeAddr + FLOAT32_BOX_NODE_CHILD2_OFFSET, INVALID_IDX);
+                    DstBuffer.Store(qbvhNodeAddr + FLOAT32_BOX_NODE_CHILD3_OFFSET, INVALID_IDX);
+                    DstBuffer.Store(qbvhNodeAddr + FLOAT32_BOX_NODE_FLAGS_OFFSET, 0xFFFFFF00);
+                    DstBuffer.Store(ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP32_NODES_OFFSET, 1);
 
                     task.leafIndex = 0;
                     task.numPrimitives = 0;
@@ -429,7 +429,7 @@ void BuildQbvhCollapseImpl(
                     const uint parentPtr = CreateRootNodePointer();
                     const uint ptr       = WritePrimitiveNodeCollapse(args, node, parentPtr, offsets, task);
 
-                    ResultBuffer.Store(qbvhNodeAddr + FLOAT32_BOX_NODE_CHILD0_OFFSET, ptr);
+                    DstBuffer.Store(qbvhNodeAddr + FLOAT32_BOX_NODE_CHILD0_OFFSET, ptr);
 
                     WriteQbvhInternalNodeNumPrimitives(node, qbvhNodeAddr, writeAsFp16BoxNode, true);
 
@@ -443,7 +443,7 @@ void BuildQbvhCollapseImpl(
             {
                 const uint nodeTypeToAccum = (writeAsFp16BoxNode ? ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP16_NODES_OFFSET
                                                                  : ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP32_NODES_OFFSET);
-                ResultBuffer.InterlockedAdd(nodeTypeToAccum, 1);
+                DstBuffer.InterlockedAdd(nodeTypeToAccum, 1);
             }
 
             WriteQbvhInternalNodeNumPrimitives(node, qbvhNodeAddr, writeAsFp16BoxNode, false);
@@ -491,7 +491,7 @@ void BuildQbvhCollapseImpl(
                         WriteQbvhInternalNodeBbox(args, c0, 0, qbvhNodeAddr, writeAsFp16BoxNode);
 
                         //child0 will point to the starting of the prim list
-                        ResultBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[1], INVALID_IDX);
+                        DstBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[1], INVALID_IDX);
                         nodeFlags = SetNodeFlagsField(nodeFlags, 0xFF, 1);
 
                         const uint leftScratchNodeFlags = ExtractNodeFlagsField(node.flags, 0);
@@ -539,7 +539,7 @@ void BuildQbvhCollapseImpl(
                     if (parentOfCollapseNodeIndex == INVALID_IDX)
                     {
                         // parent
-                        WriteParentPointer(ResultMetadata,
+                        WriteParentPointer(DstMetadata,
                                            args.metadataSizeInBytes,
                                            ptr0,
                                            qbvhNodePtr);
@@ -550,7 +550,7 @@ void BuildQbvhCollapseImpl(
 
                 if (parentOfCollapseNodeIndex == INVALID_IDX)
                 {
-                    ResultBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[0], ptr0);
+                    DstBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[0], ptr0);
                 }
 
                 Task task01;
@@ -576,7 +576,7 @@ void BuildQbvhCollapseImpl(
                     if (parentOfCollapseNodeIndex == INVALID_IDX)
                     {
                         // parent
-                        WriteParentPointer(ResultMetadata,
+                        WriteParentPointer(DstMetadata,
                                            args.metadataSizeInBytes,
                                            ptr1,
                                            qbvhNodePtr);
@@ -587,7 +587,7 @@ void BuildQbvhCollapseImpl(
 
                 if (parentOfCollapseNodeIndex == INVALID_IDX)
                 {
-                    ResultBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[1], ptr1);
+                    DstBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[1], ptr1);
                 }
             }
             else
@@ -607,8 +607,8 @@ void BuildQbvhCollapseImpl(
                 {
                     WriteQbvhInternalNodeBbox(args, c0, 0, qbvhNodeAddr, writeAsFp16BoxNode);
 
-                    ResultBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[0], ptr0);
-                    ResultBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[1], INVALID_IDX);
+                    DstBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[0], ptr0);
+                    DstBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[1], INVALID_IDX);
                     nodeFlags = SetNodeFlagsField(nodeFlags, 0xFF, 1);
 
                     const uint leftScratchNodeFlags = ExtractNodeFlagsField(node.flags, 0);
@@ -636,7 +636,7 @@ void BuildQbvhCollapseImpl(
                         WriteQbvhInternalNodeBbox(args, c1, 2, qbvhNodeAddr, writeAsFp16BoxNode);
 
                         //child2 will point to the starting of the prim list
-                        ResultBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[3], INVALID_IDX);
+                        DstBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[3], INVALID_IDX);
                         nodeFlags = SetNodeFlagsField(nodeFlags, 0xFF, 3);
 
                         const uint rightScratchNodeFlags = ExtractNodeFlagsField(node.flags, 1);
@@ -683,7 +683,7 @@ void BuildQbvhCollapseImpl(
                     if (parentOfCollapseNodeIndex == INVALID_IDX)
                     {
                         // parent
-                        WriteParentPointer(ResultMetadata,
+                        WriteParentPointer(DstMetadata,
                                            args.metadataSizeInBytes,
                                            ptr2,
                                            qbvhNodePtr);
@@ -694,7 +694,7 @@ void BuildQbvhCollapseImpl(
 
                 if (parentOfCollapseNodeIndex == INVALID_IDX)
                 {
-                    ResultBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[2], ptr2);
+                    DstBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[2], ptr2);
                 }
 
                 Task task11;
@@ -720,7 +720,7 @@ void BuildQbvhCollapseImpl(
                     if (parentOfCollapseNodeIndex == INVALID_IDX)
                     {
                         // parent
-                        WriteParentPointer(ResultMetadata,
+                        WriteParentPointer(DstMetadata,
                                            args.metadataSizeInBytes,
                                            ptr3,
                                            qbvhNodePtr);
@@ -731,7 +731,7 @@ void BuildQbvhCollapseImpl(
 
                 if (parentOfCollapseNodeIndex == INVALID_IDX)
                 {
-                    ResultBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[3], ptr3);
+                    DstBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[3], ptr3);
                 }
             }
             else
@@ -751,8 +751,8 @@ void BuildQbvhCollapseImpl(
                 {
                     WriteQbvhInternalNodeBbox(args, c1, 2, qbvhNodeAddr, writeAsFp16BoxNode);
 
-                    ResultBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[2], ptr2);
-                    ResultBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[3], INVALID_IDX);
+                    DstBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[2], ptr2);
+                    DstBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[3], INVALID_IDX);
                     nodeFlags = SetNodeFlagsField(nodeFlags, 0xFF, 3);
 
                     const uint rightScratchNodeFlags = ExtractNodeFlagsField(node.flags, 1);
@@ -778,17 +778,17 @@ void BuildQbvhCollapseImpl(
         const ScratchNode rootScratchNode = FetchScratchNodeImpl(resourceInfo, 0);
         const BoundingBox bbox            = GetScratchNodeBoundingBoxTS(args, false, rootScratchNode);
 
-        ResultBuffer.Store3(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET, asuint(bbox.min));
-        ResultBuffer.Store3(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET + 12, asuint(bbox.max));
+        DstBuffer.Store3(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET, asuint(bbox.min));
+        DstBuffer.Store3(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET + 12, asuint(bbox.max));
 
         // Merge the internal node flags
         const uint flags0 = ExtractNodeFlagsField(rootScratchNode.flags, 0);
         const uint flags1 = ExtractNodeFlagsField(rootScratchNode.flags, 1);
 
         const uint mergedNodeFlags = flags0 & flags1;
-        ResultBuffer.Store(ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET, mergedNodeFlags);
+        DstBuffer.Store(ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET, mergedNodeFlags);
 
-        WriteParentPointer(ResultMetadata,
+        WriteParentPointer(DstMetadata,
                            args.metadataSizeInBytes,
                            rootNodePtr,
                            INVALID_IDX);

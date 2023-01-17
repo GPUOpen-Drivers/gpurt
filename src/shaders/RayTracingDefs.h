@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -1775,7 +1775,7 @@ struct IndexBufferInfo
 
 //=====================================================================================================================
 // Layout sans header
-struct RayTracingResultBufferLayout
+struct RayTracingDstBufferLayout
 {
     DataOffsetAndSize metadata;          // Offset and size of internal metadata
     DataOffsetAndSize internalNodes;     // Offset and size of internal box nodes
@@ -1847,9 +1847,7 @@ struct BuildSettingsData
     float tsPriority;
     uint noCopySortedNodes;
     uint enableSAHCost;
-    uint useGrowthInLTD;
     uint doEncode;
-    uint ltdPackCentroids;
     uint enableEarlyPairCompression;
 };
 
@@ -1909,9 +1907,7 @@ struct BuildSettingsData
 #define BUILD_SETTINGS_DATA_TS_PRIORITY_ID                            (BUILD_SETTINGS_DATA_TS_PRIORITY_OFFSET / sizeof(uint))
 #define BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_ID                   (BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_OFFSET / sizeof(uint))
 #define BUILD_SETTINGS_DATA_ENABLE_SAH_COST_ID                        (BUILD_SETTINGS_DATA_ENABLE_SAH_COST_OFFSET / sizeof(uint))
-#define BUILD_SETTINGS_DATA_USE_GROWTH_IN_LTD_ID                      (BUILD_SETTINGS_DATA_USE_GROWTH_IN_LTD_OFFSET / sizeof(uint))
 #define BUILD_SETTINGS_DATA_DO_ENCODE_ID                              (BUILD_SETTINGS_DATA_DO_ENCODE / sizeof(uint))
-#define BUILD_SETTINGS_DATA_LTD_PACK_CENTROIDS_ID                     (BUILD_SETTINGS_DATA_LTD_PACK_CENTROIDS_OFFSET / sizeof(uint))
 #define BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_ID          (BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_OFFSET / sizeof(uint))
 
 #ifdef __cplusplus
@@ -1939,9 +1935,7 @@ static_assert(BUILD_SETTINGS_DATA_SAH_QBVH_OFFSET                               
 static_assert(BUILD_SETTINGS_DATA_TS_PRIORITY_OFFSET                            == offsetof(BuildSettingsData, tsPriority), "");
 static_assert(BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_OFFSET                   == offsetof(BuildSettingsData, noCopySortedNodes), "");
 static_assert(BUILD_SETTINGS_DATA_ENABLE_SAH_COST_OFFSET                        == offsetof(BuildSettingsData, enableSAHCost), "");
-static_assert(BUILD_SETTINGS_DATA_USE_GROWTH_IN_LTD_OFFSET                      == offsetof(BuildSettingsData, useGrowthInLTD), "");
 static_assert(BUILD_SETTINGS_DATA_DO_ENCODE                                     == offsetof(BuildSettingsData, doEncode), "");
-static_assert(BUILD_SETTINGS_DATA_LTD_PACK_CENTROIDS_OFFSET                     == offsetof(BuildSettingsData, ltdPackCentroids), "");
 static_assert(BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_OFFSET          == offsetof(BuildSettingsData, enableEarlyPairCompression), "");
 #endif
 

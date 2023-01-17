@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -30,8 +30,8 @@ static IntersectionResult TraceRayImpl2_0(
     in uint              rayFlags,                  ///< Ray flags
     in uint              traceRayParameters,        ///< Packed trace ray parameters
     in RayDesc           ray,                       ///< Ray to be traced
-    in uint              rayId,                     ///< Ray ID for profiling
-    in float             earlyTerminateThreshold)   ///< Early Ray Terminate Threshold
+    in uint              rayId                      ///< Ray ID for profiling
+)
 {
 #if DEVELOPER
     const uint64_t rayTraceStartTime = SampleGpuTimer();

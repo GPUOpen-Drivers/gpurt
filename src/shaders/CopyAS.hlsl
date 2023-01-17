@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -40,7 +40,7 @@ struct InputArgs
 [[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
 
 //=====================================================================================================================
-[[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer   : register(u0);
+[[vk::binding(0, 0)]] RWByteAddressBuffer DstMetadata : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer SrcBuffer   : register(u1);
 
 //=====================================================================================================================
@@ -52,7 +52,7 @@ void CopyAS(in uint3 globalThreadId : SV_DispatchThreadID)
 {
     const uint globalID = globalThreadId.x;
 
-    // The following code assumes the base address of SrcBuffer and DstBuffer includes the acceleration structure
+    // The following code assumes the base address of SrcBuffer and DstMetadata includes the acceleration structure
     // metadata header
 
     // Fetch acceleration structure metadata size
@@ -64,7 +64,7 @@ void CopyAS(in uint3 globalThreadId : SV_DispatchThreadID)
     for (uint i = globalID; i < sizeInDwords; i += ShaderConstants.numWaves * BUILD_THREADGROUP_SIZE)
     {
         uint byteOffset = (i << 2);
-        DstBuffer.Store(byteOffset, SrcBuffer.Load(byteOffset));
+        DstMetadata.Store(byteOffset, SrcBuffer.Load(byteOffset));
     }
 
     // Patch acceleration structure headers
@@ -81,23 +81,23 @@ void CopyAS(in uint3 globalThreadId : SV_DispatchThreadID)
             // Deactivate acceleration structure
             if (header.numActivePrims > 0)
             {
-                DstBuffer.Store<uint64_t>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, gpuVa);
-                DstBuffer.Store<uint32_t>(ACCEL_STRUCT_METADATA_SIZE_OFFSET,  metadataSizeInBytes);
+                DstMetadata.Store<uint64_t>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, gpuVa);
+                DstMetadata.Store<uint32_t>(ACCEL_STRUCT_METADATA_SIZE_OFFSET,  metadataSizeInBytes);
             }
             else
             {
-                DstBuffer.Store<uint64_t>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, 0);
-                DstBuffer.Store<uint32_t>(ACCEL_STRUCT_METADATA_SIZE_OFFSET,  0);
+                DstMetadata.Store<uint64_t>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, 0);
+                DstMetadata.Store<uint32_t>(ACCEL_STRUCT_METADATA_SIZE_OFFSET,  0);
             }
 
         }
         else
         {
-            DstBuffer.Store<uint64_t>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, gpuVa);
-            DstBuffer.Store<uint32_t>(ACCEL_STRUCT_METADATA_SIZE_OFFSET,  metadataSizeInBytes);
+            DstMetadata.Store<uint64_t>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, gpuVa);
+            DstMetadata.Store<uint32_t>(ACCEL_STRUCT_METADATA_SIZE_OFFSET,  metadataSizeInBytes);
         }
 
-        DstBuffer.Store(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 0);
-        DstBuffer.Store<uint32_t>(ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET, 0);
+        DstMetadata.Store(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 0);
+        DstMetadata.Store<uint32_t>(ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET, 0);
     }
 }

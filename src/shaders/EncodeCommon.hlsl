@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -248,11 +248,11 @@ uint ComputePrimitiveOffset(
     uint primitiveOffset = 0;
 
     const uint metadataSize = IsUpdate(geometryArgs.BuildFlags) ?
-                              SourceBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : geometryArgs.metadataSizeInBytes;
+                              SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : geometryArgs.metadataSizeInBytes;
 
     // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
     const AccelStructOffsets offsets =
-        SourceBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
+        SrcBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
 
     const uint baseGeometryInfoOffset =
         IsUpdate(geometryArgs.BuildFlags) ? offsets.geometryInfo : geometryArgs.BaseGeometryInfoOffset;
@@ -264,7 +264,7 @@ uint ComputePrimitiveOffset(
             (geomIdx * GEOMETRY_INFO_SIZE);
 
         GeometryInfo info;
-        info = ResultBuffer.Load<GeometryInfo>(geometryInfoOffset);
+        info = DstMetadata.Load<GeometryInfo>(geometryInfoOffset);
         uint primitiveCount = ExtractGeometryInfoNumPrimitives(info.geometryFlagsAndNumPrimitives);
 
         primitiveOffset += primitiveCount;
@@ -286,11 +286,11 @@ void WriteGeometryInfo(
         (IsUpdate(geometryArgs.BuildFlags) && (geometryArgs.isUpdateInPlace == false)))
     {
         const uint metadataSize = IsUpdate(geometryArgs.BuildFlags) ?
-            SourceBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : geometryArgs.metadataSizeInBytes;
+            SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : geometryArgs.metadataSizeInBytes;
 
         // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
         const AccelStructOffsets offsets =
-            SourceBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
+            SrcBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
 
         const uint baseGeometryInfoOffset =
             IsUpdate(geometryArgs.BuildFlags) ? offsets.geometryInfo : geometryArgs.BaseGeometryInfoOffset;
@@ -305,7 +305,7 @@ void WriteGeometryInfo(
         info.geometryFlagsAndNumPrimitives  =
             PackGeometryFlagsAndNumPrimitives(geometryArgs.GeometryFlags, numPrimitives);
 
-        ResultBuffer.Store<GeometryInfo>(geometryInfoOffset, info);
+        DstMetadata.Store<GeometryInfo>(geometryInfoOffset, info);
     }
 
     if ((IsUpdate(geometryArgs.BuildFlags) == false) &&
@@ -451,7 +451,7 @@ void PushNodeForUpdate(
             // comparison when finding the child index in the parent below.
             childNodePointer |= NODE_TYPE_TRIANGLE_1;
 
-            const uint otherPrimIndex = SourceBuffer.Load(triNodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET);
+            const uint otherPrimIndex = SrcBuffer.Load(triNodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET);
 
             // Fetch face indices from index buffer.
             const uint3 faceIndices = FetchFaceIndices(IndexBuffer,
@@ -483,21 +483,21 @@ void PushNodeForUpdate(
     }
 
     // Fetch parent node pointer
-    const uint parentNodePointer = ReadParentPointer(SourceBuffer,
+    const uint parentNodePointer = ReadParentPointer(SrcBuffer,
                                                      metadataSize,
                                                      nodePointer);
 
     // Update out of place destination buffer
     if (isUpdateInPlace == 0)
     {
-        WriteParentPointer(ResultBuffer,
+        WriteParentPointer(DstMetadata,
                            metadataSize,
                            nodePointer,
                            parentNodePointer);
     }
 
     const uint  nodeOffset = metadataSize + ExtractNodePointerOffset(parentNodePointer);
-    const uint4 childPointers = SourceBuffer.Load<uint4>(nodeOffset);
+    const uint4 childPointers = SrcBuffer.Load<uint4>(nodeOffset);
 
     // Find child index in parent (assumes child pointer 0 is always valid)
     uint childIdx = 0;
@@ -545,8 +545,8 @@ void PushNodeForUpdate(
         BoundingBox originalBox;
 
         boxOffset = childIdx * FLOAT32_BBOX_STRIDE;
-        originalBox.min = ResultBuffer.Load<float3>(nodeOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET + boxOffset);
-        originalBox.max = ResultBuffer.Load<float3>(nodeOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET + boxOffset);
+        originalBox.min = DstMetadata.Load<float3>(nodeOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET + boxOffset);
+        originalBox.max = DstMetadata.Load<float3>(nodeOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET + boxOffset);
 
         if (any(originalBox.min != boundingBox.min) ||
             any(originalBox.max != boundingBox.max))
@@ -557,7 +557,7 @@ void PushNodeForUpdate(
     else
     {
         boxOffset = childIdx * FLOAT16_BBOX_STRIDE;
-        uint3 originalBox16 = ResultBuffer.Load<uint3>(nodeOffset + FLOAT16_BOX_NODE_BB0_OFFSET + boxOffset);
+        uint3 originalBox16 = DstMetadata.Load<uint3>(nodeOffset + FLOAT16_BOX_NODE_BB0_OFFSET + boxOffset);
 
         boundingBox16 = CompressBBoxToUint3(boundingBox);
 
@@ -571,24 +571,24 @@ void PushNodeForUpdate(
     {
         if (IsBoxNode32(parentNodePointer))
         {
-            ResultBuffer.Store<float3>(nodeOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET + boxOffset, boundingBox.min);
-            ResultBuffer.Store<float3>(nodeOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET + boxOffset, boundingBox.max);
+            DstMetadata.Store<float3>(nodeOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET + boxOffset, boundingBox.min);
+            DstMetadata.Store<float3>(nodeOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET + boxOffset, boundingBox.max);
         }
         else
         {
-            ResultBuffer.Store<float3>(nodeOffset + FLOAT16_BOX_NODE_BB0_OFFSET + boxOffset, boundingBox16);
+            DstMetadata.Store<float3>(nodeOffset + FLOAT16_BOX_NODE_BB0_OFFSET + boxOffset, boundingBox16);
         }
 
         if ((childIdx == 0) && (boxNodeCount == 0))
         {
             if (isUpdateInPlace == false)
             {
-                ResultBuffer.Store<uint4>(nodeOffset, childPointers);
+                DstMetadata.Store<uint4>(nodeOffset, childPointers);
 
                 if (IsBoxNode32(parentNodePointer))
                 {
-                    const uint sourceFlags = SourceBuffer.Load(nodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET);
-                    ResultBuffer.Store(nodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, sourceFlags);
+                    const uint sourceFlags = SrcBuffer.Load(nodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET);
+                    DstMetadata.Store(nodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, sourceFlags);
                 }
             }
         }
@@ -622,11 +622,11 @@ void EncodeTriangleNode(
     }
 
     const uint metadataSize = IsUpdate(geometryArgs.BuildFlags) ?
-        SourceBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : geometryArgs.metadataSizeInBytes;
+        SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : geometryArgs.metadataSizeInBytes;
 
     // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
     const AccelStructOffsets offsets =
-        SourceBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
+        SrcBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
 
     const uint basePrimNodePtr =
         IsUpdate(geometryArgs.BuildFlags) ? offsets.primNodePtrs : geometryArgs.BasePrimNodePtrOffset;
@@ -663,7 +663,7 @@ void EncodeTriangleNode(
 
         if (IsUpdate(geometryArgs.BuildFlags))
         {
-            nodePointer = SourceBuffer.Load(primNodePointerOffset);
+            nodePointer = SrcBuffer.Load(primNodePointerOffset);
 
             // If the primitive was active during the initial build, it will have a valid primitive node pointer.
             if (nodePointer != INVALID_IDX)
@@ -675,7 +675,7 @@ void EncodeTriangleNode(
 
                 if (geometryArgs.TriangleCompressionMode != NO_TRIANGLE_COMPRESSION)
                 {
-                    triangleId    = SourceBuffer.Load(nodeOffset + TRIANGLE_NODE_ID_OFFSET);
+                    triangleId    = SrcBuffer.Load(nodeOffset + TRIANGLE_NODE_ID_OFFSET);
                     vertexOffsets = CalcTriangleCompressionVertexOffsets(nodeType, triangleId);
                 }
                 else
@@ -684,28 +684,28 @@ void EncodeTriangleNode(
                     vertexOffsets = CalcTriangleVertexOffsets(nodeType);
                 }
 
-                ResultBuffer.Store3(nodeOffset + vertexOffsets.x, asuint(tri.v0));
-                ResultBuffer.Store3(nodeOffset + vertexOffsets.y, asuint(tri.v1));
-                ResultBuffer.Store3(nodeOffset + vertexOffsets.z, asuint(tri.v2));
+                DstMetadata.Store3(nodeOffset + vertexOffsets.x, asuint(tri.v0));
+                DstMetadata.Store3(nodeOffset + vertexOffsets.y, asuint(tri.v1));
+                DstMetadata.Store3(nodeOffset + vertexOffsets.z, asuint(tri.v2));
 
                 if (geometryArgs.isUpdateInPlace == false)
                 {
                     const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(geometryArgs.GeometryIndex,
                                                                                     geometryArgs.GeometryFlags);
-                    ResultBuffer.Store(nodeOffset + TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET,
-                                        geometryIndexAndFlags);
+                    DstMetadata.Store(nodeOffset + TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET,
+                                    geometryIndexAndFlags);
 
                     const uint primIndexOffset = CalcPrimitiveIndexOffset(nodePointer);
-                    ResultBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + primIndexOffset,
-                                        primitiveIndex);
+                    DstMetadata.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + primIndexOffset,
+                                    primitiveIndex);
 
-                    ResultBuffer.Store(nodeOffset + TRIANGLE_NODE_ID_OFFSET, triangleId);
+                    DstMetadata.Store(nodeOffset + TRIANGLE_NODE_ID_OFFSET, triangleId);
                 }
             }
 
             if (geometryArgs.isUpdateInPlace == false)
             {
-                ResultBuffer.Store(primNodePointerOffset, nodePointer);
+                DstMetadata.Store(primNodePointerOffset, nodePointer);
             }
 
             // The shared bounding box for this pair of triangles will be updated by the thread handling triangle 0.
@@ -736,7 +736,7 @@ void EncodeTriangleNode(
                 (geometryArgs.enableEarlyPairCompression == true))
             {
                 const uint numLeafNodesOffset = metadataSize + ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET;
-                ResultBuffer.InterlockedAdd(numLeafNodesOffset, 1);
+                DstMetadata.InterlockedAdd(numLeafNodesOffset, 1);
             }
 
             if (IsActive(tri))
@@ -769,7 +769,7 @@ void EncodeTriangleNode(
 
             // Store invalid prim node pointer for now during first time builds.
             // If the triangle is active, BuildQBVH will write it in.
-            ResultBuffer.Store(primNodePointerOffset, INVALID_IDX);
+            DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
         }
     }
     else
@@ -782,11 +782,11 @@ void EncodeTriangleNode(
 
             ScratchBuffer.Store(scratchLeafNodeOffset, NaN);
 
-            ResultBuffer.Store(primNodePointerOffset, INVALID_IDX);
+            DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
         }
         else if (geometryArgs.isUpdateInPlace == false)
         {
-            ResultBuffer.Store(primNodePointerOffset, INVALID_IDX);
+            DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
         }
     }
 

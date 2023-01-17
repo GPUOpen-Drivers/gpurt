@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -150,9 +150,7 @@ struct Constants
 [[vk::constant_id(BUILD_SETTINGS_DATA_TS_PRIORITY_ID)]]                            float tsPriority                   = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_ID)]]                   uint noCopySortedNodes             = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_SAH_COST_ID)]]                        uint enableSAHCost                 = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_USE_GROWTH_IN_LTD_ID)]]                      uint useGrowthInLTD                = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_DO_ENCODE_ID)]]                              uint doEncode                      = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_LTD_PACK_CENTROIDS_ID)]]                     uint ltdPackCentroids              = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_ID)]]          uint enableEarlyPairCompression    = 0;
 
 static const BuildSettingsData Settings = {
@@ -181,24 +179,20 @@ static const BuildSettingsData Settings = {
     tsPriority,
     noCopySortedNodes,
     enableSAHCost,
-    useGrowthInLTD,
     doEncode,
-    ltdPackCentroids,
     enableEarlyPairCompression,
 };
 
-[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer ResultBuffer       : register(u0);
-[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer ResultMetadata     : register(u1);
+[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstBuffer          : register(u0);
+[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata        : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer      : register(u2);
 [[vk::binding(3, 0)]]                  RWByteAddressBuffer InstanceDescBuffer : register(u3);
 [[vk::binding(4, 0)]]                  RWByteAddressBuffer EmitBuffer         : register(u4);
 
-// The encode path uses SourceBuffer and ResultBuffer as the true acceleration structure base.
-#define SourceBuffer ResultMetadata
-#define ResultBuffer ResultMetadata
+// The encode path uses SrcBuffer and DstBuffer as the true acceleration structure base.
+#define SrcBuffer DstMetadata
 #include "EncodeCommon.hlsl"
-#undef SourceBuffer
-#undef ResultBuffer
+#undef SrcBuffer
 
 [[vk::binding(0, 2)]] ConstantBuffer<GeometryArgs> GeometryConstants[] : register(b0, space1);
 
@@ -227,7 +221,7 @@ void WaitForTasksToFinish(
     do
     {
         DeviceMemoryBarrier();
-    } while (ResultMetadata.Load(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET) < numTasksWait);
+    } while (DstMetadata.Load(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET) < numTasksWait);
 }
 
 // Include implementations for each pass without shader entry points and resource declarations
@@ -504,7 +498,7 @@ void PairCompression(
     uint localId,
     uint numActivePrims)
 {
-    const uint buildInfo  = ResultBuffer.Load(ACCEL_STRUCT_HEADER_INFO_OFFSET);
+    const uint buildInfo  = DstBuffer.Load(ACCEL_STRUCT_HEADER_INFO_OFFSET);
     const uint buildFlags = (buildInfo >> ACCEL_STRUCT_HEADER_INFO_FLAGS_SHIFT) & ACCEL_STRUCT_HEADER_INFO_FLAGS_MASK;
 
     PairCompressionArgs args;
@@ -528,7 +522,7 @@ void InitBuildQbvh(
     BuildQbvhArgs qbvhArgs;
 
     qbvhArgs.numPrimitives               = numLeafNodes;
-    qbvhArgs.metadataSizeInBytes         = ResultMetadata.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
+    qbvhArgs.metadataSizeInBytes         = DstMetadata.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
     qbvhArgs.numThreads                  = GetNumThreads();
     qbvhArgs.scratchNodesScratchOffset   = CalculateBvhNodesOffset(numActivePrims);
     qbvhArgs.qbvhStackScratchOffset      = ShaderConstants.offsets.qbvhStack;
@@ -569,7 +563,7 @@ void BuildQbvh(
     BuildQbvhArgs qbvhArgs;
 
     qbvhArgs.numPrimitives               = numLeafNodes;
-    qbvhArgs.metadataSizeInBytes         = ResultMetadata.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
+    qbvhArgs.metadataSizeInBytes         = DstMetadata.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
     qbvhArgs.numThreads                  = GetNumThreads();
     qbvhArgs.scratchNodesScratchOffset   = CalculateBvhNodesOffset(numActivePrims);
     qbvhArgs.qbvhStackScratchOffset      = ShaderConstants.offsets.qbvhStack;
@@ -647,17 +641,17 @@ void InitAccelerationStructure()
     // Initalize headers (metadata task counter is initialized using the CP)
     if (Settings.topLevelBuild && (ShaderConstants.numPrimitives == 0))
     {
-        ResultMetadata.Store(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, 0);
-        ResultMetadata.Store(ACCEL_STRUCT_METADATA_VA_HI_OFFSET, 0);
+        DstMetadata.Store(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, 0);
+        DstMetadata.Store(ACCEL_STRUCT_METADATA_VA_HI_OFFSET, 0);
     }
     else
     {
-        ResultMetadata.Store(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, ShaderConstants.resultBufferAddrLo);
-        ResultMetadata.Store(ACCEL_STRUCT_METADATA_VA_HI_OFFSET, ShaderConstants.resultBufferAddrHi);
+        DstMetadata.Store(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, ShaderConstants.resultBufferAddrLo);
+        DstMetadata.Store(ACCEL_STRUCT_METADATA_VA_HI_OFFSET, ShaderConstants.resultBufferAddrHi);
     }
-    ResultMetadata.Store(ACCEL_STRUCT_METADATA_SIZE_OFFSET, ShaderConstants.header.metadataSizeInBytes);
+    DstMetadata.Store(ACCEL_STRUCT_METADATA_SIZE_OFFSET, ShaderConstants.header.metadataSizeInBytes);
 
-    ResultBuffer.Store(0, ShaderConstants.header);
+    DstBuffer.Store(0, ShaderConstants.header);
 
     // Initialize valid scratch buffer counters to 0
     InitScratchCounter(ShaderConstants.offsets.currentState);
@@ -764,7 +758,7 @@ void BuildBvh(
         // Take into account the encode tasks that are done
         if ((waveId == numTasksWait) && (localId == 0))
         {
-            ResultMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET, numTasksWait);
+            DstMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET, numTasksWait);
         }
     }
 
@@ -776,13 +770,13 @@ void BuildBvh(
     {
         TriangleSplitting(globalId, localId, groupId);
 
-        numPrimitives = ResultBuffer.Load(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
+        numPrimitives = DstBuffer.Load(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
     }
     else if (Settings.rebraidType == RebraidType::V2)
     {
         Rebraid(globalId, localId, groupId);
 
-        numPrimitives = ResultBuffer.Load(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
+        numPrimitives = DstBuffer.Load(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
     }
 
     uint numActivePrims;
@@ -791,7 +785,7 @@ void BuildBvh(
     {
         BuildBvhTD(globalId, localId, groupId, numPrimitives);
 
-        numActivePrims = ResultBuffer.Load(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+        numActivePrims = DstBuffer.Load(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
     }
     else
     {
@@ -805,7 +799,7 @@ void BuildBvh(
 
             END_TASK(1);
             needRefit = true;
-            numActivePrims = ResultBuffer.Load(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+            numActivePrims = DstBuffer.Load(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
         }
         else
         {
@@ -815,7 +809,7 @@ void BuildBvh(
 
             END_TASK(ShaderConstants.numThreadGroups);
             writeDebugCounter(COUNTER_MORTONGEN_OFFSET);
-            numActivePrims = ResultBuffer.Load(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+            numActivePrims = DstBuffer.Load(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
 
             if (numActivePrims > 0)
             {
@@ -875,7 +869,7 @@ void BuildBvh(
                 END_TASK(ShaderConstants.numThreadGroups);
                 writeDebugCounter(COUNTER_REFIT_OFFSET);
             }
-            const uint geometryType = ResultBuffer.Load(ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET);
+            const uint geometryType = DstBuffer.Load(ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET);
 
             if (EnableLatePairCompression() && (geometryType == GEOMETRY_TYPE_TRIANGLES))
             {
@@ -896,7 +890,7 @@ void BuildBvh(
             {
                 // This is an empty TLAS, but we didn't know it yet when we were setting up the header writes in the
                 // command buffer. Overwrite the GPU VA to 0 to properly designate the TLAS as empty.
-                ResultMetadata.Store<GpuVirtualAddress>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, 0);
+                DstMetadata.Store<GpuVirtualAddress>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, 0);
             }
 
             END_TASK(1);
@@ -913,7 +907,7 @@ void BuildBvh(
         // Fetch leaf node count when triangle compression is enabled.
         if (EnableLatePairCompression())
         {
-            numLeafNodes = ResultBuffer.Load(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
+            numLeafNodes = DstBuffer.Load(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
         }
 
         BEGIN_TASK(ShaderConstants.numThreadGroups);
@@ -935,7 +929,7 @@ void BuildBvh(
 
     if (localId == 0)
     {
-        WriteCompactedSize(ResultBuffer,
+        WriteCompactedSize(DstBuffer,
                            EmitBuffer,
                            Settings.emitCompactSize,
                            Settings.topLevelBuild ? TOP_LEVEL : BOTTOM_LEVEL);

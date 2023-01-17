@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2019-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2019-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -768,10 +768,8 @@ struct DeviceSettings
         uint32 fp16BoxNodesRequireCompaction : 1;           // Compaction is set or not.
         uint32 noCopySortedNodes : 1;                       // Disable CopyUnsortedScratchLeafNode()
         uint32 enableSAHCost : 1;                           // Use more accurate SAH cost
-        uint32 useGrowthInLTD : 1;                          // Use growth in the calculation of ltd quality factor;
         uint32 enableMergedEncodeUpdate : 1;                // Combine encode and update in one dispatch
         uint32 enableMergedEncodeBuild : 1;                 // Combine encode and build in one dispatch
-        uint32 ltdPackCentroids : 1;
         uint32 enableEarlyPairCompression : 1;              // Enable pair triangle compression in early (Encode) phase
     };
 
@@ -779,9 +777,6 @@ struct DeviceSettings
 
     uint32                      numMortonSizeBits;
 
-    float                       ltdQualityFactorFastBuild;
-    float                       ltdQualityFactorDefaultBuild;
-    float                       ltdQualityFactorFastTrace;
 };
 
 // Describes a postbuild info write request from some acceleration structures to some location.
@@ -1127,9 +1122,7 @@ struct CompileTimeBuildSettings
     float  tsPriority;
     uint32 noCopySortedNodes;
     uint32 enableSAHCost;
-    uint32 useGrowthInLTD;
     uint32 doEncode;
-    uint32 ltdPackCentroids;
     uint32 enableEarlyPairCompression;
 };
 

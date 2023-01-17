@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -742,8 +742,8 @@ void RebraidImpl(
 
                     if (i == (args.numPrimitives - 1))
                     {
-                        ResultBuffer.Store(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET,
-                                           args.numPrimitives + prevSum + threadSumScanned + threadSum);
+                        DstBuffer.Store(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET,
+                                        args.numPrimitives + prevSum + threadSumScanned + threadSum);
                     }
                 }
 

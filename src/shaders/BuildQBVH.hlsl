@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -65,8 +65,8 @@ struct BuildQbvhArgs
 //=====================================================================================================================
 [[vk::push_constant]] ConstantBuffer<BuildQbvhArgs> ShaderConstants : register(b0);
 
-[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer  ResultBuffer       : register(u0);
-[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer  ResultMetadata     : register(u1);
+[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer  DstBuffer          : register(u0);
+[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer  DstMetadata        : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer  ScratchBuffer      : register(u2);
 [[vk::binding(3, 0)]]                  RWByteAddressBuffer  InstanceDescBuffer : register(u3);
 [[vk::binding(4, 0)]]                  RWByteAddressBuffer  EmitBuffer         : register(u4);
@@ -233,7 +233,7 @@ static void InitBuildQbvhImpl(
 void InitBuildQBVH(
     uint globalId : SV_DispatchThreadID)
 {
-    const AccelStructHeader header        = ResultBuffer.Load<AccelStructHeader>(0);
+    const AccelStructHeader header        = DstBuffer.Load<AccelStructHeader>(0);
     const uint              type          = (header.info & ACCEL_STRUCT_HEADER_INFO_TYPE_MASK);
     const bool              topLevelBuild = (type == TOP_LEVEL);
 
@@ -296,7 +296,7 @@ uint WriteInstanceNode(
     instanceDesc.accelStructureAddressLo = asuint(scratchNode.sah_or_v2_or_instBasePtr.x);
     instanceDesc.accelStructureAddressHiAndFlags = asuint(scratchNode.sah_or_v2_or_instBasePtr.y);
 
-    WriteInstanceDescriptor(ResultBuffer,
+    WriteInstanceDescriptor(DstBuffer,
                             instanceDesc,
                             instanceIndex,
                             nodeOffset,
@@ -305,7 +305,7 @@ uint WriteInstanceNode(
                             args.enableFusedInstanceNode);
 
     const uint nodePointer = PackNodePointer(nodeType, nodeOffset);
-    ResultBuffer.Store(offsets.primNodePtrs + (destIndex * sizeof(uint)), nodePointer);
+    DstBuffer.Store(offsets.primNodePtrs + (destIndex * sizeof(uint)), nodePointer);
 
     ScratchBuffer.InterlockedAdd(args.stackPtrsScratchOffset + STACK_PTRS_NUM_LEAFS_DONE_OFFSET, 1);
 
@@ -323,7 +323,7 @@ uint WritePrimitiveNode(
 
     // Load geometry info
     const uint geometryInfoOffset = offsets.geometryInfo + (scratchNode.right_or_geometryIndex * sizeof(GeometryInfo));
-    const GeometryInfo geometryInfo = ResultBuffer.Load<GeometryInfo>(geometryInfoOffset);
+    const GeometryInfo geometryInfo = DstBuffer.Load<GeometryInfo>(geometryInfoOffset);
     const uint geometryFlags = ExtractGeometryInfoFlags(geometryInfo.geometryFlagsAndNumPrimitives);
     const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(scratchNode.right_or_geometryIndex, geometryFlags);
     const uint geometryPrimNodePtrsOffset = offsets.primNodePtrs + geometryInfo.primNodePtrsOffset;
@@ -352,10 +352,10 @@ uint WritePrimitiveNode(
             nodeOffset = offsets.leafNodes + (destIndex * USER_NODE_PROCEDURAL_SIZE);
         }
 
-        ResultBuffer.Store(nodeOffset + USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET, scratchNode.left_or_primIndex_or_instIndex);
-        ResultBuffer.Store3(nodeOffset + USER_NODE_PROCEDURAL_MIN_OFFSET, asuint(scratchNode.bbox_min_or_v0));
-        ResultBuffer.Store3(nodeOffset + USER_NODE_PROCEDURAL_MAX_OFFSET, asuint(scratchNode.bbox_max_or_v1));
-        ResultBuffer.Store(nodeOffset + USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
+        DstBuffer.Store(nodeOffset + USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET, scratchNode.left_or_primIndex_or_instIndex);
+        DstBuffer.Store3(nodeOffset + USER_NODE_PROCEDURAL_MIN_OFFSET, asuint(scratchNode.bbox_min_or_v0));
+        DstBuffer.Store3(nodeOffset + USER_NODE_PROCEDURAL_MAX_OFFSET, asuint(scratchNode.bbox_max_or_v1));
+        DstBuffer.Store(nodeOffset + USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
     }
     else
     {
@@ -363,8 +363,8 @@ uint WritePrimitiveNode(
             nodeOffset = offsets.leafNodes + (destIndex * TRIANGLE_NODE_SIZE);
         }
 
-        ResultBuffer.Store(nodeOffset + TRIANGLE_NODE_ID_OFFSET, triangleId);
-        ResultBuffer.Store(nodeOffset + TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
+        DstBuffer.Store(nodeOffset + TRIANGLE_NODE_ID_OFFSET, triangleId);
+        DstBuffer.Store(nodeOffset + TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
 
         uint3 vertexOffsets;
         if (args.triangleCompressionMode != NO_TRIANGLE_COMPRESSION)
@@ -376,12 +376,12 @@ uint WritePrimitiveNode(
             vertexOffsets = CalcTriangleVertexOffsets(nodeType);
         }
 
-        ResultBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.x, scratchNode.bbox_min_or_v0);
-        ResultBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.y, scratchNode.bbox_max_or_v1);
-        ResultBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.z, scratchNode.sah_or_v2_or_instBasePtr);
+        DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.x, scratchNode.bbox_min_or_v0);
+        DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.y, scratchNode.bbox_max_or_v1);
+        DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.z, scratchNode.sah_or_v2_or_instBasePtr);
 
-        ResultBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + (nodeType * 4),
-                           scratchNode.left_or_primIndex_or_instIndex);
+        DstBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + (nodeType * 4),
+                        scratchNode.left_or_primIndex_or_instIndex);
 
         // For PAIR_TRIANGLE_COMPRESSION, the other node is not linked in the BVH tree, so we need to find it and
         // store it as well if it exists.
@@ -406,22 +406,22 @@ uint WritePrimitiveNode(
                 // the vertex that goes into v0. v1, v2, and v3 were already stored by NODE_TYPE_TRIANGLE_1 above.
                 if (otherVertexOffsets[i] == 0)
                 {
-                    ResultBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET, otherVerts[i]);
+                    DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET, otherVerts[i]);
                 }
             }
 
-            ResultBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + (otherNodeType * 4),
-                               otherNode.left_or_primIndex_or_instIndex);
+            DstBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + (otherNodeType * 4),
+                            otherNode.left_or_primIndex_or_instIndex);
 
             const uint otherPrimNodePointer = PackNodePointer(otherNodeType, nodeOffset);
-            ResultBuffer.Store(geometryPrimNodePtrsOffset + (otherNode.left_or_primIndex_or_instIndex * sizeof(uint)),
-                               otherPrimNodePointer);
+            DstBuffer.Store(geometryPrimNodePtrsOffset + (otherNode.left_or_primIndex_or_instIndex * sizeof(uint)),
+                            otherPrimNodePointer);
         }
     }
 
     const uint nodePointer = PackNodePointer(nodeType, nodeOffset);
-    ResultBuffer.Store(geometryPrimNodePtrsOffset + (scratchNode.left_or_primIndex_or_instIndex * sizeof(uint)),
-                       nodePointer);
+    DstBuffer.Store(geometryPrimNodePtrsOffset + (scratchNode.left_or_primIndex_or_instIndex * sizeof(uint)),
+                    nodePointer);
 
     return nodePointer;
 }
@@ -551,7 +551,7 @@ uint AllocQBVHStackNumItems(
     {
         origDest = QBVHStackPopDestIdx(args, topLevelBuild, origStackIdx);
 
-        // Destination offset in ResultBuffer for each child node
+        // Destination offset in DstBuffer for each child node
         intChildDstOffset += origDest;
 
         if (topLevelBuild || (DoCollapse(args) == false))
@@ -582,7 +582,7 @@ uint AllocQBVHStackNumItems(
     {
         ScratchBuffer.InterlockedAdd(args.stackPtrsScratchOffset + STACK_PTRS_DST_PTR_OFFSET, numDstChunks64B, origDest);
 
-        // Destination offset in ResultBuffer for each child node
+        // Destination offset in DstBuffer for each child node
         intChildDstOffset += origDest;
 
         if (DoCollapse(args) == false)
@@ -784,7 +784,7 @@ static uint ProcessNode(
     in bool               topLevelBuild,    // Compile time flag indicating whether this is top or bottom level build
     in ScratchNode        scratchNode,      // Scratch node being processed
     in uint               scratchNodeIndex, // Index of the Scratch node in BVH2
-    in uint               destIndex,        // Dest index of the node in terms of 64B chunks in ResultBuffer
+    in uint               destIndex,        // Dest index of the node in terms of 64B chunks in DstBuffer
     in uint               parentNodePtr,    // Parent node pointer
     in AccelStructOffsets offsets)          // Header offsets
 {
@@ -809,7 +809,7 @@ static uint ProcessNode(
         nodePointer = CreateBoxNodePointer(args, nodeOffset, writeAsFp16BoxNode);
     }
 
-    WriteParentPointer(ResultMetadata,
+    WriteParentPointer(DstMetadata,
                        args.metadataSizeInBytes,
                        nodePointer,
                        parentNodePtr);
@@ -1137,7 +1137,7 @@ void BuildQbvhImpl(
     bool          topLevelBuild)  // Compile time flag indicating whether this is top or bottom level build
 {
     // Load acceleration structure header
-    const AccelStructHeader  header  = ResultBuffer.Load<AccelStructHeader>(0);
+    const AccelStructHeader  header  = DstBuffer.Load<AccelStructHeader>(0);
     const AccelStructOffsets offsets = header.offsets;
 
     const ScratchNodeResourceInfo resourceInfo =
@@ -1154,17 +1154,17 @@ void BuildQbvhImpl(
         const ScratchNode rootScratchNode = FetchScratchNodeImpl(resourceInfo, 0);
         const BoundingBox bbox            = GetScratchNodeBoundingBoxTS(args, topLevelBuild, rootScratchNode);
 
-        ResultBuffer.Store3(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET, asuint(bbox.min));
-        ResultBuffer.Store3(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET + 12, asuint(bbox.max));
+        DstBuffer.Store3(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET, asuint(bbox.min));
+        DstBuffer.Store3(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET + 12, asuint(bbox.max));
 
         // Merge the internal node flags
         const uint flags0 = ExtractNodeFlagsField(rootScratchNode.flags, 0);
         const uint flags1 = ExtractNodeFlagsField(rootScratchNode.flags, 1);
 
         const uint mergedNodeFlags = flags0 & flags1;
-        ResultBuffer.Store(ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET, mergedNodeFlags);
+        DstBuffer.Store(ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET, mergedNodeFlags);
 
-        WriteParentPointer(ResultMetadata,
+        WriteParentPointer(DstMetadata,
                            args.metadataSizeInBytes,
                            rootNodePtr,
                            INVALID_IDX);
@@ -1191,19 +1191,19 @@ void BuildQbvhImpl(
             const uint qbvhNodeAddr = CalcQbvhInternalNodeOffset(0, true);
 
             {
-                WriteBoxNode(ResultBuffer, qbvhNodeAddr, fp32BoxNode);
+                WriteBoxNode(DstBuffer, qbvhNodeAddr, fp32BoxNode);
             }
 
-            ResultBuffer.Store(ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP32_NODES_OFFSET, 1);
+            DstBuffer.Store(ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP32_NODES_OFFSET, 1);
 
             if (args.enableSAHCost)
             {
                 const float4 childCosts = float4(0, 0, 0, 0);
-                ResultBuffer.Store<float4>(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET, childCosts);
+                DstBuffer.Store<float4>(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET, childCosts);
             }
             else
             {
-                ResultBuffer.Store4(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET, uint4(numPrimitives, 0, 0, 0));
+                DstBuffer.Store4(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET, uint4(numPrimitives, 0, 0, 0));
             }
 
             return;
@@ -1361,7 +1361,7 @@ void BuildQbvhImpl(
                    (writeAsFp16BoxNode ? ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP16_NODES_OFFSET
                                        : ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP32_NODES_OFFSET);
 
-            ResultBuffer.InterlockedAdd(nodeTypeToAccum, 1);
+            DstBuffer.InterlockedAdd(nodeTypeToAccum, 1);
 
             bool doSwapLevel0 = false;
             if (use2levelSort && !args.sahQbvh)
@@ -1468,7 +1468,7 @@ void BuildQbvhImpl(
                 fp16BoxNode.bbox2  = CompressBBoxToUint3(bbox[2]);
                 fp16BoxNode.bbox3  = CompressBBoxToUint3(bbox[3]);
 
-                WriteFp16BoxNode(ResultBuffer, qbvhNodeAddr, fp16BoxNode);
+                WriteFp16BoxNode(DstBuffer, qbvhNodeAddr, fp16BoxNode);
             }
             else
             {
@@ -1489,7 +1489,7 @@ void BuildQbvhImpl(
                 fp32BoxNode.numPrimitives  = FetchScratchNodeNumPrimitives(node, false);
 
                 {
-                    WriteBoxNode(ResultBuffer, qbvhNodeAddr, fp32BoxNode);
+                    WriteBoxNode(DstBuffer, qbvhNodeAddr, fp32BoxNode);
                 }
             }
 
@@ -1499,17 +1499,17 @@ void BuildQbvhImpl(
                 // store the actual SAH cost rather than the number of primitives
                 if (args.enableSAHCost)
                 {
-                    ResultBuffer.Store<float>(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET, cost[0]);
-                    ResultBuffer.Store<float>(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 4, cost[1]);
-                    ResultBuffer.Store<float>(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 8, cost[2]);
-                    ResultBuffer.Store<float>(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 12, cost[3]);
+                    DstBuffer.Store<float>(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET, cost[0]);
+                    DstBuffer.Store<float>(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 4, cost[1]);
+                    DstBuffer.Store<float>(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 8, cost[2]);
+                    DstBuffer.Store<float>(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 12, cost[3]);
                 }
                 else
                 {
-                    ResultBuffer.Store(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET, numPrimitives[0]);
-                    ResultBuffer.Store(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 4, numPrimitives[1]);
-                    ResultBuffer.Store(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 8, numPrimitives[2]);
-                    ResultBuffer.Store(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 12, numPrimitives[3]);
+                    DstBuffer.Store(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET, numPrimitives[0]);
+                    DstBuffer.Store(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 4, numPrimitives[1]);
+                    DstBuffer.Store(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 8, numPrimitives[2]);
+                    DstBuffer.Store(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 12, numPrimitives[3]);
                 }
             }
 
@@ -1534,7 +1534,7 @@ void BuildQBVH(
     uint localId  = localIdIn;
     uint groupId  = groupIdIn;
 
-    const AccelStructHeader header        = ResultBuffer.Load<AccelStructHeader>(0);
+    const AccelStructHeader header        = DstBuffer.Load<AccelStructHeader>(0);
     const uint              type          = (header.info & ACCEL_STRUCT_HEADER_INFO_TYPE_MASK);
     const bool              topLevelBuild = (type == TOP_LEVEL);
 
@@ -1575,7 +1575,7 @@ void BuildQBVH(
         {
             // This is an empty TLAS, but we didn't know it yet when we were setting up the header writes in the
             // command buffer. Overwrite the GPU VA to 0 to properly designate the TLAS as empty.
-            ResultMetadata.Store<GpuVirtualAddress>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, 0);
+            DstMetadata.Store<GpuVirtualAddress>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, 0);
         }
 
         END_TASK(1);
@@ -1585,7 +1585,7 @@ void BuildQBVH(
 
     if (localId == 0)
     {
-        WriteCompactedSize(ResultBuffer,
+        WriteCompactedSize(DstBuffer,
                            EmitBuffer,
                            ShaderConstants.emitCompactSize,
                            type);
@@ -1610,7 +1610,7 @@ void BuildQBVHCollapse(
     uint localId = localIdIn;
     uint groupId = groupIdIn;
 
-    const AccelStructHeader header        = ResultBuffer.Load<AccelStructHeader>(0);
+    const AccelStructHeader header        = DstBuffer.Load<AccelStructHeader>(0);
     const uint              type          = (header.info & ACCEL_STRUCT_HEADER_INFO_TYPE_MASK);
     const bool              topLevelBuild = (type == TOP_LEVEL);
 
@@ -1643,7 +1643,7 @@ void BuildQBVHCollapse(
 
     if (localId == 0)
     {
-        WriteCompactedSize(ResultBuffer,
+        WriteCompactedSize(DstBuffer,
                            EmitBuffer,
                            ShaderConstants.emitCompactSize,
                            BOTTOM_LEVEL);

@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -49,9 +49,9 @@ struct InputArgs
 
 [[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
 
-[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer    ResultBuffer   : register(u0);
+[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer    DstMetadata    : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer    ScratchBuffer  : register(u1);
-[[vk::binding(2, 0)]]                  RWByteAddressBuffer    SourceBuffer   : register(u2);
+[[vk::binding(2, 0)]]                  RWByteAddressBuffer    SrcBuffer      : register(u2);
 
 //=====================================================================================================================
 // Note, this header must be included after all resource bindings have been defined. Also, there is a strict naming
@@ -65,7 +65,7 @@ void WaitForTasksToFinish(uint numTasksWait)
     do
     {
         DeviceMemoryBarrier();
-    } while (ResultBuffer.Load(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET) < numTasksWait);
+    } while (DstMetadata.Load(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET) < numTasksWait);
 }
 
 //=====================================================================================================================
@@ -83,9 +83,9 @@ void UpdateParallel(
     uint numWorkItems = ScratchBuffer.Load(UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET);
 
     UpdateQBVHImpl(globalThreadId,
-                   ResultBuffer,
+                   DstMetadata,
                    ScratchBuffer,
-                   SourceBuffer,
+                   SrcBuffer,
                    ShaderConstants.propagationFlagsScratchOffset,
                    numWorkItems,
                    ShaderConstants.numThreads);

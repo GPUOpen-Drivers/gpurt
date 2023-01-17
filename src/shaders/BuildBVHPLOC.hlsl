@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2022 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -94,9 +94,9 @@ struct BuildPlocArgs
 
 [[vk::push_constant]] ConstantBuffer<BuildPlocArgs> ShaderConstants : register(b0);
 
-[[vk::binding(0, 0)]] RWByteAddressBuffer                  ResultBuffer   : register(u0);
-[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer ResultMetadata : register(u1);
-[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer  : register(u2);
+[[vk::binding(0, 0)]] RWByteAddressBuffer                  DstBuffer     : register(u0);
+[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata   : register(u1);
+[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer : register(u2);
 
 groupshared int SharedMem[(2 * PLOC_RADIUS_MAX + BUILD_THREADGROUP_SIZE) * LDS_AABB_STRIDE];
 
@@ -1045,7 +1045,7 @@ void BuildBVHPLOC(
     uint localId = localIdIn;
     uint groupId = groupIdIn;
 
-    const uint numActivePrims = ResultBuffer.Load(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+    const uint numActivePrims = DstBuffer.Load(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
 
     if (numActivePrims > 0)
     {
