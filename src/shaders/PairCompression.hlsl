@@ -33,14 +33,12 @@ struct PairCompressionArgs
 };
 
 #if NO_SHADER_ENTRYPOINT == 0
-#include "Common.hlsl"
-#include "BuildCommon.hlsl"
-
 #define RootSig "RootConstants(num32BitConstants=6, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
-                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894))"
+                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
+                "CBV(b1)"/*Build Settings binding*/
 
 //=====================================================================================================================
 [[vk::push_constant]] ConstantBuffer<PairCompressionArgs> ShaderConstants : register(b0);
@@ -48,6 +46,9 @@ struct PairCompressionArgs
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer  DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer  DstMetadata   : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer  ScratchBuffer : register(u2);
+
+#include "Common.hlsl"
+#include "BuildCommonScratch.hlsl"
 
 #define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
 groupshared uint SharedMem[MAX_LDS_ELEMENTS];
@@ -238,7 +239,7 @@ void WriteCompressedNodes(
         WriteBatchIndex(localId, PAIR_BATCH_SIZE - 1 - x, keptIndex);
 
         const uint quadScratchIndex = GetQuadScratchNodeIndex(quad.scratchNodeIndexAndOffset[0]);
-        const ScratchNode triangleNode = FetchScratchNode(ScratchBuffer, scratchNodesScratchOffset, quadScratchIndex);
+        const ScratchNode triangleNode = FetchScratchNode(scratchNodesScratchOffset, quadScratchIndex);
         const uint geometryFlags = triangleNode.flags;
 
         const uint numFaces = 2;
@@ -335,7 +336,7 @@ uint EncodeTwoTrianglesPerNodeQBVHCompression(
     {
         const uint scratchIndex = ReadBatchIndex(localId, batchIndex);
 
-        const ScratchNode node = FetchScratchNode(ScratchBuffer, args.scratchNodesScratchOffset, scratchIndex);
+        const ScratchNode node = FetchScratchNode(args.scratchNodesScratchOffset, scratchIndex);
 
         const uint geometryIndex  = node.right_or_geometryIndex;
         const uint primitiveIndex = node.left_or_primIndex_or_instIndex;
@@ -362,7 +363,7 @@ uint EncodeTwoTrianglesPerNodeQBVHCompression(
             }
 
             const uint quadScratchIndex = GetQuadScratchNodeIndex(quadArray[n].scratchNodeIndexAndOffset[0]);
-            const ScratchNode triangleNode = FetchScratchNode(ScratchBuffer, args.scratchNodesScratchOffset, quadScratchIndex);
+            const ScratchNode triangleNode = FetchScratchNode(args.scratchNodesScratchOffset, quadScratchIndex);
 
             // Do not compress triangles from different geometries
             if (geometryIndex != triangleNode.right_or_geometryIndex)
@@ -460,20 +461,18 @@ uint EncodeTwoTrianglesPerNodeQBVHCompression(
 
 //=====================================================================================================================
 BoundingBox FetchScratchNodeBoundingBoxPair(
-    RWByteAddressBuffer buffer,
-    uint                baseScratchNodesOffset,
-    uint                nodeIndex,
-    uint                numActivePrims)
+    uint baseScratchNodesOffset,
+    uint nodeIndex,
+    uint numActivePrims)
 {
-    const ScratchNode scratchNode = FetchScratchNode(buffer, baseScratchNodesOffset, nodeIndex);
+    const ScratchNode scratchNode = FetchScratchNode(baseScratchNodesOffset, nodeIndex);
 
     BoundingBox bbox = GetScratchNodeBoundingBox(scratchNode);
 
     // If this is a pair, get the other triangle's bounding box and merge.
     if (IsLeafNode(nodeIndex, numActivePrims) && (scratchNode.splitBox_or_nodePointer != INVALID_IDX))
     {
-        const ScratchNode otherNode = FetchScratchNode(buffer,
-                                                       baseScratchNodesOffset,
+        const ScratchNode otherNode = FetchScratchNode(baseScratchNodesOffset,
                                                        scratchNode.splitBox_or_nodePointer);
         const BoundingBox otherBbox = GetScratchNodeBoundingBox(otherNode);
 
@@ -519,7 +518,7 @@ void PairCompressionImpl(
         }
         else
         {
-            const ScratchNode node = FetchScratchNode(ScratchBuffer, args.scratchNodesScratchOffset, index);
+            const ScratchNode node = FetchScratchNode(args.scratchNodesScratchOffset, index);
 
             // Clear flags for refit.
             ScratchBuffer.Store(args.flagsScratchOffset + (index * sizeof(uint)), 0);
@@ -571,11 +570,9 @@ void PairCompressionImpl(
         // Batch Indices now contains the scratch node indices which will no longer be directly linked in the BVH.
         const uint eliminatedIndex = ReadBatchIndex(localId, i);
 
-        const ScratchNode eliminatedNode = FetchScratchNode(ScratchBuffer,
-                                                            args.scratchNodesScratchOffset,
+        const ScratchNode eliminatedNode = FetchScratchNode(args.scratchNodesScratchOffset,
                                                             eliminatedIndex);
-        const ScratchNode parentNode     = FetchScratchNode(ScratchBuffer,
-                                                            args.scratchNodesScratchOffset,
+        const ScratchNode parentNode     = FetchScratchNode(args.scratchNodesScratchOffset,
                                                             eliminatedNode.parent);
 
         const uint possiblyNotEliminatedIndex = (parentNode.left_or_primIndex_or_instIndex == eliminatedIndex) ?
@@ -586,8 +583,7 @@ void PairCompressionImpl(
                                                  (possiblyNotEliminatedIndex * sizeof(ScratchNode));
 
         const uint grandParentNodeOffset  = args.scratchNodesScratchOffset + (parentNode.parent * sizeof(ScratchNode));
-        const ScratchNode grandParentNode = FetchScratchNode(ScratchBuffer,
-                                                             args.scratchNodesScratchOffset,
+        const ScratchNode grandParentNode = FetchScratchNode(args.scratchNodesScratchOffset,
                                                              parentNode.parent);
 
         if (grandParentNode.left_or_primIndex_or_instIndex == eliminatedNode.parent)
@@ -618,7 +614,7 @@ void PairCompressionImpl(
         DeviceMemoryBarrier();
 
         // Move to parent node
-        const uint parentNodeIndex = FetchScratchNode(ScratchBuffer, args.scratchNodesScratchOffset, nodeIndex).parent;
+        const uint parentNodeIndex = FetchScratchNode(args.scratchNodesScratchOffset, nodeIndex).parent;
 
         // Check parent node's flag
         const uint flagOffset = args.flagsScratchOffset + (parentNodeIndex * sizeof(uint));
@@ -639,16 +635,15 @@ void PairCompressionImpl(
         {
             // If the flag was 1 the second child is ready and this iteration calculates and writes
             // bbox data for the parent node.
-            const ScratchNode parentNode = FetchScratchNode(ScratchBuffer,
-                                                            args.scratchNodesScratchOffset,
+            const ScratchNode parentNode = FetchScratchNode(args.scratchNodesScratchOffset,
                                                             parentNodeIndex);
 
             // Fetch child indices
             const uint lc = parentNode.left_or_primIndex_or_instIndex;
             const uint rc = parentNode.right_or_geometryIndex;
 
-            const ScratchNode leftNode  = FetchScratchNode(ScratchBuffer, args.scratchNodesScratchOffset, lc);
-            const ScratchNode rightNode = FetchScratchNode(ScratchBuffer, args.scratchNodesScratchOffset, rc);
+            const ScratchNode leftNode  = FetchScratchNode(args.scratchNodesScratchOffset, lc);
+            const ScratchNode rightNode = FetchScratchNode(args.scratchNodesScratchOffset, rc);
 
             // Fetch bounding children bounding boxes
             BoundingBox bboxRightChild;
@@ -656,8 +651,7 @@ void PairCompressionImpl(
 
             if (IsLeafNode(rc, numActivePrims))
             {
-                bboxRightChild = FetchScratchNodeBoundingBoxPair(ScratchBuffer,
-                                                                 args.scratchNodesScratchOffset,
+                bboxRightChild = FetchScratchNodeBoundingBoxPair(args.scratchNodesScratchOffset,
                                                                  rc,
                                                                  numActivePrims);
             }
@@ -668,8 +662,7 @@ void PairCompressionImpl(
 
             if (IsLeafNode(lc, numActivePrims))
             {
-                bboxLeftChild = FetchScratchNodeBoundingBoxPair(ScratchBuffer,
-                                                                args.scratchNodesScratchOffset,
+                bboxLeftChild = FetchScratchNodeBoundingBoxPair(args.scratchNodesScratchOffset,
                                                                 lc,
                                                                 numActivePrims);
             }
@@ -681,8 +674,7 @@ void PairCompressionImpl(
             // Merge bounding boxes up to parent
             const float3 bboxMinParent = min(bboxLeftChild.min, bboxRightChild.min);
             const float3 bboxMaxParent = max(bboxLeftChild.max, bboxRightChild.max);
-            WriteScratchNodeBoundingBox(ScratchBuffer,
-                                        args.scratchNodesScratchOffset,
+            WriteScratchNodeBoundingBox(args.scratchNodesScratchOffset,
                                         parentNodeIndex,
                                         bboxMinParent,
                                         bboxMaxParent);

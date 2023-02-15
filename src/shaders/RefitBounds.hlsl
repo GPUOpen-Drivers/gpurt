@@ -22,14 +22,12 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "IntersectCommon.hlsl"
-#include "BuildCommon.hlsl"
-
 #define RootSig "RootConstants(num32BitConstants=13, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
-                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894))"
+                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
+                "CBV(b1)"/*Build Settings binding*/
 
 //=====================================================================================================================
 struct Constants
@@ -55,6 +53,7 @@ struct Constants
 [[vk::binding(1, 0)]] RWByteAddressBuffer                   DstMetadata     : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer  ScratchBuffer   : register(u2);
 
+#include "IntersectCommon.hlsl"
 #include "RefitBoundsImpl.hlsl"
 
 //=====================================================================================================================

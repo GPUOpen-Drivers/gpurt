@@ -72,7 +72,6 @@ typedef struct D3D12DDI_RAYTRACING_GEOMETRY_TRIANGLES_DESC_0054
 #define GEOMETRY_DESC_AABB_COUNT_OFFSET  8
 #define GEOMETRY_DESC_AABBS_OFFSET      16
 
-//=====================================================================================================================
 static uint64_t FetchApiInstanceBaseAddress(
     in RWByteAddressBuffer SrcBuffer,
     in uint offset)

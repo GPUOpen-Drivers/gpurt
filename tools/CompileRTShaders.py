@@ -392,7 +392,8 @@ def CompileShaderConfig(shaderConfig, args, shadersOutputDir,
         threadOutput.append(f"Error: {e}")
         return (False, os.linesep.join(threadOutput))
     finally:
-        RemoveFolder(tempDirPath)
+        if not (args.interm_only or args.verbose):
+            RemoveFolder(tempDirPath)
 
 def FixInputPath(path) -> str:
     return os.path.abspath(path).replace('\\\\', '\\').replace('\\', '/')

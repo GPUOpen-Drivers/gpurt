@@ -32,31 +32,30 @@
 
 //=====================================================================================================================
 int4 safe_load_int4(
-    RWByteAddressBuffer source,
-    uint                baseOffset,
-    uint                idx,
-    uint                sizeInTypeUnits)
+    uint baseOffset,
+    uint idx,
+    uint sizeInTypeUnits)
 {
     const uint offset = baseOffset + (idx * sizeof(int4));
 
     int4 res = int4(0, 0, 0, 0);
     if (((idx + 1) << 2) <= sizeInTypeUnits)
     {
-        res = source.Load<int4>(offset);
+        res = ScratchBuffer.Load<int4>(offset);
     }
     else
     {
         if ((idx << 2) < sizeInTypeUnits)
         {
-            res.x = source.Load<int4>(offset).x;
+            res.x = ScratchBuffer.Load<int4>(offset).x;
         }
         if ((idx << 2) + 1 < sizeInTypeUnits)
         {
-            res.y = source.Load<int4>(offset).y;
+            res.y = ScratchBuffer.Load<int4>(offset).y;
         }
         if ((idx << 2) + 2 < sizeInTypeUnits)
         {
-            res.z = source.Load<int4>(offset).z;
+            res.z = ScratchBuffer.Load<int4>(offset).z;
         }
     }
 
@@ -96,31 +95,30 @@ void safe_store_int4(
 
 //=====================================================================================================================
 int4 safe_load_int4_intmax(
-    RWByteAddressBuffer source,
-    uint                baseOffset,
-    uint                idx,
-    uint                sizeInInts)
+    uint baseOffset,
+    uint idx,
+    uint sizeInInts)
 {
     const uint offset = baseOffset + (idx * sizeof(int4));
 
     int4 res = int4(INT_MAX, INT_MAX, INT_MAX, INT_MAX);
     if (((idx + 1) << 2) <= sizeInInts)
     {
-        res = source.Load<int4>(offset);
+        res = ScratchBuffer.Load<int4>(offset);
     }
     else
     {
         if ((idx << 2) < sizeInInts)
         {
-            res.x = source.Load<int4>(offset).x;
+            res.x = ScratchBuffer.Load<int4>(offset).x;
         }
         if ((idx << 2) + 1 < sizeInInts)
         {
-            res.y = source.Load<int4>(offset).y;
+            res.y = ScratchBuffer.Load<int4>(offset).y;
         }
         if ((idx << 2) + 2 < sizeInInts)
         {
-            res.z = source.Load<int4>(offset).z;
+            res.z = ScratchBuffer.Load<int4>(offset).z;
         }
     }
 
@@ -128,10 +126,9 @@ int4 safe_load_int4_intmax(
 }
 
 uint64_t4 safe_load_int64_4_intmax(
-    RWByteAddressBuffer source,
-    uint                baseOffset,
-    uint                idx,
-    uint                sizeInInts)
+    uint baseOffset,
+    uint idx,
+    uint sizeInInts)
 {
     const uint offset = baseOffset + (idx * sizeof(uint64_t4));
 
@@ -139,21 +136,21 @@ uint64_t4 safe_load_int64_4_intmax(
     uint64_t4 res  = uint64_t4(temp, temp, temp, temp);
     if (((idx + 1) << 2) <= sizeInInts)
     {
-        res = source.Load<uint64_t4>(offset);
+        res = ScratchBuffer.Load<uint64_t4>(offset);
     }
     else
     {
         if ((idx << 2) < sizeInInts)
         {
-            res.x = source.Load<uint64_t4>(offset).x;
+            res.x = ScratchBuffer.Load<uint64_t4>(offset).x;
         }
         if ((idx << 2) + 1 < sizeInInts)
         {
-            res.y = source.Load<uint64_t4>(offset).y;
+            res.y = ScratchBuffer.Load<uint64_t4>(offset).y;
         }
         if ((idx << 2) + 2 < sizeInInts)
         {
-            res.z = source.Load<uint64_t4>(offset).z;
+            res.z = ScratchBuffer.Load<uint64_t4>(offset).z;
         }
     }
 

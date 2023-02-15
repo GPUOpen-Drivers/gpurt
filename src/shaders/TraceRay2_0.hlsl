@@ -63,7 +63,7 @@ static IntersectionResult TraceRayImpl2_0(
 
     // Start from root node which follows acceleration structure header
     // BLAS root node is always fp32 regardless of mode for fp16 box nodes
-    const uint blasRootNodePtr   = CreateRootNodePointer();
+    const uint blasRootNodePtr = CreateRootNodePointer();
     uint       packedNodePointer = blasRootNodePtr;
     uint       tlasNodePtr       = INVALID_IDX;
 

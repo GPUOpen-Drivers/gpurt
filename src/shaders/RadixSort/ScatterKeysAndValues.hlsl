@@ -23,8 +23,6 @@
  *
  **********************************************************************************************************************/
 #if NO_SHADER_ENTRYPOINT == 0
-#include "ScanCommon.hlsli"
-
 #define RootSig "RootConstants(num32BitConstants=9, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
@@ -51,6 +49,8 @@ struct InputArgs
 [[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer DstMetadata   : register(u1);
 [[vk::binding(2, 0)]] RWByteAddressBuffer ScratchBuffer : register(u2);
+
+#include "ScanCommon.hlsli"
 
 //=====================================================================================================================
 // Local memory for offsets counting
@@ -217,7 +217,7 @@ void ScatterKeysAndValuesImpl(
         for (int block = 0; block < blockCount; ++block, loadIdx += GROUP_SIZE)
         {
             // Load single int4 value
-            int4 localKeys = safe_load_int4_intmax(ScratchBuffer, inputKeysOffset, loadIdx, numElements);
+            int4 localKeys = safe_load_int4_intmax(inputKeysOffset, loadIdx, numElements);
             int4 localVals;
 
             // Generate fixed indices for the first pass to avoid initialising the primitive indices
@@ -228,7 +228,7 @@ void ScatterKeysAndValuesImpl(
             }
             else
             {
-                localVals = safe_load_int4_intmax(ScratchBuffer, inputValuesOffset, loadIdx, numElements);
+                localVals = safe_load_int4_intmax(inputValuesOffset, loadIdx, numElements);
             }
 
             // Clear the histogram
@@ -368,7 +368,7 @@ void ScatterKeysAndValuesImpl(
         for (int block = 0; block < blockCount; ++block, loadIdx += GROUP_SIZE)
         {
             // Load single int4 value
-            uint64_t4 localKeys = safe_load_int64_4_intmax(ScratchBuffer, inputKeysOffset, loadIdx, numElements);
+            uint64_t4 localKeys = safe_load_int64_4_intmax(inputKeysOffset, loadIdx, numElements);
             int4 localVals;
 
             // Generate fixed indices for the first pass to avoid initialising the primitive indices
@@ -379,7 +379,7 @@ void ScatterKeysAndValuesImpl(
             }
             else
             {
-                localVals = safe_load_int4_intmax(ScratchBuffer, inputValuesOffset, loadIdx, numElements);
+                localVals = safe_load_int4_intmax(inputValuesOffset, loadIdx, numElements);
             }
 
             // Clear the histogram

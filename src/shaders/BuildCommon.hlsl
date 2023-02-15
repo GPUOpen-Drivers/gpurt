@@ -49,6 +49,9 @@
 //
 // uint numActivePrims
 
+#ifndef _BUILDCOMMON_HLSL
+#define _BUILDCOMMON_HLSL
+
 #include "IntersectCommon.hlsl"
 #include "CompactCommon.hlsl"
 
@@ -59,6 +62,28 @@
 #define LEAF_OFFSET(i) ((i) - (numActivePrims - 1))
 
 #define MAX_COLLAPSED_TRIANGLES 8
+
+//=====================================================================================================================
+struct RefitArgs
+{
+    uint topLevelBuild;
+    uint numActivePrims;
+    uint baseScratchNodesOffset;
+    uint doCollapse;
+    uint doTriangleSplitting;
+    uint enablePairCompression;
+    uint enablePairCostCheck;
+    uint splitBoxesOffset;
+    uint numBatchesOffset;
+    uint baseBatchIndicesOffset;
+    uint fp16BoxNodesMode;
+    float fp16BoxModeMixedSaThreshold;
+    uint centroidBoxesOffset;
+    uint enableCentroidBoxes;
+    bool ltdPackCentroids;
+    int4 numMortonBits;
+    uint enableInstancePrimCount;
+};
 
 //=====================================================================================================================
 static float3x4 CreateMatrix(float4 rows[3])
@@ -335,200 +360,11 @@ bool IsNodeActive(ScratchNode node)
 }
 
 //=====================================================================================================================
-struct ScratchNodeResourceInfo
-{
-    RWByteAddressBuffer scratchBuffer;
-    uint                scratchBufferScratchNodesOffset;
-};
-
-//=====================================================================================================================
 uint CalcScratchNodeOffset(
     uint baseScratchNodesOffset,
     uint nodeIndex)
 {
     return baseScratchNodesOffset + (nodeIndex * SCRATCH_NODE_SIZE);
-}
-
-//=====================================================================================================================
-ScratchNode FetchScratchNode(
-    RWByteAddressBuffer buffer,
-    uint                baseScratchNodesOffset,
-    uint                nodeIndex)
-{
-    const uint offset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    return buffer.Load<ScratchNode>(offset);
-}
-
-//=====================================================================================================================
-ScratchNode FetchScratchNodeImpl(
-    ScratchNodeResourceInfo resourceInfo,
-    uint                    nodeIndex)
-{
-    return FetchScratchNode(resourceInfo.scratchBuffer, resourceInfo.scratchBufferScratchNodesOffset, nodeIndex);
-}
-
-//=====================================================================================================================
-void WriteScratchNode(
-    RWByteAddressBuffer buffer,
-    uint                baseScratchNodesOffset,
-    uint                nodeIndex,
-    ScratchNode         node)
-{
-    const uint offset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    buffer.Store<ScratchNode>(offset, node);
-}
-
-//=====================================================================================================================
-BoundingBox FetchScratchNodeBoundingBox(
-    RWByteAddressBuffer buffer,
-    uint                baseScratchNodesOffset,
-    uint                nodeIndex)
-{
-    const ScratchNode scratchNode = FetchScratchNode(buffer, baseScratchNodesOffset, nodeIndex);
-
-    return GetScratchNodeBoundingBox(scratchNode);
-}
-
-//=====================================================================================================================
-BoundingBox FetchScratchNodeBoundingBoxTS(
-    RWByteAddressBuffer buffer,
-    uint                baseScratchNodesOffset,
-    uint                baseSplitBoxesOffset,
-    uint                nodeIndex)
-{
-    const ScratchNode scratchNode = FetchScratchNode(buffer, baseScratchNodesOffset, nodeIndex);
-
-    BoundingBox bbox;
-
-    // For triangle geometry we need to generate bounding box from split boxes
-    if (IsTriangleNode(scratchNode.type))
-    {
-        bbox = buffer.Load<BoundingBox>(baseSplitBoxesOffset +
-                                        sizeof(BoundingBox) * scratchNode.splitBox_or_nodePointer);
-    }
-    else
-    {
-        // Internal nodes and AABB geometry encodes bounding box in scratch node
-        bbox.min = scratchNode.bbox_min_or_v0;
-        bbox.max = scratchNode.bbox_max_or_v1;
-    }
-
-    return bbox;
-}
-
-//=====================================================================================================================
-uint FetchScratchNodeFlags(
-    RWByteAddressBuffer buffer,
-    uint                baseScratchNodesOffset,
-    uint                nodeIndex)
-{
-    const ScratchNode scratchNode = FetchScratchNode(buffer, baseScratchNodesOffset, nodeIndex);
-
-    return scratchNode.flags;
-}
-
-//=====================================================================================================================
-void WriteScratchNodeBoundingBox(
-    RWByteAddressBuffer buffer,
-    uint                baseScratchNodesOffset,
-    uint                nodeIndex,
-    float3              bboxMin,
-    float3              bboxMax)
-{
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    buffer.Store<float3>(nodeOffset + SCRATCH_NODE_BBOX_MIN_OFFSET, bboxMin);
-    buffer.Store<float3>(nodeOffset + SCRATCH_NODE_BBOX_MAX_OFFSET, bboxMax);
-}
-
-//=====================================================================================================================
-void WriteScratchNodeInstanceNumPrims(
-    RWByteAddressBuffer buffer,
-    uint                baseScratchNodesOffset,
-    uint                nodeIndex,
-    uint                value)
-{
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    buffer.Store(nodeOffset + SCRATCH_NODE_INSTANCE_NUM_PRIMS_OFFSET, value);
-}
-
-//=====================================================================================================================
-void WriteScratchNodeNumMortonCells(
-    RWByteAddressBuffer buffer,
-    uint                baseScratchNodesOffset,
-    uint                nodeIndex,
-    uint                value)
-{
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    buffer.Store(nodeOffset + SCRATCH_NODE_NUM_MORTON_CELLS_OFFSET, value);
-}
-
-//=====================================================================================================================
-void WriteScratchNodeType(
-    RWByteAddressBuffer buffer,
-    uint                baseScratchNodesOffset,
-    uint                fp16BoxNodesInBlasMode,
-    float               fp16BoxModeMixedSaThresh,
-    uint                nodeIndex,
-    uint                leftNodeType,
-    uint                rightNodeType,
-    float3              nodeBboxMin,
-    float3              nodeBboxMax)
-{
-    // Parents of leaves are marked to avoid propagating FP16 throughout the entire tree
-    const uint nodeTypeLeafParentFp16 = (NODE_TYPE_BOX_FLOAT16 | NODE_POINTER_MASK_MSB);
-
-    // Should this node be fp16 or fp32 box node?
-    bool isParentOfLeaf  = false;
-    bool writeNodeAsFp16 = false;
-    if (fp16BoxNodesInBlasMode == ALL_INTERIOR_NODES_IN_BLAS_AS_FP16)
-    {
-        writeNodeAsFp16 = true;
-    }
-    else if (fp16BoxNodesInBlasMode == LEAF_NODES_IN_BLAS_AS_FP16)
-    {
-        // Mark node as fp16 IFF:
-        // 1. directly attached to leaf
-        // 2. child is directly attached to leaf
-        const bool isParentOfFp16 = ( leftNodeType == nodeTypeLeafParentFp16) ||
-                                    (rightNodeType == nodeTypeLeafParentFp16);
-        isParentOfLeaf  = IsTriangleNode      ( leftNodeType) ||
-                          IsTriangleNode      (rightNodeType) ||
-                          IsUserNodeProcedural( leftNodeType) ||
-                          IsUserNodeProcedural(rightNodeType);
-        writeNodeAsFp16 = (isParentOfLeaf || isParentOfFp16);
-    }
-    else if (fp16BoxNodesInBlasMode == MIXED_NODES_IN_BLAS_AS_FP16)
-    {
-        // NOTE: it may help to skip nodes that would never be written out (maybe besed on depth from root?)
-
-        // Mark node as fp16 if its bounds compress well:
-        // increase in surface area should be < threshold
-        const BoundingBox parentBboxFp32 = { nodeBboxMin, nodeBboxMax };
-        const uint3       parentBboxFp16 = CompressBBoxToUint3(parentBboxFp32);
-
-        const float saAsFp32 = ComputeBoxSurfaceArea(parentBboxFp32);
-        const float saAsFp16 = ComputeBoxSurfaceArea(parentBboxFp16);
-
-        const float saAsFp32Scaled = saAsFp32 * fp16BoxModeMixedSaThresh;
-        writeNodeAsFp16 = (saAsFp16 < saAsFp32Scaled);
-    }
-
-    // Root node is always fp32, regardless of mode for fp16 box nodes
-    if (nodeIndex == 0)
-    {
-        isParentOfLeaf  = false;
-        writeNodeAsFp16 = false;
-    }
-
-    const uint nodeTypeAsFp16 = (isParentOfLeaf  ? nodeTypeLeafParentFp16 : NODE_TYPE_BOX_FLOAT16);
-    const uint nodeType       = (writeNodeAsFp16 ? nodeTypeAsFp16         : NODE_TYPE_BOX_FLOAT32);
-    const uint nodeOffset     = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-    buffer.Store<uint>(nodeOffset + SCRATCH_NODE_TYPE_OFFSET, nodeType);
 }
 
 //=====================================================================================================================
@@ -542,14 +378,16 @@ uint CalcNodeFlags(ScratchNode node)
 {
     uint nodeFlags = 0;
 
-    if (IsTriangleNode(node.type) || IsUserNodeProcedural(node.type))
+    if (IsTriangleNode(node.type) ||
+        IsUserNodeProcedural(node.type))
     {
         // Determine opacity from geometry flags
         nodeFlags |= (node.flags & D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE) ? 1u << BOX_NODE_FLAGS_ONLY_OPAQUE_SHIFT
                                                                           : 1u << BOX_NODE_FLAGS_ONLY_NON_OPAQUE_SHIFT;
 
-        nodeFlags |= IsTriangleNode(node.type) ? 1u << BOX_NODE_FLAGS_ONLY_TRIANGLES_SHIFT
-                                               : 1u << BOX_NODE_FLAGS_ONLY_PROCEDURAL_SHIFT;
+        nodeFlags |= IsTriangleNode(node.type)
+                                                ? 1u << BOX_NODE_FLAGS_ONLY_TRIANGLES_SHIFT
+                                                : 1u << BOX_NODE_FLAGS_ONLY_PROCEDURAL_SHIFT;
     }
     else if (IsUserNodeInstance(node.type))
     {
@@ -581,232 +419,6 @@ uint SetNodeFlagsField(uint nodeFlags, uint childFlags, uint childIndex)
 }
 
 //=====================================================================================================================
-void WriteScratchNodeFlagsFromNodes(
-    RWByteAddressBuffer buffer,
-    uint                baseScratchNodesOffset,
-    uint                nodeIndex,
-    ScratchNode         leftNode,
-    ScratchNode         rightNode)
-{
-    const uint leftNodeFlags  = CalcNodeFlags(leftNode);
-    const uint rightNodeFlags = CalcNodeFlags(rightNode);
-
-    uint nodeFlags = 0;
-    nodeFlags = SetNodeFlagsField(nodeFlags, leftNodeFlags, 0);
-    nodeFlags = SetNodeFlagsField(nodeFlags, rightNodeFlags, 1);
-
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-    buffer.Store<uint>(nodeOffset + SCRATCH_NODE_FLAGS_OFFSET, nodeFlags);
-}
-
-//=====================================================================================================================
-void WriteScratchNodeFlags(
-    RWByteAddressBuffer buffer,
-    uint                baseScratchNodesOffset,
-    uint                nodeIndex,
-    uint                nodeFlags)
-{
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-    buffer.Store<uint>(nodeOffset + SCRATCH_NODE_FLAGS_OFFSET, nodeFlags);
-}
-
-//=====================================================================================================================
-void WriteParentScratchNodeFlags(
-    RWByteAddressBuffer buffer,
-    uint                baseScratchNodesOffset,
-    uint                nodeIndex,
-    uint                flags,
-    bool                isLeft)
-{
-    uint nodeFlags = 0;
-    nodeFlags = SetNodeFlagsField(nodeFlags, flags, !isLeft);
-
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-    buffer.InterlockedOr(nodeOffset + SCRATCH_NODE_FLAGS_OFFSET, nodeFlags);
-}
-
-//=====================================================================================================================
-void WriteScratchNodeNumPrimitives(
-    RWByteAddressBuffer buffer,
-    uint                baseScratchNodesOffset,
-    uint                nodeIndex,
-    uint                numPrimitives,
-    bool                doCollapse)
-{
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    buffer.Store(nodeOffset + SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET, numPrimitives << 1 | doCollapse);
-}
-
-//=====================================================================================================================
-uint FetchScratchNodeNumPrimitives(
-    RWByteAddressBuffer buffer,
-    uint                baseScratchNodesOffset,
-    uint                nodeIndex,
-    bool                isLeaf)
-{
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    if (isLeaf)
-    {
-        return 1;
-    }
-    else
-    {
-        return buffer.Load(nodeOffset + SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET) >> 1;
-    }
-}
-
-//=====================================================================================================================
-uint FetchScratchNodeNumPrimitives(
-    ScratchNode         node,
-    bool                isLeaf)
-{
-    if (isLeaf)
-    {
-        return 1;
-    }
-    else
-    {
-        return node.numPrimitivesAndDoCollapse >> 1;
-    }
-}
-
-//=====================================================================================================================
-void WriteScratchNodeCost(
-    RWByteAddressBuffer buffer,
-    uint  baseScratchNodesOffset,
-    uint  nodeIndex,
-    float cost,
-    bool  isLeaf)
-{
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    const uint offset = nodeOffset + (isLeaf ? SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET
-                                             : SCRATCH_NODE_COST_OFFSET);
-
-    buffer.Store<float>(offset, cost);
-}
-
-//=====================================================================================================================
-float FetchScratchNodeCost(
-    RWByteAddressBuffer buffer,
-    uint  baseScratchNodesOffset,
-    uint  nodeIndex,
-    bool  isLeaf)
-{
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    const uint offset = nodeOffset + (isLeaf ? SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET
-                                             : SCRATCH_NODE_COST_OFFSET);
-
-    return buffer.Load<float>(offset);
-}
-
-//=====================================================================================================================
-float FetchScratchInternalNodeCost(ScratchNode node)
-{
-    return node.sah_or_v2_or_instBasePtr.x;
-}
-
-//=====================================================================================================================
-float FetchScratchLeafNodeCost(ScratchNode node)
-{
-    return asfloat(node.numPrimitivesAndDoCollapse);
-}
-
-//=====================================================================================================================
-void WriteScratchNodeSurfaceArea(
-    RWByteAddressBuffer buffer,
-    uint                baseScratchNodesOffset,
-    uint                nodeIndex,
-    float               surfaceArea)
-{
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    buffer.Store<float>(nodeOffset + SCRATCH_NODE_SA_OFFSET, surfaceArea);
-}
-
-//=====================================================================================================================
-float FetchScratchNodeSurfaceArea(
-    RWByteAddressBuffer buffer,
-    uint  baseScratchNodesOffset,
-    uint  nodeIndex)
-{
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    return buffer.Load<float>(nodeOffset + SCRATCH_NODE_SA_OFFSET);
-}
-
-//=====================================================================================================================
-void WriteScratchNodeChild(
-    RWByteAddressBuffer buffer,
-    uint  baseScratchNodesOffset,
-    uint  nodeIndex,
-    uint  child,
-    bool  isLeft)
-{
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    const uint direction = isLeft ? SCRATCH_NODE_LEFT_OFFSET : SCRATCH_NODE_RIGHT_OFFSET;
-
-    buffer.Store(nodeOffset + direction, child);
-}
-
-//=====================================================================================================================
-void WriteScratchNodeParent(
-    RWByteAddressBuffer buffer,
-    uint  baseScratchNodesOffset,
-    uint  nodeIndex,
-    uint  parent)
-{
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    buffer.Store(nodeOffset + SCRATCH_NODE_PARENT_OFFSET, parent);
-}
-
-//=====================================================================================================================
-void WriteBatchIndex(
-    RWByteAddressBuffer buffer,
-    uint                numBatchesOffset,
-    uint                baseBatchIndicesOffset,
-    uint                index)
-{
-    uint numBatches;
-    buffer.InterlockedAdd(numBatchesOffset, 1, numBatches);
-
-    buffer.Store(baseBatchIndicesOffset + (numBatches * sizeof(uint)), index);
-}
-
-//=====================================================================================================================
-uint FetchMortonCode(RWByteAddressBuffer buffer, uint mortonCodesOffset, uint primitiveIndex)
-{
-    const uint offset = mortonCodesOffset + (primitiveIndex << 2);
-    return buffer.Load(offset);
-}
-
-//=====================================================================================================================
-uint64_t FetchMortonCode64(RWByteAddressBuffer buffer, uint mortonCodesOffset, uint primitiveIndex)
-{
-    const uint offset = mortonCodesOffset + (primitiveIndex << 3);
-    return buffer.Load<uint64_t>(offset);
-}
-
-//=====================================================================================================================
-void WriteMortonCode(RWByteAddressBuffer buffer, uint mortonCodesOffset, uint primitiveIndex, uint code)
-{
-    const uint offset = mortonCodesOffset + (primitiveIndex << 2);
-    buffer.Store(offset, code);
-}
-
-//=====================================================================================================================
-void WriteMortonCode64(RWByteAddressBuffer buffer, uint mortonCodesOffset, uint primitiveIndex, uint64_t code)
-{
-    const uint offset = mortonCodesOffset + (primitiveIndex << 3);
-    buffer.Store<uint64_t>(offset, code);
-}
-
-//=====================================================================================================================
 uint64_t PackUint32x4ToUint64(uint4 v, uint4 numBits)
 {
     uint64_t r = uint64_t(v[3]);
@@ -831,105 +443,6 @@ uint4 UnpackUint64ToUint32x4(uint64_t v, uint4 numBits)
 }
 
 //=====================================================================================================================
-UintBoundingBox4 FetchCentroidBox(
-    RWByteAddressBuffer buffer,
-    uint baseOffset,
-    uint nodeIndex,
-    uint4 numBits,
-    bool pack,
-    uint numActivePrims)
-{
-    UintBoundingBox4 box;
-
-    if (pack)
-    {
-        if (IS_LEAF(nodeIndex))
-        {
-            // Leaf nodes don't need to have box.max stored, because it will always be
-            // box.min + 1. See WriteCentroidBox() for details.
-            const uint baseLeafOffset = (numActivePrims - 1) * sizeof(PackedUintBoundingBox4);
-            const uint leafOffset = sizeof(uint64_t) * LEAF_OFFSET(nodeIndex);
-            uint64_t boxMin = buffer.Load<uint64_t>(baseOffset + baseLeafOffset + leafOffset);
-            box.min = UnpackUint64ToUint32x4(boxMin, numBits);
-            box.max = box.min + 1;
-        }
-        else
-        {
-            PackedUintBoundingBox4 packedBox;
-
-            packedBox = buffer.Load<PackedUintBoundingBox4>(baseOffset + nodeIndex * sizeof(PackedUintBoundingBox4));
-            box.min = UnpackUint64ToUint32x4(packedBox.min, numBits);
-            box.max = UnpackUint64ToUint32x4(packedBox.max, numBits) + 1;
-        }
-    }
-    else
-    {
-        box = buffer.Load<UintBoundingBox4>(baseOffset + nodeIndex * sizeof(UintBoundingBox4));
-    }
-    return box;
-}
-
-//=====================================================================================================================
-void WriteCentroidBox(
-    RWByteAddressBuffer buffer,
-    uint baseOffset,
-    uint nodeIndex,
-    uint4 numBits,
-    bool pack,
-    uint numActivePrims,
-    UintBoundingBox4 box)
-{
-    if (pack)
-    {
-        if (IS_LEAF(nodeIndex))
-        {
-            // Leaf nodes don't need to have box.max stored, because it will always be
-            // box.min + 1, so we only store box.min in this case. But the inner nodes
-            // still need to store both min and max.
-            const uint baseLeafOffset = (numActivePrims - 1) * sizeof(PackedUintBoundingBox4);
-            const uint leafOffset = sizeof(uint64_t) * LEAF_OFFSET(nodeIndex);
-            uint64_t boxMin = PackUint32x4ToUint64(box.min, numBits);
-            buffer.Store<uint64_t>(baseOffset + baseLeafOffset + leafOffset, boxMin);
-        }
-        else
-        {
-            PackedUintBoundingBox4 packedBox;
-
-            packedBox.min = PackUint32x4ToUint64(box.min, numBits);
-            packedBox.max = PackUint32x4ToUint64(box.max - 1, numBits);
-            buffer.Store<PackedUintBoundingBox4>(baseOffset + nodeIndex * sizeof(PackedUintBoundingBox4), packedBox);
-        }
-    }
-    else
-    {
-        buffer.Store<UintBoundingBox4>(baseOffset + nodeIndex * sizeof(UintBoundingBox4), box);
-    }
-}
-
-//=====================================================================================================================
-uint FetchSortedPrimIndex(
-    RWByteAddressBuffer buffer,
-    uint                baseSortedPrimIndicesOffset,
-    uint                index)
-{
-    const uint indexOffset = baseSortedPrimIndicesOffset + (index * sizeof(uint));
-
-    return buffer.Load(indexOffset);
-}
-
-//=====================================================================================================================
-void WriteSortedPrimIndex(
-    RWByteAddressBuffer buffer,
-    uint                baseSortedPrimIndicesOffset,
-    uint                index,
-    uint                primIndex)
-{
-    const uint indexOffset = baseSortedPrimIndicesOffset + (index * sizeof(uint));
-
-    buffer.Store(indexOffset, primIndex);
-}
-
-//=====================================================================================================================
 uint CalcQbvhInternalNodeOffset(uint index, bool useFp16BoxNodesInBlas)
 {
     const uint nodeOffset = useFp16BoxNodesInBlas ? (index << QBVH_NODE_16_STRIDE_SHIFT)
@@ -940,13 +453,17 @@ uint CalcQbvhInternalNodeOffset(uint index, bool useFp16BoxNodesInBlas)
 }
 
 //=====================================================================================================================
-uint CalcQbvhInternalNodeIndex(uint offset, bool useFp16BoxNodesInBlas)
+uint CalcQbvhInternalNodeIndex(
+    uint offset,
+    bool useFp16BoxNodesInBlas)
 {
     // Node offset includes header size
     offset -= ACCEL_STRUCT_HEADER_SIZE;
 
-    return useFp16BoxNodesInBlas ? (offset >> QBVH_NODE_16_STRIDE_SHIFT)
-                                 : (offset >> QBVH_NODE_32_STRIDE_SHIFT);
+    {
+        return useFp16BoxNodesInBlas ? (offset >> QBVH_NODE_16_STRIDE_SHIFT)
+                                     : (offset >> QBVH_NODE_32_STRIDE_SHIFT);
+    }
 }
 
 //=====================================================================================================================
@@ -1178,139 +695,6 @@ uint64_t RoundUpQuotient(
 }
 
 //=====================================================================================================================
-void UpdateSceneSize(RWByteAddressBuffer scratchBuffer, uint byteOffset, float size)
-{
-    // Calculate the combined AABB for the entire wave.
-    const float waveSizeMin = WaveActiveMin(size);
-    const float waveSizeMax = WaveActiveMax(size);
-
-    //TODO: can just use centroids rather than boxes
-
-    // Calculate the AABB for the entire scene using memory atomics.
-    // Scalarize the atomic min/max writes by only using the first lane.
-    if (WaveIsFirstLane())
-    {
-        // Convert the wave bounds to uints so we can atomically min/max them against the scene bounds in memory.
-        const uint waveMinUint = FloatToUint(waveSizeMin);
-        const uint waveMaxUint = FloatToUint(waveSizeMax);
-
-        uint outValue;
-        scratchBuffer.InterlockedMin(byteOffset,     waveMinUint, outValue);
-        scratchBuffer.InterlockedMax(byteOffset + 4, waveMaxUint, outValue);
-    }
-}
-
-//=====================================================================================================================
-void UpdateSceneBounds(RWByteAddressBuffer scratchBuffer, uint byteOffset, BoundingBox boundingBox)
-{
-    // Calculate the combined AABB for the entire wave.
-    const float3 waveBoundsMin = WaveActiveMin(boundingBox.min);
-    const float3 waveBoundsMax = WaveActiveMax(boundingBox.max);
-
-    //TODO: can just use centroids rather than boxes
-
-    // Calculate the AABB for the entire scene using memory atomics.
-    // Scalarize the atomic min/max writes by only using the first lane.
-    if (WaveIsFirstLane())
-    {
-        // Convert the wave bounds to uints so we can atomically min/max them against the scene bounds in memory.
-        const uint3 waveMinUint = Float3ToUint3(waveBoundsMin);
-        const uint3 waveMaxUint = Float3ToUint3(waveBoundsMax);
-
-        uint outValue;
-        scratchBuffer.InterlockedMin(byteOffset,     waveMinUint.x, outValue);
-        scratchBuffer.InterlockedMin(byteOffset + 4, waveMinUint.y, outValue);
-        scratchBuffer.InterlockedMin(byteOffset + 8, waveMinUint.z, outValue);
-
-        scratchBuffer.InterlockedMax(byteOffset + 12, waveMaxUint.x, outValue);
-        scratchBuffer.InterlockedMax(byteOffset + 16, waveMaxUint.y, outValue);
-        scratchBuffer.InterlockedMax(byteOffset + 20, waveMaxUint.z, outValue);
-    }
-}
-
-//=====================================================================================================================
-void UpdateSceneBoundsUsingCentroid(RWByteAddressBuffer scratchBuffer, uint byteOffset, float3 centroidPoint)
-{
-    // Calculate the combined AABB for the entire wave.
-    const float3 waveBoundsMin = WaveActiveMin(centroidPoint);
-    const float3 waveBoundsMax = WaveActiveMax(centroidPoint);
-
-    //TODO: can just use centroids rather than boxes
-
-    // Calculate the AABB for the entire scene using memory atomics.
-    // Scalarize the atomic min/max writes by only using the first lane.
-    if (WaveIsFirstLane())
-    {
-        // Convert the wave bounds to uints so we can atomically min/max them against the scene bounds in memory.
-        const uint3 waveMinUint = Float3ToUint3(waveBoundsMin);
-        const uint3 waveMaxUint = Float3ToUint3(waveBoundsMax);
-
-        uint outValue;
-        scratchBuffer.InterlockedMin(byteOffset,     waveMinUint.x, outValue);
-        scratchBuffer.InterlockedMin(byteOffset + 4, waveMinUint.y, outValue);
-        scratchBuffer.InterlockedMin(byteOffset + 8, waveMinUint.z, outValue);
-
-        scratchBuffer.InterlockedMax(byteOffset + 12, waveMaxUint.x, outValue);
-        scratchBuffer.InterlockedMax(byteOffset + 16, waveMaxUint.y, outValue);
-        scratchBuffer.InterlockedMax(byteOffset + 20, waveMaxUint.z, outValue);
-    }
-}
-
-//=====================================================================================================================
-void UpdateCentroidSceneBoundsWithSize(RWByteAddressBuffer scratchBuffer, uint byteOffset, BoundingBox boundingBox)
-{
-    const float3 centroidPoint = (0.5 * (boundingBox.max + boundingBox.min));
-
-    UpdateSceneBoundsUsingCentroid(scratchBuffer, byteOffset, centroidPoint);
-
-    UpdateSceneSize(scratchBuffer, byteOffset + 24, ComputeBoxSurfaceArea(boundingBox));
-}
-
-//=====================================================================================================================
-void UpdateSceneBoundsWithSize(RWByteAddressBuffer scratchBuffer, uint byteOffset, BoundingBox boundingBox)
-{
-    UpdateSceneBounds(scratchBuffer, byteOffset, boundingBox);
-
-    UpdateSceneSize(scratchBuffer, byteOffset + 24, ComputeBoxSurfaceArea(boundingBox));
-}
-
-//=====================================================================================================================
-BoundingBox FetchSceneBounds(
-    RWByteAddressBuffer scratchBuffer,
-    uint                sceneBoundsOffset)
-{
-    UintBoundingBox sceneBounds;
-
-    uint4 data;
-    data            = scratchBuffer.Load4(sceneBoundsOffset);
-    sceneBounds.min = data.xyz;
-    data.xy         = scratchBuffer.Load2(sceneBoundsOffset + 0x10);
-    sceneBounds.max = data.wxy;
-
-    BoundingBox bbox;
-    bbox.min = Uint3ToFloat3(sceneBounds.min);
-    bbox.max = Uint3ToFloat3(sceneBounds.max);
-
-    return bbox;
-}
-
-//=====================================================================================================================
-float2 FetchSceneSize(
-    RWByteAddressBuffer scratchBuffer,
-    uint                sceneBoundsOffset)
-{
-    uint2 data;
-    data.x          = scratchBuffer.Load(sceneBoundsOffset + 24);
-    data.y          = scratchBuffer.Load(sceneBoundsOffset + 28);
-
-    float2 minMax;
-    minMax.x = UintToFloat(data.x);
-    minMax.y = UintToFloat(data.y);
-
-    return minMax;
-}
-
-//=====================================================================================================================
 TriangleData FetchTriangleFromNode(
     RWByteAddressBuffer DstBuffer,
     uint                metadataSize,
@@ -1362,7 +746,6 @@ uint ReadParentPointer(
 
 //=====================================================================================================================
 void WriteParentPointer(
-    RWByteAddressBuffer DstMetadata,
     in uint             metadataSizeInBytes,
     in uint             packedNodePtr,
     in uint             parentPtr)
@@ -1373,17 +756,22 @@ void WriteParentPointer(
 }
 
 //=====================================================================================================================
-uint GetChildCount(GpuVirtualAddress address, uint nodePointer)
+uint GetChildCount(
+    GpuVirtualAddress address,
+    uint              nodePointer)
 {
     uint count = 0;
-    if (IsBoxNode16(nodePointer))
+
+    if (
+        IsBoxNode16(nodePointer))
     {
         const Float16BoxNode node = FetchFloat16BoxNode(address, nodePointer);
         count = 1 + (node.child1 != INVALID_IDX) + (node.child2 != INVALID_IDX) + (node.child3 != INVALID_IDX);
     }
     else
     {
-        const Float32BoxNode node = FetchFloat32BoxNode(address, nodePointer);
+        const Float32BoxNode node = FetchFloat32BoxNode(address,
+                                                        nodePointer);
         count = 1 + (node.child1 != INVALID_IDX) + (node.child2 != INVALID_IDX) + (node.child3 != INVALID_IDX);
     }
 
@@ -1413,7 +801,6 @@ static Float32BoxNode FetchFloat32BoxNode(
     RWByteAddressBuffer DataBuffer,
     in uint             offset)
 {
-
     ///
 
     uint4 d0, d1, d2, d3, d4, d5, d6, d7;
@@ -1493,9 +880,11 @@ void WriteInstanceDescriptor(
 
             if (IsBoxNode32(blasRootNodePointer))
             {
-                blasRootNode = FetchFloat32BoxNode(address, blasRootNodePointer);
+                blasRootNode = FetchFloat32BoxNode(address,
+                                                   blasRootNodePointer);
             }
-            else if (IsBoxNode16(blasRootNodePointer))
+            else if (IsBoxNode16(blasRootNodePointer)
+                    )
             {
                 blasRootNode = FetchFloat16BoxNodeAsFp32(address, blasRootNodePointer);
             }
@@ -1505,7 +894,8 @@ void WriteInstanceDescriptor(
                 //
                 // Note, we only rebraid one level of the BLAS, the parent pointer is guaranteed to be the
                 // root node pointer.
-                blasRootNode = FetchFloat32BoxNode(address, CreateRootNodePointer());
+                blasRootNode = FetchFloat32BoxNode(address,
+                                                   CreateRootNodePointer());
 
                 // Copy triangle box data from root node
                 if (blasRootNode.child1 == blasRootNodePointer)
@@ -1917,3 +1307,5 @@ uint64_t CalculateVariableBitsMortonCode64(float3 sceneExtent,
                             {\
                                 DeviceMemoryBarrier();\
                             } while (DstMetadata.Load(ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET) < numTasksWait);
+
+#endif

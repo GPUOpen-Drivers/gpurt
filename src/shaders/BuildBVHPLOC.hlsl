@@ -84,13 +84,13 @@ struct BuildPlocArgs
 
 #if NO_SHADER_ENTRYPOINT == 0
 #include "Common.hlsl"
-#include "BuildCommon.hlsl"
 
 #define RootSig "RootConstants(num32BitConstants=19, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
-                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894))"
+                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
+                "CBV(b1)"/*Build Settings binding*/
 
 [[vk::push_constant]] ConstantBuffer<BuildPlocArgs> ShaderConstants : register(b0);
 
@@ -100,6 +100,7 @@ struct BuildPlocArgs
 
 groupshared int SharedMem[(2 * PLOC_RADIUS_MAX + BUILD_THREADGROUP_SIZE) * LDS_AABB_STRIDE];
 
+#include "BuildCommonScratch.hlsl"
 #include "RadixSort/ScanExclusiveInt4DLBCommon.hlsl"
 
 // https://dcgi.fel.cvut.cz/home/meistdan/dissertation/publications/ploc/paper.pdf
@@ -375,7 +376,7 @@ void InitPLOC(
     for (i = globalId; i < numActivePrims; i += args.numThreads)
     {
         const uint primIndex = args.noCopySortedNodes ?
-            FetchSortedPrimIndex(ScratchBuffer, args.primIndicesSortedScratchOffset, i) : i;
+            FetchSortedPrimIndex(args.primIndicesSortedScratchOffset, i) : i;
         WriteClusterList(args, 0, i, numInternalNodes + primIndex);
     }
 
@@ -428,16 +429,11 @@ void FindNearestNeighbour(
 
             if (args.flags & BUILD_FLAGS_TRIANGLE_SPLITTING)
             {
-                aabb = FetchScratchNodeBoundingBoxTS(ScratchBuffer,
-                    args.scratchNodesScratchOffset,
-                    args.splitBoxesByteOffset,
-                    nodeIndex);
+                aabb = FetchScratchNodeBoundingBoxTS(args.scratchNodesScratchOffset, args.splitBoxesByteOffset, nodeIndex);
             }
             else
             {
-                aabb = FetchScratchNodeBoundingBox(ScratchBuffer,
-                    args.scratchNodesScratchOffset,
-                    nodeIndex);
+                aabb = FetchScratchNodeBoundingBox(args.scratchNodesScratchOffset, nodeIndex);
             }
 
             StoreLdsBoundingBox(t + plocRadius, aabb);
@@ -640,23 +636,24 @@ void FindNearestNeighbour(
             const ScratchNode leftNode  = ScratchBuffer.Load<ScratchNode>(leftNodeOffset);
             const ScratchNode rightNode = ScratchBuffer.Load<ScratchNode>(rightNodeOffset);
 
-            WriteScratchNodeType(ScratchBuffer,
+            WriteScratchNodeType(
                 args.scratchNodesScratchOffset,
                 args.fp16BoxNodesInBlasMode,
                 args.fp16BoxModeMixedSaThresh,
                 mergedNodeIndex,
+                0,
                 leftNode.type,
                 rightNode.type,
                 mergedBox.min,
                 mergedBox.max);
 
-            WriteScratchNodeFlagsFromNodes(ScratchBuffer,
+            WriteScratchNodeFlagsFromNodes(
                 args.scratchNodesScratchOffset,
                 mergedNodeIndex,
                 leftNode,
                 rightNode);
 
-            WriteScratchNodeSurfaceArea(ScratchBuffer,
+            WriteScratchNodeSurfaceArea(
                 args.scratchNodesScratchOffset,
                 mergedNodeIndex,
                 mergedBoxSurfaceArea);
@@ -669,24 +666,22 @@ void FindNearestNeighbour(
             const bool enableCollapse        = (args.flags & BUILD_FLAGS_COLLAPSE);
             const bool enablePairCompression = (args.flags & BUILD_FLAGS_PAIR_COMPRESSION);
 
-            uint numLeft = FetchScratchNodeNumPrimitives(ScratchBuffer,
-                                                         args.scratchNodesScratchOffset,
+            uint numLeft = FetchScratchNodeNumPrimitives(args.scratchNodesScratchOffset,
                                                          leftNodeIndex,
                                                          IsLeafNode(leftNodeIndex, numActivePrims));
-            uint numRight = FetchScratchNodeNumPrimitives(ScratchBuffer,
-                                                         args.scratchNodesScratchOffset,
-                                                         rightNodeIndex,
-                                                         IsLeafNode(rightNodeIndex, numActivePrims));
+            uint numRight = FetchScratchNodeNumPrimitives(args.scratchNodesScratchOffset,
+                                                          rightNodeIndex,
+                                                          IsLeafNode(rightNodeIndex, numActivePrims));
 
             // Ct is the cost of intersecting triangle
             // Ci is the cost of interecting bbox
             const float Ct = SAH_COST_TRIANGLE_INTERSECTION;
             const float Ci = SAH_COST_AABBB_INTERSECTION;
 
-            float leftCost = FetchScratchNodeCost(ScratchBuffer, args.scratchNodesScratchOffset, leftNodeIndex,
+            float leftCost = FetchScratchNodeCost(args.scratchNodesScratchOffset, leftNodeIndex,
                                                   IsLeafNode(leftNodeIndex, numActivePrims));
 
-            float rightCost = FetchScratchNodeCost(ScratchBuffer, args.scratchNodesScratchOffset, rightNodeIndex,
+            float rightCost = FetchScratchNodeCost(args.scratchNodesScratchOffset, rightNodeIndex,
                                                    IsLeafNode(rightNodeIndex, numActivePrims));
 
             float bestCost = leftCost + rightCost + Ci * mergedBoxSurfaceArea;
@@ -715,18 +710,16 @@ void FindNearestNeighbour(
                     {
                         if (leftCollapse)
                         {
-                            WriteBatchIndex(ScratchBuffer,
-                                            args.numBatchesScratchOffset,
-                                            args.baseBatchIndicesScratchOffset,
-                                            leftNodeIndex);
+                            WriteScratchBatchIndex(args.numBatchesScratchOffset,
+                                                   args.baseBatchIndicesScratchOffset,
+                                                   leftNodeIndex);
                         }
 
                         if (rightCollapse)
                         {
-                            WriteBatchIndex(ScratchBuffer,
-                                            args.numBatchesScratchOffset,
-                                            args.baseBatchIndicesScratchOffset,
-                                            rightNodeIndex);
+                            WriteScratchBatchIndex(args.numBatchesScratchOffset,
+                                                   args.baseBatchIndicesScratchOffset,
+                                                   rightNodeIndex);
                         }
                     }
                 }
@@ -738,8 +731,8 @@ void FindNearestNeighbour(
 
             }
 
-            WriteScratchNodeCost(ScratchBuffer, args.scratchNodesScratchOffset, mergedNodeIndex, bestCost, false);
-            WriteScratchNodeNumPrimitives(ScratchBuffer, args.scratchNodesScratchOffset, mergedNodeIndex, numTris, isCollapsed);
+            WriteScratchNodeCost(args.scratchNodesScratchOffset, mergedNodeIndex, bestCost, false);
+            WriteScratchNodeNumPrimitives(args.scratchNodesScratchOffset, mergedNodeIndex, numTris, isCollapsed);
 
             ScratchBuffer.Store(leftNodeOffset + SCRATCH_NODE_PARENT_OFFSET, mergedNodeIndex);
             ScratchBuffer.Store(rightNodeOffset + SCRATCH_NODE_PARENT_OFFSET, mergedNodeIndex);
@@ -951,7 +944,7 @@ void BuildBvhPlocImpl(
         if ((args.flags & BUILD_FLAGS_PAIR_COMPRESSION) && (globalId == 0) && (numActivePrims == 1))
         {
             // Ensure that a batch index is written out for single-primitive acceleration structures.
-            WriteBatchIndex(ScratchBuffer, args.numBatchesScratchOffset, args.baseBatchIndicesScratchOffset, 0);
+            WriteScratchBatchIndex(args.numBatchesScratchOffset, args.baseBatchIndicesScratchOffset, 0);
         }
 
         return;

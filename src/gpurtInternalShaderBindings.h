@@ -62,6 +62,7 @@ namespace EncodeNodes
         uint32 sceneBoundsCalculationType;
         uint32 enableTriangleSplitting;
         uint32 enableEarlyPairCompression;
+        uint32 enableFastLBVH;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
@@ -78,6 +79,7 @@ namespace BuildBVH
         uint32 primIndicesSortedScratchOffset;
         uint32 useMortonCode30;
         uint32 noCopySortedNodes;
+        uint32 enableFastLBVH;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
@@ -235,6 +237,7 @@ namespace EncodeInstances
         uint32 buildFlags;                    // Build flags
         uint32 leafNodeExpansionFactor;       // Number of leaf nodes per primitive
         uint32 sceneBoundsCalculationType;
+        uint32 enableFastLBVH;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
@@ -316,6 +319,7 @@ namespace BuildParallel
         uint32 propagationFlags;
         uint32 dynamicBlockIndex;
         uint32 prefixSumAtomicFlags;
+        uint32 fastLBVHRootNodeIndex;
 
         // PLOC
         uint32 clusterList0;

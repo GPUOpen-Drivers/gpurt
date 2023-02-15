@@ -22,6 +22,8 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
+#include "BuildCommonScratch.hlsl"
+
 struct IndirectBuildOffset
 {
     uint primitiveCount;
@@ -61,6 +63,7 @@ struct GeometryArgs
     uint SceneBoundsCalculationType;
     uint enableTriangleSplitting;
     uint enableEarlyPairCompression;
+    uint enableFastLBVH;
 };
 
 //=====================================================================================================================
@@ -490,8 +493,7 @@ void PushNodeForUpdate(
     // Update out of place destination buffer
     if (isUpdateInPlace == 0)
     {
-        WriteParentPointer(DstMetadata,
-                           metadataSize,
+        WriteParentPointer(metadataSize,
                            nodePointer,
                            parentNodePointer);
     }
@@ -615,12 +617,6 @@ void EncodeTriangleNode(
     uint                       vertexOffset,
     bool                       writeNodesToUpdateStack)
 {
-    if (primitiveIndex == 0)
-    {
-        WriteGeometryInfo(
-            geometryArgs, geometryBasePrimOffset, geometryArgs.NumPrimitives, DECODE_PRIMITIVE_STRIDE_TRIANGLE);
-    }
-
     const uint metadataSize = IsUpdate(geometryArgs.BuildFlags) ?
         SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : geometryArgs.metadataSizeInBytes;
 
@@ -695,9 +691,10 @@ void EncodeTriangleNode(
                     DstMetadata.Store(nodeOffset + TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET,
                                     geometryIndexAndFlags);
 
-                    const uint primIndexOffset = CalcPrimitiveIndexOffset(nodePointer);
+                    const uint primIndexOffset = CalcPrimitiveIndexOffset(
+                                                                          nodePointer);
                     DstMetadata.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + primIndexOffset,
-                                    primitiveIndex);
+                                        primitiveIndex);
 
                     DstMetadata.Store(nodeOffset + TRIANGLE_NODE_ID_OFFSET, triangleId);
                 }
@@ -714,19 +711,21 @@ void EncodeTriangleNode(
 
             if ((nodePointer != INVALID_IDX) && (skipPairUpdatePush == false))
             {
-                PushNodeForUpdate(geometryArgs,
-                                  GeometryBuffer,
-                                  IndexBuffer,
-                                  TransformBuffer,
-                                  metadataSize,
-                                  geometryArgs.BaseUpdateStackScratchOffset,
-                                  geometryArgs.TriangleCompressionMode,
-                                  geometryArgs.isUpdateInPlace,
-                                  nodePointer,
-                                  triangleId,
-                                  vertexOffset,
-                                  boundingBox,
-                                  writeNodesToUpdateStack);
+                {
+                    PushNodeForUpdate(geometryArgs,
+                                      GeometryBuffer,
+                                      IndexBuffer,
+                                      TransformBuffer,
+                                      metadataSize,
+                                      geometryArgs.BaseUpdateStackScratchOffset,
+                                      geometryArgs.TriangleCompressionMode,
+                                      geometryArgs.isUpdateInPlace,
+                                      nodePointer,
+                                      triangleId,
+                                      vertexOffset,
+                                      boundingBox,
+                                      writeNodesToUpdateStack);
+                }
             }
         }
         else
@@ -743,15 +742,15 @@ void EncodeTriangleNode(
             {
                 if (geometryArgs.SceneBoundsCalculationType == SceneBoundsBasedOnGeometry)
                 {
-                    UpdateSceneBounds(ScratchBuffer, geometryArgs.SceneBoundsByteOffset, boundingBox);
+                    UpdateSceneBounds(geometryArgs.SceneBoundsByteOffset, boundingBox);
                 }
                 else if (geometryArgs.SceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
                 {
-                    UpdateSceneBoundsWithSize(ScratchBuffer, geometryArgs.SceneBoundsByteOffset, boundingBox);
+                    UpdateSceneBoundsWithSize(geometryArgs.SceneBoundsByteOffset, boundingBox);
                 }
                 else
                 {
-                    UpdateCentroidSceneBoundsWithSize(ScratchBuffer, geometryArgs.SceneBoundsByteOffset, boundingBox);
+                    UpdateCentroidSceneBoundsWithSize(geometryArgs.SceneBoundsByteOffset, boundingBox);
                 }
             }
             else
@@ -791,12 +790,14 @@ void EncodeTriangleNode(
     }
 
     // ClearFlags for refit and update
+
     {
         const uint stride = geometryArgs.LeafNodeExpansionFactor * sizeof(uint);
         const uint flagOffset = geometryArgs.PropagationFlagsScratchOffset + (flattenedPrimitiveIndex * stride);
+        const uint initValue = geometryArgs.enableFastLBVH ? 0xffffffffu : 0;
         for (uint i = 0; i < geometryArgs.LeafNodeExpansionFactor; ++i)
         {
-            ScratchBuffer.Store(flagOffset + (i * sizeof(uint)), 0);
+            ScratchBuffer.Store(flagOffset + (i * sizeof(uint)), initValue);
         }
     }
 }

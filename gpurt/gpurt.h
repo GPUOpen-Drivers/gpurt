@@ -74,17 +74,16 @@ namespace GpuRt
 // clients need to make decisions based on individual bits during code generation.
 enum class StaticPipelineFlag : uint32
 {
-    SkipTriangles                 = 0x100,        // Always skip triangle node intersections
-    SkipProceduralPrims           = 0x200,        // Always skip procedural node intersections
-    BvhCollapse                   = (1u << 31),   // Enable BVH collapse
-    UseRayQuery                   = (1u << 30),   // Use RayQuery for TraceRays
-    UseTreeRebraid                = (1u << 29),   // Use Tree Rebraid for TraceRays
-    EnableAccelStructTracking     = (1u << 28),   // Enable logging of TLAS addresses using AccelStructTracker
-    EnableTraversalCounter        = (1u << 27),   // Enable Traversal counters
-    Reserved                      = (1u << 26),
-    EnableFusedInstanceNodes      = (1u << 25),   // Enable fused instance nodes
+    SkipTriangles                  = 0x100,        // Always skip triangle node intersections
+    SkipProceduralPrims            = 0x200,        // Always skip procedural node intersections
+    BvhCollapse                    = (1u << 31),   // Enable BVH collapse
+    UseRayQuery                    = (1u << 30),   // Use RayQuery for TraceRays
+    UseTreeRebraid                 = (1u << 29),   // Use Tree Rebraid for TraceRays
+    EnableAccelStructTracking      = (1u << 28),   // Enable logging of TLAS addresses using AccelStructTracker
+    EnableTraversalCounter         = (1u << 27),   // Enable Traversal counters
+    Reserved                       = (1u << 26),
+    EnableFusedInstanceNodes       = (1u << 25),   // Enable fused instance nodes
 };
-
 // TODO #gpurt: Abstract these?  Some of these probably should come from PAL device properties
 
 constexpr uint32 RayTracingBoxGrowthNumUlpsDefault = 6;
@@ -771,6 +770,8 @@ struct DeviceSettings
         uint32 enableMergedEncodeUpdate : 1;                // Combine encode and update in one dispatch
         uint32 enableMergedEncodeBuild : 1;                 // Combine encode and build in one dispatch
         uint32 enableEarlyPairCompression : 1;              // Enable pair triangle compression in early (Encode) phase
+
+        uint32 enableFastLBVH : 1;                          // Enable the Fast LBVH path
     };
 
     uint64                      accelerationStructureUUID;  // Acceleration Structure UUID
@@ -1124,6 +1125,7 @@ struct CompileTimeBuildSettings
     uint32 enableSAHCost;
     uint32 doEncode;
     uint32 enableEarlyPairCompression;
+    uint32 enableFastLBVH;
 };
 
 // Map key for map of internal pipelines
@@ -1520,6 +1522,8 @@ PipelineShaderCode GPURT_API_ENTRY GetShaderLibraryCode(
 // @return whether the function table was found successfully
 Pal::Result GPURT_API_ENTRY QueryRayTracingEntryFunctionTable(
     const Pal::RayTracingIpLevel   rayTracingIpLevel,
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 30
+#endif
     EntryFunctionTable* const      pEntryFunctionTable);
 
 // =====================================================================================================================

@@ -22,9 +22,6 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "IntersectCommon.hlsl"
-#include "BuildCommon.hlsl"
-
 #define RootSig "RootConstants(num32BitConstants=10, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
@@ -33,7 +30,8 @@
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 2)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 3)),"\
                 "DescriptorTable(CBV(b0, numDescriptors = 4294967295, space = 1)),"\
-                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894))"
+                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
+                "CBV(b1)" /*Build Settings binding*/
 
 //======================================================================================================================
 // 32 bit constants
@@ -71,8 +69,9 @@ struct InputArgs
 groupshared uint SharedMem[1];
 
 //======================================================================================================================
-// Note, this header must be included after all resource bindings have been defined. Also, there is a strict naming
+// Note, these headers must be included after all resource bindings have been defined. Also, there is a strict naming
 // requirement for resources and variables. See BuildCommon.hlsl for details.
+#include "IntersectCommon.hlsl"
 #include "UpdateQBVHImpl.hlsl"
 
 #if !AMD_VULKAN
@@ -85,11 +84,17 @@ void EncodePrimitives(
         const uint primCount = GeometryConstants[geometryIndex].NumPrimitives;
         const uint geometryBasePrimOffset = GeometryConstants[geometryIndex].PrimitiveOffset;
 
+        GeometryArgs geometryArgs = GeometryConstants[geometryIndex];
+        geometryArgs.BuildFlags = DDI_BUILD_FLAG_PERFORM_UPDATE;
+
+        if (globalId == 0)
+        {
+            WriteGeometryInfo(
+                geometryArgs, geometryBasePrimOffset, geometryArgs.NumPrimitives, DECODE_PRIMITIVE_STRIDE_TRIANGLE);
+        }
+
         for (uint primitiveIndex = globalId; primitiveIndex < primCount; primitiveIndex += ShaderConstants.numThreads)
         {
-            GeometryArgs geometryArgs = GeometryConstants[geometryIndex];
-            geometryArgs.BuildFlags = DDI_BUILD_FLAG_PERFORM_UPDATE;
-
             EncodeTriangleNode(
                 GeometryBuffer[geometryIndex],
                 IndexBuffer[geometryIndex],

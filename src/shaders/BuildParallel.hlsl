@@ -22,9 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "BuildCommon.hlsl"
-
-#define RootSig "RootConstants(num32BitConstants=90, b0),"\
+#define RootSig "RootConstants(num32BitConstants=91, b0),"\
                 "UAV(u0),"\
                 "UAV(u1),"\
                 "UAV(u2),"\
@@ -35,7 +33,9 @@
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 3)),"\
                 "DescriptorTable(CBV(b0, numDescriptors = 4294967295, space = 1)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b1)"
+                "CBV(b1)"/*Build Settings binding*/
+
+#include "RayTracingDefs.h"
 
 struct ScratchOffsets
 {
@@ -53,6 +53,7 @@ struct ScratchOffsets
     uint propagationFlags;
     uint dynamicBlockIndex;
     uint prefixSumAtomicFlags;
+    uint fastLBVHRootNodeIndex;
 
     uint clusterList0;
     uint clusterList1;
@@ -125,69 +126,13 @@ struct Constants
 
 [[vk::push_constant]] ConstantBuffer<Constants> ShaderConstants : register(b0);
 
-[[vk::constant_id(BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_ID)]]                        uint topLevelBuild                 = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_BUILD_MODE_ID)]]                             uint buildMode                     = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_TRIANGLE_COMPRESSION_MODE_ID)]]              uint triangleCompressionMode       = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_DO_TRIANGLE_SPLITTING_ID)]]                  uint doTriangleSplitting           = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_DO_COLLAPSE_ID)]]                            uint doCollapse                    = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_FP16_BOX_NODES_MODE_ID)]]                    uint fp16BoxNodesMode              = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_FP16_BOX_MODE_MIXED_SA_THRESHHOLD_ID)]]      float fp16BoxModeMixedSaThreshhold = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_RADIX_SORT_SCAN_LEVEL_ID)]]                  uint radixSortScanLevel            = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_EMIT_COMPACT_SIZE_ID)]]                      uint emitCompactSize               = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_BVH_BUILD_DEBUG_COUNTERS_ID)]]        uint enableBVHBuildDebugCounters   = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_PLOC_RADIUS_ID)]]                            uint plocRadius                    = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_PAIR_COST_CHECK_ID)]]                 uint enablePairCostCheck           = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_VARIABLE_BITS_MC_ID)]]                uint enableVariableBitsMortonCode  = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_REBRAID_TYPE_ID)]]                           uint rebraidType                   = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_TOP_DOWN_BUILD_ID)]]                  uint enableTopDownBuild            = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_USE_MORTON_CODE_30_ID)]]                     uint useMortonCode30               = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_MERGE_SORT_ID)]]                      uint enableMergeSort               = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_FAST_BUILD_THRESHOLD_ID)]]                   uint fastBuildThreshold            = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_BVH_BUILDER_NODE_SORT_TYPE_ID)]]             uint bvhBuilderNodeSortType        = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_BVH_BUILDER_NODE_SORT_HEURISTIC_ID)]]        uint bvhBuilderNodeSortHeuristic   = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_FUSED_INSTANCE_NODE_ID)]]             uint enableFusedInstanceNode       = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_SAH_QBVH_ID)]]                               uint sahQbvh                       = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_TS_PRIORITY_ID)]]                            float tsPriority                   = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_ID)]]                   uint noCopySortedNodes             = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_SAH_COST_ID)]]                        uint enableSAHCost                 = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_DO_ENCODE_ID)]]                              uint doEncode                      = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_ID)]]          uint enableEarlyPairCompression    = 0;
-
-static const BuildSettingsData Settings = {
-    topLevelBuild,
-    buildMode,
-    triangleCompressionMode,
-    doTriangleSplitting,
-    doCollapse,
-    fp16BoxNodesMode,
-    fp16BoxModeMixedSaThreshhold,
-    radixSortScanLevel,
-    emitCompactSize,
-    enableBVHBuildDebugCounters,
-    plocRadius,
-    enablePairCostCheck,
-    enableVariableBitsMortonCode,
-    rebraidType,
-    enableTopDownBuild,
-    useMortonCode30,
-    enableMergeSort,
-    fastBuildThreshold,
-    bvhBuilderNodeSortType,
-    bvhBuilderNodeSortHeuristic,
-    enableFusedInstanceNode,
-    sahQbvh,
-    tsPriority,
-    noCopySortedNodes,
-    enableSAHCost,
-    doEncode,
-    enableEarlyPairCompression,
-};
-
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstBuffer          : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata        : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer      : register(u2);
 [[vk::binding(3, 0)]]                  RWByteAddressBuffer InstanceDescBuffer : register(u3);
 [[vk::binding(4, 0)]]                  RWByteAddressBuffer EmitBuffer         : register(u4);
+
+#include "BuildCommonScratch.hlsl"
 
 // The encode path uses SrcBuffer and DstBuffer as the true acceleration structure base.
 #define SrcBuffer DstMetadata
@@ -254,7 +199,7 @@ void GenerateMortonCodes(
     uint globalId,
     uint numPrimitives)
 {
-    const BoundingBox sceneBounds = FetchSceneBounds(ScratchBuffer, ShaderConstants.offsets.sceneBounds);
+    const BoundingBox sceneBounds = FetchSceneBounds(ShaderConstants.offsets.sceneBounds);
 
     const float3 sceneExtent = sceneBounds.max - sceneBounds.min;
     const float3 sceneMin    = sceneBounds.min;
@@ -265,7 +210,7 @@ void GenerateMortonCodes(
 
     if (ShaderConstants.numMortonSizeBits > 0)
     {
-        sizeMinMax = FetchSceneSize(ScratchBuffer, ShaderConstants.offsets.sceneBounds);
+        sizeMinMax = FetchSceneSize(ShaderConstants.offsets.sceneBounds);
     }
 
     for (uint primitiveIndex = globalId; primitiveIndex < primCount; primitiveIndex += GetNumThreads())
@@ -372,6 +317,44 @@ void RefitBounds(
 }
 
 //======================================================================================================================
+void FastAgglomerativeLbvh(
+    uint globalId,
+    uint numActivePrims)
+{
+    FastLBVHArgs args;
+
+    args.rootNodeIndexOffset         = ShaderConstants.offsets.fastLBVHRootNodeIndex;
+    args.topLevelBuild               = Settings.topLevelBuild;
+    args.numActivePrims              = numActivePrims;
+    args.baseFlagsOffset             = ShaderConstants.offsets.propagationFlags;
+    args.baseScratchNodesOffset      = CalculateBvhNodesOffset(numActivePrims);
+    args.sortedMortonCodesOffset     = ShaderConstants.offsets.mortonCodesSorted;
+    args.useMortonCode30             = Settings.useMortonCode30;
+    args.doCollapse                  = Settings.doCollapse;
+    args.doTriangleSplitting         = Settings.doTriangleSplitting;
+    args.splitBoxesOffset            = ShaderConstants.offsets.splitBoxes;
+    args.numBatchesOffset            = ShaderConstants.offsets.numBatches;
+    args.baseBatchIndicesOffset      = ShaderConstants.offsets.batchIndices;
+    args.fp16BoxNodesMode            = Settings.fp16BoxNodesMode;
+    args.fp16BoxModeMixedSaThreshold = Settings.fp16BoxModeMixedSaThreshhold;
+    args.noCopySortedNodes           = Settings.noCopySortedNodes;
+    args.sortedPrimIndicesOffset     = ShaderConstants.offsets.primIndicesSorted;
+
+    args.enablePairCompression       = EnableLatePairCompression();
+    args.enablePairCostCheck         = Settings.enablePairCostCheck;
+    args.centroidBoxesOffset         = 0;
+    args.enableCentroidBoxes         = false;
+    args.ltdPackCentroids            = false;
+    args.numMortonBits               = 0;
+    args.enableInstancePrimCount     = false;
+
+    for (uint primIndex = globalId; primIndex < numActivePrims; primIndex += GetNumThreads())
+    {
+        FastAgglomerativeLbvhImpl(primIndex, args);
+    }
+}
+
+//======================================================================================================================
 uint BuildModeFlags()
 {
     uint flags = 0;
@@ -389,7 +372,7 @@ void TriangleSplitting(
     uint       localId,
     uint       groupId)
 {
-    TriangleSplittingArgs args;
+    TriangleSplittingArgs args          = (TriangleSplittingArgs)0;
 
     args.numThreadGroups                = ShaderConstants.numThreadGroups;
     args.numPrimitives                  = ShaderConstants.numPrimitives;
@@ -473,21 +456,21 @@ void BuildBvhTD(
 {
     TDArgs args;
 
-    args.NumPrimitives = numPrimitives;
-    args.AllowUpdate = false;  //not used
-    args.NumThreads = GetNumThreads();
-    args.MaxRefCountSize = numPrimitives * ShaderConstants.rebraidFactor;
-    args.LengthPercentage = 0.1;
-    args.BvhNodeDataScratchOffset = ShaderConstants.offsets.bvhNodes;
+    args.NumPrimitives                = numPrimitives;
+    args.AllowUpdate                  = false;  //not used
+    args.NumThreads                   = GetNumThreads();
+    args.MaxRefCountSize              = numPrimitives * ShaderConstants.rebraidFactor;
+    args.LengthPercentage             = 0.1;
+    args.BvhNodeDataScratchOffset     = ShaderConstants.offsets.bvhNodes;
     args.BvhLeafNodeDataScratchOffset = ShaderConstants.offsets.unsortedBvhLeafNodes;
-    args.SceneBoundsOffset = ShaderConstants.offsets.sceneBounds;
-    args.RefScratchOffset = ShaderConstants.offsets.tdRefs;
-    args.TDNodeScratchOffset = ShaderConstants.offsets.tdNodes;
-    args.TDBinsScratchOffset = ShaderConstants.offsets.tdBins;
-    args.CurrentStateScratchOffset = ShaderConstants.offsets.tdState;
-    args.TdTaskCounterScratchOffset = ShaderConstants.offsets.tdTaskCounters;
-    args.OffsetsScratchOffset = 0; //not used
-    args.EncodeArrayOfPointers = ShaderConstants.encodeArrayOfPointers;
+    args.SceneBoundsOffset            = ShaderConstants.offsets.sceneBounds;
+    args.RefScratchOffset             = ShaderConstants.offsets.tdRefs;
+    args.TDNodeScratchOffset          = ShaderConstants.offsets.tdNodes;
+    args.TDBinsScratchOffset          = ShaderConstants.offsets.tdBins;
+    args.CurrentStateScratchOffset    = ShaderConstants.offsets.tdState;
+    args.TdTaskCounterScratchOffset   = ShaderConstants.offsets.tdTaskCounters;
+    args.OffsetsScratchOffset         = 0; //not used
+    args.EncodeArrayOfPointers        = ShaderConstants.encodeArrayOfPointers;
 
     BuildBVHTDImpl(globalId, localId, groupId, args);
 }
@@ -538,6 +521,9 @@ void InitBuildQbvh(
     qbvhArgs.enableFusedInstanceNode     = Settings.enableFusedInstanceNode;
     qbvhArgs.sahQbvh                     = Settings.sahQbvh;
     qbvhArgs.enableEarlyPairCompression  = Settings.enableEarlyPairCompression;
+    qbvhArgs.enableFastLBVH              = Settings.enableFastLBVH;
+    qbvhArgs.fastLBVHRootNodeIndex       = Settings.enableFastLBVH ?
+        ScratchBuffer.Load(ShaderConstants.offsets.fastLBVHRootNodeIndex) : 0;
 
     if (!Settings.topLevelBuild)
     {
@@ -579,6 +565,9 @@ void BuildQbvh(
     qbvhArgs.enableFusedInstanceNode     = Settings.enableFusedInstanceNode;
     qbvhArgs.sahQbvh                     = Settings.sahQbvh;
     qbvhArgs.enableEarlyPairCompression  = Settings.enableEarlyPairCompression;
+    qbvhArgs.enableFastLBVH              = Settings.enableFastLBVH;
+    qbvhArgs.fastLBVHRootNodeIndex       = Settings.enableFastLBVH ?
+        ScratchBuffer.Load(ShaderConstants.offsets.fastLBVHRootNodeIndex) : 0;
 
     if (!Settings.topLevelBuild)
     {
@@ -690,11 +679,17 @@ void EncodePrimitives(
         const uint primCount = GeometryConstants[geometryIndex].NumPrimitives;
         const uint geometryBasePrimOffset = GeometryConstants[geometryIndex].PrimitiveOffset;
 
+        GeometryArgs geometryArgs = GeometryConstants[geometryIndex];
+        geometryArgs.BuildFlags = 0; // Indicate this is not an update
+
+        if (globalId == 0)
+        {
+            WriteGeometryInfo(
+                geometryArgs, geometryBasePrimOffset, geometryArgs.NumPrimitives, DECODE_PRIMITIVE_STRIDE_TRIANGLE);
+        }
+
         for (uint primitiveIndex = globalId; primitiveIndex < primCount; primitiveIndex += GetNumThreads())
         {
-            GeometryArgs geometryArgs = GeometryConstants[geometryIndex];
-            geometryArgs.BuildFlags = 0; // Indicate this is not an update
-
             EncodeTriangleNode(
                 GeometryBuffer[geometryIndex],
                 IndexBuffer[geometryIndex],
@@ -795,7 +790,10 @@ void BuildBvh(
         {
             BEGIN_TASK(1);
 
-            FastBuildBVH(globalId, numPrimitives, ShaderConstants.offsets.unsortedBvhLeafNodes, ShaderConstants.offsets.bvhNodes);
+            FastBuildBVH(globalId,
+                         numPrimitives,
+                         ShaderConstants.offsets.unsortedBvhLeafNodes,
+                         ShaderConstants.offsets.bvhNodes);
 
             END_TASK(1);
             needRefit = true;
@@ -847,13 +845,25 @@ void BuildBvh(
                 }
                 else
                 {
-                    BEGIN_TASK(ShaderConstants.numThreadGroups);
+                    if (Settings.enableFastLBVH == false)
+                    {
+                        BEGIN_TASK(ShaderConstants.numThreadGroups);
 
-                    BuildBvhLinear(globalId, numActivePrims, numPrimitives);
+                        BuildBvhLinear(globalId, numActivePrims, numPrimitives);
 
-                    END_TASK(ShaderConstants.numThreadGroups);
-                    writeDebugCounter(COUNTER_BUILDLBVH_OFFSET);
-                    needRefit = true;
+                        END_TASK(ShaderConstants.numThreadGroups);
+                        writeDebugCounter(COUNTER_BUILDLBVH_OFFSET);
+                        needRefit = true;
+                    }
+                    else
+                    {
+                        BEGIN_TASK(ShaderConstants.numThreadGroups);
+
+                        FastAgglomerativeLbvh(globalId, numActivePrims);
+
+                        END_TASK(ShaderConstants.numThreadGroups);
+                        writeDebugCounter(COUNTER_BUILDFASTLBVH_OFFSET);
+                    }
                 }
             }
         }
@@ -867,8 +877,10 @@ void BuildBvh(
                 RefitBounds(globalId, numActivePrims);
 
                 END_TASK(ShaderConstants.numThreadGroups);
+
                 writeDebugCounter(COUNTER_REFIT_OFFSET);
             }
+
             const uint geometryType = DstBuffer.Load(ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET);
 
             if (EnableLatePairCompression() && (geometryType == GEOMETRY_TYPE_TRIANGLES))

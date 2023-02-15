@@ -721,6 +721,13 @@ uint32 GpuBvhBuilder::CalculateScratchBufferInfo(
         runningOffset += aabbCount * sizeof(uint32);
     }
 
+    uint32 fastLBVHRootNodeIndex = 0xFFFFFFFF;
+    if (m_buildConfig.enableFastLBVH)
+    {
+        fastLBVHRootNodeIndex = runningOffset;
+        runningOffset += sizeof(uint32);
+    }
+
     uint32 maxSize = runningOffset;
 
     const uint32 passOffset = runningOffset;
@@ -1026,6 +1033,7 @@ uint32 GpuBvhBuilder::CalculateScratchBufferInfo(
         pOffsets->numBatches = numBatches;
         pOffsets->batchIndices = batchIndices;
         pOffsets->indexBufferInfo = indexBufferInfo;
+        pOffsets->fastLBVHRootNodeIndex = fastLBVHRootNodeIndex;
     }
 
     // Return maxSize which now contains the total scratch size.
@@ -1231,6 +1239,9 @@ void GpuBvhBuilder::InitBuildConfig(
     m_buildConfig.numMortonSizeBits = m_deviceSettings.numMortonSizeBits;
     // Todo: fix NoCopySortedNodes for TopDown builder, for now disable it for TopDown
     m_buildConfig.noCopySortedNodes  = m_buildConfig.topDownBuild ? 0 : m_deviceSettings.noCopySortedNodes;
+    m_buildConfig.enableFastLBVH     = (m_buildConfig.topDownBuild == false) && (m_deviceSettings.enableFastLBVH == true) &&
+        (m_buildConfig.buildMode == BvhBuildMode::Linear
+        );
 
     m_buildConfig.sceneCalcType = SceneBoundsCalculation::BasedOnGeometry;
 
@@ -1272,8 +1283,9 @@ AccelStructHeader GpuBvhBuilder::InitAccelStructHeader()
 {
     const uint32 accelStructSize = CalculateResultBufferInfo(&m_resultOffsets, &m_metadataSizeInBytes);
 
-    AccelStructHeader header = {};
-    AccelStructHeaderInfo info = {};
+    AccelStructHeader      header = {};
+    AccelStructHeaderInfo  info   = {};
+    AccelStructHeaderInfo2 info2  = {};
 
     info.type                       = static_cast<uint32>(m_buildArgs.inputs.type);
     info.buildType                  = static_cast<uint32>(AccelStructBuilderType::Gpu);
@@ -1284,8 +1296,6 @@ AccelStructHeader GpuBvhBuilder::InitAccelStructHeader()
     info.rebraid                    = m_buildConfig.rebraidType != RebraidType::Off;
     info.fusedInstanceNode          = m_deviceSettings.enableFusedInstanceNode;
     info.flags                      = m_buildArgs.inputs.flags;
-
-    AccelStructHeaderInfo2 info2 = {};
 
     header.info                     = info;
     header.info2                    = info2;
@@ -1466,7 +1476,8 @@ void GpuBvhBuilder::EncodeTriangleNodes(
         Util::HighPart(indexBufferGpuVa),
         static_cast<uint32>(m_buildConfig.sceneCalcType),
         m_buildConfig.triangleSplitting,
-        m_buildConfig.enableEarlyPairCompression
+        m_buildConfig.enableEarlyPairCompression,
+        m_buildConfig.enableFastLBVH
     };
 
     InternalRayTracingCsType encodePipeline = (indirectGpuVa > 0) ?
@@ -1602,6 +1613,7 @@ void GpuBvhBuilder::EncodeAABBNodes(
         static_cast<uint32>(m_buildConfig.sceneCalcType),
         false,
         false,
+        m_buildConfig.enableFastLBVH
     };
 
     BindPipeline(InternalRayTracingCsType::EncodeAABBNodes);
@@ -1671,7 +1683,8 @@ void GpuBvhBuilder::EncodeInstances(
         internalFlags,
         m_buildArgs.inputs.flags,
         GetLeafNodeExpansion(),
-        static_cast<uint32>(m_buildConfig.sceneCalcType)
+        static_cast<uint32>(m_buildConfig.sceneCalcType),
+        m_buildConfig.enableFastLBVH
     };
 
     BindPipeline(InternalRayTracingCsType::EncodeInstances);
@@ -2136,6 +2149,7 @@ void GpuBvhBuilder::InitBuildSettings()
     m_buildSettings.radixSortScanLevel  = m_buildConfig.radixSortScanLevel;
 
     m_buildSettings.enableEarlyPairCompression = m_buildConfig.enableEarlyPairCompression;
+    m_buildSettings.enableFastLBVH      = m_buildConfig.enableFastLBVH;
 
     uint32 emitBufferCount = 0;
     for (uint32 i = 0; i < m_buildArgs.postBuildInfoDescCount; ++i)
@@ -3209,6 +3223,7 @@ void GpuBvhBuilder::BuildBVH()
         m_scratchOffsets.primIndicesSorted,
         m_deviceSettings.enableMortonCode30,
         m_buildConfig.noCopySortedNodes,
+        m_buildConfig.enableFastLBVH,
     };
 
     // Set shader constants
@@ -4149,6 +4164,7 @@ void GpuBvhBuilder::BuildParallel()
     shaderConstants.offsets.propagationFlags     = m_scratchOffsets.propagationFlags;
     shaderConstants.offsets.dynamicBlockIndex    = m_scratchOffsets.dynamicBlockIndex;
     shaderConstants.offsets.prefixSumAtomicFlags = m_scratchOffsets.atomicFlags;
+    shaderConstants.offsets.fastLBVHRootNodeIndex= m_scratchOffsets.fastLBVHRootNodeIndex;
 
     shaderConstants.offsets.clusterList0         = m_scratchOffsets.clusterList0;
     shaderConstants.offsets.clusterList1         = m_scratchOffsets.clusterList1;

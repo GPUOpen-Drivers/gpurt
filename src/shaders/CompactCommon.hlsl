@@ -42,8 +42,7 @@ uint CalcCompactedSize(
 
     uint internalNodeSize = 0;
     uint leafNodeSize     = 0;
-
-    const uint boxNodeSize = sizeof(Float32BoxNode);
+    uint boxNodeSize      = sizeof(Float32BoxNode);
 
     if (accelStructType == BOTTOM_LEVEL)
     {

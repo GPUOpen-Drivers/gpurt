@@ -71,7 +71,10 @@ uint WritePrimitiveNodeCollapse(
 {
     // Constants when interior FP16 box nodes are enabled
     const uint boxUsedNodeType     = GetNodeType(parentPtr);
-    const bool usedNodeTypeIsFp16  = (boxUsedNodeType == NODE_TYPE_BOX_FLOAT16);
+    bool usedNodeTypeIsFp16 = false;
+    {
+        usedNodeTypeIsFp16 = (boxUsedNodeType == NODE_TYPE_BOX_FLOAT16);
+    }
     const uint boxUsedChild0Offset = (usedNodeTypeIsFp16 ? FLOAT16_BOX_NODE_CHILD0_OFFSET
                                                          : FLOAT32_BOX_NODE_CHILD0_OFFSET);
     const uint nodeType            = GetNodeType(node.type);
@@ -97,7 +100,9 @@ uint WritePrimitiveNodeCollapse(
         DstBuffer.Store3(nodeOffset + USER_NODE_PROCEDURAL_MIN_OFFSET, asuint(node.bbox_min_or_v0));
         DstBuffer.Store3(nodeOffset + USER_NODE_PROCEDURAL_MAX_OFFSET, asuint(node.bbox_max_or_v1));
         DstBuffer.Store(nodeOffset + USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
-        DstBuffer.Store(nodeOffset + USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET, node.left_or_primIndex_or_instIndex);
+        {
+            DstBuffer.Store(nodeOffset + USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET, node.left_or_primIndex_or_instIndex);
+        }
     }
     else
     {
@@ -130,8 +135,7 @@ uint WritePrimitiveNodeCollapse(
         if ((args.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
             (node.splitBox_or_nodePointer != INVALID_IDX))
         {
-            const ScratchNode otherNode = FetchScratchNode(ScratchBuffer,
-                                                           args.scratchNodesScratchOffset,
+            const ScratchNode otherNode = FetchScratchNode(args.scratchNodesScratchOffset,
                                                            node.splitBox_or_nodePointer);
             const uint otherNodeType = GetNodeType(otherNode.type);
 
@@ -178,24 +182,21 @@ uint WritePrimitiveNodeCollapse(
         DstBuffer.Store(collapseParentNodeAddress + boxUsedChild0Offset + offset * NODE_PTR_SIZE, primNodePointer);
 
         // parent pointer
-        WriteParentPointer(DstMetadata,
-                           args.metadataSizeInBytes,
+        WriteParentPointer(args.metadataSizeInBytes,
                            nodePointer,
                            PackNodePointer(boxUsedNodeType, collapseParentNodeAddress));
     }
     else if (task.parentOfCollapseNodeIndex != INVALID_IDX) // not first in the collapse list
     {
         // parent pointer
-        WriteParentPointer(DstMetadata,
-                           args.metadataSizeInBytes,
+        WriteParentPointer(args.metadataSizeInBytes,
                            nodePointer,
                            PackNodePointer(boxUsedNodeType, collapseParentNodeAddress));
     }
     else // no collapse
     {
         // parent pointer
-        WriteParentPointer(DstMetadata,
-                           args.metadataSizeInBytes,
+        WriteParentPointer(args.metadataSizeInBytes,
                            nodePointer,
                            parentPtr);
     }
@@ -273,13 +274,9 @@ void BuildQbvhCollapseImpl(
 
     const uint baseQbvhStackOffset = args.qbvhStackScratchOffset;
 
-    const ScratchNodeResourceInfo resourceInfo =
-    {
-        ScratchBuffer,
-        args.scratchNodesScratchOffset
-    };
-
     bool isDone = false;
+
+    const uint32_t rootNodeIndex = args.enableFastLBVH ? args.fastLBVHRootNodeIndex : 0;
 
     while (1)
     {
@@ -304,7 +301,7 @@ void BuildQbvhCollapseImpl(
         if (bvhNodeSrcIdx != INVALID_IDX)
         {
             // Fetch BVH2 node - it knows whether to be fp16 or fp32 interior node
-            const ScratchNode node = FetchScratchNodeImpl(resourceInfo, bvhNodeSrcIdx);
+            const ScratchNode node = FetchScratchNode(args.scratchNodesScratchOffset, bvhNodeSrcIdx);
 
             // Declare child nodes so they can be fetched at most once in this code block and reused later.
             // This can be done because the logic checking which grandchildren are valid is the same.
@@ -321,15 +318,15 @@ void BuildQbvhCollapseImpl(
             if (IsLeafNode(bvhNodeSrcIdx, numActivePrims) == false)
             {
                 // If this is an internal node, we need to fetch its child nodes
-                c0 = FetchScratchNodeImpl(resourceInfo, node.left_or_primIndex_or_instIndex);
-                c1 = FetchScratchNodeImpl(resourceInfo, node.right_or_geometryIndex);
+                c0 = FetchScratchNode(args.scratchNodesScratchOffset, node.left_or_primIndex_or_instIndex);
+                c1 = FetchScratchNode(args.scratchNodesScratchOffset, node.right_or_geometryIndex);
 
                 uint numIntChildren   = 0;
                 uint childDstCount64B = 0;
                 if (IsLeafNode(node.left_or_primIndex_or_instIndex, numActivePrims) == false)
                 {
-                    const ScratchNode c00 = FetchScratchNodeImpl(resourceInfo, c0.left_or_primIndex_or_instIndex);
-                    const ScratchNode c01 = FetchScratchNodeImpl(resourceInfo, c0.right_or_geometryIndex);
+                    const ScratchNode c00 = FetchScratchNode(args.scratchNodesScratchOffset, c0.left_or_primIndex_or_instIndex);
+                    const ScratchNode c01 = FetchScratchNode(args.scratchNodesScratchOffset, c0.right_or_geometryIndex);
 
                     const uint c00Type = GetNodeType(c00.type);
                     const uint c01Type = GetNodeType(c01.type);
@@ -338,20 +335,24 @@ void BuildQbvhCollapseImpl(
                     intChildNodeIdx.y = c0.right_or_geometryIndex;
 
                     intChildDstIdx.x  = childDstCount64B;
-                    compChildInfo    |= (IsBoxNode  (c00Type) ? 0x1 : 0);
-                    childDstCount64B += (IsBoxNode32(c00Type) ? 2
-                                                              : (IsBoxNode16(c00Type) ? 1 : 0));
+                    compChildInfo |= (IsBoxNode(c00Type)
+                                                             ? 0x1 : 0);
+                    {
+                        childDstCount64B += (IsBoxNode32(c00Type) ? 2 : (IsBoxNode16(c00Type) ? 1 : 0));
+                    }
 
                     intChildDstIdx.y  = childDstCount64B;
-                    compChildInfo    |= (IsBoxNode  (c01Type) ? 0x2 : 0);
-                    childDstCount64B += (IsBoxNode32(c01Type) ? 2
-                                                              : (IsBoxNode16(c01Type) ? 1 : 0));
+                    compChildInfo |= (IsBoxNode(c01Type)
+                                                             ? 0x2 : 0);
+                    {
+                        childDstCount64B += (IsBoxNode32(c01Type) ? 2 : (IsBoxNode16(c01Type) ? 1 : 0));
+                    }
                 }
 
                 if (IsLeafNode(node.right_or_geometryIndex, numActivePrims) == false)
                 {
-                    const ScratchNode c10 = FetchScratchNodeImpl(resourceInfo, c1.left_or_primIndex_or_instIndex);
-                    const ScratchNode c11 = FetchScratchNodeImpl(resourceInfo, c1.right_or_geometryIndex);
+                    const ScratchNode c10 = FetchScratchNode(args.scratchNodesScratchOffset, c1.left_or_primIndex_or_instIndex);
+                    const ScratchNode c11 = FetchScratchNode(args.scratchNodesScratchOffset, c1.right_or_geometryIndex);
 
                     const uint c10Type = GetNodeType(c10.type);
                     const uint c11Type = GetNodeType(c11.type);
@@ -360,14 +361,18 @@ void BuildQbvhCollapseImpl(
                     intChildNodeIdx.w = c1.right_or_geometryIndex;
 
                     intChildDstIdx.z  = childDstCount64B;
-                    compChildInfo    |= (IsBoxNode  (c10Type) ? 0x4 : 0);
-                    childDstCount64B += (IsBoxNode32(c10Type) ? 2
-                                                              : (IsBoxNode16(c10Type) ? 1 : 0));
+                    compChildInfo |= (IsBoxNode(c10Type)
+                                                             ? 0x4 : 0);
+                    {
+                        childDstCount64B += (IsBoxNode32(c10Type) ? 2 : (IsBoxNode16(c10Type) ? 1 : 0));
+                    }
 
                     intChildDstIdx.w  = childDstCount64B;
-                    compChildInfo    |= (IsBoxNode  (c11Type) ? 0x8 : 0);
-                    childDstCount64B += (IsBoxNode32(c11Type) ? 2
-                                                              : (IsBoxNode16(c11Type) ? 1 : 0));
+                    compChildInfo |= (IsBoxNode(c11Type)
+                                                             ? 0x8 : 0);
+                    {
+                        childDstCount64B += (IsBoxNode32(c11Type) ? 2 : (IsBoxNode16(c11Type) ? 1 : 0));
+                    }
                 }
 
                 // Fetch the stack index and destination for the 1st child, and then offset our indices
@@ -388,7 +393,10 @@ void BuildQbvhCollapseImpl(
 
             // Fetch BVH2 node - it knows whether to be fp16 or fp32 interior node
             const uint qbvhNodeType = GetNodeType(node.type);
-            const bool writeAsFp16BoxNode = (qbvhNodeType == NODE_TYPE_BOX_FLOAT16);
+            bool writeAsFp16BoxNode = false;
+            {
+                writeAsFp16BoxNode = (qbvhNodeType == NODE_TYPE_BOX_FLOAT16);
+            }
 
             // Fetch node destination offset
             const bool nodeTypesMixed = (args.fp16BoxNodesInBlasMode == LEAF_NODES_IN_BLAS_AS_FP16) ||
@@ -433,7 +441,9 @@ void BuildQbvhCollapseImpl(
 
                     WriteQbvhInternalNodeNumPrimitives(node, qbvhNodeAddr, writeAsFp16BoxNode, true);
 
-                    WriteQbvhInternalNodeFlags(CalcNodeFlags(node), qbvhNodeAddr, writeAsFp16BoxNode);
+                    WriteQbvhInternalNodeFlags(CalcNodeFlags(node),
+                                               qbvhNodeAddr,
+                                               writeAsFp16BoxNode);
                 }
 
                 isDone = true;
@@ -458,7 +468,7 @@ void BuildQbvhCollapseImpl(
                     // not the root
                     if (task.lastNodeIndex != INVALID_IDX)
                     {
-                        const ScratchNode taskNode = FetchScratchNodeImpl(resourceInfo, task.nodeIndex);
+                        const ScratchNode taskNode = FetchScratchNode(args.scratchNodesScratchOffset, task.nodeIndex);
 
                         // ScratchNode.numPrimitivesAndDoCollapse holds the numPrims << 1 | (doCollapse)
                         if (taskNode.numPrimitivesAndDoCollapse & 0x1)
@@ -475,8 +485,8 @@ void BuildQbvhCollapseImpl(
             // Fetch next level children if these are internal nodes and pull them into the QBVH
             if (IsLeafNode(node.left_or_primIndex_or_instIndex, numActivePrims) == false)
             {
-                const ScratchNode c00 = FetchScratchNodeImpl(resourceInfo, c0.left_or_primIndex_or_instIndex);
-                const ScratchNode c01 = FetchScratchNodeImpl(resourceInfo, c0.right_or_geometryIndex);
+                const ScratchNode c00 = FetchScratchNode(args.scratchNodesScratchOffset, c0.left_or_primIndex_or_instIndex);
+                const ScratchNode c01 = FetchScratchNode(args.scratchNodesScratchOffset, c0.right_or_geometryIndex);
 
                 uint leafIndex00 = task.leafIndex;
                 uint leafIndex01 = task.leafIndex + (c00.numPrimitivesAndDoCollapse >> 1);
@@ -539,8 +549,7 @@ void BuildQbvhCollapseImpl(
                     if (parentOfCollapseNodeIndex == INVALID_IDX)
                     {
                         // parent
-                        WriteParentPointer(DstMetadata,
-                                           args.metadataSizeInBytes,
+                        WriteParentPointer(args.metadataSizeInBytes,
                                            ptr0,
                                            qbvhNodePtr);
                     }
@@ -576,8 +585,7 @@ void BuildQbvhCollapseImpl(
                     if (parentOfCollapseNodeIndex == INVALID_IDX)
                     {
                         // parent
-                        WriteParentPointer(DstMetadata,
-                                           args.metadataSizeInBytes,
+                        WriteParentPointer(args.metadataSizeInBytes,
                                            ptr1,
                                            qbvhNodePtr);
                     }
@@ -619,8 +627,8 @@ void BuildQbvhCollapseImpl(
             // Fetch next level children if these are internal nodes and pull them into the QBVH
             if (IsLeafNode(node.right_or_geometryIndex, numActivePrims) == false)
             {
-                const ScratchNode c10 = FetchScratchNodeImpl(resourceInfo, c1.left_or_primIndex_or_instIndex);
-                const ScratchNode c11 = FetchScratchNodeImpl(resourceInfo, c1.right_or_geometryIndex);
+                const ScratchNode c10 = FetchScratchNode(args.scratchNodesScratchOffset, c1.left_or_primIndex_or_instIndex);
+                const ScratchNode c11 = FetchScratchNode(args.scratchNodesScratchOffset, c1.right_or_geometryIndex);
 
                 uint leafIndex10 = task.leafIndex + (c0.numPrimitivesAndDoCollapse >> 1);
                 uint leafIndex11 = task.leafIndex + (c0.numPrimitivesAndDoCollapse >> 1) +
@@ -683,8 +691,7 @@ void BuildQbvhCollapseImpl(
                     if (parentOfCollapseNodeIndex == INVALID_IDX)
                     {
                         // parent
-                        WriteParentPointer(DstMetadata,
-                                           args.metadataSizeInBytes,
+                        WriteParentPointer(args.metadataSizeInBytes,
                                            ptr2,
                                            qbvhNodePtr);
                     }
@@ -720,8 +727,7 @@ void BuildQbvhCollapseImpl(
                     if (parentOfCollapseNodeIndex == INVALID_IDX)
                     {
                         // parent
-                        WriteParentPointer(DstMetadata,
-                                           args.metadataSizeInBytes,
+                        WriteParentPointer(args.metadataSizeInBytes,
                                            ptr3,
                                            qbvhNodePtr);
                     }
@@ -775,7 +781,7 @@ void BuildQbvhCollapseImpl(
         // Is always of type fp32 regardless of mode for fp16 box nodes
         uint rootNodePtr = CreateRootNodePointer();
 
-        const ScratchNode rootScratchNode = FetchScratchNodeImpl(resourceInfo, 0);
+        const ScratchNode rootScratchNode = FetchScratchNode(args.scratchNodesScratchOffset, rootNodeIndex);
         const BoundingBox bbox            = GetScratchNodeBoundingBoxTS(args, false, rootScratchNode);
 
         DstBuffer.Store3(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET, asuint(bbox.min));
@@ -788,8 +794,7 @@ void BuildQbvhCollapseImpl(
         const uint mergedNodeFlags = flags0 & flags1;
         DstBuffer.Store(ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET, mergedNodeFlags);
 
-        WriteParentPointer(DstMetadata,
-                           args.metadataSizeInBytes,
+        WriteParentPointer(args.metadataSizeInBytes,
                            rootNodePtr,
                            INVALID_IDX);
     }

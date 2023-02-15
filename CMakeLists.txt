@@ -33,6 +33,12 @@ add_library(gpurt STATIC)
 
 add_library(AMD::gpurt ALIAS gpurt)
 
+set_target_properties(gpurt PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED YES
+    CXX_EXTENSIONS NO
+)
+
 # Force client to specify developer mode
 if (NOT DEFINED GPURT_DEVELOPER_MODE)
     message(FATAL_ERROR "Client must specify developer mode")

@@ -22,14 +22,12 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "IntersectCommon.hlsl"
-#include "BuildCommon.hlsl"
-
 #define RootSig "RootConstants(num32BitConstants=10, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
-                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894))"
+                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
+                "CBV(b1)" /*Build Settings binding*/
 
 //=====================================================================================================================
 // 32 bit constants
@@ -54,8 +52,10 @@ struct InputArgs
 [[vk::binding(2, 0)]]                  RWByteAddressBuffer    SrcBuffer      : register(u2);
 
 //=====================================================================================================================
-// Note, this header must be included after all resource bindings have been defined. Also, there is a strict naming
+// Note, these headers must be included after all resource bindings have been defined. Also, there is a strict naming
 // requirement for resources and variables. See BuildCommon.hlsl for details.
+#include "IntersectCommon.hlsl"
+#include "BuildCommon.hlsl"
 #include "UpdateQBVHImpl.hlsl"
 
 //=====================================================================================================================
@@ -81,12 +81,13 @@ void UpdateParallel(
 
     // Fetch number of nodes to process
     uint numWorkItems = ScratchBuffer.Load(UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET);
-
-    UpdateQBVHImpl(globalThreadId,
-                   DstMetadata,
-                   ScratchBuffer,
-                   SrcBuffer,
-                   ShaderConstants.propagationFlagsScratchOffset,
-                   numWorkItems,
-                   ShaderConstants.numThreads);
+        {
+            UpdateQBVHImpl(globalThreadId,
+                           DstMetadata,
+                           ScratchBuffer,
+                           SrcBuffer,
+                           ShaderConstants.propagationFlagsScratchOffset,
+                           numWorkItems,
+                           ShaderConstants.numThreads);
+        }
 }

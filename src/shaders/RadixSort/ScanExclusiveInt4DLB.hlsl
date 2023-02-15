@@ -23,18 +23,10 @@
  *
  **********************************************************************************************************************/
 #if NO_SHADER_ENTRYPOINT == 0
-#include "ScanCommon.hlsli"
-#include "../BuildCommon.hlsl"
-
 #define RootSig "RootConstants(num32BitConstants=4, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL)"
-
-//=====================================================================================================================
-groupshared int SharedMem[GROUP_SIZE];
-
-#include "ScanExclusiveInt4DLBCommon.hlsl"
 
 //=====================================================================================================================
 struct InputArgs
@@ -51,6 +43,14 @@ struct InputArgs
 [[vk::binding(0, 0)]] RWByteAddressBuffer                  DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer                  DstMetadata   : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer : register(u2);
+
+#include "ScanCommon.hlsli"
+#include "../BuildCommon.hlsl"
+
+//=====================================================================================================================
+groupshared int SharedMem[GROUP_SIZE];
+
+#include "ScanExclusiveInt4DLBCommon.hlsl"
 #endif
 
 #define DLB_KEYS_PER_THREAD     4
@@ -183,8 +183,7 @@ void ScanExclusiveInt4DLBImpl(
 
         uint loadIndex4 = loadIndex / 4;
 
-        uint4 value = safe_load_int4(ScratchBuffer,
-                                     inOutArrayScratchOffset,
+        uint4 value = safe_load_int4(inOutArrayScratchOffset,
                                      loadIndex4,
                                      numElements);
 

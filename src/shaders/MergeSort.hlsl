@@ -23,9 +23,6 @@
  *
  **********************************************************************************************************************/
 #if NO_SHADER_ENTRYPOINT == 0
-#include "Common.hlsl"
-#include "BuildCommon.hlsl"
-
 //=====================================================================================================================
 // Root signature
 #define RootSig "RootConstants(num32BitConstants=6, b0, visibility=SHADER_VISIBILITY_ALL), "\
@@ -52,6 +49,9 @@ struct Constants
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata   : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer : register(u2);
 
+#include "Common.hlsl"
+#include "BuildCommonScratch.hlsl"
+
 #define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
 groupshared int SharedMem[MAX_LDS_ELEMENTS];
 #endif
@@ -65,7 +65,7 @@ uint NumElemsLessThan(uint val, uint offset, uint offsetNext, uint keysOffset)
     while (l < r)
     {
         const uint index = (l + r) / 2;
-        if (FetchMortonCode(ScratchBuffer, keysOffset, index) < val)
+        if (FetchMortonCode(keysOffset, index) < val)
         {
             l = index + 1;
         }
@@ -86,7 +86,7 @@ uint NumElemsLessThan64(uint64_t val, uint offset, uint offsetNext, uint keysOff
     while (l < r)
     {
         const uint index = (l + r) / 2;
-        if (FetchMortonCode64(ScratchBuffer, keysOffset, index) < val)
+        if (FetchMortonCode64(keysOffset, index) < val)
         {
             l = index + 1;
         }
@@ -107,7 +107,7 @@ uint NumElemsLessThanOrEqualTo(uint val, uint offset, uint offsetNext, uint keys
     while (l < r)
     {
         const uint index = (l + r) / 2;
-        if (FetchMortonCode(ScratchBuffer, keysOffset, index) <= val)
+        if (FetchMortonCode(keysOffset, index) <= val)
         {
             l = index + 1;
         }
@@ -128,7 +128,7 @@ uint NumElemsLessThanOrEqualTo64(uint64_t val, uint offset, uint offsetNext, uin
     while (l < r)
     {
         const uint index = (l + r) / 2;
-        if (FetchMortonCode64(ScratchBuffer, keysOffset, index) <= val)
+        if (FetchMortonCode64(keysOffset, index) <= val)
         {
             l = index + 1;
         }
@@ -189,29 +189,29 @@ void GlobalMerge(
         {
             if (useMortonCode30)
             {
-                const uint mortonCode = FetchMortonCode(ScratchBuffer, outputKeysOffset, globalId);
-                const uint index      = FetchSortedPrimIndex(ScratchBuffer, outputValuesOffset, globalId);
+                const uint mortonCode = FetchMortonCode(outputKeysOffset, globalId);
+                const uint index      = FetchSortedPrimIndex(outputValuesOffset, globalId);
 
                 uint posInMergedList  =  localId + (groupId % splitGap) * groupSize + (groupIdNew / splitGap) * capacity * 2;
 
                 posInMergedList += (leftSubtree) ? NumElemsLessThan(mortonCode, subtreeOffset, subtreeEnd, outputKeysOffset) :
                                                    NumElemsLessThanOrEqualTo(mortonCode, subtreeOffset, subtreeEnd, outputKeysOffset);
 
-                WriteMortonCode(ScratchBuffer, keysOffsetSwap, posInMergedList, mortonCode);
-                WriteSortedPrimIndex(ScratchBuffer, valuesOffsetSwap, posInMergedList, index);
+                WriteMortonCode(keysOffsetSwap, posInMergedList, mortonCode);
+                WriteSortedPrimIndex(valuesOffsetSwap, posInMergedList, index);
             }
             else
             {
-                const uint64_t mortonCode = FetchMortonCode64(ScratchBuffer, outputKeysOffset, globalId);
-                const uint index          = FetchSortedPrimIndex(ScratchBuffer, outputValuesOffset, globalId);
+                const uint64_t mortonCode = FetchMortonCode64(outputKeysOffset, globalId);
+                const uint index          = FetchSortedPrimIndex(outputValuesOffset, globalId);
 
                 uint posInMergedList      =  localId + (groupId % splitGap) * groupSize + (groupIdNew / splitGap) * capacity * 2;
 
                 posInMergedList += (leftSubtree) ? NumElemsLessThan64(mortonCode, subtreeOffset, subtreeEnd, outputKeysOffset) :
                                                    NumElemsLessThanOrEqualTo64(mortonCode, subtreeOffset, subtreeEnd, outputKeysOffset);
 
-                WriteMortonCode64(ScratchBuffer, keysOffsetSwap, posInMergedList, mortonCode);
-                WriteSortedPrimIndex(ScratchBuffer, valuesOffsetSwap, posInMergedList, index);
+                WriteMortonCode64(keysOffsetSwap, posInMergedList, mortonCode);
+                WriteSortedPrimIndex(valuesOffsetSwap, posInMergedList, index);
             }
         }
         END_TASK(activeGroups);
@@ -224,17 +224,17 @@ void GlobalMerge(
         {
             if (useMortonCode30)
             {
-                const uint mortonCode = FetchMortonCode(ScratchBuffer, keysOffsetSwap, globalId);
-                WriteMortonCode(ScratchBuffer, outputKeysOffset, globalId, mortonCode);
+                const uint mortonCode = FetchMortonCode(keysOffsetSwap, globalId);
+                WriteMortonCode( outputKeysOffset, globalId, mortonCode);
             }
             else
             {
-                const uint64_t mortonCode = FetchMortonCode64(ScratchBuffer, keysOffsetSwap, globalId);
-                WriteMortonCode64(ScratchBuffer, outputKeysOffset, globalId, mortonCode);
+                const uint64_t mortonCode = FetchMortonCode64(keysOffsetSwap, globalId);
+                WriteMortonCode64( outputKeysOffset, globalId, mortonCode);
             }
 
-            const uint index = FetchSortedPrimIndex(ScratchBuffer, valuesOffsetSwap, globalId);
-            WriteSortedPrimIndex(ScratchBuffer, outputValuesOffset, globalId, index);
+            const uint index = FetchSortedPrimIndex(valuesOffsetSwap, globalId);
+            WriteSortedPrimIndex(outputValuesOffset, globalId, index);
         }
         END_TASK(activeGroups);
     }

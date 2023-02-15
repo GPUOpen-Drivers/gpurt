@@ -45,6 +45,12 @@
 
 #define SORT(childA,childB,distA,distB) if((childB!=INVALID_NODE&&distB<distA)||childA==INVALID_NODE){  float t0 = distA; uint t1 = childA;  childA = childB; distA = distB;  childB=t1; distB=t0; }
 
+#define INTERSECT_RAY_VERSION_1 1
+
+#if GPURT_BUILD_RTIP2
+#define INTERSECT_RAY_VERSION_2 2
+#endif
+
 //=====================================================================================================================
 // Avoid tracing NaN rays or null acceleration structures.
 // - Null acceleration structure bindings should result in a miss.
@@ -247,7 +253,9 @@ static uint FetchFloat32BoxNodeNumPrimitives(in GpuVirtualAddress bvhAddress, in
 }
 
 //=====================================================================================================================
-static Float32BoxNode FetchFloat32BoxNode(in GpuVirtualAddress bvhAddress, in uint nodePointer)
+static Float32BoxNode FetchFloat32BoxNode(in GpuVirtualAddress bvhAddress,
+                                          in uint              nodePointer)
+
 {
     const uint byteOffset = ExtractNodePointerOffset(nodePointer);
     const GpuVirtualAddress nodeAddr = bvhAddress + byteOffset;
@@ -774,12 +782,6 @@ static void HandleNodePtrFlags(inout_param(Float32BoxNode) node, uint64_t hwNode
 #endif
 #endif
 
-#define INTERSECT_RAY_VERSION_1 1
-
-#if GPURT_BUILD_RTIP2
-#define INTERSECT_RAY_VERSION_2 2
-#endif
-
 //=====================================================================================================================
 static uint4 image_bvh64_intersect_ray_base(
     GpuVirtualAddress bvhAddress,
@@ -822,18 +824,20 @@ static uint4 image_bvh64_intersect_ray_base(
     }
 #endif
 
-    if (IsBoxNode(nodePointer))
+    if (IsBoxNodeBasedOnStaticPipelineFlags(nodePointer))
     {
         // When using 16bit bboxes in BLAS, convert to a full 32bit box on load for simplicity
         Float32BoxNode node;
-        if (IsBoxNode16(nodePointer))
+
+        if (IsBoxNode16(nodePointer)
+            )
         {
             node = FetchFloat16BoxNodeAsFp32(bvhAddress, nodePointer);
         }
         else
         {
-            node = FetchFloat32BoxNode(bvhAddress, nodePointer);
-
+            node = FetchFloat32BoxNode(bvhAddress,
+                                       nodePointer);
 #if GPURT_BUILD_RTIP2
             if (intersectRayVersion >= INTERSECT_RAY_VERSION_2)
             {
@@ -850,7 +854,7 @@ static uint4 image_bvh64_intersect_ray_base(
                                BOX_EXPANSION_DEFAULT_AMOUNT,
                                boxSortHeuristic);
     }
-    else if (IsTriangleNode(nodePointer))
+    else if (IsTriangleNodeBasedOnStaticPipelineFlags(nodePointer))
     {
         bool procedural = false;
         uint hwTriFlags = 0;

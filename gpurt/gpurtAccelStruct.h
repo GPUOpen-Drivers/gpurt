@@ -45,7 +45,7 @@
 // Note this file is designed to be compilable as HLSL.
 
 #define GPURT_ACCEL_STRUCT_MAJOR_VERSION 15
-#define GPURT_ACCEL_STRUCT_MINOR_VERSION 8
+#define GPURT_ACCEL_STRUCT_MINOR_VERSION 9
 #define GPURT_ACCEL_STRUCT_VERSION       ((GPURT_ACCEL_STRUCT_MAJOR_VERSION << 16) | GPURT_ACCEL_STRUCT_MINOR_VERSION)
 
 #ifdef __cplusplus
@@ -123,8 +123,9 @@ union AccelStructHeaderInfo2
 {
     struct
     {
-        uint32 compacted     : 1;  // This BVH has been compacted
-        uint32 reserved      : 31; // Unused bits
+        uint32 compacted     : 1;   // This BVH has been compacted
+        uint32 reserved      : 1;   // Unused bits
+        uint32 reserved2     : 30;  // Unused bits
     };
 
     uint32 u32All;

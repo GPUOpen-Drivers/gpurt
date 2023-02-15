@@ -52,15 +52,13 @@ struct TDArgs
 #if NO_SHADER_ENTRYPOINT == 0
 #define USE_LDS     1
 
-#include "IntersectCommon.hlsl"
-#include "BuildCommon.hlsl"
-
 #define RootSig "RootConstants(num32BitConstants=15, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894))"
+                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
+                "CBV(b1)"/*Build Settings binding*/
 
 [[vk::push_constant]] ConstantBuffer<TDArgs> args : register(b0);
 
@@ -68,6 +66,9 @@ struct TDArgs
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata        : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer      : register(u2);
 [[vk::binding(3, 0)]]                  RWByteAddressBuffer InstanceDescBuffer : register(u3);
+
+#include "IntersectCommon.hlsl"
+#include "BuildCommon.hlsl"
 
 groupshared uint SharedIndex;
 
@@ -214,7 +215,10 @@ uint AllocScratchNode(uint parent, BoundingBox box, TDArgs args)
     internalNode.sah_or_v2_or_instBasePtr = float3(0, ComputeBoxSurfaceArea(box), 0);
     internalNode.parent = parent;
 
-    internalNode.type = NODE_TYPE_BOX_FLOAT32;
+    {
+        internalNode.type = NODE_TYPE_BOX_FLOAT32;
+    }
+
     // Initialize box node flags to 1. These will be updated with the leaf node flags as the tree is constructed.
     internalNode.flags = 0xF | (0xF << BOX_NODE_FLAGS_BIT_STRIDE);
     internalNode.splitBox_or_nodePointer = 0;
@@ -563,7 +567,8 @@ void WriteFp32BoxNodeChildrenTreeRefList(
     out BoundingBox         centroidBox,
     TDArgs                  args)
 {
-    const Float32BoxNode node = FetchFloat32BoxNode(address, ref.nodePointer);
+    const Float32BoxNode node = FetchFloat32BoxNode(address,
+                                                    ref.nodePointer);
 
     BoundingBox temp;
 
@@ -730,14 +735,17 @@ void WriteChildrenTreeRefList(uint replaceIndex, uint startIndex, TDRefScratch r
     {
         GpuVirtualAddress addr = InstanceDescBuffer.Load<GpuVirtualAddress>(ref.primitiveIndex *
                                                                             GPU_VIRTUAL_ADDRESS_SIZE);
-        desc = FetchInstanceDesc(addr, 0);
+        {
+            desc = FetchInstanceDesc(addr, 0);
+        }
     }
     else
     {
         desc = InstanceDescBuffer.Load<InstanceDesc>(ref.primitiveIndex * INSTANCE_DESC_SIZE);
     }
 
-    if (IsBoxNode16(ref.nodePointer))
+    if (
+        IsBoxNode16(ref.nodePointer))
     {
         WriteFp16BoxNodeChildrenTreeRefList(address, desc, replaceIndex, startIndex, ref, centroidBox, args);
     }

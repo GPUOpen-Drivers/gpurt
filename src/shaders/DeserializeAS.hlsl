@@ -22,10 +22,6 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "Common.hlsl"
-#include "SerializeCommon.hlsl"
-#include "BuildCommon.hlsl"
-
 #define RootSig "RootConstants(num32BitConstants=3, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
@@ -45,6 +41,10 @@ struct InputArgs
 //=====================================================================================================================
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstMetadata : register(u0);
 [[vk::binding(1, 0)]]                  RWByteAddressBuffer SrcBuffer   : register(u1);
+
+#include "Common.hlsl"
+#include "SerializeCommon.hlsl"
+#include "BuildCommon.hlsl"
 
 groupshared uint SharedMem[1];
 

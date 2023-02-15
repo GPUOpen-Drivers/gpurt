@@ -23,9 +23,6 @@
  *
  **********************************************************************************************************************/
 #if NO_SHADER_ENTRYPOINT == 0
-#include "..\BuildCommon.hlsl"
-#include "ScanCommon.hlsli"
-
 #define RootSig "RootConstants(num32BitConstants=6, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
@@ -48,6 +45,9 @@ struct InputArgs
 [[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer DstMetadata   : register(u1);
 [[vk::binding(2, 0)]] RWByteAddressBuffer ScratchBuffer : register(u2);
+
+#include "..\BuildCommon.hlsl"
+#include "ScanCommon.hlsli"
 
 //=====================================================================================================================
 // Shared memory used to store an intermediate histogram.
@@ -87,8 +87,7 @@ void BitHistogramImpl(
         if (useMortonCode30)
         {
             // Load single int4 value
-            int4 value = safe_load_int4_intmax(ScratchBuffer,
-                                               inputOffset,
+            int4 value = safe_load_int4_intmax(inputOffset,
                                                loadidx,
                                                numElements);
 
@@ -99,8 +98,7 @@ void BitHistogramImpl(
         else
         {
             // Load single uint64_t4 value
-            uint64_t4 value = safe_load_int64_4_intmax(ScratchBuffer,
-                                                       inputOffset,
+            uint64_t4 value = safe_load_int64_4_intmax(inputOffset,
                                                        loadidx,
                                                        numElements);
 

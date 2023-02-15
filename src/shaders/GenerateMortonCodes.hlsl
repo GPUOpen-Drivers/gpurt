@@ -23,14 +23,13 @@
  *
  **********************************************************************************************************************/
 #if NO_SHADER_ENTRYPOINT == 0
-#include "BuildCommon.hlsl"
-
 //=====================================================================================================================
 // Root signature
 #define RootSig "RootConstants(num32BitConstants=8, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u2, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
+                "CBV(b1)"/*Build Settings binding*/
 
 //=====================================================================================================================
 // 32 bit constants
@@ -54,13 +53,7 @@ struct Constants
 [[vk::binding(2, 0)]] RWByteAddressBuffer ScratchBuffer : register(u2);
 #endif
 
-//=====================================================================================================================
-ScratchNode GetScratchLeafNode(
-    uint leafNodesOffset,
-    uint primitiveIndex)
-{
-    return FetchScratchNode(ScratchBuffer, leafNodesOffset, primitiveIndex);
-}
+#include "BuildCommonScratch.hlsl"
 
 //=====================================================================================================================
 uint CalculateVariableBitsMortonCode(float3 sceneExtent, float3 normalizedPos)
@@ -341,7 +334,7 @@ void GenerateMortonCodesImpl(
     bool    enableGridPos,
     uint    gridPosOffset)
 {
-    ScratchNode node = GetScratchLeafNode(leafNodesOffset, primitiveIndex);
+    ScratchNode node = FetchScratchNode(leafNodesOffset, primitiveIndex);
 
     if (IsNodeActive(node))
     {
@@ -367,7 +360,7 @@ void GenerateMortonCodesImpl(
             const uint mortonCode = (enableVariableBits) ? CalculateVariableBitsMortonCode(sceneExtent, normalizedPos) :
                                                            CalculateMortonCode(normalizedPos);
 
-            WriteMortonCode(ScratchBuffer, mortonCodesOffset, primitiveIndex, mortonCode);
+            WriteMortonCode(mortonCodesOffset, primitiveIndex, mortonCode);
         }
         else
         {
@@ -428,7 +421,7 @@ void GenerateMortonCodesImpl(
             {
                 mortonCode = 0x7FFFFFFFFFFFFFFE;
             }
-            WriteMortonCode64(ScratchBuffer, mortonCodesOffset, primitiveIndex, mortonCode);
+            WriteMortonCode64(mortonCodesOffset, primitiveIndex, mortonCode);
         }
 
         DstBuffer.InterlockedAdd(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, 1);
@@ -437,11 +430,11 @@ void GenerateMortonCodesImpl(
     {
         if (useMortonCode30)
         {
-            WriteMortonCode(ScratchBuffer, mortonCodesOffset, primitiveIndex, INT_MAX);
+            WriteMortonCode(mortonCodesOffset, primitiveIndex, INT_MAX);
         }
         else
         {
-            WriteMortonCode64(ScratchBuffer, mortonCodesOffset, primitiveIndex, 0x7FFFFFFFFFFFFFFE);
+            WriteMortonCode64(mortonCodesOffset, primitiveIndex, 0x7FFFFFFFFFFFFFFE);
         }
     }
 }
@@ -459,7 +452,7 @@ void GenerateMortonCodes(
 
     if (primitiveIndex < ShaderConstants.NumPrimitives)
     {
-        const BoundingBox sceneBounds = FetchSceneBounds(ScratchBuffer, ShaderConstants.SceneBoundsByteOffset);
+        const BoundingBox sceneBounds = FetchSceneBounds(ShaderConstants.SceneBoundsByteOffset);
 
         const float3 sceneExtent = sceneBounds.max - sceneBounds.min;
         const float3 sceneMin    = sceneBounds.min;

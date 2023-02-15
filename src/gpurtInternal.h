@@ -63,7 +63,7 @@ static constexpr size_t RayTracingAtomicFlags           = 8;
 
 static constexpr size_t RayTracingStateRebraidBuildSize = 28;
 
-static constexpr size_t RayTracingBuildDebugCounters    = 12;
+static constexpr size_t RayTracingBuildDebugCounters    = 11;
 
 static constexpr size_t RayTracingTaskQueueCounterSize  = 20;
 static constexpr size_t RayTracingTaskQueueCounters     = 5;
@@ -75,10 +75,10 @@ constexpr uint32 DefaultThreadGroupSize = 64;
 
 enum EncodeFlags : uint32
 {
-    EncodeFlagArrayOfPointers   = 0x00000001,
-    EncodeFlagUpdateInPlace     = 0x00000002,
-    EncodeFlagRebraidEnabled    = 0x00000004,
-    EncodeFlagFusedInstanceNode = 0x00000010,
+    EncodeFlagArrayOfPointers       = 0x00000001,
+    EncodeFlagUpdateInPlace         = 0x00000002,
+    EncodeFlagRebraidEnabled        = 0x00000004,
+    EncodeFlagFusedInstanceNode     = 0x00000008,
 };
 
 struct RadixSortConfig
@@ -147,6 +147,7 @@ struct RayTracingScratchDataOffsets
     uint32 tdTaskQueueCounter;
     uint32 refOffsets;
     uint32 bvhLeafNodeData;
+    uint32 fastLBVHRootNodeIndex;
     uint32 clusterList0;        // BVH AC build only
     uint32 clusterList1;        // BVH AC build only
     uint32 numClusterList0;     // BVH AC build only

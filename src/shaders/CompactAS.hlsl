@@ -22,9 +22,6 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "Common.hlsl"
-#include "BuildCommon.hlsl"
-
 #define RootSig "RootConstants(num32BitConstants=3, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL)"
@@ -44,6 +41,9 @@ struct InputArgs
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer    DstMetadata : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer                     SrcBuffer   : register(u1);
 
+#include "Common.hlsl"
+#include "BuildCommon.hlsl"
+
 //=====================================================================================================================
 uint UpdateParentPointer(
     uint srcMetadataSizeInBytes,
@@ -54,8 +54,7 @@ uint UpdateParentPointer(
     uint parentNodePointer = ReadParentPointer(SrcBuffer,
                                                srcMetadataSizeInBytes,
                                                srcNodePointer);
-    WriteParentPointer(DstMetadata,
-                       dstMetadataSizeInBytes,
+    WriteParentPointer(dstMetadataSizeInBytes,
                        dstNodePointer,
                        parentNodePointer);
 
@@ -156,6 +155,8 @@ void CopyFp32BoxNode(
     const Float32BoxNode node = SrcBuffer.Load<Float32BoxNode>(srcInternalNodeDataOffset);
 
     // Skip leaf child pointers because they will be updated while copying leaf nodes
+
+    // CopyFp32BoxNode is not called when HighPrecisionBoxNode is enabled.
     if ((node.child0 == INVALID_IDX) || IsBoxNode(node.child0))
     {
         DstMetadata.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_CHILD0_OFFSET, node.child0);
@@ -334,53 +335,89 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
     const uint dstOffsetDataGeometryInfo  = dstOffsets.geometryInfo      + dstMetadataSizeInBytes;
     const uint dstOffsetDataPrimNodePtrs  = dstOffsets.primNodePtrs      + dstMetadataSizeInBytes;
 
-    const uint fp16BoxNodesInBlasMode =
-        (srcHeader.info >> ACCEL_STRUCT_HEADER_INFO_FP16_BOXNODE_IN_BLAS_MODE_SHIFT) & ACCEL_STRUCT_HEADER_INFO_FP16_BOXNODE_IN_BLAS_MODE_MASK;
-
-    const uint srcOffsetDataLeafNodes = srcOffsets.leafNodes + srcMetadataSizeInBytes;
-    const uint dstOffsetDataLeafNodes = dstOffsets.leafNodes + dstMetadataSizeInBytes;
-
-    // Copy internal nodes
-    // 16-bit internal nodes only apply to BLAS
-    if (type == BOTTOM_LEVEL)
     {
-        if ((fp16BoxNodesInBlasMode == LEAF_NODES_IN_BLAS_AS_FP16) ||
-            (fp16BoxNodesInBlasMode == MIXED_NODES_IN_BLAS_AS_FP16))
+        const uint fp16BoxNodesInBlasMode =
+            (srcHeader.info >> ACCEL_STRUCT_HEADER_INFO_FP16_BOXNODE_IN_BLAS_MODE_SHIFT) & ACCEL_STRUCT_HEADER_INFO_FP16_BOXNODE_IN_BLAS_MODE_MASK;
+
+        const uint srcOffsetDataLeafNodes = srcOffsets.leafNodes + srcMetadataSizeInBytes;
+        const uint dstOffsetDataLeafNodes = dstOffsets.leafNodes + dstMetadataSizeInBytes;
+
+        // Copy internal nodes
+        // 16-bit internal nodes only apply to BLAS
+        if (type == BOTTOM_LEVEL)
         {
-            // Because interior box nodes are mixed (fp16 and fp32), each thread traverses up the tree from leaf nodes
-            // following parent pointers, copying each parent. The iteration traversing up the tree continues
-            // only for the thread coming from the 1st child of the parent.
-
-            // NOTE: in case this method is slow, we can try other alternatives which use some extra memory:
-            // 1. add sideband data which is a bitfield. Each bit corresponds to an interior node and would store
-            //    a flag whether the node is fp16 or fp32. Computing offset to a particular node that corresponds
-            //    to a bit i requries counting bits [0...i-1] and multiplying by 64B.
-            // 2. store atomic counters per node to count how many children were processed. The last thread
-            //    continues up the tree. See UpdateQBVHImpl.hlsl
-            // 3. traverse tree top-down and use a stack for the next node address to process. The stack passes
-            //    indexes to threads. See BuildQBVH.hlsl
-
-            // Iterate over number of leaf nodes. This is also required in the case of
-            // tri-splitting since prim node pointer cannot point to multiple split triangle nodes.
-            for (uint nodeIndex = globalId; nodeIndex < srcHeader.numLeafNodes; nodeIndex += ShaderConstants.numThreads)
+            if ((fp16BoxNodesInBlasMode == LEAF_NODES_IN_BLAS_AS_FP16) ||
+                (fp16BoxNodesInBlasMode == MIXED_NODES_IN_BLAS_AS_FP16))
             {
-                const uint primNodeSize      = (srcHeader.geometryType == GEOMETRY_TYPE_TRIANGLES) ?
-                                                sizeof(TriangleNode) :
-                                                sizeof(ProceduralNode);
-                const uint nodeOffset        = nodeIndex * primNodeSize;
-                const uint srcNodeDataOffset = srcOffsetDataLeafNodes + nodeOffset;
+                // Because interior box nodes are mixed (fp16 and fp32), each thread traverses up the tree from leaf nodes
+                // following parent pointers, copying each parent. The iteration traversing up the tree continues
+                // only for the thread coming from the 1st child of the parent.
 
-                // Node type does not matter, so just use 0
-                const uint srcNodePointer    = PackNodePointer(0, srcOffsets.leafNodes + nodeOffset);
+                // NOTE: in case this method is slow, we can try other alternatives which use some extra memory:
+                // 1. add sideband data which is a bitfield. Each bit corresponds to an interior node and would store
+                //    a flag whether the node is fp16 or fp32. Computing offset to a particular node that corresponds
+                //    to a bit i requries counting bits [0...i-1] and multiplying by 64B.
+                // 2. store atomic counters per node to count how many children were processed. The last thread
+                //    continues up the tree. See UpdateQBVHImpl.hlsl
+                // 3. traverse tree top-down and use a stack for the next node address to process. The stack passes
+                //    indexes to threads. See BuildQBVH.hlsl
 
-                CopyInteriorNodesTraversingUpwards(srcNodePointer,
-                                                   srcOffsetDataInternalNodes,
-                                                   srcMetadataSizeInBytes,
-                                                   dstOffsetDataInternalNodes,
-                                                   dstMetadataSizeInBytes);
+                // Iterate over number of leaf nodes. This is also required in the case of
+                // tri-splitting since prim node pointer cannot point to multiple split triangle nodes.
+                for (uint nodeIndex = globalId; nodeIndex < srcHeader.numLeafNodes; nodeIndex += ShaderConstants.numThreads)
+                {
+                    const uint primNodeSize      = (srcHeader.geometryType == GEOMETRY_TYPE_TRIANGLES) ?
+                                                    sizeof(TriangleNode) :
+                                                    sizeof(ProceduralNode);
+                    const uint nodeOffset        = nodeIndex * primNodeSize;
+                    const uint srcNodeDataOffset = srcOffsetDataLeafNodes + nodeOffset;
+
+                    // Node type does not matter, so just use 0
+                    const uint srcNodePointer    = PackNodePointer(0, srcOffsets.leafNodes + nodeOffset);
+
+                    CopyInteriorNodesTraversingUpwards(srcNodePointer,
+                                                       srcOffsetDataInternalNodes,
+                                                       srcMetadataSizeInBytes,
+                                                       dstOffsetDataInternalNodes,
+                                                       dstMetadataSizeInBytes);
+                }
+            }
+            else if (fp16BoxNodesInBlasMode == NO_NODES_IN_BLAS_AS_FP16)
+            {
+                for (uint nodeIndex = globalId; nodeIndex < srcHeader.numInternalNodesFp32; nodeIndex += ShaderConstants.numThreads)
+                {
+                    const uint nodeOffset = nodeIndex * sizeof(Float32BoxNode);
+                    CopyFp32BoxNode(nodeOffset,
+                                    srcOffsetDataInternalNodes,
+                                    srcMetadataSizeInBytes,
+                                    dstOffsetDataInternalNodes,
+                                    dstMetadataSizeInBytes);
+                }
+            }
+            else
+            {
+                // Write out the root node, which is fp32
+                if (globalId == 0)
+                {
+                    CopyFp32BoxNode(0,
+                                    srcOffsetDataInternalNodes,
+                                    srcMetadataSizeInBytes,
+                                    dstOffsetDataInternalNodes,
+                                    dstMetadataSizeInBytes);
+                }
+                // Write out the rest as fp16
+                for (uint nodeIndex = globalId; nodeIndex < srcHeader.numInternalNodesFp16; nodeIndex += ShaderConstants.numThreads)
+                {
+                    const uint nodeOffset = nodeIndex * sizeof(Float16BoxNode) + sizeof(Float32BoxNode);
+                    CopyFp16BoxNode(nodeOffset,
+                                    srcOffsetDataInternalNodes,
+                                    srcMetadataSizeInBytes,
+                                    dstOffsetDataInternalNodes,
+                                    dstMetadataSizeInBytes);
+                }
             }
         }
-        else if (fp16BoxNodesInBlasMode == NO_NODES_IN_BLAS_AS_FP16)
+        else // TOP_LEVEL
         {
             for (uint nodeIndex = globalId; nodeIndex < srcHeader.numInternalNodesFp32; nodeIndex += ShaderConstants.numThreads)
             {
@@ -392,90 +429,24 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
                                 dstMetadataSizeInBytes);
             }
         }
-        else
+
+        // Copy leaf nodes
+        if (type == TOP_LEVEL)
         {
-            // Write out the root node, which is fp32
-            if (globalId == 0)
+            for (uint nodeIndex = globalId; nodeIndex < srcHeader.numLeafNodes; nodeIndex += ShaderConstants.numThreads)
             {
-                CopyFp32BoxNode(0,
-                                srcOffsetDataInternalNodes,
-                                srcMetadataSizeInBytes,
-                                dstOffsetDataInternalNodes,
-                                dstMetadataSizeInBytes);
-            }
-            // Write out the rest as fp16
-            for (uint nodeIndex = globalId; nodeIndex < srcHeader.numInternalNodesFp16; nodeIndex += ShaderConstants.numThreads)
-            {
-                const uint nodeOffset = nodeIndex * sizeof(Float16BoxNode) + sizeof(Float32BoxNode);
-                CopyFp16BoxNode(nodeOffset,
-                                srcOffsetDataInternalNodes,
-                                srcMetadataSizeInBytes,
-                                dstOffsetDataInternalNodes,
-                                dstMetadataSizeInBytes);
-            }
-        }
-    }
-    else // TOP_LEVEL
-    {
-        for (uint nodeIndex = globalId; nodeIndex < srcHeader.numInternalNodesFp32; nodeIndex += ShaderConstants.numThreads)
-        {
-            const uint nodeOffset = nodeIndex * sizeof(Float32BoxNode);
-            CopyFp32BoxNode(nodeOffset,
-                            srcOffsetDataInternalNodes,
-                            srcMetadataSizeInBytes,
-                            dstOffsetDataInternalNodes,
-                            dstMetadataSizeInBytes);
-        }
-    }
+                const uint nodeOffset         = nodeIndex * GetBvhNodeSizeLeaf(PrimitiveType::Instance, enableFusedInstanceNode);
+                const uint srcNodeDataOffset  = srcOffsetDataLeafNodes + nodeOffset;
+                const uint dstNodeDataOffset  = dstOffsetDataLeafNodes + nodeOffset;
 
-    // Copy leaf nodes
-    if (type == TOP_LEVEL)
-    {
-        for (uint nodeIndex = globalId; nodeIndex < srcHeader.numLeafNodes; nodeIndex += ShaderConstants.numThreads)
-        {
-            const uint nodeOffset         = nodeIndex * GetBvhNodeSizeLeaf(PrimitiveType::Instance, enableFusedInstanceNode);
-            const uint srcNodeDataOffset  = srcOffsetDataLeafNodes + nodeOffset;
-            const uint dstNodeDataOffset  = dstOffsetDataLeafNodes + nodeOffset;
+                // Copy instance node
+                const InstanceNode node = SrcBuffer.Load<InstanceNode>(srcNodeDataOffset);
+                DstMetadata.Store<InstanceNode>(dstNodeDataOffset, node);
 
-            // Copy instance node
-            const InstanceNode node = SrcBuffer.Load<InstanceNode>(srcNodeDataOffset);
-            DstMetadata.Store<InstanceNode>(dstNodeDataOffset, node);
+                // Top level acceleration structures do not have geometry info.
 
-            // Top level acceleration structures do not have geometry info.
-
-            const uint srcNodePointer = PackNodePointer(NODE_TYPE_USER_NODE_INSTANCE, srcOffsets.leafNodes + nodeOffset);
-            const uint dstNodePointer = PackNodePointer(NODE_TYPE_USER_NODE_INSTANCE, dstOffsets.leafNodes + nodeOffset);
-
-            // Fix up the child pointer in the parent node
-            WriteParentNodeChildPointer(srcMetadataSizeInBytes,
-                                        srcNodePointer,
-                                        dstMetadataSizeInBytes,
-                                        dstNodePointer);
-        }
-    }
-    else if (srcHeader.geometryType == GEOMETRY_TYPE_TRIANGLES)
-    {
-        for (uint nodeIndex = globalId; nodeIndex < srcHeader.numLeafNodes; nodeIndex += ShaderConstants.numThreads)
-        {
-            const uint nodeOffset         = (nodeIndex * sizeof(TriangleNode));
-            const uint srcNodeDataOffset  = srcOffsetDataLeafNodes + nodeOffset;
-            const uint dstNodeDataOffset  = dstOffsetDataLeafNodes + nodeOffset;
-
-            // Copy triangle node data
-            const TriangleNode node = SrcBuffer.Load<TriangleNode>(srcNodeDataOffset);
-            DstMetadata.Store<TriangleNode>(dstNodeDataOffset, node);
-
-            // Handle per-primitive data
-            if (triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION)
-            {
-                uint nodeType = NODE_TYPE_TRIANGLE_0;
-                if (((node.triangleId >> (NODE_TYPE_TRIANGLE_1 * TRIANGLE_ID_BIT_STRIDE)) & 0xf) != 0)
-                {
-                    nodeType = NODE_TYPE_TRIANGLE_1;
-                }
-
-                const uint srcNodePointer = PackNodePointer(nodeType, srcOffsets.leafNodes + nodeOffset);
-                const uint dstNodePointer = PackNodePointer(nodeType, dstOffsets.leafNodes + nodeOffset);
+                const uint srcNodePointer = PackNodePointer(NODE_TYPE_USER_NODE_INSTANCE, srcOffsets.leafNodes + nodeOffset);
+                const uint dstNodePointer = PackNodePointer(NODE_TYPE_USER_NODE_INSTANCE, dstOffsets.leafNodes + nodeOffset);
 
                 // Fix up the child pointer in the parent node
                 WriteParentNodeChildPointer(srcMetadataSizeInBytes,
@@ -483,47 +454,79 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
                                             dstMetadataSizeInBytes,
                                             dstNodePointer);
             }
-            else
+        }
+        else if (srcHeader.geometryType == GEOMETRY_TYPE_TRIANGLES)
+        {
+            for (uint nodeIndex = globalId; nodeIndex < srcHeader.numLeafNodes; nodeIndex += ShaderConstants.numThreads)
             {
-                for (uint nodeType = 0; nodeType < 4; nodeType++)
-                {
-                    if (((node.triangleId >> (nodeType * TRIANGLE_ID_BIT_STRIDE)) & 0xf) != 0)
-                    {
-                        const uint srcNodePointer = PackNodePointer(nodeType, srcOffsets.leafNodes + nodeOffset);
-                        const uint dstNodePointer = PackNodePointer(nodeType, dstOffsets.leafNodes + nodeOffset);
+                const uint nodeOffset         = (nodeIndex * sizeof(TriangleNode));
+                const uint srcNodeDataOffset  = srcOffsetDataLeafNodes + nodeOffset;
+                const uint dstNodeDataOffset  = dstOffsetDataLeafNodes + nodeOffset;
 
-                        // Fix up the child pointer in the parent node
-                        WriteParentNodeChildPointer(srcMetadataSizeInBytes,
-                                                    srcNodePointer,
-                                                    dstMetadataSizeInBytes,
-                                                    dstNodePointer);
+                // Copy triangle node data
+                const TriangleNode node = SrcBuffer.Load<TriangleNode>(srcNodeDataOffset);
+                DstMetadata.Store<TriangleNode>(dstNodeDataOffset, node);
+
+                // Handle per-primitive data
+                if (triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION)
+                {
+                    uint nodeType = NODE_TYPE_TRIANGLE_0;
+                    if (((node.triangleId >> (NODE_TYPE_TRIANGLE_1 * TRIANGLE_ID_BIT_STRIDE)) & 0xf) != 0)
+                    {
+                        nodeType = NODE_TYPE_TRIANGLE_1;
+                    }
+
+                    const uint srcNodePointer = PackNodePointer(nodeType, srcOffsets.leafNodes + nodeOffset);
+                    const uint dstNodePointer = PackNodePointer(nodeType, dstOffsets.leafNodes + nodeOffset);
+
+                    // Fix up the child pointer in the parent node
+                    WriteParentNodeChildPointer(srcMetadataSizeInBytes,
+                                                srcNodePointer,
+                                                dstMetadataSizeInBytes,
+                                                dstNodePointer);
+                }
+                else
+                {
+                    for (uint nodeType = 0; nodeType < 4; nodeType++)
+                    {
+                        if (((node.triangleId >> (nodeType * TRIANGLE_ID_BIT_STRIDE)) & 0xf) != 0)
+                        {
+                            const uint srcNodePointer = PackNodePointer(nodeType, srcOffsets.leafNodes + nodeOffset);
+                            const uint dstNodePointer = PackNodePointer(nodeType, dstOffsets.leafNodes + nodeOffset);
+
+                            // Fix up the child pointer in the parent node
+                            WriteParentNodeChildPointer(srcMetadataSizeInBytes,
+                                                        srcNodePointer,
+                                                        dstMetadataSizeInBytes,
+                                                        dstNodePointer);
+                        }
                     }
                 }
             }
         }
-    }
-    else // GEOMETRY_TYPE_AABBS
-    {
-        for (uint nodeIndex = globalId; nodeIndex < srcHeader.numLeafNodes; nodeIndex += ShaderConstants.numThreads)
+        else // GEOMETRY_TYPE_AABBS
         {
-            const uint nodeOffset        = nodeIndex * sizeof(ProceduralNode);
-            const uint srcNodeDataOffset = srcOffsetDataLeafNodes + nodeOffset;
-            const uint dstNodeDataOffset = dstOffsetDataLeafNodes + nodeOffset;
+            for (uint nodeIndex = globalId; nodeIndex < srcHeader.numLeafNodes; nodeIndex += ShaderConstants.numThreads)
+            {
+                const uint nodeOffset        = nodeIndex * sizeof(ProceduralNode);
+                const uint srcNodeDataOffset = srcOffsetDataLeafNodes + nodeOffset;
+                const uint dstNodeDataOffset = dstOffsetDataLeafNodes + nodeOffset;
 
-            // Copy procedural node
-            const ProceduralNode node = SrcBuffer.Load<ProceduralNode>(srcNodeDataOffset);
-            DstMetadata.Store<ProceduralNode>(dstNodeDataOffset, node);
+                // Copy procedural node
+                const ProceduralNode node = SrcBuffer.Load<ProceduralNode>(srcNodeDataOffset);
+                DstMetadata.Store<ProceduralNode>(dstNodeDataOffset, node);
 
-            const uint srcNodePointer = PackNodePointer(NODE_TYPE_USER_NODE_PROCEDURAL, srcOffsets.leafNodes + nodeOffset);
-            const uint dstNodePointer = PackNodePointer(NODE_TYPE_USER_NODE_PROCEDURAL, dstOffsets.leafNodes + nodeOffset);
+                const uint srcNodePointer = PackNodePointer(NODE_TYPE_USER_NODE_PROCEDURAL, srcOffsets.leafNodes + nodeOffset);
+                const uint dstNodePointer = PackNodePointer(NODE_TYPE_USER_NODE_PROCEDURAL, dstOffsets.leafNodes + nodeOffset);
 
-            // Fix up the child pointer in the parent node
-            WriteParentNodeChildPointer(srcMetadataSizeInBytes,
-                                        srcNodePointer,
-                                        dstMetadataSizeInBytes,
-                                        dstNodePointer);
+                // Fix up the child pointer in the parent node
+                WriteParentNodeChildPointer(srcMetadataSizeInBytes,
+                                            srcNodePointer,
+                                            dstMetadataSizeInBytes,
+                                            dstNodePointer);
+            }
         }
-    }
+     }
 
     if (type == BOTTOM_LEVEL)
     {
@@ -539,25 +542,28 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
     }
 
     // Copy primitive node pointers
-    for (uint primIndex = globalId; primIndex < srcHeader.numPrimitives; primIndex += ShaderConstants.numThreads)
     {
-        const uint srcNodePtrOffset = srcOffsetDataPrimNodePtrs + (primIndex * NODE_PTR_SIZE);
-        const uint dstNodePtrOffset = dstOffsetDataPrimNodePtrs + (primIndex * NODE_PTR_SIZE);
-
-        const uint srcNodePointer = SrcBuffer.Load(srcNodePtrOffset);
-
-        uint dstNodePointer = INVALID_IDX;
-        if (srcNodePointer != INVALID_IDX)
+        for (uint primIndex = globalId; primIndex < srcHeader.numPrimitives; primIndex += ShaderConstants.numThreads)
         {
-            const uint srcNodeType       = GetNodeType(srcNodePointer);
-            const uint srcNodeOffset     = ExtractNodePointerOffset(srcNodePointer);
-            // Increment primitive count to offset the decrement in PackLeafNodePointer
-            const uint collapsePrimCount = ExtractPrimitiveCount(srcNodePointer) + 1;
-            const uint nodeOffset        = (srcNodeOffset - srcOffsets.leafNodes);
+            const uint srcNodePtrOffset = srcOffsetDataPrimNodePtrs + (primIndex * NODE_PTR_SIZE);
+            const uint dstNodePtrOffset = dstOffsetDataPrimNodePtrs + (primIndex * NODE_PTR_SIZE);
 
-            dstNodePointer = PackLeafNodePointer(srcNodeType, dstOffsets.leafNodes + nodeOffset, collapsePrimCount);
+            const uint srcNodePointer = SrcBuffer.Load(srcNodePtrOffset);
+
+            uint dstNodePointer = INVALID_IDX;
+            if (srcNodePointer != INVALID_IDX)
+            {
+                const uint srcNodeType = GetNodeType(srcNodePointer);
+                const uint srcNodeOffset = ExtractNodePointerOffset(srcNodePointer);
+                // Increment primitive count to offset the decrement in PackLeafNodePointer
+                const uint collapsePrimCount = ExtractPrimitiveCount(srcNodePointer) + 1;
+                const uint nodeOffset = (srcNodeOffset - srcOffsets.leafNodes);
+
+                dstNodePointer = PackLeafNodePointer(srcNodeType, dstOffsets.leafNodes + nodeOffset, collapsePrimCount);
+            }
+
+            DstMetadata.Store(dstNodePtrOffset, dstNodePointer);
         }
-
-        DstMetadata.Store(dstNodePtrOffset, dstNodePointer);
     }
+
 }

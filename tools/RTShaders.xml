@@ -18,7 +18,7 @@
         <Shader path="BuildBVHTDTR.hlsl" entryPoint="BuildBVHTD" />
         <Shader path="BuildBVHTDTR.hlsl" entryPoint="BuildBVHTD" outputName="BuildBVHTDTR" defines="USE_BVH_REBRAID=1" />
         <Shader path="GenerateMortonCodes.hlsl" entryPoint="GenerateMortonCodes" />
-        <Shader path="BuildBVH.hlsl" entryPoint="BuildBVH" outputName="BuildBVHSortLeaves" defines="USE_BVH_AC=1" />
+        <Shader path="BuildBVH.hlsl" entryPoint="BuildBVH" outputName="BuildBVHSortLeaves" />
         <Shader path="BuildBVH.hlsl" entryPoint="BuildBVH" />
         <Shader path="BuildBVHPLOC.hlsl" entryPoint="BuildBVHPLOC" />
         <Shader path="UpdateQBVH.hlsl" entryPoint="UpdateQBVH" />

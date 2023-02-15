@@ -256,7 +256,7 @@ static bool RayQueryProceedImpl1_1(
     GpuVirtualAddress bvhAddress          = GetRayQueryBvhAddress(rayQuery);
 
     // BLAS root node is always fp32 regardless of mode for fp16 box nodes
-    const uint blasRootNodePtr   = CreateRootNodePointer();
+    const uint blasRootNodePtr = CreateRootNodePointer();
 
     const bool rayForceOpaque    = (rayQuery.rayFlags & RAY_FLAG_FORCE_OPAQUE);
     const bool rayForceNonOpaque = (rayQuery.rayFlags & RAY_FLAG_FORCE_NON_OPAQUE);

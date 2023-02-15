@@ -386,24 +386,24 @@ union RayTracingAccelStructBuildInfo
 };
 #endif
 
-#define ACCEL_STRUCT_HEADER_INFO_TYPE_SHIFT                         0
-#define ACCEL_STRUCT_HEADER_INFO_TYPE_MASK                          0x1
-#define ACCEL_STRUCT_HEADER_INFO_BUILD_TYPE_SHIFT                   1
-#define ACCEL_STRUCT_HEADER_INFO_BUILD_TYPE_MASK                    0x1
-#define ACCEL_STRUCT_HEADER_INFO_MODE_SHIFT                         2
-#define ACCEL_STRUCT_HEADER_INFO_MODE_MASK                          0xf
-#define ACCEL_STRUCT_HEADER_INFO_TRI_COMPRESS_SHIFT                 6
-#define ACCEL_STRUCT_HEADER_INFO_TRI_COMPRESS_MASK                  0x7
-#define ACCEL_STRUCT_HEADER_INFO_FP16_BOXNODE_IN_BLAS_MODE_SHIFT    9
-#define ACCEL_STRUCT_HEADER_INFO_FP16_BOXNODE_IN_BLAS_MODE_MASK     0x3
-#define ACCEL_STRUCT_HEADER_INFO_TRIANGLE_SPLITTING_FLAGS_SHIFT     11
-#define ACCEL_STRUCT_HEADER_INFO_TRIANGLE_SPLITTING_FLAGS_MASK      0x1
-#define ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_SHIFT                12
-#define ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_MASK                 0x1
-#define ACCEL_STRUCT_HEADER_INFO_FUSED_INSTANCE_NODE_FLAGS_SHIFT    13
-#define ACCEL_STRUCT_HEADER_INFO_FUSED_INSTANCE_NODE_FLAGS_MASK     0x1
-#define ACCEL_STRUCT_HEADER_INFO_FLAGS_SHIFT                        16
-#define ACCEL_STRUCT_HEADER_INFO_FLAGS_MASK                         0xffff
+#define ACCEL_STRUCT_HEADER_INFO_TYPE_SHIFT                             0
+#define ACCEL_STRUCT_HEADER_INFO_TYPE_MASK                              0x1
+#define ACCEL_STRUCT_HEADER_INFO_BUILD_TYPE_SHIFT                       1
+#define ACCEL_STRUCT_HEADER_INFO_BUILD_TYPE_MASK                        0x1
+#define ACCEL_STRUCT_HEADER_INFO_MODE_SHIFT                             2
+#define ACCEL_STRUCT_HEADER_INFO_MODE_MASK                              0xf
+#define ACCEL_STRUCT_HEADER_INFO_TRI_COMPRESS_SHIFT                     6
+#define ACCEL_STRUCT_HEADER_INFO_TRI_COMPRESS_MASK                      0x7
+#define ACCEL_STRUCT_HEADER_INFO_FP16_BOXNODE_IN_BLAS_MODE_SHIFT        9
+#define ACCEL_STRUCT_HEADER_INFO_FP16_BOXNODE_IN_BLAS_MODE_MASK         0x3
+#define ACCEL_STRUCT_HEADER_INFO_TRIANGLE_SPLITTING_FLAGS_SHIFT         11
+#define ACCEL_STRUCT_HEADER_INFO_TRIANGLE_SPLITTING_FLAGS_MASK          0x1
+#define ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_SHIFT                    12
+#define ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_MASK                     0x1
+#define ACCEL_STRUCT_HEADER_INFO_FUSED_INSTANCE_NODE_FLAGS_SHIFT        13
+#define ACCEL_STRUCT_HEADER_INFO_FUSED_INSTANCE_NODE_FLAGS_MASK         0x1
+#define ACCEL_STRUCT_HEADER_INFO_FLAGS_SHIFT                            16
+#define ACCEL_STRUCT_HEADER_INFO_FLAGS_MASK                             0xffff
 
 //=====================================================================================================================
 #ifdef __cplusplus
@@ -412,15 +412,16 @@ union RayTracingAccelStructBuildInfo2
     struct
     {
         uint compacted     : 1;       /// This BVH has been compacted
-        uint reserved      : 31;      /// Unused bits
+        uint reserved      : 1;       /// Unused bits
+        uint reserved2     : 30;      /// Unused bits
     };
 
     uint u32All;
 };
 #endif
 
-#define ACCEL_STRUCT_HEADER_INFO_2_BVH_COMPACTION_FLAGS_SHIFT         0
-#define ACCEL_STRUCT_HEADER_INFO_2_BVH_COMPACTION_FLAGS_MASK          0x1
+#define ACCEL_STRUCT_HEADER_INFO_2_BVH_COMPACTION_FLAGS_SHIFT    0
+#define ACCEL_STRUCT_HEADER_INFO_2_BVH_COMPACTION_FLAGS_MASK     0x1
 
 //=====================================================================================================================
 // 128 byte aligned acceleration structure header
@@ -672,9 +673,9 @@ static_assert(FLOAT16_BOX_NODE_BB3_OFFSET    == offsetof(Float16BoxNode, bbox3),
 //=====================================================================================================================
 // Triangle node sideband data offsets when limiting triangle compression to 2 triangles per node
 // Geometry Index in bottom 24 bits and Geometry Flags in bits 25-26
-#define TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET TRIANGLE_NODE_V4_OFFSET
-#define TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET         TRIANGLE_NODE_V4_OFFSET + 4
-#define TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET         TRIANGLE_NODE_V4_OFFSET + 8
+#define TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET         TRIANGLE_NODE_V4_OFFSET
+#define TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET         TRIANGLE_NODE_V4_OFFSET + 4
+#define TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET TRIANGLE_NODE_V4_OFFSET + 8
 #define TRIANGLE_NODE_PARENT_PTR_OFFSET               TRIANGLE_NODE_V3_OFFSET
 
 //=====================================================================================================================
@@ -732,8 +733,8 @@ static_assert(TRIANGLE_NODE_ID_OFFSET == offsetof(TriangleNode, triangleId), "")
 
 //=====================================================================================================================
 // Procedural node primitive data offsets
-#define USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET   TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET
 #define USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET            TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET
+#define USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET   TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET
 #define USER_NODE_PROCEDURAL_TRIANGLE_ID_OFFSET                TRIANGLE_NODE_ID_OFFSET
 
 //=====================================================================================================================
@@ -743,9 +744,9 @@ struct ProceduralNode
     float3 bbox_min;
     float3 bbox_max;
     uint   padding1[6];
-    uint   geometryIndexAndFlags;
     uint   reserved;
     uint   primitiveIndex;
+    uint   geometryIndexAndFlags;
     uint   triangleId;
 };
 
@@ -1284,6 +1285,7 @@ static_assert(STACK_PTRS_NUM_LEAFS_DONE_OFFSET == offsetof(StackPtrs, numLeafsDo
 #define COUNTER_BUILDQBVH_OFFSET        0x1C
 #define COUNTER_EMPTYPRIM_OFFSET        0x20
 #define COUNTER_EMITCOMPACTSIZE_OFFSET  0x24
+#define COUNTER_BUILDFASTLBVH_OFFSET    0x28
 
 //=====================================================================================================================
 // Calculate internal BVH nodes
@@ -1478,11 +1480,12 @@ static uint CalcMetadataSizeInBytes(
 }
 
 //=====================================================================================================================
-static uint CreateRootNodePointer()
+static uint CreateRootNodePointer(
+)
 {
-    const uint rootNodePointer = PackNodePointer(NODE_TYPE_BOX_FLOAT32, ACCEL_STRUCT_HEADER_SIZE);
-
-    return rootNodePointer;
+    {
+        return PackNodePointer(NODE_TYPE_BOX_FLOAT32, ACCEL_STRUCT_HEADER_SIZE);
+    }
 }
 
 //=====================================================================================================================
@@ -1849,6 +1852,7 @@ struct BuildSettingsData
     uint enableSAHCost;
     uint doEncode;
     uint enableEarlyPairCompression;
+    uint enableFastLBVH;
 };
 
 #define BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_OFFSET                        0
@@ -1880,7 +1884,8 @@ struct BuildSettingsData
 #define BUILD_SETTINGS_DATA_DO_ENCODE                                     104
 #define BUILD_SETTINGS_DATA_LTD_PACK_CENTROIDS_OFFSET                     108
 #define BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_OFFSET          112
-#define BUILD_SETTINGS_DATA_SIZE                                          116
+#define BUILD_SETTINGS_DATA_ENABLE_FAST_LBVH_OFFSET                       116
+#define BUILD_SETTINGS_DATA_SIZE                                          120
 
 #define BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_ID                        (BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_OFFSET / sizeof(uint))
 #define BUILD_SETTINGS_DATA_BUILD_MODE_ID                             (BUILD_SETTINGS_DATA_BUILD_MODE_OFFSET  / sizeof(uint))
@@ -1909,6 +1914,7 @@ struct BuildSettingsData
 #define BUILD_SETTINGS_DATA_ENABLE_SAH_COST_ID                        (BUILD_SETTINGS_DATA_ENABLE_SAH_COST_OFFSET / sizeof(uint))
 #define BUILD_SETTINGS_DATA_DO_ENCODE_ID                              (BUILD_SETTINGS_DATA_DO_ENCODE / sizeof(uint))
 #define BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_ID          (BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_OFFSET / sizeof(uint))
+#define BUILD_SETTINGS_DATA_ENABLE_FAST_LBVH_ID                       (BUILD_SETTINGS_DATA_ENABLE_FAST_LBVH_OFFSET / sizeof(uint))
 
 #ifdef __cplusplus
 static_assert(BUILD_SETTINGS_DATA_SIZE                                          == sizeof(BuildSettingsData), "BuildSettingsData structure header mismatch");
@@ -1937,6 +1943,7 @@ static_assert(BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_OFFSET                   
 static_assert(BUILD_SETTINGS_DATA_ENABLE_SAH_COST_OFFSET                        == offsetof(BuildSettingsData, enableSAHCost), "");
 static_assert(BUILD_SETTINGS_DATA_DO_ENCODE                                     == offsetof(BuildSettingsData, doEncode), "");
 static_assert(BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_OFFSET          == offsetof(BuildSettingsData, enableEarlyPairCompression), "");
+static_assert(BUILD_SETTINGS_DATA_ENABLE_FAST_LBVH_OFFSET                       == offsetof(BuildSettingsData, enableFastLBVH), "");
 #endif
 
 #define BUILD_MODE_LINEAR   0
@@ -1966,7 +1973,7 @@ static uint CalcNumQBVHNodes(uint numPrimitives)
 #define ENCODE_FLAG_ARRAY_OF_POINTERS          0x00000001
 #define ENCODE_FLAG_UPDATE_IN_PLACE            0x00000002
 #define ENCODE_FLAG_REBRAID_ENABLED            0x00000004
-#define ENCODE_FLAG_ENABLE_FUSED_INSTANCE_NODE 0x00000010
+#define ENCODE_FLAG_ENABLE_FUSED_INSTANCE_NODE 0x00000008
 
 //=====================================================================================================================
 struct IntersectionResult

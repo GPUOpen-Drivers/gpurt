@@ -22,14 +22,12 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "IntersectCommon.hlsl"
-#include "BuildCommon.hlsl"
-
 #define RootSig "RootConstants(num32BitConstants=8, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u0, space=2147420894, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u0, space=2147420894, visibility=SHADER_VISIBILITY_ALL),"\
+                "CBV(b1)"/*Build Settings binding*/
 
 //=====================================================================================================================
 struct Constants
@@ -50,6 +48,8 @@ struct Constants
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer   : register(u1);
 [[vk::binding(2, 0)]]                  RWByteAddressBuffer SrcBuffer       : register(u2);
 
+#include "IntersectCommon.hlsl"
+#include "BuildCommon.hlsl"
 #include "UpdateQBVHImpl.hlsl"
 
 //=====================================================================================================================
@@ -68,11 +68,13 @@ void UpdateQBVH(
         return;
     }
 
-    UpdateQBVHImpl(globalThreadId.x,
-                   DstMetadata,
-                   ScratchBuffer,
-                   SrcBuffer,
-                   ShaderConstants.propagationFlagsScratchOffset,
-                   numWorkItems,
-                   numWorkItems);
+    {
+        UpdateQBVHImpl(globalThreadId.x,
+                       DstMetadata,
+                       ScratchBuffer,
+                       SrcBuffer,
+                       ShaderConstants.propagationFlagsScratchOffset,
+                       numWorkItems,
+                       numWorkItems);
+    }
 }

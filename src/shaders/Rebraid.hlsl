@@ -159,7 +159,9 @@ float CalculatePriorityUsingSAHComparison(RebraidArgs args, ScratchNode leaf)
     {
         const GpuVirtualAddress addr = InstanceDescBuffer.Load<GpuVirtualAddress>(leaf.left_or_primIndex_or_instIndex *
                                                                                   GPU_VIRTUAL_ADDRESS_SIZE);
-        desc = FetchInstanceDesc(addr, 0);
+        {
+            desc = FetchInstanceDesc(addr, 0);
+        }
     }
     else
     {
@@ -169,7 +171,8 @@ float CalculatePriorityUsingSAHComparison(RebraidArgs args, ScratchNode leaf)
     const GpuVirtualAddress address = GetInstanceAddr(asuint(leaf.sah_or_v2_or_instBasePtr.x),
                                                       asuint(leaf.sah_or_v2_or_instBasePtr.y));
 
-    const Float32BoxNode node = FetchFloat32BoxNode(address, rootNodePointer);
+    const Float32BoxNode node = FetchFloat32BoxNode(address,
+                                                    rootNodePointer);
 
     BoundingBox temp;
     temp.min = node.bbox0_min;
@@ -291,8 +294,7 @@ void RebraidImpl(
                 if (args.enableCentroidSceneBoundsWithSize)
                 {
                     const uint rebraidSceneOffset = sizeof(BoundingBox) + 2 * sizeof(float);
-                    initialSceneBounds = FetchSceneBounds(ScratchBuffer,
-                                                          ShaderConstants.offsets.sceneBounds
+                    initialSceneBounds = FetchSceneBounds(ShaderConstants.offsets.sceneBounds
                                                           + rebraidSceneOffset);
 
                     initSceneExtent = initialSceneBounds.max - initialSceneBounds.min;
@@ -385,8 +387,7 @@ void RebraidImpl(
                 if (args.enableCentroidSceneBoundsWithSize)
                 {
                     const uint rebraidSceneOffset = sizeof(BoundingBox) + 2 * sizeof(float);
-                    initialSceneBounds = FetchSceneBounds(ScratchBuffer,
-                                                          ShaderConstants.offsets.sceneBounds
+                    initialSceneBounds = FetchSceneBounds(ShaderConstants.offsets.sceneBounds
                                                           + rebraidSceneOffset);
 
                     initSceneExtent = initialSceneBounds.max - initialSceneBounds.min;
@@ -439,7 +440,9 @@ void RebraidImpl(
                             {
                                 const GpuVirtualAddress addr = InstanceDescBuffer.Load<GpuVirtualAddress>(leaf.left_or_primIndex_or_instIndex *
                                                                                                     GPU_VIRTUAL_ADDRESS_SIZE);
-                                desc = FetchInstanceDesc(addr, 0);
+                                {
+                                    desc = FetchInstanceDesc(addr, 0);
+                                }
                             }
                             else
                             {
@@ -447,7 +450,8 @@ void RebraidImpl(
                                                                              * INSTANCE_DESC_SIZE);
                             }
 
-                            const uint childCount = GetChildCount(address, rootNodePointer);
+                            const uint childCount = GetChildCount(address,
+                                                                  rootNodePointer);
 
                             localKeys[keyIndex] = childCount - 1; // additional children
                             open[keyIndex] = true;
@@ -456,7 +460,7 @@ void RebraidImpl(
                         {
                             if (args.enableCentroidSceneBoundsWithSize)
                             {
-                                UpdateCentroidSceneBoundsWithSize(ScratchBuffer, args.sceneBoundsOffset, aabb);
+                                UpdateCentroidSceneBoundsWithSize(args.sceneBoundsOffset, aabb);
                             }
 
                             localKeys[keyIndex] = 0;
@@ -552,7 +556,9 @@ void RebraidImpl(
                         {
                             const GpuVirtualAddress addr = InstanceDescBuffer.Load<GpuVirtualAddress>(leaf.left_or_primIndex_or_instIndex *
                                                                                                       GPU_VIRTUAL_ADDRESS_SIZE);
-                            desc = FetchInstanceDesc(addr, 0);
+                            {
+                                desc = FetchInstanceDesc(addr, 0);
+                            }
                         }
                         else
                         {
@@ -583,7 +589,8 @@ void RebraidImpl(
                                 numPrims[3] = FetchHeaderField(address, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 12);
                             }
 
-                            const Float32BoxNode node = FetchFloat32BoxNode(address, rootNodePointer);
+                            const Float32BoxNode node = FetchFloat32BoxNode(address,
+                                                                            rootNodePointer);
 
                             BoundingBox temp;
                             temp.min = node.bbox0_min;
@@ -601,12 +608,12 @@ void RebraidImpl(
                             }
                             else
                             {
-                                WriteScratchNodeCost(ScratchBuffer, args.bvhLeafNodeDataScratchOffset, i, cost[0], true);
+                                WriteScratchNodeCost(args.bvhLeafNodeDataScratchOffset, i, cost[0], true);
                             }
 
                             if (args.enableCentroidSceneBoundsWithSize)
                             {
-                                UpdateCentroidSceneBoundsWithSize(ScratchBuffer, args.sceneBoundsOffset, temp);
+                                UpdateCentroidSceneBoundsWithSize(args.sceneBoundsOffset, temp);
                             }
 
                             // update leaf and siblings
@@ -639,7 +646,7 @@ void RebraidImpl(
 
                                 if (args.enableCentroidSceneBoundsWithSize)
                                 {
-                                    UpdateCentroidSceneBoundsWithSize(ScratchBuffer, args.sceneBoundsOffset, temp);
+                                    UpdateCentroidSceneBoundsWithSize(args.sceneBoundsOffset, temp);
                                 }
 
                                 numSiblings++;
@@ -672,7 +679,7 @@ void RebraidImpl(
 
                                 if (args.enableCentroidSceneBoundsWithSize)
                                 {
-                                    UpdateCentroidSceneBoundsWithSize(ScratchBuffer, args.sceneBoundsOffset, temp);
+                                    UpdateCentroidSceneBoundsWithSize(args.sceneBoundsOffset, temp);
                                 }
 
                                 numSiblings++;
@@ -705,7 +712,7 @@ void RebraidImpl(
 
                                 if (args.enableCentroidSceneBoundsWithSize)
                                 {
-                                    UpdateCentroidSceneBoundsWithSize(ScratchBuffer, args.sceneBoundsOffset, temp);
+                                    UpdateCentroidSceneBoundsWithSize(args.sceneBoundsOffset, temp);
                                 }
 
                                 numSiblings++;
@@ -733,7 +740,7 @@ void RebraidImpl(
 
                                 costSum += SAH_COST_AABBB_INTERSECTION * surfaceArea;
 
-                                WriteScratchNodeCost(ScratchBuffer, args.bvhLeafNodeDataScratchOffset, i, costSum, true);
+                                WriteScratchNodeCost(args.bvhLeafNodeDataScratchOffset, i, costSum, true);
                             }
                         }
                     }

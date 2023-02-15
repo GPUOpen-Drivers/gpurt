@@ -23,15 +23,10 @@
  *
  **********************************************************************************************************************/
 #if NO_SHADER_ENTRYPOINT == 0
-#include "ScanCommon.hlsli"
-
 #define RootSig "RootConstants(num32BitConstants=3, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL)"
-
-//=====================================================================================================================
-groupshared int SharedMem[GROUP_SIZE];
 
 //=====================================================================================================================
 struct InputArgs
@@ -47,6 +42,11 @@ struct InputArgs
 [[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer DstMetadata   : register(u1);
 [[vk::binding(2, 0)]] RWByteAddressBuffer ScratchBuffer : register(u2);
+
+#include "ScanCommon.hlsli"
+
+//=====================================================================================================================
+groupshared int SharedMem[GROUP_SIZE];
 #endif
 
 //=====================================================================================================================
@@ -99,8 +99,8 @@ void ScanExclusivePartialInt4Impl(
     uint partialSumsOffset, // Offset of intermediate partial sums
     uint numElements)
 {
-    int4 v1 = safe_load_int4(ScratchBuffer, inOutDataOffset, 2 * globalId, numElements);
-    int4 v2 = safe_load_int4(ScratchBuffer, inOutDataOffset, 2 * globalId + 1, numElements);
+    int4 v1 = safe_load_int4(inOutDataOffset, 2 * globalId, numElements);
+    int4 v2 = safe_load_int4(inOutDataOffset, 2 * globalId + 1, numElements);
 
     v1.y += v1.x; v1.w += v1.z; v1.w += v1.y;
     v2.y += v2.x; v2.w += v2.z; v2.w += v2.y;

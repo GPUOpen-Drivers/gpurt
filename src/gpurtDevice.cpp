@@ -196,9 +196,14 @@ PipelineShaderCode GPURT_API_ENTRY GetShaderLibraryCode(
 // Maps Pal::RayTracingIpLevel to the appropriate function table.
 Pal::Result GPURT_API_ENTRY QueryRayTracingEntryFunctionTable(
     const Pal::RayTracingIpLevel   rayTracingIpLevel,
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 30
+#endif
     EntryFunctionTable* const      pEntryFunctionTable)
 {
     Pal::Result result = Pal::Result::Success;
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 30
+    const bool bvh8Enable = false;
+#endif
 
     const char* const* ppFuncTable = nullptr;
     switch (rayTracingIpLevel)
@@ -407,7 +412,10 @@ Pal::Result Device::QueryRayTracingEntryFunctionTable(
     const Pal::RayTracingIpLevel   rayTracingIpLevel,
     EntryFunctionTable* const      pEntryFunctionTable)
 {
-    return GpuRt::QueryRayTracingEntryFunctionTable(rayTracingIpLevel, pEntryFunctionTable);
+    return GpuRt::QueryRayTracingEntryFunctionTable(rayTracingIpLevel,
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 30
+#endif
+                                                    pEntryFunctionTable);
 }
 
 // =====================================================================================================================
@@ -436,13 +444,9 @@ Pal::IPipeline* Device::GetInternalPipeline(
 {
     Util::RWLock* pPipelineLock = const_cast<Util::RWLock*>(&m_internalPipelineLock);
 
-    // Only BuildParallel is using compile time constants for now. Avoid creating unnecessary variations of other
-    // pipelines when the build settings change.
-    const bool enableCompileTimeSettings = (shaderType == InternalRayTracingCsType::BuildParallel);
-
     InternalPipelineKey key = {};
     key.shaderType   = shaderType;
-    key.settingsHash = enableCompileTimeSettings ? buildSettingsHash : 0;
+    key.settingsHash = buildSettingsHash;
 
     InternalPipelineMemoryPair* pPipelinePair = nullptr;
 
@@ -543,61 +547,58 @@ Pal::IPipeline* Device::GetInternalPipeline(
             char pipelineName[MaxStrLength];
 #endif
 
-            if (enableCompileTimeSettings)
-            {
-                const uint32 lastNodeIndex = pPipelineBuildInfo->nodeCount;
+            const uint32 lastNodeIndex = pPipelineBuildInfo->nodeCount;
 
-                nodes[lastNodeIndex].type          = NodeType::ConstantBuffer;
-                nodes[lastNodeIndex].dwSize        = 2;
-                nodes[lastNodeIndex].dwOffset      = nodeOffset;
-                nodes[lastNodeIndex].logicalId     = cbvCount + ReservedLogicalIdCount;
-                nodes[lastNodeIndex].srdStartIndex = cbvBindingCount;
-                nodes[lastNodeIndex].srdStride     = nodes[lastNodeIndex].dwSize;
+            nodes[lastNodeIndex].type          = NodeType::ConstantBuffer;
+            nodes[lastNodeIndex].dwSize        = 2;
+            nodes[lastNodeIndex].dwOffset      = nodeOffset;
+            nodes[lastNodeIndex].logicalId     = cbvCount + ReservedLogicalIdCount;
+            nodes[lastNodeIndex].srdStartIndex = cbvBindingCount;
+            nodes[lastNodeIndex].srdStride     = nodes[lastNodeIndex].dwSize;
 
-                // Set binding and descSet to irrelevant value to avoid messing up the resource mapping for Vulkan.
-                nodes[lastNodeIndex].binding       = ~0u;
-                nodes[lastNodeIndex].descSet       = ~0u;
+            // Set binding and descSet to irrelevant value to avoid messing up the resource mapping for Vulkan.
+            nodes[lastNodeIndex].binding       = ~0u;
+            nodes[lastNodeIndex].descSet       = ~0u;
 
-                buildInfo.nodeCount++;
+            buildInfo.nodeCount++;
 
-                compileConstants.pConstants          = reinterpret_cast<const uint32*>(&buildSettings);
-                compileConstants.numConstants        = sizeof(CompileTimeBuildSettings) / sizeof(uint32);
-                compileConstants.logicalId           = nodes[lastNodeIndex].logicalId;
-                compileConstants.constantBufferIndex = nodes[lastNodeIndex].srdStartIndex;
+            compileConstants.pConstants          = reinterpret_cast<const uint32*>(&buildSettings);
+            compileConstants.numConstants        = sizeof(CompileTimeBuildSettings) / sizeof(uint32);
+            compileConstants.logicalId           = nodes[lastNodeIndex].logicalId;
+            compileConstants.constantBufferIndex = nodes[lastNodeIndex].srdStartIndex;
 
 #if GPURT_DEVELOPER
-                // Append appropriate strings based on build settings
-                if (buildInfo.pPipelineName != nullptr)
+            // Append appropriate strings based on build settings
+            if (buildInfo.pPipelineName != nullptr)
+            {
+                constexpr const char* BuildModeStr[] =
                 {
-                    constexpr const char* BuildModeStr[] =
-                    {
-                        "LBVH",     // BvhBuildMode::Linear,
-                        "Reserved", // BvhBuildMode::Reserved,
-                        "PLOC",     // BvhBuildMode::PLOC,
-                        "Reserved",
-                        "Auto",     // BvhBuildMode::Auto,
-                    };
+                    "LBVH",     // BvhBuildMode::Linear,
+                    "Reserved", // BvhBuildMode::Reserved,
+                    "PLOC",     // BvhBuildMode::PLOC,
+                    "Reserved",
+                    "Auto",     // BvhBuildMode::Auto,
+                };
 
-                    constexpr const char* RebraidTypeStr[] =
-                    {
-                        "",           // GpuRt::RebraidType::Off,
-                        "_RebraidV1", // GpuRt::RebraidType::V1,
-                        "_RebraidV2", // GpuRt::RebraidType::V2,
-                    };
+                constexpr const char* RebraidTypeStr[] =
+                {
+                    "",           // GpuRt::RebraidType::Off,
+                    "_RebraidV1", // GpuRt::RebraidType::V1,
+                    "_RebraidV2", // GpuRt::RebraidType::V2,
+                };
 
-                    Util::Snprintf(pipelineName, MaxStrLength, "%s%s_%s%s%s%s_RadixSortLevel_%d",
-                                   buildInfo.pPipelineName,
-                                   buildSettings.topLevelBuild ? "_TLAS" : "_BLAS",
-                                   buildSettings.enableTopDownBuild ? "TopDown" : BuildModeStr[buildSettings.buildMode],
-                                   buildSettings.doTriangleSplitting ? "_TriSplit" : "",
-                                   buildSettings.triangleCompressionMode ? "_TriCompr" : "",
-                                   RebraidTypeStr[buildSettings.rebraidType],
-                                   buildSettings.radixSortScanLevel);
+                Util::Snprintf(pipelineName, MaxStrLength, "%s%s_%s%s%s%s_RadixSortLevel_%d",
+                                buildInfo.pPipelineName,
+                                buildSettings.topLevelBuild ? "_TLAS" : "_BLAS",
+                                buildSettings.enableTopDownBuild ? "TopDown" : BuildModeStr[buildSettings.buildMode],
+                                buildSettings.doTriangleSplitting ? "_TriSplit" : "",
+                                buildSettings.triangleCompressionMode ? "_TriCompr" : "",
+                                RebraidTypeStr[buildSettings.rebraidType],
+                                buildSettings.radixSortScanLevel);
 
-                    buildInfo.pPipelineName = &pipelineName[0];
-                }
-#endif
+                buildInfo.pPipelineName = &pipelineName[0];
             }
+#endif
 
             result = m_clientCb.pfnCreateInternalComputePipeline(
                 m_info,

@@ -22,11 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-//=====================================================================================================================
-// The functions defined below require the following resources defined before including this header
-//
-// Must include BuildCommon.hlsl
-//
+#include "BuildCommonScratch.hlsl"
 
 //=====================================================================================================================
 void RefitBoundsImpl(
@@ -54,12 +50,12 @@ void RefitBoundsImpl(
     if (enablePairCompression && (primIndex == 0) && (numActivePrims == 1))
     {
         // Ensure that a batch index is written out for single-primitive acceleration structures.
-        WriteBatchIndex(ScratchBuffer, numBatchesOffset, baseBatchIndicesOffset, 0);
+        WriteScratchBatchIndex(numBatchesOffset, baseBatchIndicesOffset, 0);
     }
 
     // Start from leaf node referenced by this thread
     uint nodeIndex = noCopySortedNodes ?
-        LEAFIDX(FetchSortedPrimIndex(ScratchBuffer, sortedPrimIndicesOffset, primIndex)) :
+        LEAFIDX(FetchSortedPrimIndex(sortedPrimIndicesOffset, primIndex)) :
         LEAFIDX(primIndex);
 
     uint numTris = 1;
@@ -75,7 +71,7 @@ void RefitBoundsImpl(
     while (nodeIndex != 0)
     {
         // Move to parent node
-        const uint parentNodeIndex = FetchScratchNode(ScratchBuffer, baseScratchNodesOffset, nodeIndex).parent;
+        const uint parentNodeIndex = FetchScratchNode(baseScratchNodesOffset, nodeIndex).parent;
 
         // Check parent node's flag
         const uint flagOffset = baseFlagsOffset + (parentNodeIndex * sizeof(uint));
@@ -94,14 +90,14 @@ void RefitBoundsImpl(
 
             // If the flag was 1 the second child is ready and this thread calculates and writes
             // bbox data for the parent node
-            const ScratchNode parentNode = FetchScratchNode(ScratchBuffer, baseScratchNodesOffset, parentNodeIndex);
+            const ScratchNode parentNode = FetchScratchNode(baseScratchNodesOffset, parentNodeIndex);
 
             // Fetch child indices
             const uint lc = parentNode.left_or_primIndex_or_instIndex;
             const uint rc = parentNode.right_or_geometryIndex;
 
-            const ScratchNode leftNode  = FetchScratchNode(ScratchBuffer, baseScratchNodesOffset, lc);
-            const ScratchNode rightNode = FetchScratchNode(ScratchBuffer, baseScratchNodesOffset, rc);
+            const ScratchNode leftNode  = FetchScratchNode(baseScratchNodesOffset, lc);
+            const ScratchNode rightNode = FetchScratchNode(baseScratchNodesOffset, rc);
 
             // Fetch bounding children bounding boxes
             BoundingBox bboxRightChild;
@@ -158,14 +154,12 @@ void RefitBoundsImpl(
             // Compute surface area of parent box
             const float mergedBoxSurfaceArea = ComputeBoxSurfaceArea(mergedBox);
 
-            WriteScratchNodeBoundingBox(ScratchBuffer,
-                                        baseScratchNodesOffset,
+            WriteScratchNodeBoundingBox(baseScratchNodesOffset,
                                         parentNodeIndex,
                                         mergedBox.min,
                                         mergedBox.max);
 
-            WriteScratchNodeSurfaceArea(ScratchBuffer,
-                                        baseScratchNodesOffset,
+            WriteScratchNodeSurfaceArea(baseScratchNodesOffset,
                                         parentNodeIndex,
                                         mergedBoxSurfaceArea);
 
@@ -193,12 +187,12 @@ void RefitBoundsImpl(
                     {
                         if (leftCollapse)
                         {
-                            WriteBatchIndex(ScratchBuffer, numBatchesOffset, baseBatchIndicesOffset, lc);
+                            WriteScratchBatchIndex(numBatchesOffset, baseBatchIndicesOffset, lc);
                         }
 
                         if (rightCollapse)
                         {
-                            WriteBatchIndex(ScratchBuffer, numBatchesOffset, baseBatchIndicesOffset, rc);
+                            WriteScratchBatchIndex(numBatchesOffset, baseBatchIndicesOffset, rc);
                         }
                     }
                 }
@@ -209,23 +203,22 @@ void RefitBoundsImpl(
                 }
             }
 
-            WriteScratchNodeCost(ScratchBuffer, baseScratchNodesOffset, parentNodeIndex, bestCost, false);
-            WriteScratchNodeNumPrimitives(ScratchBuffer, baseScratchNodesOffset, parentNodeIndex, numTris, isCollapsed);
+            WriteScratchNodeCost(baseScratchNodesOffset, parentNodeIndex, bestCost, false);
+            WriteScratchNodeNumPrimitives(baseScratchNodesOffset, parentNodeIndex, numTris, isCollapsed);
 
             // Decide on what type of interior box node the parent should be
             // and write the type into scratch
-            WriteScratchNodeType(ScratchBuffer,
-                                 baseScratchNodesOffset,
+            WriteScratchNodeType(baseScratchNodesOffset,
                                  fp16BoxNodeMode,
                                  fp16BoxModeMixedSaThreshold,
                                  parentNodeIndex,
+                                 0,
                                  leftNode.type,
                                  rightNode.type,
                                  mergedBox.min,
                                  mergedBox.max);
 
-            WriteScratchNodeFlagsFromNodes(ScratchBuffer,
-                                           baseScratchNodesOffset,
+            WriteScratchNodeFlagsFromNodes(baseScratchNodesOffset,
                                            parentNodeIndex,
                                            leftNode,
                                            rightNode);
@@ -235,8 +228,7 @@ void RefitBoundsImpl(
                 const uint instancePrimCount = asuint(rightNode.sah_or_v2_or_instBasePtr[2]) +
                                                asuint(leftNode.sah_or_v2_or_instBasePtr[2]);
 
-                WriteScratchNodeInstanceNumPrims(ScratchBuffer,
-                                                 baseScratchNodesOffset,
+                WriteScratchNodeInstanceNumPrims(baseScratchNodesOffset,
                                                  parentNodeIndex,
                                                  instancePrimCount);
             }

@@ -40,6 +40,8 @@ set(gpurtHlsl
     BuildBVHPLOC.hlsl
     BuildBVHTDTR.hlsl
     BuildCommon.hlsl
+    BuildCommonScratch.hlsl
+    BuildSettings.hlsli
     BuildParallel.hlsl
     BuildQBVH.hlsl
     BuildQBVHCollapseImpl.hlsl

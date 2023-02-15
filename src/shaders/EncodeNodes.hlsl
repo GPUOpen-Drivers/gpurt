@@ -22,10 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include ".\Common.hlsl"
-#include ".\BuildCommon.hlsl"
-
-#define RootSig "RootConstants(num32BitConstants=28, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=29, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 1)),"\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
@@ -33,7 +30,8 @@
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
-                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894))"
+                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
+                "CBV(b1)"/*Build Settings binding*/
 
 [[vk::binding(0, 2)]] RWBuffer<float3>            GeometryBuffer  : register(u0, space1);
 
@@ -41,11 +39,14 @@
 [[vk::binding(0, 0)]] RWByteAddressBuffer         IndexBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWStructuredBuffer<float4>  TransformBuffer : register(u1);
 
-[[vk::binding(2, 0)]] RWByteAddressBuffer DstMetadata       : register(u2);
-[[vk::binding(3, 0)]] RWByteAddressBuffer ScratchBuffer     : register(u3);
-[[vk::binding(4, 0)]] RWByteAddressBuffer SrcBuffer         : register(u4);
-[[vk::binding(5, 0)]] RWByteAddressBuffer IndirectArgBuffer : register(u5);
+[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer DstMetadata       : register(u2);
+[[vk::binding(3, 0)]] RWByteAddressBuffer                  ScratchBuffer     : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer                  SrcBuffer         : register(u4);
+[[vk::binding(5, 0)]] RWByteAddressBuffer                  IndirectArgBuffer : register(u5);
 
+#include "Common.hlsl"
+#include "BuildCommon.hlsl"
+#include "BuildCommonScratch.hlsl"
 #include "EncodeCommon.hlsl"
 
 [[vk::binding(0, 1)]] ConstantBuffer<GeometryArgs> ShaderConstants : register(b0);
@@ -77,6 +78,12 @@ void EncodeTriangleNodes(
     const uint primitiveOffset    = ShaderConstants.PrimitiveOffset;
     const uint vertexOffset       = 0;
 #endif
+
+    if (globalThreadId.x == 0)
+    {
+        WriteGeometryInfo(
+            ShaderConstants, primitiveOffset, ShaderConstants.NumPrimitives, DECODE_PRIMITIVE_STRIDE_TRIANGLE);
+    }
 
     uint primitiveIndex = globalThreadId.x;
     if (primitiveIndex < numPrimitives)
@@ -152,6 +159,7 @@ void WriteScratchBoundingBoxNode(
 
     // type, flags, splitBox, numPrimitivesAndDoCollapse
     uint typeAndId = NODE_TYPE_USER_NODE_PROCEDURAL;
+
     const float cost = SAH_COST_AABBB_INTERSECTION * ComputeBoxSurfaceArea(bbox);
 
     data = uint4(typeAndId, flags, INVALID_IDX, asuint(cost));
@@ -180,7 +188,9 @@ void WriteProceduralNodePrimitiveData(
     const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(ShaderConstants.GeometryIndex,
                                                                  ShaderConstants.GeometryFlags);
     DstMetadata.Store(nodeOffset + USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
-    DstMetadata.Store(nodeOffset + USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET, primitiveIndex);
+    {
+        DstMetadata.Store(nodeOffset + USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET, primitiveIndex);
+    }
 }
 
 //=====================================================================================================================
@@ -240,24 +250,27 @@ void EncodeAABBNodes(
 
                 if (ShaderConstants.isUpdateInPlace == false)
                 {
-                    WriteProceduralNodePrimitiveData(metadataSize, nodePointer, primitiveIndex);
+                    WriteProceduralNodePrimitiveData(metadataSize,
+                                                     nodePointer,
+                                                     primitiveIndex);
 
                     DstMetadata.Store(primNodePointerOffset, nodePointer);
                 }
-
-                PushNodeForUpdate(ShaderConstants,
-                                  GeometryBuffer,
-                                  IndexBuffer,
-                                  TransformBuffer,
-                                  metadataSize,
-                                  ShaderConstants.BaseUpdateStackScratchOffset,
-                                  ShaderConstants.TriangleCompressionMode,
-                                  ShaderConstants.isUpdateInPlace,
-                                  nodePointer,
-                                  0,
-                                  0,
-                                  boundingBox,
-                                  true);
+                {
+	                PushNodeForUpdate(ShaderConstants,
+	                                  GeometryBuffer,
+	                                  IndexBuffer,
+	                                  TransformBuffer,
+	                                  metadataSize,
+	                                  ShaderConstants.BaseUpdateStackScratchOffset,
+	                                  ShaderConstants.TriangleCompressionMode,
+	                                  ShaderConstants.isUpdateInPlace,
+	                                  nodePointer,
+	                                  0,
+	                                  0,
+	                                  boundingBox,
+	                                  true);
+                }
             }
             else if (ShaderConstants.isUpdateInPlace == false)
             {
@@ -269,15 +282,15 @@ void EncodeAABBNodes(
         {
             if (ShaderConstants.SceneBoundsCalculationType == SceneBoundsBasedOnGeometry)
             {
-                UpdateSceneBounds(ScratchBuffer, ShaderConstants.SceneBoundsByteOffset, boundingBox);
+                UpdateSceneBounds(ShaderConstants.SceneBoundsByteOffset, boundingBox);
             }
             else if (ShaderConstants.SceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
             {
-                UpdateSceneBoundsWithSize(ScratchBuffer, ShaderConstants.SceneBoundsByteOffset, boundingBox);
+                UpdateSceneBoundsWithSize(ShaderConstants.SceneBoundsByteOffset, boundingBox);
             }
             else
             {
-                UpdateCentroidSceneBoundsWithSize(ScratchBuffer, ShaderConstants.SceneBoundsByteOffset, boundingBox);
+                UpdateCentroidSceneBoundsWithSize(ShaderConstants.SceneBoundsByteOffset, boundingBox);
             }
 
             WriteScratchBoundingBoxNode(ScratchBuffer,

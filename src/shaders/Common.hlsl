@@ -35,6 +35,7 @@
 #define _COMMON_HLSL
 
 #include "RayTracingDefs.h"
+#include "BuildSettings.hlsli"
 
 #if !defined(__cplusplus)
 #define out_param(x) out x
@@ -87,13 +88,13 @@ static const BoundingBox InvalidBoundingBox =
 #define RAY_FLAG_SKIP_TRIANGLES                  0x100
 #define RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES      0x200
 
-#define PIPELINE_FLAG_BVH_COLLAPSE          0x80000000
-#define PIPELINE_FLAG_USE_RAYQUERY          0x40000000
-#define PIPELINE_FLAG_USE_REBRAID           0x20000000
-#define PIPELINE_FLAG_ENABLE_AS_TRACKING    0x10000000
-#define PIPELINE_FLAG_ENABLE_TRAVERSAL_CTR  0x08000000
-#define PIPELINE_FLAG_RESERVED              0x04000000
-#define PIPELINE_FLAG_ENABLE_FUSED_INSTANCE 0x02000000
+#define PIPELINE_FLAG_BVH_COLLAPSE                   0x80000000
+#define PIPELINE_FLAG_USE_RAYQUERY                   0x40000000
+#define PIPELINE_FLAG_USE_REBRAID                    0x20000000
+#define PIPELINE_FLAG_ENABLE_AS_TRACKING             0x10000000
+#define PIPELINE_FLAG_ENABLE_TRAVERSAL_CTR           0x08000000
+#define PIPELINE_FLAG_RESERVED                       0x04000000
+#define PIPELINE_FLAG_ENABLE_FUSED_INSTANCE          0x02000000
 
 #define HIT_KIND_TRIANGLE_FRONT_FACE 0xFE
 #define HIT_KIND_TRIANGLE_BACK_FACE  0xFF
@@ -252,30 +253,86 @@ static uint64_t EncodeBasePointer(
 }
 
 //=====================================================================================================================
+static bool IsBoxNode32(uint pointer)
+{
+    return (GetNodeType(pointer) == NODE_TYPE_BOX_FLOAT32);
+}
+
+//=====================================================================================================================
+static bool IsBoxNode16(uint pointer)
+{
+    return (GetNodeType(pointer) == NODE_TYPE_BOX_FLOAT16);
+}
+
+//=====================================================================================================================
+static bool IsBoxNode(
+    uint pointer
+                     )
+{
+    {
+        return IsBoxNode16(pointer) || IsBoxNode32(pointer);
+    }
+}
+
+//=====================================================================================================================
+static bool IsBoxNodeBasedOnStaticPipelineFlags(uint pointer)
+{
+    {
+        return IsBoxNode16(pointer) || IsBoxNode32(pointer);
+    }
+
+}
+
+//=====================================================================================================================
+static bool IsTriangleNode(
+    uint pointer
+                          )
+{
+    {
+        return (GetNodeType(pointer) <= NODE_TYPE_TRIANGLE_3);
+    }
+}
+
+//=====================================================================================================================
+static bool IsTriangleNodeBasedOnStaticPipelineFlags(uint pointer)
+{
+        return (GetNodeType(pointer) <= NODE_TYPE_TRIANGLE_3);
+
+}
+
+//=====================================================================================================================
+static bool IsUserNodeInstance(uint pointer)
+{
+    return (GetNodeType(pointer) == NODE_TYPE_USER_NODE_INSTANCE);
+}
+
+//=====================================================================================================================
+static bool IsUserNodeProcedural(uint pointer)
+{
+    return (GetNodeType(pointer) == NODE_TYPE_USER_NODE_PROCEDURAL);
+}
+
+//=====================================================================================================================
 static bool CheckHandleTriangleNode(in uint pointerOrType)
 {
-    bool skipTriangleFlag   = false;
-
-    bool isNodeTypeTriangle = (GetNodeType(pointerOrType) <= NODE_TYPE_TRIANGLE_3);
+    bool skipTriangleFlag = false;
 
     const uint pipelineRayFlag = AmdTraceRayGetStaticFlags();
     skipTriangleFlag = (pipelineRayFlag & PIPELINE_FLAG_SKIP_TRIANGLES) ? true : false;
 
-    return (isNodeTypeTriangle && (!skipTriangleFlag));
+    return (IsTriangleNodeBasedOnStaticPipelineFlags(pointerOrType) && (!skipTriangleFlag));
 }
 
 //=====================================================================================================================
 static bool CheckHandleProceduralUserNode(in uint nodePointer)
 {
-    bool skipProceduralFlag   = false;
-
-    bool isNodeTypeProcedural = (GetNodeType(nodePointer) == NODE_TYPE_USER_NODE_PROCEDURAL);
+    bool skipProceduralFlag = false;
 
     const uint pipelineRayFlag = AmdTraceRayGetStaticFlags();
     skipProceduralFlag =
         (pipelineRayFlag & PIPELINE_FLAG_SKIP_PROCEDURAL_PRIMITIVES) ? true : false;
 
-    return (isNodeTypeProcedural && (!skipProceduralFlag));
+    return (IsUserNodeProcedural(nodePointer) && (!skipProceduralFlag));
 }
 
 //=====================================================================================================================
@@ -421,7 +478,7 @@ static BoundingBox GetScratchNodeBoundingBox(in ScratchNode node)
     BoundingBox bbox;
 
     // For triangle geometry we need to generate bounding box from triangle vertices
-    if (GetNodeType(node.type) <= NODE_TYPE_TRIANGLE_3)
+    if (IsTriangleNode(node.type))
     {
         bbox = GenerateTriangleBoundingBox(node.bbox_min_or_v0,
                                            node.bbox_max_or_v1,
@@ -586,42 +643,6 @@ static void InstanceTransform(
 
     newOrigin = float3(r0x, r0y, r0z);
     newDirection = float3(r1x, r1y, r1z);
-}
-
-//=====================================================================================================================
-static bool IsBoxNode16(uint pointer)
-{
-    return (GetNodeType(pointer) == NODE_TYPE_BOX_FLOAT16);
-}
-
-//=====================================================================================================================
-static bool IsBoxNode32(uint pointer)
-{
-    return (GetNodeType(pointer) == NODE_TYPE_BOX_FLOAT32);
-}
-
-//=====================================================================================================================
-static bool IsBoxNode(uint pointer)
-{
-    return IsBoxNode16(pointer) || IsBoxNode32(pointer);
-}
-
-//=====================================================================================================================
-static bool IsTriangleNode(uint pointer)
-{
-    return (GetNodeType(pointer) <= NODE_TYPE_TRIANGLE_3);
-}
-
-//=====================================================================================================================
-static bool IsUserNodeInstance(uint pointer)
-{
-    return (GetNodeType(pointer) == NODE_TYPE_USER_NODE_INSTANCE);
-}
-
-//=====================================================================================================================
-static bool IsUserNodeProcedural(uint pointer)
-{
-    return (GetNodeType(pointer) == NODE_TYPE_USER_NODE_PROCEDURAL);
 }
 
 //=====================================================================================================================

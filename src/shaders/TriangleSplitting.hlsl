@@ -324,7 +324,7 @@ void AllocRefs(TriangleSplittingArgs args,
 
             if (storeIndex < args.numPrimitives)
             {
-                ScratchNode node = FetchScratchNode(ScratchBuffer, args.scratchLeafNodesScratchOffset, storeIndex);
+                ScratchNode node = FetchScratchNode(args.scratchLeafNodesScratchOffset, storeIndex);
 
                 const BoundingBox bbox = GetScratchNodeBoundingBox(node);
 
@@ -529,14 +529,13 @@ uint3 CalculateVariableAxisBitCount64(float3 sceneExtent,
 }
 
 //=====================================================================================================================
-void WriteScratchNodeSplitBoxIndex(RWByteAddressBuffer buffer,
-                                   uint                baseScratchNodesOffset,
-                                   uint                nodeIndex,
-                                   uint                splitBoxIndex)
+void WriteScratchNodeSplitBoxIndex(uint baseScratchNodesOffset,
+                                   uint nodeIndex,
+                                   uint splitBoxIndex)
 {
     const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
 
-    buffer.Store(nodeOffset + SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, splitBoxIndex);
+    ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, splitBoxIndex);
 }
 
 //=====================================================================================================================
@@ -609,11 +608,12 @@ void TriangleSplittingImpl(
                 {
                     float priority;
 
-                    ScratchNode node = FetchScratchNode(ScratchBuffer, args.scratchLeafNodesScratchOffset, i);
+                    ScratchNode node = FetchScratchNode(args.scratchLeafNodesScratchOffset, i);
 
                     if ((node.flags & D3D12_RAYTRACING_GEOMETRY_FLAG_NO_DUPLICATE_ANYHIT_INVOCATION) ||
                         (IsNodeActive(node) == false) ||
-                        (IsTriangleNode(node.type) == false))
+                        (IsTriangleNode(node.type)
+                                                          == false))
                     {
                         priority = 0;
                     }
@@ -688,7 +688,7 @@ void TriangleSplittingImpl(
                 const uint refListIndex = ScratchBuffer.Load(refListIndexOffset);
                 const uint numRefs = ScratchBuffer.Load(numRefsOffset);
 
-                const BoundingBox sceneAABB = FetchSceneBounds(ScratchBuffer, args.sceneBoundsByteOffset);
+                const BoundingBox sceneAABB = FetchSceneBounds(args.sceneBoundsByteOffset);
                 const float3 sceneExtents = sceneAABB.max - sceneAABB.min;
 
                 const uint3 numAxisBits = CalculateVariableAxisBitCount64(sceneExtents, args.numSizeBits);
@@ -791,8 +791,7 @@ void TriangleSplittingImpl(
                         rightTri.min = float3(FLT_MAX, FLT_MAX, FLT_MAX);
                         rightTri.max = float3(-FLT_MAX, -FLT_MAX, -FLT_MAX);
 
-                        ScratchNode leafNode = FetchScratchNode(ScratchBuffer,
-                                                                args.scratchLeafNodesScratchOffset,
+                        ScratchNode leafNode = FetchScratchNode(args.scratchLeafNodesScratchOffset,
                                                                 ref.leafIndex);
 
                         // v0->v1
@@ -1006,8 +1005,7 @@ void TriangleSplittingImpl(
 
                                 WriteBox(args, writeIndex, ref.bbox);
 
-                                WriteScratchNodeSplitBoxIndex(ScratchBuffer,
-                                                              args.scratchLeafNodesScratchOffset,
+                                WriteScratchNodeSplitBoxIndex(args.scratchLeafNodesScratchOffset,
                                                               writeIndex,
                                                               writeIndex);
 
@@ -1023,25 +1021,22 @@ void TriangleSplittingImpl(
 
                                 const float sahCost = surfaceArea * SAH_COST_TRIANGLE_INTERSECTION;
 
-                                WriteScratchNodeCost(ScratchBuffer,
-                                                     args.scratchLeafNodesScratchOffset,
+                                WriteScratchNodeCost(args.scratchLeafNodesScratchOffset,
                                                      ref.leafIndex,
                                                      sahCost,
                                                      true);
 
-                                WriteScratchNodeSplitBoxIndex(ScratchBuffer,
-                                                              args.scratchLeafNodesScratchOffset,
+                                WriteScratchNodeSplitBoxIndex(args.scratchLeafNodesScratchOffset,
                                                               ref.leafIndex,
                                                               ref.leafIndex);
 
-                                UpdateSceneSize(ScratchBuffer, args.sceneBoundsByteOffset + 24, surfaceArea);
+                                UpdateSceneSize(args.sceneBoundsByteOffset + 24, surfaceArea);
                             }
                             else // copy original box to split boxes
                             {
                                 const float surfaceArea = ComputeBoxSurfaceArea(ref.bbox);
 
-                                ScratchNode leafNode = FetchScratchNode(ScratchBuffer,
-                                                                        args.scratchLeafNodesScratchOffset,
+                                ScratchNode leafNode = FetchScratchNode(args.scratchLeafNodesScratchOffset,
                                                                         ref.leafIndex);
 
                                 const uint writeIndex = ref.splitLeafBaseIndex >> 1;
@@ -1050,14 +1045,14 @@ void TriangleSplittingImpl(
 
                                 leafNode.numPrimitivesAndDoCollapse = asuint(surfaceArea * SAH_COST_TRIANGLE_INTERSECTION);
 
-                                WriteScratchNode(ScratchBuffer, args.scratchLeafNodesScratchOffset, writeIndex, leafNode);
+                                WriteScratchNode(args.scratchLeafNodesScratchOffset, writeIndex, leafNode);
 
                                 WriteBox(args, writeIndex, ref.bbox);
 
                                 const uint extraPrimNodePtrOffset = basePrimNodePtrsOffset + (writeIndex * sizeof(uint));
                                 DstBuffer.Store(extraPrimNodePtrOffset, INVALID_IDX);
 
-                                UpdateSceneSize(ScratchBuffer, args.sceneBoundsByteOffset + 24, surfaceArea);
+                                UpdateSceneSize(args.sceneBoundsByteOffset + 24, surfaceArea);
                             }
                         }
                     }

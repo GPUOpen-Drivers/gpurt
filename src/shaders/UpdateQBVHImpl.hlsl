@@ -101,7 +101,9 @@ void UpdateRootBoundingBox(
     RWByteAddressBuffer DstMetadata,
     uint                metadataSize)
 {
-    const Float32BoxNode rootBoxNode = FetchFloat32BoxNode(DstMetadata, metadataSize + ACCEL_STRUCT_HEADER_SIZE);
+    const Float32BoxNode rootBoxNode = FetchFloat32BoxNode(DstMetadata,
+                                                           metadataSize + ACCEL_STRUCT_HEADER_SIZE);
+
     const BoundingBox    rootBbox    = GenerateBoxNode32BoundingBox(rootBoxNode);
 
     DstMetadata.Store3(metadataSize + ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET,      asuint(rootBbox.min));
@@ -135,7 +137,6 @@ void UpdateQBVHImpl(
 
     // Root node is always fp32 regardless of mode for fp16 box nodes
     const uint rootNodePointer = CreateRootNodePointer();
-
     // Handle the header for not-in-place updates
     if (globalID == 0)
     {
@@ -175,8 +176,7 @@ void UpdateQBVHImpl(
 
             DstMetadata.Store<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET, header.offsets);
 
-            WriteParentPointer(DstMetadata,
-                               metadataSize,
+            WriteParentPointer(metadataSize,
                                rootNodePointer,
                                INVALID_IDX);
         }
@@ -259,8 +259,7 @@ void UpdateQBVHImpl(
 
         if (ShaderConstants.isUpdateInPlace == false)
         {
-            WriteParentPointer(DstMetadata,
-                               metadataSize,
+            WriteParentPointer(metadataSize,
                                ExtractNodePointerCollapse(nodePointer),
                                parentNodePointer);
         }
@@ -268,7 +267,9 @@ void UpdateQBVHImpl(
         // Ensure the child bounding box write is done
         DeviceMemoryBarrier();
 
-        uint originalFlagValue = SignalParentNode(baseFlagsOffset, parentNodePointer, decodeNodePtrAsFp16);
+        uint originalFlagValue = SignalParentNode(baseFlagsOffset,
+                                                  parentNodePointer,
+                                                  decodeNodePtrAsFp16);
 
         if (originalFlagValue < (numValidChildren - 1))
         {

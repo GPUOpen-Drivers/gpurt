@@ -29,7 +29,7 @@
 #define RootSig "RootConstants(num32BitConstants=1, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u2, visibility=SHADER_VISIBILITY_ALL) "
+                "UAV(u2, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
 // 32 bit constants
@@ -127,7 +127,9 @@ void SerializeAS(in uint3 globalThreadId : SV_DispatchThreadID)
                 const uint currentInstNodeOffset = metadataSizeInBytes + ExtractNodePointerOffset(currentInstNodePtr);
 
                 // Fetch acceleration structure base address in TLAS instance
-                gpuVa = FetchApiInstanceBaseAddress(SrcBuffer, currentInstNodeOffset);
+                {
+                    gpuVa = FetchApiInstanceBaseAddress(SrcBuffer, currentInstNodeOffset);
+                }
 
                 // Fetch API instance index from instance node. With rebraid enabled the instance node pointers
                 // in memory are in sorted order with no deactivated instances in between. The re-braided instances

@@ -23,8 +23,6 @@
  *
  **********************************************************************************************************************/
 #if NO_SHADER_ENTRYPOINT == 0
-#include "ScanCommon.hlsli"
-
 #define RootSig "RootConstants(num32BitConstants=3, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
@@ -44,6 +42,8 @@ struct InputArgs
 [[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer DstMetadata   : register(u1);
 [[vk::binding(2, 0)]] RWByteAddressBuffer ScratchBuffer : register(u2);
+
+#include "ScanCommon.hlsli"
 #endif
 
 //=====================================================================================================================
@@ -55,7 +55,7 @@ void DistributePartSumInt4Impl(
     uint partialSumsOffset,
     uint numElements)
 {
-    int4 v1 = safe_load_int4(ScratchBuffer, inOutDataOffset, globalId, numElements);
+    int4 v1 = safe_load_int4(inOutDataOffset, globalId, numElements);
     int sum = ScratchBuffer.Load(partialSumsOffset + ((groupId >> 1) * sizeof(int)));
     v1.xyzw += sum;
 

@@ -492,7 +492,8 @@ static void WriteDispatchCounters(
 
 //=====================================================================================================================
 static void UpdateWaveTraversalStatistics(
-    in uint nodePtr)
+    in uint nodePtr
+)
 {
     if (LogCounters(0, TRACERAY_COUNTER_MODE_DISPATCH))
     {

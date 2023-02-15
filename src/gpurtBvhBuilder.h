@@ -117,6 +117,7 @@ protected:
         bool                            noCopySortedNodes;
         bool                            needEncodeDispatch;
         bool                            enableEarlyPairCompression;
+        bool                            enableFastLBVH;
     };
 
     BvhBuilder(
