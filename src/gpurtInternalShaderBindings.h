@@ -64,8 +64,9 @@ namespace EncodeNodes
         uint32 enableEarlyPairCompression;
         uint32 enableFastLBVH;
     };
-
-    constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
+    // Add 4 DWORD padding to avoid page faults when the compiler uses a multi-DWORD load straddling the end of the
+    // constant buffer
+    constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32)) + 4;
 }
 
 namespace BuildBVH

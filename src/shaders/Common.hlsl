@@ -35,7 +35,9 @@
 #define _COMMON_HLSL
 
 #include "RayTracingDefs.h"
+#if !defined(__cplusplus)
 #include "BuildSettings.hlsli"
+#endif
 
 #if !defined(__cplusplus)
 #define out_param(x) out x

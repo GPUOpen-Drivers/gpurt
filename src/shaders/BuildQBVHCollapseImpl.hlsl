@@ -22,7 +22,6 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-//=====================================================================================================================
 // The functions defined below require the following resources defined before including this header
 //
 // RWByteAddressBuffer DstBuffer

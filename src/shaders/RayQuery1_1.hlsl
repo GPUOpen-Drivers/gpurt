@@ -22,7 +22,6 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-//=====================================================================================================================
 static GpuVirtualAddress GetRayQueryTopBvhAddress(in RayQueryInternal rayQuery)
 {
     return MakeGpuVirtualAddress(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi);

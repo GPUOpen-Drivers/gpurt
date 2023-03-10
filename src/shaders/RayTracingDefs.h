@@ -22,7 +22,6 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-//=====================================================================================================================
 // This header file contains shared definitions between the HLSL raytracing shaders and the prototype c++ code
 //
 #ifndef RAYTRACING_DEF_H
@@ -673,9 +672,9 @@ static_assert(FLOAT16_BOX_NODE_BB3_OFFSET    == offsetof(Float16BoxNode, bbox3),
 //=====================================================================================================================
 // Triangle node sideband data offsets when limiting triangle compression to 2 triangles per node
 // Geometry Index in bottom 24 bits and Geometry Flags in bits 25-26
-#define TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET         TRIANGLE_NODE_V4_OFFSET
-#define TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET         TRIANGLE_NODE_V4_OFFSET + 4
-#define TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET TRIANGLE_NODE_V4_OFFSET + 8
+#define TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET TRIANGLE_NODE_V4_OFFSET
+#define TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET         TRIANGLE_NODE_V4_OFFSET + 4
+#define TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET         TRIANGLE_NODE_V4_OFFSET + 8
 #define TRIANGLE_NODE_PARENT_PTR_OFFSET               TRIANGLE_NODE_V3_OFFSET
 
 //=====================================================================================================================
@@ -746,7 +745,6 @@ struct ProceduralNode
     uint   padding1[6];
     uint   reserved;
     uint   primitiveIndex;
-    uint   geometryIndexAndFlags;
     uint   triangleId;
 };
 
