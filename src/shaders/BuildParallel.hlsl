@@ -134,9 +134,13 @@ struct Constants
 
 #include "BuildCommonScratch.hlsl"
 
+#define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
+groupshared uint SharedMem[MAX_LDS_ELEMENTS];
+
 // The encode path uses SrcBuffer and DstBuffer as the true acceleration structure base.
 #define SrcBuffer DstMetadata
 #include "EncodeCommon.hlsl"
+#include "EncodePairedTriangleImpl.hlsl"
 #undef SrcBuffer
 
 [[vk::binding(0, 2)]] ConstantBuffer<GeometryArgs> GeometryConstants[] : register(b0, space1);
@@ -147,9 +151,6 @@ struct Constants
 // DXC does not support arrays of structured buffers for SPIRV currently. See issue 3281 / PR 4663).
 [[vk::binding(0, 5)]] RWStructuredBuffer<float4> TransformBuffer[] : register(u0, space3);
 #endif
-
-#define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
-groupshared uint SharedMem[MAX_LDS_ELEMENTS];
 
 //======================================================================================================================
 // Returns number of threads launched
@@ -206,11 +207,18 @@ void GenerateMortonCodes(
 
     const uint primCount = numPrimitives;
 
+    uint numSizeBits = ShaderConstants.numMortonSizeBits;
+
     float2  sizeMinMax = float2(0, 0);
 
     if (ShaderConstants.numMortonSizeBits > 0)
     {
         sizeMinMax = FetchSceneSize(ShaderConstants.offsets.sceneBounds);
+
+        if (sizeMinMax.x == sizeMinMax.y)
+        {
+            numSizeBits = 0;
+        }
     }
 
     for (uint primitiveIndex = globalId; primitiveIndex < primCount; primitiveIndex += GetNumThreads())
@@ -297,10 +305,12 @@ void RefitBounds(
             numActivePrims,
             ShaderConstants.offsets.propagationFlags,
             CalculateBvhNodesOffset(numActivePrims),
+            ShaderConstants.offsets.unsortedBvhLeafNodes,
             ShaderConstants.offsets.primIndicesSorted,
             Settings.doCollapse,
             Settings.doTriangleSplitting,
             Settings.noCopySortedNodes,
+            Settings.enableEarlyPairCompression,
             EnableLatePairCompression(),
             Settings.enablePairCostCheck,
             ShaderConstants.offsets.splitBoxes,
@@ -339,6 +349,8 @@ void FastAgglomerativeLbvh(
     args.fp16BoxModeMixedSaThreshold = Settings.fp16BoxModeMixedSaThreshhold;
     args.noCopySortedNodes           = Settings.noCopySortedNodes;
     args.sortedPrimIndicesOffset     = ShaderConstants.offsets.primIndicesSorted;
+    args.enableEarlyPairCompression  = Settings.enableEarlyPairCompression;
+    args.unsortedNodesBaseOffset     = ShaderConstants.offsets.unsortedBvhLeafNodes,
 
     args.enablePairCompression       = EnableLatePairCompression();
     args.enablePairCostCheck         = Settings.enablePairCostCheck;
@@ -360,7 +372,7 @@ uint BuildModeFlags()
     uint flags = 0;
     flags |= Settings.doCollapse ? BUILD_FLAGS_COLLAPSE : 0;
     flags |= Settings.doTriangleSplitting ? BUILD_FLAGS_TRIANGLE_SPLITTING : 0;
-    flags |= EnableLatePairCompression() ? BUILD_FLAGS_PAIR_COMPRESSION : 0;
+    flags |= EnableLatePairCompression() ? BUILD_FLAGS_LATE_PAIR_COMPRESSION : 0;
     flags |= Settings.enablePairCostCheck ? BUILD_FLAGS_PAIR_COST_CHECK : 0;
 
     return flags;
@@ -423,6 +435,8 @@ void BuildBvhPloc(
     plocArgs.primIndicesSortedScratchOffset = ShaderConstants.offsets.primIndicesSorted;
     plocArgs.numLeafNodes                   = ShaderConstants.numLeafNodes;
     plocArgs.noCopySortedNodes              = Settings.noCopySortedNodes;
+    plocArgs.enableEarlyPairCompression     = Settings.enableEarlyPairCompression;
+    plocArgs.unsortedBvhLeafNodesOffset     = ShaderConstants.offsets.unsortedBvhLeafNodes;
 
     BuildBvhPlocImpl(globalId, localId, groupId, numActivePrims, plocArgs);
 }
@@ -516,14 +530,12 @@ void InitBuildQbvh(
     qbvhArgs.flags                       = BuildModeFlags();
     qbvhArgs.encodeArrayOfPointers       = ShaderConstants.encodeArrayOfPointers;
     qbvhArgs.topDownBuild                = 0;
-    qbvhArgs.bvhBuilderNodeSortType      = Settings.bvhBuilderNodeSortType;
-    qbvhArgs.bvhBuilderNodeSortHeuristic = Settings.bvhBuilderNodeSortHeuristic;
     qbvhArgs.enableFusedInstanceNode     = Settings.enableFusedInstanceNode;
-    qbvhArgs.sahQbvh                     = Settings.sahQbvh;
-    qbvhArgs.enableEarlyPairCompression  = Settings.enableEarlyPairCompression;
     qbvhArgs.enableFastLBVH              = Settings.enableFastLBVH;
     qbvhArgs.fastLBVHRootNodeIndex       = Settings.enableFastLBVH ?
         ScratchBuffer.Load(ShaderConstants.offsets.fastLBVHRootNodeIndex) : 0;
+    qbvhArgs.enableEarlyPairCompression  = Settings.enableEarlyPairCompression;
+    qbvhArgs.unsortedBvhLeafNodesOffset  = ShaderConstants.offsets.unsortedBvhLeafNodes;
 
     if (!Settings.topLevelBuild)
     {
@@ -560,14 +572,12 @@ void BuildQbvh(
     qbvhArgs.flags                       = BuildModeFlags();
     qbvhArgs.encodeArrayOfPointers       = ShaderConstants.encodeArrayOfPointers;
     qbvhArgs.topDownBuild                = Settings.rebraidType != RebraidType::Off;
-    qbvhArgs.bvhBuilderNodeSortType      = Settings.bvhBuilderNodeSortType;
-    qbvhArgs.bvhBuilderNodeSortHeuristic = Settings.bvhBuilderNodeSortHeuristic;
     qbvhArgs.enableFusedInstanceNode     = Settings.enableFusedInstanceNode;
-    qbvhArgs.sahQbvh                     = Settings.sahQbvh;
     qbvhArgs.enableEarlyPairCompression  = Settings.enableEarlyPairCompression;
     qbvhArgs.enableFastLBVH              = Settings.enableFastLBVH;
     qbvhArgs.fastLBVHRootNodeIndex       = Settings.enableFastLBVH ?
         ScratchBuffer.Load(ShaderConstants.offsets.fastLBVHRootNodeIndex) : 0;
+    qbvhArgs.unsortedBvhLeafNodesOffset  = ShaderConstants.offsets.unsortedBvhLeafNodes;
 
     if (!Settings.topLevelBuild)
     {
@@ -672,7 +682,8 @@ void InitAccelerationStructure()
 //======================================================================================================================
 // Encode primitives for each geometry.
 void EncodePrimitives(
-    uint globalId)
+    uint globalId,
+    uint localId)
 {
     for (uint geometryIndex = 0; geometryIndex < ShaderConstants.numDescs; geometryIndex++)
     {
@@ -690,15 +701,32 @@ void EncodePrimitives(
 
         for (uint primitiveIndex = globalId; primitiveIndex < primCount; primitiveIndex += GetNumThreads())
         {
-            EncodeTriangleNode(
-                GeometryBuffer[geometryIndex],
-                IndexBuffer[geometryIndex],
-                TransformBuffer[geometryIndex],
-                geometryArgs,
-                primitiveIndex,
-                geometryBasePrimOffset,
-                0,
-                false); // Don't write to the update stack
+            // not an update, just check the "enableEarlyPairCompression" and decide which Encode path to use
+            if (Settings.enableEarlyPairCompression == true)
+            {
+                EncodePairedTriangleNodeImpl(
+                    GeometryBuffer[geometryIndex],
+                    IndexBuffer[geometryIndex],
+                    TransformBuffer[geometryIndex],
+                    geometryArgs,
+                    primitiveIndex,
+                    localId,
+                    geometryBasePrimOffset,
+                    0,
+                    false); // Don't write to the update stack
+            }
+            else
+            {
+                EncodeTriangleNode(
+                    GeometryBuffer[geometryIndex],
+                    IndexBuffer[geometryIndex],
+                    TransformBuffer[geometryIndex],
+                    geometryArgs,
+                    primitiveIndex,
+                    geometryBasePrimOffset,
+                    0,
+                    false); // Don't write to the update stack
+            }
         }
     }
 }
@@ -743,7 +771,7 @@ void BuildBvh(
 
         BEGIN_TASK(ShaderConstants.numThreadGroups);
 
-        EncodePrimitives(globalId);
+        EncodePrimitives(globalId, localId);
 
         END_TASK(ShaderConstants.numThreadGroups);
     }

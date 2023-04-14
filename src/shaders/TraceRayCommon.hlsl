@@ -25,34 +25,55 @@
 //
 
 #include "IntersectCommon.hlsl"
-
 #if DEVELOPER
 #include "../../gpurt/gpurtCounter.h"
 #endif
+#include "../../gpurt/gpurtDispatch.h"
+
+//=====================================================================================================================
+// Shader types
+#define SHADER_TYPE_CALLABLE    0
+#define SHADER_TYPE_MISS        1
+#define SHADER_TYPE_CHS         2
+#define SHADER_TYPE_AHS         3
+#define SHADER_TYPE_IS          4
+#define SHADER_TYPE_RGS         5
+
+// Shader priorities for continuation scheduling. Higher values mean higher scheduling precedence.
+// Reserve priority 0 as invalid value. This way, 0-initialized priorities in metadata-annotated
+// function pointers (e.g. from relocations) can be detected.
+#define SCHEDULING_PRIORITY_INVALID   0
+#define SCHEDULING_PRIORITY_RGS       1
+#define SCHEDULING_PRIORITY_CHS       2
+#define SCHEDULING_PRIORITY_MISS      2
+#define SCHEDULING_PRIORITY_TRAVERSAL 3
+// Give IS higher prio than AHS so AHS called by ReportHit
+// have a chance to run together with AHS called by Traversal.
+#define SCHEDULING_PRIORITY_AHS       4
+#define SCHEDULING_PRIORITY_IS        5
+// TODO Decide on the callable shader priority
+#define SCHEDULING_PRIORITY_CALLABLE  6
 
 // Driver reserved space ID and resource bindings
 #ifdef AMD_VULKAN
 
 #define SPACEID space93
 
-#define DispatchDynamicRaysInfoId b16
-#define DispatchRaysInfoId        b17
+#define DispatchRaysConstantsId        b17
 #else
 
 #define SPACEID space2147420893
 
-#define DispatchDynamicRaysInfoId b0
-#define DispatchRaysInfoId        b1
+#define DispatchRaysConstantsId        b1
 
 #endif
 
 #ifndef __cplusplus
 //=====================================================================================================================
-ConstantBuffer<DispatchRaysDynamicInfoData> DispatchDynamicRaysInfo : register(DispatchDynamicRaysInfoId, SPACEID);
-ConstantBuffer<DispatchRaysInfoData>        DispatchRaysInfo        : register(DispatchRaysInfoId, SPACEID);
+ConstantBuffer<DispatchRaysConstantData> DispatchRaysConstBuf : register(DispatchRaysConstantsId, SPACEID);
 
 #if DEVELOPER
-globallycoherent RWByteAddressBuffer        Counters                : register(u0, SPACEID);
+globallycoherent RWByteAddressBuffer Counters         : register(u0, SPACEID);
 #endif
 #endif
 
@@ -81,9 +102,43 @@ static uint ExtractMissShaderIndex(in uint traceRayParameters)
 }
 
 //=====================================================================================================================
+// The VPC (vector program counter) is a 64-bit value containing the lower half of an actual function pointer in its
+// lower half, and 32 metadata bits in the upper half. The metadata includes a VGPR count and a scheduling priority.
+// This function sets that scheduling priority in a given VPC, and returns the modified value.
+static uint2 GetVPCWithPriority(in uint2 vpc, in uint priority)
+{
+    uint2 retVal;
+    retVal.x = vpc.x;
+    retVal.y = (priority << 16) | (vpc.y & 0xFFFF);
+    return retVal;
+}
+
+//=====================================================================================================================
+static uint GetPriorityForShaderType(uint shaderType)
+{
+    switch (shaderType)
+    {
+    case SHADER_TYPE_CALLABLE:  return SCHEDULING_PRIORITY_CALLABLE;
+    case SHADER_TYPE_MISS:      return SCHEDULING_PRIORITY_MISS;
+    case SHADER_TYPE_CHS:       return SCHEDULING_PRIORITY_CHS;
+    case SHADER_TYPE_AHS:       return SCHEDULING_PRIORITY_AHS;
+    case SHADER_TYPE_IS:        return SCHEDULING_PRIORITY_IS;
+    case SHADER_TYPE_RGS:       return SCHEDULING_PRIORITY_RGS;
+    default:                    return SCHEDULING_PRIORITY_INVALID;
+    }
+}
+
+//=====================================================================================================================
 static uint2 GetShaderId(GpuVirtualAddress tableAddress, uint index, uint stride)
 {
     return LoadDwordAtAddrx2(tableAddress + stride * index);
+}
+
+//=====================================================================================================================
+static uint2 GetShaderIdWithPriority(GpuVirtualAddress tableAddress, uint index, uint stride, uint priority)
+{
+    uint2 shaderId = GetShaderId(tableAddress, index, stride);
+    return GetVPCWithPriority(shaderId, priority);
 }
 
 //=====================================================================================================================
@@ -117,13 +172,17 @@ static HitGroupInfo GetHitGroupInfo(
     HitGroupInfo hitInfo;
     hitInfo.tableIndex = hitGroupRecordIndex;
 #else
-    const uint offset = DispatchRaysInfo.HitGroupTableStrideInBytes * hitGroupRecordIndex;
+    const uint offset = DispatchRaysConstBuf.hitGroupTableStrideInBytes * hitGroupRecordIndex;
 
-    const GpuVirtualAddress tableVa = MakeGpuVirtualAddress(DispatchRaysInfo.HitGroupTableStartAddressLow,
-                                                            DispatchRaysInfo.HitGroupTableStartAddressHigh);
+    const GpuVirtualAddress tableVa =
+        PackUint64(DispatchRaysConstBuf.hitGroupTableBaseAddressLo, DispatchRaysConstBuf.hitGroupTableBaseAddressHi);
 
     const uint4 d0 = LoadDwordAtAddrx4(tableVa + offset);
+#ifdef AMD_VULKAN
+    const uint2 d1 = LoadDwordAtAddrx4(tableVa + offset + 0x10).xy;
+#else
     const uint2 d1 = LoadDwordAtAddrx2(tableVa + offset + 0x10);
+#endif
 
     HitGroupInfo hitInfo;
     hitInfo.closestHitId   = d0.xy;
@@ -136,7 +195,7 @@ static HitGroupInfo GetHitGroupInfo(
 }
 
 //=====================================================================================================================
-static uint GetAnyHitIdLow(
+static uint2 GetAnyHitId(
     in uint traceParameters,
     in uint geometryContributionToHitGroupIndex,
     in uint instanceContributionToHitGroupIndex)
@@ -147,14 +206,22 @@ static uint GetAnyHitIdLow(
                                        geometryContributionToHitGroupIndex,
                                        instanceContributionToHitGroupIndex);
 
-    const uint offset = DispatchRaysInfo.HitGroupTableStrideInBytes * hitGroupRecordIndex;
+    const uint offset = DispatchRaysConstBuf.hitGroupTableStrideInBytes * hitGroupRecordIndex;
 
-    const GpuVirtualAddress tableVa = MakeGpuVirtualAddress(DispatchRaysInfo.HitGroupTableStartAddressLow,
-                                                            DispatchRaysInfo.HitGroupTableStartAddressHigh);
+    const GpuVirtualAddress tableVa =
+        PackUint64(DispatchRaysConstBuf.hitGroupTableBaseAddressLo, DispatchRaysConstBuf.hitGroupTableBaseAddressHi);
 
-    const uint anyHitIdLow = LoadDwordAtAddr(tableVa + offset + 8);
+    const uint2 anyHitId  = LoadDwordAtAddrx2(tableVa + offset + 8);
+    return GetVPCWithPriority(anyHitId, SCHEDULING_PRIORITY_AHS);
+}
 
-    return anyHitIdLow;
+//=====================================================================================================================
+static uint64_t CalculateInstanceNodePtr64(
+    in uint64_t instanceBaseAddr,
+    in uint32_t instanceNodePtr,
+    in uint32_t rtIpLevel)
+{
+    return CalculateNodeAddr64(instanceBaseAddr, instanceNodePtr);
 }
 
 #if DEVELOPER
@@ -162,8 +229,9 @@ static uint GetAnyHitIdLow(
 static uint GetRayId(in uint3 dispatchRaysIndex)
 {
     const uint flatRayIndex = dispatchRaysIndex.x +
-                             (dispatchRaysIndex.y * DispatchRaysInfo.RayGridWidth) +
-                             (dispatchRaysIndex.z * DispatchRaysInfo.RayGridWidth * DispatchRaysInfo.RayGridHeight);
+        (dispatchRaysIndex.y * DispatchRaysConstBuf.rayDispatchWidth) +
+        (dispatchRaysIndex.z * DispatchRaysConstBuf.rayDispatchWidth * DispatchRaysConstBuf.rayDispatchHeight);
+
     return flatRayIndex;
 }
 
@@ -208,9 +276,9 @@ static uint WriteRayHistoryControlToken(
 //=====================================================================================================================
 static bool LogCounters(in uint id, in uint mode)
 {
-    return ((DispatchRaysInfo.CounterMode == mode) &&
-            (id >= DispatchRaysInfo.RayIdRangeBegin) &&
-            (id < DispatchRaysInfo.RayIdRangeEnd));
+    return ((DispatchRaysConstBuf.counterMode == mode) &&
+            (id >= DispatchRaysConstBuf.counterRayIdRangeBegin) &&
+            (id < DispatchRaysConstBuf.counterRayIdRangeEnd));
 }
 
 //=====================================================================================================================

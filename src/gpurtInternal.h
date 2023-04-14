@@ -25,6 +25,7 @@
 #pragma once
 #include "gpurt/gpurt.h"
 #include "gpurt/gpurtAccelStruct.h"
+#include "gpurt/gpurtBuildSettings.h"
 #include "palInlineFuncs.h"
 
 namespace GpuRt
@@ -332,12 +333,9 @@ public:
         bool  enableAccelStructTracking,
         bool  enableTraversalCounter) override;
 
-    // Builds an acceleration structure.
+    // Writes commands into a command buffer to build an acceleration structure
     //
-    // When pCmdBuffer is non-nullptr, it writes commands to perform the operation into the command buffer.  Otherwise,
-    // this operation executes on the CPU.
-    //
-    // @param pCmdBuffer           [in] Command buffer where commands will be written (optional)
+    // @param pCmdBuffer           [in] Command buffer where commands will be written
     // @param buildInfo            [in] Acceleration structure build info
     virtual void BuildAccelStruct(
         Pal::ICmdBuffer*              pCmdBuffer,
@@ -503,6 +501,8 @@ public:
     // Returns size in DWORDs of a buffer view SRD
     uint32 GetBufferSrdSizeDw() const { return m_bufferSrdSizeDw; };
 
+    Pal::RayTracingIpLevel GetRtIpLevel() const { return m_rtIpLevel; }
+
 #if GPURT_DEVELOPER
     // Driver generated RGP markers are only added in internal builds because they expose details about the
     // construction of acceleration structure.
@@ -532,6 +532,8 @@ protected:
     GpuRt::AccelStructTraceSource            m_accelStructTraceSource;
     uint32                                   m_bufferSrdSizeDw;
     ClientCallbacks                          m_clientCb;
+    Pal::RayTracingIpLevel                   m_rtIpLevel;           // the actual RTIP level GPURT is using,
+                                                                    // is based on emulatedRtIpLevel and the actual device.
 };
 }  // namespace Internal
 } // namespace GpuRt

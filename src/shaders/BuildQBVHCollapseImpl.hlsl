@@ -76,7 +76,7 @@ uint WritePrimitiveNodeCollapse(
     }
     const uint boxUsedChild0Offset = (usedNodeTypeIsFp16 ? FLOAT16_BOX_NODE_CHILD0_OFFSET
                                                          : FLOAT32_BOX_NODE_CHILD0_OFFSET);
-    const uint nodeType            = GetNodeType(node.type);
+    uint nodeType = GetNodeType(node.type);
 
     // Load geometry info
     const uint geometryInfoOffset = offsets.geometryInfo + (node.right_or_geometryIndex * sizeof(GeometryInfo));
@@ -92,25 +92,30 @@ uint WritePrimitiveNodeCollapse(
 
     uint nodeOffset;
 
+    const uint triangleId = node.type >> 3;
+
     if (nodeType == NODE_TYPE_USER_NODE_PROCEDURAL)
     {
         nodeOffset = offsets.leafNodes + (destLeafIndex * USER_NODE_PROCEDURAL_SIZE);
 
         DstBuffer.Store3(nodeOffset + USER_NODE_PROCEDURAL_MIN_OFFSET, asuint(node.bbox_min_or_v0));
         DstBuffer.Store3(nodeOffset + USER_NODE_PROCEDURAL_MAX_OFFSET, asuint(node.bbox_max_or_v1));
-        DstBuffer.Store(nodeOffset + USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
         {
             DstBuffer.Store(nodeOffset + USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET, node.left_or_primIndex_or_instIndex);
+            DstBuffer.Store(nodeOffset + USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
         }
     }
     else
     {
         nodeOffset = offsets.leafNodes + (destLeafIndex * TRIANGLE_NODE_SIZE);
 
-        const uint triangleId = node.type >> 3;
-
         DstBuffer.Store(nodeOffset + TRIANGLE_NODE_ID_OFFSET, triangleId);
-        DstBuffer.Store(nodeOffset + TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
+
+        {
+            DstBuffer.Store(nodeOffset + TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
+            DstBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + (nodeType * 4),
+                            node.left_or_primIndex_or_instIndex);
+        }
 
         uint3 vertexOffsets;
         if (args.triangleCompressionMode != NO_TRIANGLE_COMPRESSION)
@@ -125,9 +130,6 @@ uint WritePrimitiveNodeCollapse(
         DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.x, node.bbox_min_or_v0);
         DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.y, node.bbox_max_or_v1);
         DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.z, node.sah_or_v2_or_instBasePtr);
-
-        DstBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + (nodeType * 4),
-                        node.left_or_primIndex_or_instIndex);
 
         // For PAIR_TRIANGLE_COMPRESSION, the other node is not linked in the BVH tree, so we need to find it and
         // store it as well if it exists.
@@ -152,8 +154,10 @@ uint WritePrimitiveNodeCollapse(
                 }
             }
 
-            DstBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + (otherNodeType * 4),
-                            otherNode.left_or_primIndex_or_instIndex);
+            {
+                DstBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + (otherNodeType * 4),
+                                otherNode.left_or_primIndex_or_instIndex);
+            }
 
             const uint otherPrimNodePointer = PackNodePointer(otherNodeType, nodeOffset);
             DstBuffer.Store(geometryPrimNodePtrsOffset + (otherNode.left_or_primIndex_or_instIndex * sizeof(uint)),

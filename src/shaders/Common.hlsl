@@ -287,31 +287,28 @@ static bool IsBoxNodeBasedOnStaticPipelineFlags(uint pointer)
 
 //=====================================================================================================================
 static bool IsTriangleNode(
-    uint pointer
-                          )
+    uint nodePtr)
 {
-    {
-        return (GetNodeType(pointer) <= NODE_TYPE_TRIANGLE_3);
-    }
+    return (GetNodeType(nodePtr) <= NODE_TYPE_TRIANGLE_1);
 }
 
 //=====================================================================================================================
-static bool IsTriangleNodeBasedOnStaticPipelineFlags(uint pointer)
+static bool IsTriangleNodeBasedOnStaticPipelineFlags(
+    uint nodePtr)
 {
-        return (GetNodeType(pointer) <= NODE_TYPE_TRIANGLE_3);
-
+    return (GetNodeType(nodePtr) <= NODE_TYPE_TRIANGLE_1);
 }
 
 //=====================================================================================================================
-static bool IsUserNodeInstance(uint pointer)
+static bool IsUserNodeInstance(uint nodePtr)
 {
-    return (GetNodeType(pointer) == NODE_TYPE_USER_NODE_INSTANCE);
+    return (GetNodeType(nodePtr) == NODE_TYPE_USER_NODE_INSTANCE);
 }
 
 //=====================================================================================================================
-static bool IsUserNodeProcedural(uint pointer)
+static bool IsUserNodeProcedural(uint nodePtr)
 {
-    return (GetNodeType(pointer) == NODE_TYPE_USER_NODE_PROCEDURAL);
+    return (GetNodeType(nodePtr) == NODE_TYPE_USER_NODE_PROCEDURAL);
 }
 
 //=====================================================================================================================
@@ -322,7 +319,7 @@ static bool CheckHandleTriangleNode(in uint pointerOrType)
     const uint pipelineRayFlag = AmdTraceRayGetStaticFlags();
     skipTriangleFlag = (pipelineRayFlag & PIPELINE_FLAG_SKIP_TRIANGLES) ? true : false;
 
-    return (IsTriangleNodeBasedOnStaticPipelineFlags(pointerOrType) && (!skipTriangleFlag));
+    return (IsTriangleNode(pointerOrType) && (!skipTriangleFlag));
 }
 
 //=====================================================================================================================
@@ -409,16 +406,6 @@ static uint3 CalcTriangleVertexOffsets(uint nodeType)
         offsets.x = TRIANGLE_NODE_V1_OFFSET;
         offsets.y = TRIANGLE_NODE_V3_OFFSET;
         offsets.z = TRIANGLE_NODE_V2_OFFSET;
-        break;
-    case NODE_TYPE_TRIANGLE_2:
-        offsets.x = TRIANGLE_NODE_V2_OFFSET;
-        offsets.y = TRIANGLE_NODE_V3_OFFSET;
-        offsets.z = TRIANGLE_NODE_V4_OFFSET;
-        break;
-    case NODE_TYPE_TRIANGLE_3:
-        offsets.x = TRIANGLE_NODE_V2_OFFSET;
-        offsets.y = TRIANGLE_NODE_V4_OFFSET;
-        offsets.z = TRIANGLE_NODE_V0_OFFSET;
         break;
     }
 
@@ -779,10 +766,36 @@ static PrimitiveData FetchPrimitiveData(
 }
 
 //=====================================================================================================================
+
+//=====================================================================================================================
+static uint32_t GetInstanceSidebandOffset(
+    in AccelStructHeader header,
+    in uint32_t nodePtr)
+{
+    uint32_t sidebandOffset = 0;
+
+    const uint32_t instanceNodeOffset = ExtractNodePointerOffset(nodePtr);
+
+    {
+        sidebandOffset = instanceNodeOffset + sizeof(InstanceDesc);
+    }
+
+    return sidebandOffset;
+}
+
+// Node pointer values with special meanings
+#define INVALID_NODE      0xffffffff
+#define TERMINAL_NODE     0xfffffffe
+#define SKIP_0_3          0xfffffffd
+#define SKIP_4_7          0xfffffffb
+#define SKIP_0_7          0xfffffff9
+#define END_SEARCH        0xfffffff8
+
+//=====================================================================================================================
 // Node pointers with all upper bits set are sentinels: INVALID_NODE, TERMINAL_NODE, SKIP_*
 static bool IsValidNode(uint nodePtr)
 {
-    return nodePtr < 0xFFFFFFF8;
+    return nodePtr < END_SEARCH;
 }
 
 #endif

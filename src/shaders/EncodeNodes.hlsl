@@ -22,7 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#define RootSig "RootConstants(num32BitConstants=29, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=30, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 1)),"\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
@@ -48,6 +48,7 @@
 #include "BuildCommon.hlsl"
 #include "BuildCommonScratch.hlsl"
 #include "EncodeCommon.hlsl"
+#include "EncodePairedTriangle.hlsl"
 
 [[vk::binding(0, 1)]] ConstantBuffer<GeometryArgs> ShaderConstants : register(b0);
 
@@ -64,7 +65,8 @@ void IncrementTaskCounter()
 [numthreads(BUILD_THREADGROUP_SIZE, 1, 1)]
 //=====================================================================================================================
 void EncodeTriangleNodes(
-    in uint3 globalThreadId : SV_DispatchThreadID)
+    in uint3 globalThreadId : SV_DispatchThreadID,
+    in uint localId         : SV_GroupThreadID)
 {
 #if INDIRECT_BUILD
     // Sourced from Indirect Buffers
@@ -86,17 +88,34 @@ void EncodeTriangleNodes(
     }
 
     uint primitiveIndex = globalThreadId.x;
+    bool isUpdate = IsUpdate(ShaderConstants.BuildFlags);
+
     if (primitiveIndex < numPrimitives)
     {
-        EncodeTriangleNode(
-            GeometryBuffer,
-            IndexBuffer,
-            TransformBuffer,
-            ShaderConstants,
-            primitiveIndex,
-            primitiveOffset,
-            vertexOffset,
-            true);
+        if ((ShaderConstants.enableEarlyPairCompression == true) &&
+            (isUpdate == false))
+        {
+            EncodePairedTriangleNode(GeometryBuffer,
+                                     IndexBuffer,
+                                     TransformBuffer,
+                                     ShaderConstants,
+                                     primitiveIndex,
+                                     localId,
+                                     primitiveOffset,
+                                     vertexOffset,
+                                     true);
+        }
+        else
+        {
+            EncodeTriangleNode(GeometryBuffer,
+                               IndexBuffer,
+                               TransformBuffer,
+                               ShaderConstants,
+                               primitiveIndex,
+                               primitiveOffset,
+                               vertexOffset,
+                               true);
+        }
 
         IncrementTaskCounter();
     }
@@ -187,9 +206,9 @@ void WriteProceduralNodePrimitiveData(
     const uint nodeOffset            = metadataSize + ExtractNodePointerOffset(nodePointer);
     const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(ShaderConstants.GeometryIndex,
                                                                  ShaderConstants.GeometryFlags);
-    DstMetadata.Store(nodeOffset + USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
     {
         DstMetadata.Store(nodeOffset + USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET, primitiveIndex);
+        DstMetadata.Store(nodeOffset + USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
     }
 }
 
@@ -310,11 +329,7 @@ void EncodeAABBNodes(
 
         // ClearFlags for refit and update
         const uint flattenedPrimitiveIndex = primitiveOffset + primitiveIndex;
-
-        {
-            const uint flagOffset = ShaderConstants.PropagationFlagsScratchOffset + (flattenedPrimitiveIndex * sizeof(uint));
-            ScratchBuffer.Store(flagOffset, 0);
-        }
+        ClearFlagsForRefitAndUpdate(ShaderConstants, flattenedPrimitiveIndex, true);
 
         IncrementTaskCounter();
     }

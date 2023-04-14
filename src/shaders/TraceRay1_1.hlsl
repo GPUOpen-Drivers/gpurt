@@ -187,7 +187,7 @@ static IntersectionResult TraceRayImpl1_1(
     }
 
 #if DEVELOPER
-    while ((packedNodePointer != INVALID_IDX) && (intersection.numIterations < DispatchRaysInfo.MaxIterations))
+    while ((packedNodePointer != INVALID_IDX) && (intersection.numIterations < DispatchRaysConstBuf.profileMaxIterations))
 #else
     while (packedNodePointer != INVALID_IDX)
 #endif
@@ -343,14 +343,14 @@ static IntersectionResult TraceRayImpl1_1(
                                                                    geometryIndex,
                                                                    instanceContribution);
 
-                            const uint2 instNodeAddr64 = CalculateNodeAddr64(topLevelBvh, instNodePtr);
+                            const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(topLevelBvh, instNodePtr, GPURT_RTIP1_1);
 
                             // Set intersection attributes
                             AmdTraceRaySetHitAttributes(candidateT,
                                                         hitKind,
                                                         HIT_STATUS_ACCEPT,
-                                                        instNodeAddr64.x,
-                                                        instNodeAddr64.y,
+                                                        LowPart(instNodePtr64),
+                                                        HighPart(instNodePtr64),
                                                         primitiveIndex,
                                                         ANYHIT_CALLTYPE_NO_DUPLICATE,
                                                         geometryIndex);
@@ -462,14 +462,14 @@ static IntersectionResult TraceRayImpl1_1(
 
             if (isCulled == false)
             {
-                const uint2 instNodeAddr64 = CalculateNodeAddr64(topLevelBvh, instNodePtr);
+                const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(topLevelBvh, instNodePtr, GPURT_RTIP1_1);
 
                 // Set intersection attributes
                 AmdTraceRaySetHitAttributes(intersection.t,
                                             0,
                                             HIT_STATUS_IGNORE,
-                                            instNodeAddr64.x,
-                                            instNodeAddr64.y,
+                                            LowPart(instNodePtr64),
+                                            HighPart(instNodePtr64),
                                             primitiveIndex,
                                             anyHitCallType,
                                             geometryIndex);

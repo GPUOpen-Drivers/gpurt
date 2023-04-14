@@ -611,8 +611,7 @@ void TriangleSplittingImpl(
 
                     if ((node.flags & D3D12_RAYTRACING_GEOMETRY_FLAG_NO_DUPLICATE_ANYHIT_INVOCATION) ||
                         (IsNodeActive(node) == false) ||
-                        (IsTriangleNode(node.type)
-                                                          == false))
+                        (IsTriangleNode(node.type) == false))
                     {
                         priority = 0;
                     }

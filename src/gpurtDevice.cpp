@@ -24,7 +24,6 @@
  **********************************************************************************************************************/
 #include "gpurtInternal.h"
 #include "gpurtBvhBuilder.h"
-#include "gpurtCpuBvhBuilder.h"
 #include "gpurt/gpurtLib.h"
 #include "gpurt/gpurtCounter.h"
 #include "gpurtInternalShaderBindings.h"
@@ -112,6 +111,61 @@ constexpr const char* FunctionTableRTIP2_0[] =
 };
 #endif
 
+//=====================================================================================================================
+// Maps Pal::RayTracingIpLevel to the appropriate function table.
+static Pal::Result QueryRayTracingEntryFunctionTableInternal(
+    const Pal::RayTracingIpLevel   rayTracingIpLevel,
+    EntryFunctionTable* const      pEntryFunctionTable)
+{
+    Pal::Result result = Pal::Result::Success;
+
+    const char* const* ppFuncTable = nullptr;
+    switch (rayTracingIpLevel)
+    {
+        case Pal::RayTracingIpLevel::RtIp1_0:
+        case Pal::RayTracingIpLevel::RtIp1_1:
+            ppFuncTable = FunctionTableRTIP1_1;
+            break;
+#if GPURT_BUILD_RTIP2
+        case Pal::RayTracingIpLevel::RtIp2_0:
+            ppFuncTable = FunctionTableRTIP2_0;
+            break;
+#endif
+        case Pal::RayTracingIpLevel::None:
+        default:
+            result = Pal::Result::ErrorInvalidValue;
+            PAL_ASSERT_ALWAYS();
+            break;
+    }
+
+    if (ppFuncTable)
+    {
+        pEntryFunctionTable->traceRay.pTraceRay =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::TraceRay)];
+        pEntryFunctionTable->traceRay.pTraceRayUsingHitToken =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::TraceRayUsingHitToken)];
+        pEntryFunctionTable->traceRay.pTraceRayUsingRayQuery =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::TraceRayUsingRayQuery)];
+
+        pEntryFunctionTable->rayQuery.pTraceRayInline =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::TraceRayInline)];
+        pEntryFunctionTable->rayQuery.pProceed =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::RayQueryProceed)];
+
+        pEntryFunctionTable->intrinsic.pGetInstanceID =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::GetInstanceID)];
+        pEntryFunctionTable->intrinsic.pGetInstanceIndex =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::GetInstanceIndex)];
+        pEntryFunctionTable->intrinsic.pGetObjectToWorldTransform =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::GetObjectToWorldTransform)];
+        pEntryFunctionTable->intrinsic.pGetWorldToObjectTransform =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::GetWorldToObjectTransform)];
+
+    }
+
+    return result;
+}
+
 // =====================================================================================================================
 // Create GPURT device
 //
@@ -163,7 +217,8 @@ PipelineShaderCode GPURT_API_ENTRY GetShaderLibraryCode(
 
     PipelineShaderCode code = {};
 
-#define CHOOSE_SHADER(x) { code.pDxilCode = (x); code.dxilSize = sizeof(x); }
+#define CHOOSE_SHADER(x) { code.pDxilCode = (x); code.dxilSize = sizeof(x); \
+                           code.pSpvCode  = (x); code.spvSize  = sizeof(x); }
 
     if (enableSwTraversal)
     {
@@ -200,56 +255,11 @@ Pal::Result GPURT_API_ENTRY QueryRayTracingEntryFunctionTable(
 #endif
     EntryFunctionTable* const      pEntryFunctionTable)
 {
-    Pal::Result result = Pal::Result::Success;
-#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 30
-    const bool bvh8Enable = false;
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 30
+    return QueryRayTracingEntryFunctionTableInternal(rayTracingIpLevel, pEntryFunctionTable);
+#else
+    return QueryRayTracingEntryFunctionTableInternal(rayTracingIpLevel, pEntryFunctionTable);
 #endif
-
-    const char* const* ppFuncTable = nullptr;
-    switch (rayTracingIpLevel)
-    {
-        case Pal::RayTracingIpLevel::RtIp1_0:
-        case Pal::RayTracingIpLevel::RtIp1_1:
-            ppFuncTable = FunctionTableRTIP1_1;
-            break;
-#if GPURT_BUILD_RTIP2
-        case Pal::RayTracingIpLevel::RtIp2_0:
-            ppFuncTable = FunctionTableRTIP2_0;
-            break;
-#endif
-        case Pal::RayTracingIpLevel::None:
-        default:
-            result = Pal::Result::ErrorInvalidValue;
-            PAL_ASSERT_ALWAYS();
-            break;
-    }
-
-    if (ppFuncTable)
-    {
-        pEntryFunctionTable->traceRay.pTraceRay =
-            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::TraceRay)];
-        pEntryFunctionTable->traceRay.pTraceRayUsingHitToken =
-            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::TraceRayUsingHitToken)];
-        pEntryFunctionTable->traceRay.pTraceRayUsingRayQuery =
-            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::TraceRayUsingRayQuery)];
-
-        pEntryFunctionTable->rayQuery.pTraceRayInline =
-            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::TraceRayInline)];
-        pEntryFunctionTable->rayQuery.pProceed =
-            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::RayQueryProceed)];
-
-        pEntryFunctionTable->intrinsic.pGetInstanceID =
-            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::GetInstanceID)];
-        pEntryFunctionTable->intrinsic.pGetInstanceIndex =
-            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::GetInstanceIndex)];
-        pEntryFunctionTable->intrinsic.pGetObjectToWorldTransform =
-            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::GetObjectToWorldTransform)];
-        pEntryFunctionTable->intrinsic.pGetWorldToObjectTransform =
-            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::GetWorldToObjectTransform)];
-
-    }
-
-    return result;
 }
 
 namespace Internal {
@@ -332,11 +342,11 @@ void Device::GetAccelStructPrebuildInfo(
 
     deviceSettings = m_info.deviceSettings;
 
-    GpuBvhBuilder builder(nullptr,
-                          this,
-                          *m_info.pDeviceProperties,
-                          clientCb,
-                          deviceSettings);
+    BvhBuilder builder(nullptr,
+                       this,
+                       *m_info.pDeviceProperties,
+                       clientCb,
+                       deviceSettings);
 
     builder.GetAccelerationStructurePrebuildInfo(buildInfo, pPrebuildInfo);
 }
@@ -383,6 +393,15 @@ Pal::Result Device::Init()
 
     m_bufferSrdSizeDw = props.gfxipProperties.srdSizes.bufferView / sizeof(uint32);
 
+    if (m_info.deviceSettings.emulatedRtIpLevel == Pal::RayTracingIpLevel::None)
+    {
+        m_rtIpLevel = m_info.pDeviceProperties->gfxipProperties.rayTracingIp;
+    }
+    else
+    {
+        m_rtIpLevel = m_info.deviceSettings.emulatedRtIpLevel;
+    }
+
 #if PAL_BUILD_RDF
     Pal::IPlatform* pPlatform = m_info.pPalPlatform;
     GpuUtil::TraceSession* pTraceSession = pPlatform->GetTraceSession();
@@ -397,7 +416,7 @@ Pal::Result Device::Init()
 
 #if GPURT_BUILD_RTIP2
     // Fused instance node is currently only supported on RTIP2.0
-    if (m_info.pDeviceProperties->gfxipProperties.rayTracingIp != Pal::RayTracingIpLevel::RtIp2_0)
+    if (m_rtIpLevel != Pal::RayTracingIpLevel::RtIp2_0)
     {
         m_info.deviceSettings.enableFusedInstanceNode = false;
     }
@@ -412,10 +431,8 @@ Pal::Result Device::QueryRayTracingEntryFunctionTable(
     const Pal::RayTracingIpLevel   rayTracingIpLevel,
     EntryFunctionTable* const      pEntryFunctionTable)
 {
-    return GpuRt::QueryRayTracingEntryFunctionTable(rayTracingIpLevel,
-#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 30
-#endif
-                                                    pEntryFunctionTable);
+    return QueryRayTracingEntryFunctionTableInternal(rayTracingIpLevel,
+                                                     pEntryFunctionTable);
 }
 
 // =====================================================================================================================
@@ -587,25 +604,27 @@ Pal::IPipeline* Device::GetInternalPipeline(
                     "_RebraidV2", // GpuRt::RebraidType::V2,
                 };
 
-                Util::Snprintf(pipelineName, MaxStrLength, "%s%s_%s%s%s%s_RadixSortLevel_%d",
+                char radixSortLevelStr[MaxStrLength];
+                Util::Snprintf(radixSortLevelStr, MaxStrLength, "_RadixSortLevel_%d", buildSettings.radixSortScanLevel);
+
+                Util::Snprintf(pipelineName, MaxStrLength, "%s%s_%s%s%s%s%s",
                                 buildInfo.pPipelineName,
                                 buildSettings.topLevelBuild ? "_TLAS" : "_BLAS",
                                 buildSettings.enableTopDownBuild ? "TopDown" : BuildModeStr[buildSettings.buildMode],
                                 buildSettings.doTriangleSplitting ? "_TriSplit" : "",
                                 buildSettings.triangleCompressionMode ? "_TriCompr" : "",
                                 RebraidTypeStr[buildSettings.rebraidType],
-                                buildSettings.radixSortScanLevel);
+                                buildSettings.enableMergeSort ? "_MergeSort" : radixSortLevelStr);
 
                 buildInfo.pPipelineName = &pipelineName[0];
             }
 #endif
 
-            result = m_clientCb.pfnCreateInternalComputePipeline(
-                m_info,
-                buildInfo,
-                compileConstants,
-                &pPipelinePair->pPipeline,
-                &pPipelinePair->pMemory);
+            result = m_clientCb.pfnCreateInternalComputePipeline(m_info,
+                                                                 buildInfo,
+                                                                 compileConstants,
+                                                                 &pPipelinePair->pPipeline,
+                                                                 &pPipelinePair->pMemory);
 
             PAL_ASSERT(result == Pal::Result::Success);
         }
@@ -1088,6 +1107,8 @@ void Device::BuildAccelStruct(
     const AccelStructBuildInfo&   buildInfo
 )
 {
+    PAL_ASSERT(pCmdBuffer != nullptr);
+
     DeviceSettings deviceSettings;
     ClientCallbacks clientCb = {};
 
@@ -1095,29 +1116,17 @@ void Device::BuildAccelStruct(
 
     deviceSettings = m_info.deviceSettings;
 
-    if (pCmdBuffer != nullptr)
-    {
-        pCmdBuffer->CmdSaveComputeState(Pal::ComputeStateAll);
+    pCmdBuffer->CmdSaveComputeState(Pal::ComputeStateAll);
 
-        GpuBvhBuilder builder(pCmdBuffer,
-                              this,
-                              *m_info.pDeviceProperties,
-                              clientCb,
-                              deviceSettings);
+    BvhBuilder builder(pCmdBuffer,
+                       this,
+                       *m_info.pDeviceProperties,
+                       clientCb,
+                       deviceSettings);
 
-        builder.BuildRaytracingAccelerationStructure(buildInfo);
+    builder.BuildRaytracingAccelerationStructure(buildInfo);
 
-        pCmdBuffer->CmdRestoreComputeState(Pal::ComputeStateAll);
-    }
-    else
-    {
-        CpuBvhBuilder builder(this,
-                              *m_info.pDeviceProperties,
-                              clientCb,
-                              deviceSettings);
-
-        builder.BuildRaytracingAccelerationStructure(buildInfo);
-    }
+    pCmdBuffer->CmdRestoreComputeState(Pal::ComputeStateAll);
 }
 
 // =====================================================================================================================
@@ -1126,6 +1135,8 @@ void Device::EmitAccelStructPostBuildInfo(
     const AccelStructPostBuildInfo& postBuildInfo
 )
 {
+    PAL_ASSERT(pCmdBuffer != nullptr);
+
     DeviceSettings deviceSettings;
     ClientCallbacks clientCb = {};
 
@@ -1133,29 +1144,17 @@ void Device::EmitAccelStructPostBuildInfo(
 
     deviceSettings = m_info.deviceSettings;
 
-    if (pCmdBuffer != nullptr)
-    {
-        pCmdBuffer->CmdSaveComputeState(Pal::ComputeStateAll);
+    pCmdBuffer->CmdSaveComputeState(Pal::ComputeStateAll);
 
-        GpuBvhBuilder builder(pCmdBuffer,
-                              this,
-                              *m_info.pDeviceProperties,
-                              clientCb,
-                              deviceSettings);
+    BvhBuilder builder(pCmdBuffer,
+                       this,
+                       *m_info.pDeviceProperties,
+                       clientCb,
+                       deviceSettings);
 
-        builder.EmitAccelerationStructurePostBuildInfo(postBuildInfo);
+    builder.EmitAccelerationStructurePostBuildInfo(postBuildInfo);
 
-        pCmdBuffer->CmdRestoreComputeState(Pal::ComputeStateAll);
-    }
-    else
-    {
-        CpuBvhBuilder builder(this,
-                              *m_info.pDeviceProperties,
-                              clientCb,
-                              deviceSettings);
-
-        builder.EmitAccelerationStructurePostBuildInfo(postBuildInfo);
-    }
+    pCmdBuffer->CmdRestoreComputeState(Pal::ComputeStateAll);
 }
 
 // =====================================================================================================================
@@ -1164,6 +1163,8 @@ void Device::CopyAccelStruct(
     const AccelStructCopyInfo&    copyInfo
 )
 {
+    PAL_ASSERT(pCmdBuffer != nullptr);
+
     DeviceSettings deviceSettings;
     ClientCallbacks clientCb = {};
 
@@ -1171,29 +1172,17 @@ void Device::CopyAccelStruct(
 
     deviceSettings = m_info.deviceSettings;
 
-    if (pCmdBuffer != nullptr)
-    {
-        pCmdBuffer->CmdSaveComputeState(Pal::ComputeStateAll);
+    pCmdBuffer->CmdSaveComputeState(Pal::ComputeStateAll);
 
-        GpuBvhBuilder builder(pCmdBuffer,
-                              this,
-                              *m_info.pDeviceProperties,
-                              clientCb,
-                              deviceSettings);
+    BvhBuilder builder(pCmdBuffer,
+                       this,
+                       *m_info.pDeviceProperties,
+                       clientCb,
+                       deviceSettings);
 
-        builder.CopyAccelerationStructure(copyInfo);
+    builder.CopyAccelerationStructure(copyInfo);
 
-        pCmdBuffer->CmdRestoreComputeState(Pal::ComputeStateAll);
-    }
-    else
-    {
-        CpuBvhBuilder builder(this,
-                              *m_info.pDeviceProperties,
-                              clientCb,
-                              deviceSettings);
-
-        builder.CopyAccelerationStructure(copyInfo);
-    }
+    pCmdBuffer->CmdRestoreComputeState(Pal::ComputeStateAll);
 }
 
 // =====================================================================================================================

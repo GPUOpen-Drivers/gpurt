@@ -72,13 +72,45 @@ typedef struct D3D12DDI_RAYTRACING_GEOMETRY_TRIANGLES_DESC_0054
 #define GEOMETRY_DESC_AABB_COUNT_OFFSET  8
 #define GEOMETRY_DESC_AABBS_OFFSET      16
 
-static uint64_t FetchApiInstanceBaseAddress(
+//=====================================================================================================================
+static uint32_t FetchInstanceIndex(
     in RWByteAddressBuffer SrcBuffer,
-    in uint offset)
+    in uint32_t            bufferOffset,
+    in AccelStructHeader   header,
+    in uint32_t            nodePtr)
 {
-    // Fetch acceleration structure base address in TLAS instance
-    uint2 qword = SrcBuffer.Load2(offset + INSTANCE_DESC_VA_LO_OFFSET);
-    uint64_t gpuVa = PackUint64(qword.x, qword.y);
+    const uint32_t sidebandOffset = GetInstanceSidebandOffset(header, nodePtr);
+    return SrcBuffer.Load(
+        bufferOffset + header.metadataSizeInBytes + sidebandOffset + RTIP1_1_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET);
+}
+
+//=====================================================================================================================
+static InstanceDesc DecodeApiInstanceDesc(
+    in RWByteAddressBuffer SrcBuffer,
+    in AccelStructHeader header,
+    in uint nodePtr)
+{
+    InstanceDesc apiInstanceDesc = (InstanceDesc)0;
+
+    uint32_t blasMetadataSizeInBytes = 0;
+
+    {
+        const uint offset = header.metadataSizeInBytes + ExtractNodePointerOffset(nodePtr);
+        apiInstanceDesc = SrcBuffer.Load<InstanceDesc>(offset);
+
+        const InstanceSidebandData1_1 sideband =
+            SrcBuffer.Load<InstanceSidebandData1_1>(offset + sizeof(InstanceDesc));
+
+        apiInstanceDesc.Transform[0] = sideband.Transform[0];
+        apiInstanceDesc.Transform[1] = sideband.Transform[1];
+        apiInstanceDesc.Transform[2] = sideband.Transform[2];
+
+        blasMetadataSizeInBytes =
+            SrcBuffer.Load(offset + INSTANCE_NODE_EXTRA_OFFSET + RTIP1_1_INSTANCE_SIDEBAND_CHILD_METADATA_SIZE_OFFSET);
+    }
+
+    uint64_t gpuVa =
+        PackUint64(apiInstanceDesc.accelStructureAddressLo, apiInstanceDesc.accelStructureAddressHiAndFlags);
 
     // Mask off instance flags in the upper bits of the acceleration structure address
     gpuVa = ExtractInstanceAddr(gpuVa);
@@ -86,13 +118,14 @@ static uint64_t FetchApiInstanceBaseAddress(
     // Skip null BLAS
     if (gpuVa != 0)
     {
-        const uint blasMetadataSizeInBytes = SrcBuffer.Load(offset +
-            INSTANCE_NODE_EXTRA_OFFSET + INSTANCE_EXTRA_METADATA_SIZE_OFFSET);
-
-        // - offset to base of bottom level acceleration structure
+        // Offset to base of bottom level acceleration structure
         gpuVa -= blasMetadataSizeInBytes;
     }
 
-    return gpuVa;
+    // Patch instance address
+    apiInstanceDesc.accelStructureAddressLo = LowPart(gpuVa);
+    apiInstanceDesc.accelStructureAddressHiAndFlags = HighPart(gpuVa);
+
+    return apiInstanceDesc;
 }
 #endif

@@ -48,17 +48,17 @@ BoundingBox GenerateNodeBoundingBox(
 
     BoundingBox bbox;
 
-    if (IsBoxNode16(nodePointer))
     {
-        const Float16BoxNode node = DstMetadata.Load<Float16BoxNode>(nodeOffset);
-
-        bbox = GenerateBoxNode16BoundingBox(node);
-    }
-    else // box node
-    {
-        const Float32BoxNode node = DstMetadata.Load<Float32BoxNode>(nodeOffset);
-
-        bbox = GenerateBoxNode32BoundingBox(node);
+        if (IsBoxNode16(nodePointer))
+        {
+            const Float16BoxNode node = DstMetadata.Load<Float16BoxNode>(nodeOffset);
+            bbox = GenerateBoxNode16BoundingBox(node);
+        }
+        else
+        {
+            const Float32BoxNode node = DstMetadata.Load<Float32BoxNode>(nodeOffset);
+            bbox = GenerateBoxNode32BoundingBox(node);
+        }
     }
 
     return bbox;
@@ -72,26 +72,28 @@ void UpdateChildBoundingBox(
     uint                nodePointer,
     uint                childIdx)
 {
-    const uint parentNodeOffset = metadataSize + ExtractNodePointerOffset(parentNodePointer);
+    uint parentNodeOffset = metadataSize + ExtractNodePointerOffset(parentNodePointer);
 
     // TODO: We must handle rounding errors originating from converting fp32 to fp16 box representation
     //       Currently, the errors will propagate up the tree
     const BoundingBox bbox = GenerateNodeBoundingBox(DstMetadata, metadataSize, nodePointer);
 
-    if (IsBoxNode32(parentNodePointer))
     {
-        const uint bboxMinOffset = FLOAT32_BOX_NODE_BB0_MIN_OFFSET + (childIdx * FLOAT32_BBOX_STRIDE);
-        const uint bboxMaxOffset = FLOAT32_BOX_NODE_BB0_MAX_OFFSET + (childIdx * FLOAT32_BBOX_STRIDE);
+        if (IsBoxNode32(parentNodePointer))
+        {
+            const uint bboxMinOffset = FLOAT32_BOX_NODE_BB0_MIN_OFFSET + (childIdx * FLOAT32_BBOX_STRIDE);
+            const uint bboxMaxOffset = FLOAT32_BOX_NODE_BB0_MAX_OFFSET + (childIdx * FLOAT32_BBOX_STRIDE);
 
-        DstMetadata.Store<float3>(parentNodeOffset + bboxMinOffset, bbox.min);
-        DstMetadata.Store<float3>(parentNodeOffset + bboxMaxOffset, bbox.max);
-    }
-    else // Float16BoxNode
-    {
-        const uint  bbox16Offset = FLOAT16_BOX_NODE_BB0_OFFSET + (childIdx * FLOAT16_BBOX_STRIDE);
-        const uint3 bbox16       = CompressBBoxToUint3(bbox);
+            DstMetadata.Store<float3>(parentNodeOffset + bboxMinOffset, bbox.min);
+            DstMetadata.Store<float3>(parentNodeOffset + bboxMaxOffset, bbox.max);
+        }
+        else // Float16BoxNode
+        {
+            const uint  bbox16Offset = FLOAT16_BOX_NODE_BB0_OFFSET + (childIdx * FLOAT16_BBOX_STRIDE);
+            const uint3 bbox16 = CompressBBoxToUint3(bbox);
 
-        DstMetadata.Store<uint3>(parentNodeOffset + bbox16Offset, bbox16);
+            DstMetadata.Store<uint3>(parentNodeOffset + bbox16Offset, bbox16);
+        }
     }
 }
 
@@ -103,7 +105,7 @@ void UpdateRootBoundingBox(
     const Float32BoxNode rootBoxNode = FetchFloat32BoxNode(DstMetadata,
                                                            metadataSize + ACCEL_STRUCT_HEADER_SIZE);
 
-    const BoundingBox    rootBbox    = GenerateBoxNode32BoundingBox(rootBoxNode);
+    BoundingBox rootBbox = GenerateBoxNode32BoundingBox(rootBoxNode);
 
     DstMetadata.Store3(metadataSize + ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET,      asuint(rootBbox.min));
     DstMetadata.Store3(metadataSize + ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET + 12, asuint(rootBbox.max));
@@ -113,10 +115,43 @@ void UpdateRootBoundingBox(
         const uint flags0 = ExtractNodeFlagsField(rootBoxNode.flags, 0);
         const uint flags1 = ExtractNodeFlagsField(rootBoxNode.flags, 1);
 
-        const uint mergedNodeFlags = flags0 & flags1;
+        uint mergedNodeFlags = flags0 & flags1;
 
         DstMetadata.Store(metadataSize + ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET, mergedNodeFlags);
     }
+}
+
+//=====================================================================================================================
+void UpdateNodeFlagsTopLevel(
+    uint metadataSize, uint parentNodeOffset)
+{
+    // Read child pointers from source buffer
+    const uint childPointers[4] = SrcBuffer.Load<uint[4]>(parentNodeOffset);
+
+    // Read node flags from parent. Note, instance nodes update their relevant flag bits at EncodeTopLevel
+    uint parentNodeFlags = DstMetadata.Load(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET);
+
+    for (uint i = 0; i < 4; i++)
+    {
+        // Note this also returns false for INVALID_IDX
+        if (IsBoxNode32(childPointers[i]))
+        {
+            const uint childOffset = metadataSize + ExtractNodePointerOffset(childPointers[i]);
+            const uint childFlags = DstMetadata.Load(childOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET);
+
+            const uint flags0 = ExtractNodeFlagsField(childFlags, 0);
+            const uint flags1 = ExtractNodeFlagsField(childFlags, 1);
+            const uint flags2 = ExtractNodeFlagsField(childFlags, 2);
+            const uint flags3 = ExtractNodeFlagsField(childFlags, 3);
+
+            const uint mergedNodeFlags = flags0 & flags1 & flags2 & flags3;
+
+            parentNodeFlags = ClearNodeFlagsField(parentNodeFlags, i);
+            parentNodeFlags = SetNodeFlagsField(parentNodeFlags, mergedNodeFlags, i);
+        }
+    }
+
+    DstMetadata.Store(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, parentNodeFlags);
 }
 
 //=====================================================================================================================
@@ -160,7 +195,7 @@ void UpdateQBVHImpl(
 
             DstMetadata.Store<AccelStructMetadataHeader>(0, resultMetadata);
 
-            DstMetadata.Store(metadataSize + ACCEL_STRUCT_HEADER_VERSION_OFFSET,                 header.version);
+            DstMetadata.Store(metadataSize + ACCEL_STRUCT_HEADER_VERSION_OFFSET,                 header.accelStructVersion);
             DstMetadata.Store(metadataSize + ACCEL_STRUCT_HEADER_INFO_OFFSET,                    header.info);
             DstMetadata.Store(metadataSize + ACCEL_STRUCT_HEADER_METADATA_SIZE_OFFSET,           header.metadataSizeInBytes);
             DstMetadata.Store(metadataSize + ACCEL_STRUCT_HEADER_BYTE_SIZE_OFFSET,               header.sizeInBytes);
@@ -229,30 +264,10 @@ void UpdateQBVHImpl(
                                                          ExtractNodePointerCollapse(nodePointer));
 
         const uint parentNodeOffset = metadataSize + ExtractNodePointerOffset(parentNodePointer);
-        const uint childPointers[4] = SrcBuffer.Load<uint[4]>(parentNodeOffset);
-
-        // find child index
-        uint childIdx = 0;
-
-        // There is always at least one valid child node
         uint numValidChildren = 0;
 
-        for (uint i = 0; i < 4; i++)
-        {
-            if (childPointers[i] != INVALID_IDX)
-            {
-                // Skip leaves as they are handled during Encode
-                if (IsBoxNode(childPointers[i]))
-                {
-                    numValidChildren++;
-                }
-
-                if (childPointers[i] == nodePointer)
-                {
-                    childIdx = i;
-                }
-            }
-        }
+        const uint childIdx =
+            ComputeChildIndexAndValidBoxCount(Settings, SrcBuffer, parentNodeOffset, nodePointer, numValidChildren);
 
         UpdateChildBoundingBox(DstMetadata, metadataSize, parentNodePointer, nodePointer, childIdx);
 
@@ -280,38 +295,13 @@ void UpdateQBVHImpl(
         {
             if (ShaderConstants.isUpdateInPlace == false)
             {
-                DstMetadata.Store<uint[4]>(parentNodeOffset, childPointers);
-
-                const uint sourceFlags = SrcBuffer.Load(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET);
-                DstMetadata.Store(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, sourceFlags);
+                CopyChildPointersAndFlags(SrcBuffer, DstMetadata, parentNodePointer, metadataSize);
             }
 
             if (type == TOP_LEVEL)
             {
-                // Read node flags from parent. Note, instance nodes update their relevant flag bits at EncodeTopLevel
-                uint parentNodeFlags = DstMetadata.Load(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET);
+                UpdateNodeFlagsTopLevel(metadataSize, parentNodeOffset);
 
-                for (uint i = 0; i < 4; i++)
-                {
-                    // Note this also returns false for INVALID_IDX
-                    if (IsBoxNode32(childPointers[i]))
-                    {
-                        const uint childOffset = metadataSize + ExtractNodePointerOffset(childPointers[i]);
-                        const uint childFlags  = DstMetadata.Load(childOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET);
-
-                        const uint flags0 = ExtractNodeFlagsField(childFlags, 0);
-                        const uint flags1 = ExtractNodeFlagsField(childFlags, 1);
-                        const uint flags2 = ExtractNodeFlagsField(childFlags, 2);
-                        const uint flags3 = ExtractNodeFlagsField(childFlags, 3);
-
-                        const uint mergedNodeFlags = flags0 & flags1 & flags2 & flags3;
-
-                        parentNodeFlags = ClearNodeFlagsField(parentNodeFlags, i);
-                        parentNodeFlags = SetNodeFlagsField(parentNodeFlags, mergedNodeFlags, i);
-                    }
-                }
-
-                DstMetadata.Store(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, parentNodeFlags);
             }
 
             // The last child of the root node updates the root bounding box in the header

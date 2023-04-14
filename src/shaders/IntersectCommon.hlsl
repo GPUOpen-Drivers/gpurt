@@ -36,13 +36,6 @@
 
 #define INVALID_IDX       0xffffffff
 
-// Node pointer values with special meanings
-#define INVALID_NODE      0xffffffff
-#define TERMINAL_NODE     0xfffffffe
-#define SKIP_0_3          0xfffffffd
-#define SKIP_4_7          0xfffffffb
-#define SKIP_0_7          0xfffffff9
-
 #define SORT(childA,childB,distA,distB) if((childB!=INVALID_NODE&&distB<distA)||childA==INVALID_NODE){  float t0 = distA; uint t1 = childA;  childA = childB; distA = distB;  childB=t1; distB=t0; }
 
 #define INTERSECT_RAY_VERSION_1 1
@@ -50,6 +43,20 @@
 #if GPURT_BUILD_RTIP2
 #define INTERSECT_RAY_VERSION_2 2
 #endif
+
+//=====================================================================================================================
+// Helper function for extracting a single bit from a 32-bit field
+inline uint bit(uint index)
+{
+    return 1u << index;
+}
+
+//=====================================================================================================================
+// Helper function for generating a 32-bit bit mask
+inline uint bits(uint bitcount)
+{
+    return (1u << bitcount) - 1;
+}
 
 //=====================================================================================================================
 // Avoid tracing NaN rays or null acceleration structures.
@@ -150,74 +157,16 @@ static bool CheckInstanceCulling(in InstanceDesc desc, const uint rayFlags, cons
 }
 
 //=====================================================================================================================
-static uint FetchInstanceIndexAddr(in GpuVirtualAddress nodeAddr)
-{
-    return LoadDwordAtAddr(nodeAddr + INSTANCE_NODE_EXTRA_OFFSET + INSTANCE_EXTRA_INDEX_OFFSET);
-}
-
-//=====================================================================================================================
-static uint FetchInstanceIndex(in GpuVirtualAddress bvhAddress, in uint nodePointer)
-{
-    const uint byteOffset = ExtractNodePointerOffset(nodePointer);
-    const GpuVirtualAddress nodeAddr = bvhAddress + byteOffset;
-    return FetchInstanceIndexAddr(nodeAddr);
-}
-
-//=====================================================================================================================
 static uint FetchInstanceNodePointerAddr(in GpuVirtualAddress nodeAddr)
 {
-    return LoadDwordAtAddr(nodeAddr + INSTANCE_NODE_EXTRA_OFFSET + INSTANCE_EXTRA_NODE_POINTER_OFFSET);
+    return LoadDwordAtAddr(nodeAddr + INSTANCE_NODE_EXTRA_OFFSET + RTIP1_1_INSTANCE_SIDEBAND_CHILD_POINTER_OFFSET);
 }
 
 //=====================================================================================================================
-static uint FetchInstanceNodePointer(in GpuVirtualAddress bvhAddress, in uint nodePointer)
+static uint64_t CalculateNodeAddr64(in GpuVirtualAddress bvhAddress, in uint nodePointer)
 {
     const uint byteOffset = ExtractNodePointerOffset(nodePointer);
-    const GpuVirtualAddress nodeAddr = bvhAddress + byteOffset;
-    return FetchInstanceNodePointerAddr(nodeAddr);
-}
-
-//=====================================================================================================================
-static uint2 CalculateNodeAddr64(in GpuVirtualAddress bvhAddress, in uint nodePointer)
-{
-    const uint byteOffset = ExtractNodePointerOffset(nodePointer);
-    const GpuVirtualAddress nodeAddr64 = bvhAddress + byteOffset;
-
-    return uint2(LowPart(nodeAddr64), HighPart(nodeAddr64));
-}
-
-//=====================================================================================================================
-static TriangleNode FetchTriangleNode(in GpuVirtualAddress bvhAddress, in uint nodePointer)
-{
-    const uint byteOffset = ExtractNodePointerOffset(nodePointer);
-    const GpuVirtualAddress nodeAddr = bvhAddress + byteOffset;
-
-    uint4 d0, d1, d2, d3;
-    d0 = LoadDwordAtAddrx4(nodeAddr);
-    d1 = LoadDwordAtAddrx4(nodeAddr + 0x10);
-    d2 = LoadDwordAtAddrx4(nodeAddr + 0x20);
-    d3 = LoadDwordAtAddrx4(nodeAddr + 0x30);
-
-    TriangleNode node;
-
-    node.v0.x = asfloat(d0.x);
-    node.v0.y = asfloat(d0.y);
-    node.v0.z = asfloat(d0.z);
-    node.v1.x = asfloat(d0.w);
-    node.v1.y = asfloat(d1.x);
-    node.v1.z = asfloat(d1.y);
-    node.v2.x = asfloat(d1.z);
-    node.v2.y = asfloat(d1.w);
-    node.v2.z = asfloat(d2.x);
-    node.v3.x = asfloat(d2.y);
-    node.v3.y = asfloat(d2.z);
-    node.v3.z = asfloat(d2.w);
-    node.v4.x = asfloat(d3.x);
-    node.v4.y = asfloat(d3.y);
-    node.v4.z = asfloat(d3.z);
-    node.triangleId = d3.w;
-
-    return node;
+    return (bvhAddress + byteOffset);
 }
 
 //=====================================================================================================================
@@ -517,7 +466,7 @@ static float4 fast_intersect_bbox(
 }
 
 //=====================================================================================================================
-static uint4 IntersectNode(
+static uint4 IntersectNodeBvh4(
     const Float32BoxNode node, float ray_extent, float3 ray_origin, float3 ray_inv_dir, uint box_grow_ulp, uint box_sort_heuristic)
 {
     // Box nodes consist of the bounds of four different axis aligned
@@ -619,34 +568,6 @@ static uint4 IntersectNode(
 }
 
 //=====================================================================================================================
-// Intersect rays vs bbox and return intersection span.
-static float2 fast_intersect_bbox_compressed(
-    float3 oprime, float3 dprime, float3 box_min, float3 box_max, float t_max)
-{
-    const float3 t_plane_min = box_min * dprime + oprime;
-    const float3 t_plane_max = box_max * dprime + oprime;
-
-    float3 min_interval, max_interval;
-
-    min_interval.x = dprime.x >= 0.0f ? t_plane_min.x : t_plane_max.x;
-    max_interval.x = dprime.x >= 0.0f ? t_plane_max.x : t_plane_min.x;
-
-    min_interval.y = dprime.y >= 0.0f ? t_plane_min.y : t_plane_max.y;
-    max_interval.y = dprime.y >= 0.0f ? t_plane_max.y : t_plane_min.y;
-
-    min_interval.z = dprime.z >= 0.0f ? t_plane_min.z : t_plane_max.z;
-    max_interval.z = dprime.z >= 0.0f ? t_plane_max.z : t_plane_min.z;
-
-    const float min_of_intervals = max3(min_interval);
-    const float max_of_intervals = min3(max_interval);
-
-    const float min_t = max(min_of_intervals, 0.0f);
-    const float max_t = min(max_of_intervals, t_max);
-
-    return float2(min_t, max_t);
-}
-
-//=====================================================================================================================
 // Intersect ray against a triangle and return whether the triangle hit is accepted or not. If hit is accepted
 // hit attributes (closest distance, barycentrics and hit kind) are updated
 static uint4 fast_intersect_triangle(
@@ -711,25 +632,50 @@ static void SwizzleBarycentrics(
     result.w = asuint(baryc[(triangleId >> (triangleShift + TRIANGLE_ID_J_SRC_SHIFT)) % 4]);
 }
 
+#if GPURT_BUILD_RTIP2
 //=====================================================================================================================
-// Given a point in triangle plane, calculate its barycentrics
-static float2 triangle_calculate_barycentrics(float3 p, float3 v1, float3 v2, float3 v3)
+static void PerformTriangleCulling(
+    in uint32_t        intersectRayVersion,
+    in uint64_t        hwNodePtr,
+    in bool            isOpaque,
+    inout_param(uint4) result)
 {
-    const float3 e1 = v2 - v1;
-    const float3 e2 = v3 - v1;
-    const float3 e = p - v1;
-    const float d00 = dot(e1, e1);
-    const float d01 = dot(e1, e2);
-    const float d11 = dot(e2, e2);
-    const float d20 = dot(e, e1);
-    const float d21 = dot(e, e2);
-    const float invdenom = rcp(d00 * d11 - d01 * d01);
-    const float b1 = (d11 * d20 - d01 * d21) * invdenom;
-    const float b2 = (d00 * d21 - d01 * d20) * invdenom;
-    return float2(b1, b2);
+    bool triangleCulled = false;
+
+    {
+        // If determinant is positive and front face winding is counterclockwise or vice versa, the triangle is
+        // back facing.
+        bool frontFacingTriangle = (asfloat(result.y) >= 0.0f);
+        if (FLAG_IS_SET(hwNodePtr, NODE_POINTER_FLIP_FACEDNESS))
+        {
+            frontFacingTriangle = !frontFacingTriangle;
+
+            // The signs of t_num and t_denom are flipped when winding is flipped.
+            // The sign of t_denom indicates front vs back face.
+            result.x ^= 0x80000000;
+            result.y ^= 0x80000000;
+        }
+
+        const bool faceCulled = frontFacingTriangle ?
+            FLAG_IS_SET(hwNodePtr, NODE_POINTER_CULL_FRONT_FACING) :
+            FLAG_IS_SET(hwNodePtr, NODE_POINTER_CULL_BACK_FACING);
+
+        triangleCulled = faceCulled || FLAG_IS_SET(hwNodePtr, NODE_POINTER_SKIP_TRIANGLES);
+    }
+
+    const bool opaque =
+        FLAG_IS_SET(hwNodePtr, NODE_POINTER_FORCE_OPAQUE) ||
+        (FLAG_IS_CLEAR(hwNodePtr, NODE_POINTER_FORCE_NON_OPAQUE) &&
+            isOpaque);
+
+    const bool opaqueCulled = opaque && FLAG_IS_SET(hwNodePtr, NODE_POINTER_CULL_OPAQUE);
+
+    if (triangleCulled || opaqueCulled)
+    {
+        result = uint4(asuint(INFINITY), asuint(1.0f), 0, 0);
+    }
 }
 
-#if GPURT_BUILD_RTIP2
 //=====================================================================================================================
 static bool IsChildEarlyCulled(uint childIndex, uint allBoxFlags, uint64_t hwNodePtr)
 {
@@ -755,7 +701,7 @@ static bool IsChildEarlyCulled(uint childIndex, uint allBoxFlags, uint64_t hwNod
 }
 
 //=====================================================================================================================
-static void HandleNodePtrFlags(inout_param(Float32BoxNode) node, uint64_t hwNodePtr)
+static void PerformEarlyBoxCulling(inout_param(Float32BoxNode) node, uint64_t hwNodePtr)
 {
     const uint boxFlags = node.flags;
 
@@ -841,20 +787,20 @@ static uint4 image_bvh64_intersect_ray_base(
 #if GPURT_BUILD_RTIP2
             if (intersectRayVersion >= INTERSECT_RAY_VERSION_2)
             {
-                HandleNodePtrFlags(node, hwNodePtr);
+                PerformEarlyBoxCulling(node, hwNodePtr);
             }
 #endif
         }
 
         // Intersect ray with qbvh node
-        result = IntersectNode(node,
-                               rayExtent,
-                               rayOrigin,
-                               rayDirectionInverse,
-                               BOX_EXPANSION_DEFAULT_AMOUNT,
-                               boxSortHeuristic);
+        result = IntersectNodeBvh4(node,
+                                   rayExtent,
+                                   rayOrigin,
+                                   rayDirectionInverse,
+                                   BOX_EXPANSION_DEFAULT_AMOUNT,
+                                   boxSortHeuristic);
     }
-    else if (IsTriangleNodeBasedOnStaticPipelineFlags(nodePointer))
+    else if (IsTriangleNode(nodePointer))
     {
         bool procedural = false;
         uint hwTriFlags = 0;
@@ -885,42 +831,12 @@ static uint4 image_bvh64_intersect_ray_base(
 #if GPURT_BUILD_RTIP2
         if (intersectRayVersion >= INTERSECT_RAY_VERSION_2)
         {
-            bool faceCulled = false;
-            if (!procedural)
-            {
-                // If determinant is positive and front face winding is counterclockwise or vice versa, the triangle is
-                // back facing.
-                bool frontFacingTriangle = (asfloat(result.y) >= 0.0f);
-                if (FLAG_IS_SET(hwNodePtr, NODE_POINTER_FLIP_FACEDNESS))
-                {
-                    frontFacingTriangle = !frontFacingTriangle;
-                    // The signs of t_num and t_denom are flipped when winding is flipped.
-                    // The sign of t_denom indicates front vs back face.
-                    result.x ^= 0x80000000;
-                    result.y ^= 0x80000000;
-                }
 
-                faceCulled = frontFacingTriangle ?
-                    FLAG_IS_SET(hwNodePtr, NODE_POINTER_CULL_FRONT_FACING) :
-                    FLAG_IS_SET(hwNodePtr, NODE_POINTER_CULL_BACK_FACING);
-            }
-
-            bool trianglesCulled = false;
-            {
-                trianglesCulled = FLAG_IS_SET(hwNodePtr, NODE_POINTER_SKIP_TRIANGLES);
-            }
-
-            const bool opaque =
-                FLAG_IS_SET(hwNodePtr, NODE_POINTER_FORCE_OPAQUE) ||
-                (FLAG_IS_CLEAR(hwNodePtr, NODE_POINTER_FORCE_NON_OPAQUE) &&
-                 FLAG_IS_SET(hwTriFlags, TRIANGLE_ID_OPAQUE));
-
-            const bool opaqueCulled = opaque && FLAG_IS_SET(hwNodePtr, NODE_POINTER_CULL_OPAQUE);
-
-            if (trianglesCulled || faceCulled || opaqueCulled)
-            {
-                result = uint4(asuint(INFINITY), asuint(1.0f), 0, 0);
-            }
+            const bool opaque = FLAG_IS_SET(hwTriFlags, TRIANGLE_ID_OPAQUE);
+            PerformTriangleCulling(intersectRayVersion,
+                                   hwNodePtr,
+                                   opaque,
+                                   result);
         }
 #endif
     }

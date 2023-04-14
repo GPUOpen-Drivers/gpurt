@@ -98,14 +98,6 @@ static IntersectionResult TraceRayImpl2_0(
     // Last visited node pointer used to record which node was prior for stackless back tracking
     uint lastNodePtr = INVALID_NODE;
 
-#if DEVELOPER
-    if (EnableTraversalCounter())
-    {
-        WriteRayHistoryTokenBegin(rayId, AmdTraceRayDispatchRaysIndex(), topLevelBvh, rayFlags, traceRayParameters, ray);
-        WriteRayHistoryTokenTimeStamp(rayId, rayTraceStartTime);
-    }
-#endif
-
     // stack marker for top level node
     uint stackAddr = 0;
 #if USE_HW_INTRINSIC
@@ -118,7 +110,7 @@ static IntersectionResult TraceRayImpl2_0(
     uint pointerFlags = rayFlagsSetBits;
 
 #if DEVELOPER
-    while ((packedNodePointer < TERMINAL_NODE) && (intersection.numIterations < DispatchRaysInfo.MaxIterations))
+    while ((packedNodePointer < TERMINAL_NODE) && (intersection.numIterations < DispatchRaysConstBuf.profileMaxIterations))
 #else
     while (packedNodePointer < TERMINAL_NODE)
 #endif
@@ -285,14 +277,14 @@ static IntersectionResult TraceRayImpl2_0(
                                                                 geometryIndex,
                                                                 instanceContribution);
 
-                        const uint2 instNodeAddr64 = CalculateNodeAddr64(topLevelBvh, instNodePtr);
+                        const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(topLevelBvh, instNodePtr, GPURT_RTIP2_0);
 
                         // Set intersection attributes
                         AmdTraceRaySetHitAttributes(candidateT,
                                                     hitKind,
                                                     HIT_STATUS_ACCEPT,
-                                                    instNodeAddr64.x,
-                                                    instNodeAddr64.y,
+                                                    LowPart(instNodePtr64),
+                                                    HighPart(instNodePtr64),
                                                     primitiveIndex,
                                                     ANYHIT_CALLTYPE_NO_DUPLICATE,
                                                     geometryIndex);
@@ -425,14 +417,14 @@ static IntersectionResult TraceRayImpl2_0(
 
             if (isCulled == false)
             {
-                const uint2 instNodeAddr64 = CalculateNodeAddr64(topLevelBvh, instNodePtr);
+                const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(topLevelBvh, instNodePtr, GPURT_RTIP2_0);
 
                 // Set intersection attributes
                 AmdTraceRaySetHitAttributes(intersection.t,
                                             0,
                                             HIT_STATUS_IGNORE,
-                                            instNodeAddr64.x,
-                                            instNodeAddr64.y,
+                                            LowPart(instNodePtr64),
+                                            HighPart(instNodePtr64),
                                             primitiveIndex,
                                             anyHitCallType,
                                             geometryIndex);
@@ -569,23 +561,6 @@ static IntersectionResult TraceRayImpl2_0(
         // Set hit token blas and tlas values to invalid for miss
         AmdTraceRaySetHitTokenData(INVALID_NODE, INVALID_NODE);
     }
-
-#if DEVELOPER
-    if (EnableTraversalCounter())
-    {
-        if (intersection.nodeIndex != INVALID_NODE)
-        {
-            WriteRayHistoryTokenEnd(rayId, uint2(intersection.primitiveIndex, intersection.geometryIndex));
-        }
-        else
-        {
-            WriteRayHistoryTokenEnd(rayId, uint2(~0, ~0));
-        }
-        // End trace ray time
-        const uint64_t rayTraceEndTime = SampleGpuTimer();
-        WriteRayHistoryTokenTimeStamp(rayId, rayTraceEndTime);
-    }
-#endif
 
     return intersection;
 }

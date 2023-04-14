@@ -42,9 +42,9 @@ struct InputArgs
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstMetadata : register(u0);
 [[vk::binding(1, 0)]]                  RWByteAddressBuffer SrcBuffer   : register(u1);
 
-#include "Common.hlsl"
 #include "SerializeCommon.hlsl"
 #include "BuildCommon.hlsl"
+#include "DecodeCommon.hlsl"
 
 groupshared uint SharedMem[1];
 
@@ -117,36 +117,44 @@ void DeserializeAS(
             // rebraid disabled
             if (currentInstNodePtr != INVALID_IDX)
             {
-                const uint currentInstNodeOffset = metadataSizeInBytes + ExtractNodePointerOffset(currentInstNodePtr);
-
-                const uint64_t oldGpuVa = SrcBuffer.Load<uint64_t>(serializedHeaderSize + currentInstNodeOffset +
-                                                                   INSTANCE_DESC_VA_LO_OFFSET);
-
                 // Fetch API instance index from instance node. With rebraid enabled the instance node pointers
                 // in memory are in sorted order with no deactivated instances in between. The re-braided instances
                 // are mixed in this array so we need to read the instance index from memory to account for
                 // all API instances. There is some duplication here since we may have multiple leaf nodes
                 // pointing to same instance but Serialize performance is not of great concern.
-                const uint apiInstanceIndex = SrcBuffer.Load(serializedHeaderSize + currentInstNodeOffset +
-                                                                                     INSTANCE_NODE_EXTRA_OFFSET +
-                                                                                     INSTANCE_EXTRA_INDEX_OFFSET);
+                uint apiInstanceIndex = 0;
+
+                {
+                    apiInstanceIndex = FetchInstanceIndex(SrcBuffer, serializedHeaderSize, header, currentInstNodePtr);
+                }
 
                 // During serialisation we store the BLAS base addresses in API instance order. See SerializeAS
                 // for details
                 uint64_t newGpuVa = SrcBuffer.Load<uint64_t>(SERIALIZED_AS_HEADER_SIZE + (apiInstanceIndex * GPUVA_SIZE));
 
-                // Handle null BLAS address
-                if (newGpuVa != 0)
-                {
-                    const uint blasMetadataSize = SrcBuffer.Load(serializedHeaderSize + currentInstNodeOffset +
-                                                                 INSTANCE_NODE_EXTRA_OFFSET +
-                                                                 INSTANCE_EXTRA_METADATA_SIZE_OFFSET);
-                    newGpuVa = newGpuVa + blasMetadataSize;
-                }
+                const uint currentInstNodeOffset = metadataSizeInBytes + ExtractNodePointerOffset(currentInstNodePtr);
 
-                // Preserve the instance flags in the high bits of the address.
-                newGpuVa = (oldGpuVa & ~(INSTANCE_BASE_POINTER_ADDRESS_USED_MASK)) | (newGpuVa >> 3);
-                DstMetadata.Store<uint64_t>(currentInstNodeOffset + INSTANCE_DESC_VA_LO_OFFSET, newGpuVa);
+                uint64_t childBasePtr = 0;
+
+                {
+                    childBasePtr = SrcBuffer.Load<uint64_t>(
+                        serializedHeaderSize + currentInstNodeOffset + INSTANCE_DESC_VA_LO_OFFSET);
+
+                    // Handle null BLAS address
+                    if (newGpuVa != 0)
+                    {
+                        const uint blasMetadataSize = SrcBuffer.Load(serializedHeaderSize + currentInstNodeOffset +
+                                                                     INSTANCE_NODE_EXTRA_OFFSET +
+                                                                     RTIP1_1_INSTANCE_SIDEBAND_CHILD_METADATA_SIZE_OFFSET);
+                        newGpuVa = newGpuVa + blasMetadataSize;
+                    }
+
+                    // Preserve the instance flags in the high bits of the address.
+                    const uint64_t newChildBasePtr =
+                        (childBasePtr & ~(INSTANCE_BASE_POINTER_ADDRESS_USED_MASK)) | (newGpuVa >> 3);
+
+                    DstMetadata.Store<uint64_t>(currentInstNodeOffset + INSTANCE_DESC_VA_LO_OFFSET, newChildBasePtr);
+                }
             }
         }
     }

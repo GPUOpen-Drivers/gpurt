@@ -272,10 +272,6 @@ def RunSpirv(outputDir, compilerPath, inShaderConfig, inShaderBasePath, inDXC, i
         if entryPoint:
             commandArgs += ['-E', entryPoint]
         commandArgs += ['-DAMD_VULKAN', '-DAMD_VULKAN_DXC', '-DAMD_VULKAN_SPV']
-#if GPURT_BUILD_RTIP2
-        commandArgs += ['-DGPURT_BUILD_RTIP2']
-#endif
-
         commandArgs += shaderDefines
         commandArgs += ['-fvk-use-scalar-layout']
         if isLibrary:
@@ -329,6 +325,9 @@ def CompileShaderConfig(shaderConfig, args, shadersOutputDir,
 
     # Attempt to compile the shader. Exit the loop if we fail.
     isSpirv = isSpirvShader(shaderConfig, args)
+
+    # Add Defines passed from CMAKE
+    shaderConfig.defines = args.defines.replace(";",",") + ("" if shaderConfig.defines is None else str("," + shaderConfig.defines))
 
     # Create a temporary working directory for this shader
     tempDirPath = shadersOutputDir + '/' + conversionOutputFilename
@@ -483,12 +482,14 @@ def main() -> int:
     parser.add_argument('--skip-bvh', action='store_true', help='Skip updating BVH shaders', default=False)
     parser.add_argument('--skip-trace', action='store_true', help='Skip updating traversal shaders', default=False)
     parser.add_argument('--verbose', action='store_true', help='Output verbose inforation', default=False)
+    parser.add_argument('--defines', help='Defines for the shader compiler.', default="")
     parser.add_argument('--spirvCompilerPath', help='Path to SPIR-V compiler (either dxc or glslangValidator).', default='./dxc.exe')
     parser.add_argument('--dxcompilerLibPath', help='Path to dxcompiler.dll/libdxcompiler.so', default='./dxcompiler.dll')
     parser.add_argument('--spirvRemapPath', help='Path to spirv-remap executable', default='./spirv-remap.exe')
     parser.add_argument('--whiteListPath', help='Path to SPIRV whitelist file', default=SPIRV_WHITELIST)
     parser.add_argument('--jobs', help='Number of job threads to compile with', default=os.cpu_count())
     parser.add_argument('--spirv', action='store_true', help='Output SPIR-V for Vulkan for BVH shaders, need to be used with --vulkan', default=False)
+    parser.add_argument('--strict', action='store_true', help='Require SSC invocations to finish cleanly without output or warnings.')
 
     originalPath = os.getcwd()
 

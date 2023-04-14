@@ -94,34 +94,15 @@ void DecodeAS(in uint3 globalThreadId : SV_DispatchThreadID)
             const uint dstInstanceDescOffset = VISUALIZATION_HEADER_SIZE + (i * INSTANCE_DESC_SIZE);
             const uint nodePointer           = SrcBuffer.Load(basePrimNodePointersOffset + (i * NODE_PTR_SIZE));
 
-            uint64_t accelStructAddr = 0;
-
+            if (nodePointer != INVALID_IDX)
             {
-                if (nodePointer != INVALID_IDX)
-                {
-                    const uint srcInstanceDescOffset = ExtractNodePointerOffset(nodePointer) + metadataSizeInBytes;
-
-                    const uint xformOffset = srcInstanceDescOffset + INSTANCE_NODE_EXTRA_OFFSET + INSTANCE_EXTRA_XFORM_OFFSET;
-
-                    // transform
-                    uint4 transform = SrcBuffer.Load4(xformOffset);
-                    DstBuffer.Store4(dstInstanceDescOffset, transform);
-
-                    transform = SrcBuffer.Load4(xformOffset + 16);
-                    DstBuffer.Store4(dstInstanceDescOffset + 16, transform);
-
-                    transform = SrcBuffer.Load4(xformOffset + 32);
-                    DstBuffer.Store4(dstInstanceDescOffset + 32, transform);
-
-                    // InstanceID_andMask, InstanceContributionToHitGroupIndex_and_Flags
-                    uint2 d0 = SrcBuffer.Load2(srcInstanceDescOffset + INSTANCE_DESC_ID_AND_MASK_OFFSET);
-                    DstBuffer.Store2(dstInstanceDescOffset + INSTANCE_DESC_ID_AND_MASK_OFFSET, d0);
-
-                    accelStructAddr = FetchApiInstanceBaseAddress(SrcBuffer, srcInstanceDescOffset);
-                }
-
-                // AccelStructureAddressLo/Hi
-                DstBuffer.Store<uint64_t>(dstInstanceDescOffset + INSTANCE_DESC_VA_LO_OFFSET, accelStructAddr);
+                InstanceDesc apiInstanceDesc = DecodeApiInstanceDesc(SrcBuffer, header, nodePointer);
+                DstBuffer.Store<InstanceDesc>(dstInstanceDescOffset, apiInstanceDesc);
+            }
+            else
+            {
+                InstanceDesc apiInstanceDesc = (InstanceDesc)0;
+                DstBuffer.Store<InstanceDesc>(dstInstanceDescOffset, apiInstanceDesc);
             }
         }
     }

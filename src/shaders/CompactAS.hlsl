@@ -87,10 +87,12 @@ void WriteParentNodeChildPointer(
                                                                   ExtractNodePointerOffset(dstNodePointer),
                                                                   collapsePrimCount);
 
-            DstMetadata.Store(parentNodeOffset + dstMetadataSizeInBytes + (childIndex * sizeof(uint)), dstPackedNodePointer);
+            DstMetadata.Store(parentNodeOffset + dstMetadataSizeInBytes + (childIndex * sizeof(uint)),
+                              dstPackedNodePointer);
             break;
         }
     }
+
 }
 
 //=====================================================================================================================
@@ -133,8 +135,10 @@ void CopyFp16BoxNode(
     DstMetadata.Store<uint3>(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_BB2_OFFSET, node.bbox2);
     DstMetadata.Store<uint3>(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_BB3_OFFSET, node.bbox3);
 
-    const uint srcNodePointer = PackNodePointer(NODE_TYPE_BOX_FLOAT16, srcInternalNodeDataOffset - srcMetadataSizeInBytes);
-    const uint dstNodePointer = PackNodePointer(NODE_TYPE_BOX_FLOAT16, dstInternalNodeDataOffset - dstMetadataSizeInBytes);
+    const uint srcNodePointer =
+        PackNodePointer(NODE_TYPE_BOX_FLOAT16, srcInternalNodeDataOffset - srcMetadataSizeInBytes);
+    const uint dstNodePointer =
+        PackNodePointer(NODE_TYPE_BOX_FLOAT16, dstInternalNodeDataOffset - dstMetadataSizeInBytes);
 
     // Update parent pointer
     UpdateParentPointer(srcMetadataSizeInBytes, srcNodePointer, dstMetadataSizeInBytes, dstNodePointer);
@@ -191,7 +195,7 @@ void CopyFp32BoxNode(
     const uint srcNodePointer = PackNodePointer(NODE_TYPE_BOX_FLOAT32, srcInternalNodeDataOffset - srcMetadataSizeInBytes);
     const uint dstNodePointer = PackNodePointer(NODE_TYPE_BOX_FLOAT32, dstInternalNodeDataOffset - dstMetadataSizeInBytes);
 
-    // Update parent pointer
+    // Update parent pointer.
     UpdateParentPointer(srcMetadataSizeInBytes, srcNodePointer, dstMetadataSizeInBytes, dstNodePointer);
 }
 

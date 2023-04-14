@@ -154,9 +154,7 @@ void EncodeInstances(
         if (ShaderConstants.internalFlags & ENCODE_FLAG_ARRAY_OF_POINTERS)
         {
             GpuVirtualAddress addr = InstanceDescBuffer.Load<GpuVirtualAddress>(index * GPU_VIRTUAL_ADDRESS_SIZE);
-            {
-                desc = FetchInstanceDesc(addr, 0);
-            }
+            desc = FetchInstanceDescAddr(addr);
         }
         else
         {
@@ -337,24 +335,10 @@ void EncodeInstances(
 
                 {
                     const uint parentNodeOffset = tlasMetadataSize + ExtractNodePointerOffset(parentNodePointer);
-                    const uint4 childPointers = SrcBuffer.Load<uint4>(parentNodeOffset);
 
-                    // Find child index in parent (assumes child pointer 0 is always valid)
-                    uint childIdx = 0;
-                    if (nodePointer == childPointers.y)
-                    {
-                        childIdx = 1;
-                    }
-
-                    if (nodePointer == childPointers.z)
-                    {
-                        childIdx = 2;
-                    }
-
-                    if (nodePointer == childPointers.w)
-                    {
-                        childIdx = 3;
-                    }
+                    // Compute box node count and child index in parent node
+                    uint boxNodeCount = 0;
+                    const uint childIdx = ComputeChildIndexAndValidBoxCount(Settings, SrcBuffer, parentNodeOffset, nodePointer, boxNodeCount);
 
                     // If even a single child node is a box node, this is a node higher up the tree. Skip queueing parent node as another
                     // leaf at the bottom of the tree will queue its parent which will handle our parent node.
@@ -367,21 +351,17 @@ void EncodeInstances(
                     // L x L x --> 0 --> Queue parent node
                     // L L L L --> 0 --> Queue parent node
 
-                    // Note, IsBoxNode() will return false for invalid nodes.
-                    uint boxNodeCount = 0;
-                    boxNodeCount += IsBoxNode(childPointers.x) ? 1 : 0;
-                    boxNodeCount += IsBoxNode(childPointers.y) ? 1 : 0;
-                    boxNodeCount += IsBoxNode(childPointers.z) ? 1 : 0;
-                    boxNodeCount += IsBoxNode(childPointers.w) ? 1 : 0;
                     const uint boxOffset = childIdx * FLOAT32_BBOX_STRIDE;
-                    DstMetadata.Store<float3>(parentNodeOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET + boxOffset, boundingBox.min);
-                    DstMetadata.Store<float3>(parentNodeOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET + boxOffset, boundingBox.max);
+                    {
+                        DstMetadata.Store<float3>(parentNodeOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET + boxOffset, boundingBox.min);
+                        DstMetadata.Store<float3>(parentNodeOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET + boxOffset, boundingBox.max);
 
-                    // The instance flags can be changed in an update, so the node flags need to be updated.
-                    const uint fieldMask = 0xFFu << (childIdx * BOX_NODE_FLAGS_BIT_STRIDE);
-                    DstMetadata.InterlockedAnd(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, ~fieldMask);
-                    DstMetadata.InterlockedOr(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET,
-                                              nodeFlags << (childIdx * BOX_NODE_FLAGS_BIT_STRIDE));
+                        // The instance flags can be changed in an update, so the node flags need to be updated.
+                        const uint fieldMask = 0xFFu << (childIdx * BOX_NODE_FLAGS_BIT_STRIDE);
+                        DstMetadata.InterlockedAnd(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, ~fieldMask);
+                        DstMetadata.InterlockedOr(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET,
+                                                  nodeFlags << (childIdx * BOX_NODE_FLAGS_BIT_STRIDE));
+                    }
 
                     // If this is the first child in the parent node with all leaf children, queue parent pointer to
                     // stack in scratch memory
@@ -391,7 +371,9 @@ void EncodeInstances(
 
                         if (IsUpdateInPlace() == false)
                         {
+                            const uint4 childPointers = SrcBuffer.Load<uint4>(parentNodeOffset);
                             DstMetadata.Store<uint4>(parentNodeOffset, childPointers);
+
                         }
                     }
                 }

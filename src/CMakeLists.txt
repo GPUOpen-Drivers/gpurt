@@ -45,7 +45,6 @@ target_include_directories(gpurt PRIVATE .)
 target_sources(gpurt PRIVATE
     CMakeLists.txt
     gpurtBvhBuilder.cpp
-    gpurtCpuBvhBuilder.cpp
     gpurtDevice.cpp
     gpurtInternalShaders.cpp
     gpurtTraceSource.cpp

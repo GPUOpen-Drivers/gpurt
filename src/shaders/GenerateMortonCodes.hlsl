@@ -336,7 +336,7 @@ void GenerateMortonCodesImpl(
 {
     ScratchNode node = FetchScratchNode(leafNodesOffset, primitiveIndex);
 
-    if (IsNodeActive(node))
+    if (IsNodeActive(node) && (IsNodeLinkedOnly(node) == false))
     {
         // Calculate the scene-normalized position of the center of the current bounding box.
         // This is required for the morton code generation.
@@ -425,6 +425,17 @@ void GenerateMortonCodesImpl(
         }
 
         DstBuffer.InterlockedAdd(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, 1);
+    }
+    else if (IsNodeLinkedOnly(node))
+    {
+        if (useMortonCode30)
+        {
+            WriteMortonCode(mortonCodesOffset, primitiveIndex, 0x7FFFFFFD);
+        }
+        else
+        {
+            WriteMortonCode64(mortonCodesOffset, primitiveIndex, 0x7FFFFFFFFFFFFFFD);
+        }
     }
     else
     {

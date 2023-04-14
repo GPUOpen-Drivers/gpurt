@@ -30,18 +30,19 @@
 #endif
 
 //=====================================================================================================================
-static IntersectionResult TraceRay(
+// Default path
+static IntersectionResult TraceRayInternal(
     in GpuVirtualAddress topLevelBvh,               ///< Top-level acceleration structure to use
     in uint              rayFlags,                  ///< Ray flags
     in uint              traceRayParameters,        ///< Packed trace ray parameters
     in RayDesc           ray,                       ///< Ray to be traced
     in uint              rayId,                     ///< Ray ID for profiling
-    in uint              rtHwVersion                ///< HW version to determine TraceRay implementation
+    in uint              rtIpLevel                ///< HW version to determine TraceRay implementation
 )
 {
-    switch (rtHwVersion)
+    switch (rtIpLevel)
     {
-        case RTIP1_1:
+        case GPURT_RTIP1_1:
         return TraceRayImpl1_1(
             topLevelBvh,
             rayFlags,
@@ -50,7 +51,7 @@ static IntersectionResult TraceRay(
             rayId
         );
 #if GPURT_BUILD_RTIP2
-        case RTIP2_0:
+        case GPURT_RTIP2_0:
         return TraceRayImpl2_0(
             topLevelBvh,
             rayFlags,
@@ -71,13 +72,13 @@ static IntersectionResult IntersectRay(
     in uint              blasPointer,   ///< bottom level node pointer
     in uint              tlasPointer,   ///< top level node pointer
     in uint              rayId,         ///< Ray ID for profiling
-    in uint              rtHwVersion)   ///< HW version to determine IntersectRay implementation
+    in uint              rtIpLevel)   ///< HW version to determine IntersectRay implementation
 {
-    switch (rtHwVersion)
+    switch (rtIpLevel)
     {
-        case RTIP1_1:  return IntersectRayImpl1_1(topLevelBvh, ray, blasPointer, tlasPointer, rayId);
+        case GPURT_RTIP1_1:  return IntersectRayImpl1_1(topLevelBvh, ray, blasPointer, tlasPointer, rayId);
 #if GPURT_BUILD_RTIP2
-        case RTIP2_0:  return IntersectRayImpl1_1(topLevelBvh, ray, blasPointer, tlasPointer, rayId);
+        case GPURT_RTIP2_0:  return IntersectRayImpl1_1(topLevelBvh, ray, blasPointer, tlasPointer, rayId);
 #endif
         default: return (IntersectionResult)0;
     }
@@ -103,11 +104,11 @@ static bool TraceRayCommon(
     uint  blasPointer,
     uint  tlasPointer,
     bool  traverse,
-    uint  rtHwVersion
+    uint  rtIpLevel
 )
 {
 #if DEVELOPER
-    rayFlags |= DispatchRaysInfo.ProfileRayFlags;
+    rayFlags |= DispatchRaysConstBuf.profileRayFlags;
     TraversalCounter counter;
     uint64_t timerBegin = SampleGpuTimer();
 #endif
@@ -159,18 +160,18 @@ static bool TraceRayCommon(
 
         if (traverse)
         {
-            result = TraceRay(
+            result = TraceRayInternal(
                 accelStruct,
                 rayFlags,
                 packedTraceParams,
                 ray,
                 rayId,
-                rtHwVersion
-            );
+                rtIpLevel
+                );
         }
         else
         {
-            result = IntersectRay(accelStruct, ray, blasPointer, tlasPointer, rayId, rtHwVersion);
+            result = IntersectRay(accelStruct, ray, blasPointer, tlasPointer, rayId, rtIpLevel);
         }
     }
     else
@@ -226,14 +227,14 @@ static bool TraceRayCommon(
                                                          result.geometryIndex,
                                                          instanceContribution);
 
-            const uint2 instNodeAddr64 = CalculateNodeAddr64(accelStruct, result.instNodePtr);
+            const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(accelStruct, result.instNodePtr, rtIpLevel);
 
             // Set intersection attributes
             AmdTraceRaySetHitAttributes(result.t,
                                         result.hitkind,
                                         HIT_STATUS_ACCEPT,
-                                        instNodeAddr64.x,
-                                        instNodeAddr64.y,
+                                        LowPart(instNodePtr64),
+                                        HighPart(instNodePtr64),
                                         result.primitiveIndex,
                                         false,
                                         result.geometryIndex);
@@ -254,10 +255,12 @@ static bool TraceRayCommon(
     }
     else // Miss
     {
-        const uint2 shaderId = GetShaderId(MakeGpuVirtualAddress(DispatchRaysInfo.MissShaderTableStartAddressLow,
-                                                                 DispatchRaysInfo.MissShaderTableStartAddressHigh),
+        const uint64_t missTableBaseAddress =
+            PackUint64(DispatchRaysConstBuf.missTableBaseAddressLo, DispatchRaysConstBuf.missTableBaseAddressHi);
+
+        const uint2 shaderId = GetShaderId(missTableBaseAddress,
                                            missShaderIndex,
-                                           DispatchRaysInfo.MissShaderTableStrideInBytes);
+                                           DispatchRaysConstBuf.missTableStrideInBytes);
 
         // Only tCurrent/tMax is valid in the miss shader
         AmdTraceRaySetHitAttributes((tMax - tMin), 0, 0, 0, 0, 0, false, 0);
@@ -306,7 +309,8 @@ static void TraceRayUsingRayQueryCommon(uint  accelStructLo,
                                         float dirY,
                                         float dirZ,
                                         float tMax,
-                                        uint  rtHwVersion)
+                                        uint  rtIpLevel
+)
 {
     // Capture parameters so they can be used to implement HLSL intrinsic functions.
     AmdTraceRaySetTraceParams(rayFlags,
@@ -344,7 +348,7 @@ static void TraceRayUsingRayQueryCommon(uint  accelStructLo,
                          instanceInclusionMask,
                          ray,
                          AmdTraceRayDispatchRaysIndex(),
-                         rtHwVersion);
+                         rtIpLevel);
 
     const GpuVirtualAddress accelStruct = MakeGpuVirtualAddress(accelStructLo, accelStructHi);
     const bool raySkipProcedural        = (rayQuery.rayFlags & RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES);
@@ -360,7 +364,7 @@ static void TraceRayUsingRayQueryCommon(uint  accelStructLo,
         while (RayQueryProceedCommon(rayQuery,
                                      constRayFlags,
                                      AmdTraceRayDispatchRaysIndex(),
-                                     rtHwVersion
+                                     rtIpLevel
                                      ) == true)
         {
             const uint instanceContribution = rayQuery.candidate.instanceContribution;
@@ -372,7 +376,7 @@ static void TraceRayUsingRayQueryCommon(uint  accelStructLo,
             uint  status  = HIT_STATUS_IGNORE;
             uint  hitkind = 0;
 
-            const uint2 candidateInstNodeAddr64 = CalculateNodeAddr64(accelStruct, rayQuery.candidate.instNodePtr);
+            const uint64_t candidateInstNodePtr64 = CalculateInstanceNodePtr64(accelStruct, rayQuery.candidate.instNodePtr, rtIpLevel);
 
             // Handle candidate hits and calling intersection/anyhit shaders
             if ((raySkipProcedural == false) && (rayQuery.candidateType != CANDIDATE_NON_OPAQUE_TRIANGLE))
@@ -391,8 +395,8 @@ static void TraceRayUsingRayQueryCommon(uint  accelStructLo,
                 AmdTraceRaySetHitAttributes(currentT,
                                             0,
                                             status,
-                                            candidateInstNodeAddr64.x,
-                                            candidateInstNodeAddr64.y,
+                                            LowPart(candidateInstNodePtr64),
+                                            HighPart(candidateInstNodePtr64),
                                             rayQuery.candidate.primitiveIndex,
                                             anyHitCallType,
                                             rayQuery.candidate.geometryIndex);
@@ -418,8 +422,8 @@ static void TraceRayUsingRayQueryCommon(uint  accelStructLo,
                                             rayQuery.candidate.frontFace ? HIT_KIND_TRIANGLE_FRONT_FACE :
                                                                            HIT_KIND_TRIANGLE_BACK_FACE,
                                             status,
-                                            candidateInstNodeAddr64.x,
-                                            candidateInstNodeAddr64.y,
+                                            LowPart(candidateInstNodePtr64),
+                                            HighPart(candidateInstNodePtr64),
                                             rayQuery.candidate.primitiveIndex,
                                             ANYHIT_CALLTYPE_NO_DUPLICATE,
                                             rayQuery.candidate.geometryIndex);
@@ -487,15 +491,15 @@ static void TraceRayUsingRayQueryCommon(uint  accelStructLo,
                                                                           HIT_KIND_TRIANGLE_BACK_FACE;
                     }
 
-                    const uint2 committedInstNodeAddr64 = CalculateNodeAddr64(accelStruct,
-                                                                              rayQuery.committed.instNodePtr);
+                    const uint64_t committedInstNodePtr64 =
+                        CalculateInstanceNodePtr64(accelStruct, rayQuery.committed.instNodePtr, rtIpLevel);
 
                     // Set intersection attributes
                     AmdTraceRaySetHitAttributes(rayQuery.committed.rayTCurrent,
                                                 committedHitkind,
                                                 HIT_STATUS_ACCEPT,
-                                                committedInstNodeAddr64.x,
-                                                committedInstNodeAddr64.y,
+                                                LowPart(committedInstNodePtr64),
+                                                HighPart(committedInstNodePtr64),
                                                 rayQuery.committed.primitiveIndex,
                                                 0,
                                                 rayQuery.committed.geometryIndex);
@@ -517,11 +521,13 @@ static void TraceRayUsingRayQueryCommon(uint  accelStructLo,
             // Call miss shader
             case COMMITTED_NOTHING:
             {
+                const uint64_t missTableBaseAddress =
+                    PackUint64(DispatchRaysConstBuf.missTableBaseAddressLo, DispatchRaysConstBuf.missTableBaseAddressHi);
+
                 // Calculate miss shader record address
-                const uint2 shaderId = GetShaderId(MakeGpuVirtualAddress(DispatchRaysInfo.MissShaderTableStartAddressLow,
-                                                                         DispatchRaysInfo.MissShaderTableStartAddressHigh),
+                const uint2 shaderId = GetShaderId(missTableBaseAddress,
                                                    missShaderIndex,
-                                                   DispatchRaysInfo.MissShaderTableStrideInBytes);
+                                                   DispatchRaysConstBuf.missTableStrideInBytes);
 
                 // Only tCurrent/tMax is valid in the miss shader
                 AmdTraceRaySetHitAttributes((rayQuery.rayDesc.TMax - rayQuery.rayDesc.TMin), 0, 0, 0, 0, 0, false, 0);

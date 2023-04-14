@@ -33,6 +33,9 @@ find_package(Python3
     COMPONENTS Interpreter
 )
 
+get_target_property(COMPILE_DEFINITIONS gpurt COMPILE_DEFINITIONS)
+set(gpurtDefines "${COMPILE_DEFINITIONS}")
+
 set(gpurtToolsDir         "${GPU_RAY_TRACING_SOURCE_DIR}/tools")
 set(gpurtShadersSourceDir "${GPU_RAY_TRACING_SOURCE_DIR}/src/shaders")
 
@@ -100,9 +103,11 @@ if(GPURT_CLIENT_API STREQUAL "VULKAN")
             --outputDir "${gpurtOutputDir}"
             ${SPIRV_COMPILER_ARGUMENT}
             ${SPIRV_REMAP_ARGUMENT}
+            --defines "\"${gpurtDefines}\""
             --shaderConfig "${gpurtCompileConfig}"
             --whiteListPath "${gpurtStripWhitelist}"
             "${gpurtShadersSourceDir}"
+            --strict
     )
 else()
     message(FATAL_ERROR "Unknown graphics API: ${GPURT_CLIENT_API}")

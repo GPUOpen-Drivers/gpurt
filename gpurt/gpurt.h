@@ -32,9 +32,10 @@
 #include "palHashMap.h"
 #include "palVector.h"
 #include "../gpurt/src/gpurtTraceSource.h"
+#include "gpurtDispatch.h"
 
-#if PAL_BUILD_GFX11
-#define GPURT_BUILD_RTIP2 1
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 28
+#include "gpurtBuildSettings.h"
 #endif
 
 #define GPURT_API_ENTRY PAL_STDCALL
@@ -447,6 +448,7 @@ enum class VertexFormat : uint32
     R8G8_Unorm          // 8-bit fixed-point unsigned normalized R8G8 X,Y,0 format
 };
 
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 32
 // BvhBuilder NodeSort Type
 // There are 2 sort type
 // 1-) 4-Way Sort:   Sort all 4 child of a box node, given 1 sort heuristic
@@ -475,6 +477,7 @@ enum class BvhBuilderNodeSortHeuristic : uint32
     DensityLargestFirst,
     DensitySmallestFirst
 };
+#endif
 
 // Geometry node triangle data
 struct GeometryTriangles
@@ -556,7 +559,7 @@ static_assert(uint32(BvhCpuBuildMode::RecursiveSAH)           == 0,
 static_assert(uint32(BvhCpuBuildMode::RecursiveLargestExtent) == 1,
     "Enums encoded in the acceleration structure must not change.");
 
-// Ray tracing counter mode for a particular TraceRay dispatch, written as part of DispatchRaysInfoData
+// Ray tracing counter mode for a particular TraceRay dispatch, written as part of DispatchRaysConstants
 enum TraceRayCounterMode : uint32
 {
     TraceRayCounterDisable         = 0, // Disable counters
@@ -669,16 +672,6 @@ struct AccelStructBuildInfo
                                                            // ClientConvertAccelStructPostBuildInfo().
 };
 
-// Additional per instance data stored in a separate array after the instance descs
-struct InstanceExtraData
-{
-    uint32 instanceIndex;     // Instance index
-    uint32 blasNodePointer;
-    uint32 blasMetadataSize;
-    uint32 padding0;
-    float  objectToWorld[12]; // ObjectToWorld matrix
-};
-
 // GPURT version of the API AABB description in GPU memory.  It should match e.g. D3D12DDI_RAYTRACING_AABB.
 struct Aabb
 {
@@ -698,8 +691,6 @@ struct AccelStructPrebuildInfo
     uint64 scratchDataSizeInBytes;        // Amount of temporary memory required to build an acceleration structure
     uint64 updateScratchDataSizeInBytes;  // Amount of temporary memory required for future updates of that struct
 
-    uint64 cpuScratchSizeInBytes;         // Amount of temporary system memory required for a CPU build.
-    uint64 cpuUpdateScratchSizeInBytes;   // Amount of temporary system memory required for a CPU update.
     uint32 maxPrimitiveCount;             // Max primitive count
 };
 
@@ -730,15 +721,19 @@ struct DeviceSettings
     uint32                      maxTopDownBuildInstances;             // Max instances allowed for top down build
     uint32                      parallelBuildWavesPerSimd;            // Waves per SIMD to launch for parallel build
 
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 32
     // Controls build-time sorting of QBVH child nodes
     BvhBuilderNodeSortType      bvhBuilderNodeSortType;
     BvhBuilderNodeSortHeuristic bvhBuilderNodeSortHeuristic;
+#endif
 
     uint32                      fastBuildThreshold;                   // Apply Fast Build for BVHs with primitives <= Threshold.
     uint32                      lbvhBuildThreshold;                   // Apply LBVH for BVHs with primitives <= Threshold.
 
     Fp16BoxNodesInBlasMode      fp16BoxNodesInBlasMode;               // Mode for which interior nodes in BLAS are FP16
     float                       fp16BoxModeMixedSaThresh;             // For fp16 mode "mixed", surface area threshold
+
+    Pal::RayTracingIpLevel      emulatedRtIpLevel;                    // Client request RTIP level, used to override IP level related GPURT settings.
 
     struct
     {
@@ -762,7 +757,9 @@ struct DeviceSettings
         uint32 enableMergeSort : 1;
         uint32 bvhCollapse : 1;                             // Collapse individual geometry leaf nodes into multi-geometry leaves
         uint32 topDownBuild : 1;                            // Top down build in TLAS
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 32
         uint32 sahQbvh : 1;                                 // Apply SAH into QBVH build.
+#endif
         uint32 allowFp16BoxNodesInUpdatableBvh : 1;         // Allow box node in updatable bvh.
         uint32 fp16BoxNodesRequireCompaction : 1;           // Compaction is set or not.
         uint32 noCopySortedNodes : 1;                       // Disable CopyUnsortedScratchLeafNode()
@@ -777,6 +774,7 @@ struct DeviceSettings
     uint64                      accelerationStructureUUID;  // Acceleration Structure UUID
 
     uint32                      numMortonSizeBits;
+    uint32                      trianglePairingSearchRadius; // The search radius for paired triangle, used by EarlyCompression
 
 };
 
@@ -933,7 +931,7 @@ struct DeviceInitInfo
 
     const Pal::DeviceProperties* pDeviceProperties; // Pointer to host PAL device properties
                                                     // (this pointer is retained).
-    DeviceSettings         deviceSettings;          // Settings Used to initialize parts of GlobalSettings
+    DeviceSettings    deviceSettings;               // Settings Used to initialize parts of GlobalSettings
 
     union
     {
@@ -961,172 +959,6 @@ struct ShaderIdentifier
 };
 
 static_assert(sizeof(ShaderIdentifier) == RayTraceShaderIdentifierByteSize, "");
-
-// Dispatch rays arguments top-level descriptor table (GPU structure)
-struct DispatchRaysTopLevelData
-{
-    uint64 dispatchRaysConstGpuVa;   // DispatchRays info constant buffer GPU VA
-    uint32 internalUavBufferSrd[4];  // Internal UAV shader resource descriptor
-    uint32 accelStructTrackerSrd[4]; // Structured buffer SRD pointing to the accel struct tracker
-};
-
-// Dispatch rays constant buffer data (GPU structure)
-#pragma pack(push, 4)
-struct DispatchRaysInfoData
-{
-    uint64        rayGenerationTable; // Shader record table for raygeneration shaders
-    uint32        rayDispatchWidth;   // Width of the ray dispatch
-    uint32        rayDispatchHeight;  // Height of the ray dispatch
-    uint32        rayDispatchDepth;   // Depth of the ray dispatch
-
-    struct
-    {
-        uint64 baseAddress;
-        uint32 strideInBytes;
-    } missTable;                     // Miss shader record table
-
-    uint32 maxRecursionDepth;        // Maximum recursion depth
-
-    struct
-    {
-        uint64 baseAddress;
-        uint32 strideInBytes;
-    } hitGroupTable;                // Hit group shader record table
-
-    uint32 maxAttributeSize;        // Maximum attribute size
-
-    struct
-    {
-        uint64 baseAddress;
-        uint32 strideInBytes;
-    } callableTable;                // Callable shader table record
-
-    struct
-    {
-        uint32 rayFlags;            // Ray flags applied when profiling is enabled
-        uint32 maxIterations;       // Maximum trace ray loop iteration limit
-    } profile;
-
-    uint64 traceRayGpuVa;           // Internal TraceRays indirect function GPU VA
-
-    uint32 counterMode;             // Counter capture mode. see TraceRayCounterMode
-    uint32 counterRayIdRangeBegin;  // Counter capture ray ID range begin
-    uint32 counterRayIdRangeEnd;    // Counter capture ray ID range end
-
-    uint32 cpsStackOffsetInBytes;   // The scratch memory used as stacks are divided into two parts:
-                                    //  (a) Used by a compiler backend, start at offset 0.
-                                    //  (b) Used by IR (Intermediate Representation), for a continuation passing shader.
-};
-#pragma pack(pop)
-
-constexpr uint32 DispatchRaysInfoDataDw = sizeof(DispatchRaysInfoData) / sizeof(uint32);
-
-// GPU structure containing all data for DXR/VK ray dispatch command
-struct DispatchRaysConstants
-{
-    DispatchRaysTopLevelData descriptorTable;  // Top-level internal dispatch bindings (includes pointer to infoData)
-    DispatchRaysInfoData     infoData;         // Dispatch rays args constant buffer contents
-};
-
-static_assert((sizeof(DispatchRaysConstants) % sizeof(uint32)) == 0,
-              "DispatchRaysConstants is not dword-aligned");
-
-constexpr uint32 DispatchRaysConstantsDw = sizeof(DispatchRaysConstants) / sizeof(uint32);
-
-constexpr uint32 MaxSupportedIndirectCounters = 8;
-constexpr uint32 MaxBufferSrdSize = 4;
-
-// Resource bindings required for InitExecuteIndirect
-struct InitExecuteIndirectUserData
-{
-    uint64 constantsVa;         // InitExecuteIndirectConstants struct
-    uint64 countVa;             // Count buffer (number of indirect dispatches)
-    uint64 raygenIdsVa;         // Array of raygen shader IDs for unified pipelines
-    uint64 inputBufferVa;       // Input indirect args specified by the application
-    uint64 outputBufferVa;      // Output indirect arg buffer consumed by indirect dispatch and/or command generator
-    uint64 outputConstantsVa;   // DispatchRaysInfoData for each dispatch
-    uint64 outputDescriptorsVa; // Internal descriptor tables with DispatchRays CBV
-    uint64 outputCounterMetaVa; // Counter metadata UAV. Must be valid when
-                                // InitExecuteIndirectConstants.counterMode != 0
-};
-
-// Constants for InitExecuteIndirect shader
-struct InitExecuteIndirectConstants
-{
-    uint32 inputBytesPerDispatch;   // Size of application indirect arguments
-    uint32 outputBytesPerDispatch;  // Size of resulting driver internal arguments
-    uint32 bindingArgsSize;         // Size of binding arguments in the app buffer preceeding the dispatch
-    uint32 maxDispatchCount;        // Max number of dispatches requested by the app
-    uint32 indirectMode;            // 0: vkCmdTraceRaysIndirectKHR - ray trace query dimensions
-                                    // 1: vkCmdTraceRaysIndirect2KHR- shaderTable + ray trace query dimensions
-    uint32 dispatchDimSwizzleMode;  // Swizzle mode for mapping user specified trace ray dimension to internal
-                                    // dispatch dimension.
-                                    // 0: native mapping (width -> x, height -> y, depth -> z)
-                                    // 1: flatten width and height to x, and depth to y. Thread group is 1D
-                                    // and defined by rtThreadGroupSizeX.
-    uint32 rtThreadGroupSizeX;      // Internal RT threadgroup size X
-    uint32 rtThreadGroupSizeY;      // Internal RT threadgroup size Y
-    uint32 rtThreadGroupSizeZ;      // Internal RT threadgroup size Z
-    uint32 isUnifiedPipeline;       // Unified pipeline?
-    uint32 pipelineCount;           // Number of pipelines to launch (1 for indirect launch, raygen count for unified)
-    uint32 maxIterations;           // Max traversal interations for profiling
-    uint32 profileRayFlags;         // Profiling flags
-    uint32 traceRayFunctionAddrLo;  // Address of trace indirect function
-    uint32 traceRayFunctionAddrHi;  // Address of trace indirect function
-    uint32 internalTableVaLo;       // Address of the internal descriptor tables
-    uint32 outputConstantsVaLo;     // Address of the output constant buffer for initializing the descriptor table
-    uint32 outputConstantsVaHi;     // Address of the output constant buffer for initializing the descriptor table
-    uint32 counterMode;             // Counter mode
-    uint32 counterRayIdRangeBegin;  // Counter ray ID range begin
-    uint32 counterRayIdRangeEnd;    // Counter ray ID range end
-    uint32 padding[3];              // Padding for 16-byte alignment
-
-     // Internal counter buffer SRDs
-    uint32 internalUavSrd[MaxSupportedIndirectCounters][MaxBufferSrdSize];
-
-    // Internal acceleration structure tracker buffer SRD.
-    uint32 accelStructTrackerSrd[MaxBufferSrdSize];
-};
-
-static_assert((MaxBufferSrdSize == 4), "Buffer SRD size changed, affected shaders and constants need update");
-static_assert((sizeof(InitExecuteIndirectConstants) % sizeof(uint32)) == 0,
-              "InitExecuteIndirectConstants is not dword-aligned");
-
-constexpr uint32 InitExecuteIndirectConstantsDw = sizeof(InitExecuteIndirectConstants) / sizeof(uint32);
-
-// Settings passed to the build shaders via compile time constant buffer. Note that adding settings here will cause
-// additional shaders to be compiled when the setting changes.
-struct CompileTimeBuildSettings
-{
-    uint32 topLevelBuild;
-    uint32 buildMode;
-    uint32 triangleCompressionMode;
-    uint32 doTriangleSplitting;
-    uint32 doCollapse;
-    uint32 fp16BoxNodesMode;
-    float  fp16BoxModeMixedSaThreshhold;
-    uint32 radixSortScanLevel;
-    uint32 emitCompactSize;
-    uint32 enableBVHBuildDebugCounters;
-    uint32 plocRadius;
-    uint32 enablePairCostCheck;
-    uint32 enableVariableBitsMortonCode;
-    uint32 rebraidType;
-    uint32 enableTopDownBuild;
-    uint32 useMortonCode30;
-    uint32 enableMergeSort;
-    uint32 fastBuildThreshold;
-    uint32 bvhBuilderNodeSortType;
-    uint32 bvhBuilderNodeSortHeuristic;
-    uint32 enableFusedInstanceNode;
-    uint32 sahQbvh;
-    float  tsPriority;
-    uint32 noCopySortedNodes;
-    uint32 enableSAHCost;
-    uint32 doEncode;
-    uint32 enableEarlyPairCompression;
-    uint32 enableFastLBVH;
-};
 
 // Map key for map of internal pipelines
 struct InternalPipelineKey
@@ -1577,12 +1409,9 @@ public:
         bool  enableAccelStructTracking,
         bool  enableTraversalCounter) = 0;
 
-    // Builds an acceleration structure.
+    // Writes commands into a command buffer to build an acceleration structure
     //
-    // When pCmdBuffer is non-nullptr, it writes commands to perform the operation into the command buffer.  Otherwise,
-    // this operation executes on the CPU.
-    //
-    // @param pCmdBuffer           [in] Command buffer where commands will be written (optional)
+    // @param pCmdBuffer           [in] Command buffer where commands will be written
     // @param buildInfo            [in] Acceleration structure build info
     virtual void BuildAccelStruct(
         Pal::ICmdBuffer*              pCmdBuffer,
@@ -1745,12 +1574,9 @@ public:
                                                      enableTraversalCounter);
     }
 
-    // Builds an acceleration structure.
+    // Writes commands into a command buffer to build an acceleration structure
     //
-    // When pCmdBuffer is non-nullptr, it writes commands to perform the operation into the command buffer.  Otherwise,
-    // this operation executes on the CPU.
-    //
-    // @param pCmdBuffer           [in] Command buffer where commands will be written (optional)
+    // @param pCmdBuffer           [in] Command buffer where commands will be written
     // @param buildInfo            [in] Acceleration structure build info
     void BuildAccelStruct(
         Pal::ICmdBuffer*              pCmdBuffer,

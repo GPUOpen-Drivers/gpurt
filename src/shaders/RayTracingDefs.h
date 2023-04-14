@@ -27,6 +27,21 @@
 #ifndef RAYTRACING_DEF_H
 #define RAYTRACING_DEF_H
 
+#include "../../gpurt/gpurtAccelStruct.h"
+#include "../../gpurt/gpurtBuildSettings.h"
+#include "../../gpurt/gpurtDispatch.h"
+
+// Due to lack of enum support in HLSL, we have these defines which should match Pal::RayTracingIpLevel in palDevice.h.
+#define GPURT_RTIP1_0 1
+#define GPURT_RTIP1_1 2
+#define GPURT_RTIP2_0 3
+
+#ifdef __cplusplus
+static_assert(GPURT_RTIP1_0 == Pal::RayTracingIpLevel::RtIp1_0, "GPURT_HLSL_RTIP mismatch.");
+static_assert(GPURT_RTIP1_1 == Pal::RayTracingIpLevel::RtIp1_1, "GPURT_HLSL_RTIP mismatch.");
+static_assert(GPURT_RTIP2_0 == Pal::RayTracingIpLevel::RtIp2_0, "GPURT_HLSL_RTIP mismatch.");
+#endif
+
 #ifdef AMD_VULKAN
 //=====================================================================================================================
 ///@note Enum is a reserved keyword in glslang. To workaround this limitation, define static constants to replace the
@@ -81,8 +96,8 @@ enum PrimitiveType : uint
 // BVH node types shared between HW and SW nodes
 #define NODE_TYPE_TRIANGLE_0           0
 #define NODE_TYPE_TRIANGLE_1           1
-#define NODE_TYPE_TRIANGLE_2           2
-#define NODE_TYPE_TRIANGLE_3           3
+#define NODE_TYPE_UNUSED_0             2 // Hardware NODE_TYPE_TRIANGLE_2
+#define NODE_TYPE_UNUSED_1             3 // Hardware NODE_TYPE_TRIANGLE_3
 #define NODE_TYPE_BOX_FLOAT16          4
 #define NODE_TYPE_BOX_FLOAT32          5
 #define NODE_TYPE_USER_NODE_INSTANCE   6
@@ -90,10 +105,6 @@ enum PrimitiveType : uint
 // From the HW IP 2.0 spec: '7: User Node 1 (processed as a Procedural Node for culling)'
 #endif
 #define NODE_TYPE_USER_NODE_PROCEDURAL 7
-
-//=====================================================================================================================
-// Various node size definitions
-#define USER_NODE_INSTANCE_SIZE        128
 
 //=====================================================================================================================
 // Triangle Compression Modes
@@ -157,63 +168,6 @@ enum BoxSortHeuristic : uint
 };
 #endif
 
-//=====================================================================================================================
-// Bvh build node sort heuristic
-// 0: SurfaceAreaLargestFirst
-// 1: SurfaceAreaSmallestFirst
-// 2: DensityLargestFirst
-// 3: DensitySmallestFirst
-
-#ifdef AMD_VULKAN_GLSLANG
-//=====================================================================================================================
-///@note Enum is a reserved keyword in glslang. To workaround this limitation, define static constants to replace the
-///      HLSL enums that follow for compatibility.
-//=====================================================================================================================
-namespace BvhBuilderNodeSortHeuristic
-{
-    static const uint SurfaceAreaLargestFirst  = 0x0;
-    static const uint SurfaceAreaSmallestFirst = 0x1;
-    static const uint DensityLargestFirst      = 0x2;
-    static const uint DensitySmallestFirst     = 0x3;
-}
-#else
-enum BvhBuilderNodeSortHeuristic : uint
-{
-    SurfaceAreaLargestFirst  = 0x0,
-    SurfaceAreaSmallestFirst = 0x1,
-    DensityLargestFirst      = 0x2,
-    DensitySmallestFirst     = 0x3,
-};
-#endif
-
-#ifdef AMD_VULKAN_GLSLANG
-//=====================================================================================================================
-///@note Enum is a reserved keyword in glslang. To workaround this limitation, define static constants to replace the
-///      HLSL enums that follow for compatibility.
-//=====================================================================================================================
-namespace BvhBuilderNodeSortType
-{
-    static const uint SortOff               = 0x0;
-    static const uint FourWaySortOnTLAS     = 0x1;
-    static const uint FourWaySortOnBLAS     = 0x2;
-    static const uint FourWaySortOnBoth     = 0x3;
-    static const uint TwoLevelSortOnTLAS    = 0x4;
-    static const uint TwoLevelSortOnBLAS    = 0x5;
-    static const uint TwoLevelSortOnBoth    = 0x6;
-}
-#else
-enum BvhBuilderNodeSortType : uint
-{
-    SortOff             = 0x0,
-    FourWaySortOnTLAS   = 0x1,
-    FourWaySortOnBLAS   = 0x2,
-    FourWaySortOnBoth   = 0x3,
-    TwoLevelSortOnTLAS  = 0x4,
-    TwoLevelSortOnBLAS  = 0x5,
-    TwoLevelSortOnBoth  = 0x6
-};
-#endif
-
 #ifdef AMD_VULKAN_GLSLANG
 //=====================================================================================================================
 ///@note Enum is a reserved keyword in glslang. To workaround this limitation, define static constants to replace the
@@ -245,16 +199,12 @@ enum SceneBoundsCalculation : uint
 #define NODE_POINTER_MASK_MSB              0x80000000u
 
 //=====================================================================================================================
-#define BVH_NODE_STRIDE_SHIFT                 6
-#define INSTANCE_NODE_STRIDE_SHIFT            7
-#define QBVH_NODE_32_STRIDE_SHIFT             7   // Box 32 node
-#define QBVH_NODE_16_STRIDE_SHIFT             6   // Box 16 node
-#define QBVH_LEAF_STRIDE_SHIFT                6
-#define QBVH_COMPRESSED_NODE_STRIDE_SHIFT     6
+#define BVH4_NODE_32_STRIDE_SHIFT             7   // Box 32 node
+#define BVH4_NODE_16_STRIDE_SHIFT             6   // Box 16 node
 
-#define INVALID_IDX     0xffffffff
-
-#define COMPRESS_SHADER_PROGRESS_COUNTERS 1
+#define INVALID_IDX           0xffffffff
+#define INACTIVE_PRIM         0xfffffffe
+#define PAIRED_TRI_LINKONLY   0xfffffffd
 
 static const uint ByteStrideScratchNode = 64;
 static const uint ByteStrideU32         = 12;
@@ -307,206 +257,8 @@ struct PackedUintBoundingBox4
 };
 
 //=====================================================================================================================
-struct AccelStructMetadataHeader
-{
-    uint addressLo;   // Address of acceleration structure data section (low bits)
-    uint addressHi;   // Address of acceleration structure data section (high bits)
-    uint sizeInBytes; // Metadata size in bytes for tooling purposes (including this header)
-    uint reserved0;
-    uint taskCounter; // Task counter for dispatch-wide spin loop synchronization
-    uint numTasksDone;// Number of tasks done
-    uint reserved1;
-    uint reserved2;
-    uint reserved3;
-};
-
-#define ACCEL_STRUCT_METADATA_VA_LO_OFFSET              0
-#define ACCEL_STRUCT_METADATA_VA_HI_OFFSET              4
-#define ACCEL_STRUCT_METADATA_SIZE_OFFSET               8
-#define ACCEL_STRUCT_METADATA_RESERVED_0                12
-#define ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET       16
-#define ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET     20
-#define ACCEL_STRUCT_METADATA_RESERVED_1                24
-#define ACCEL_STRUCT_METADATA_RESERVED_2                28
-#define ACCEL_STRUCT_METADATA_RESERVED_3                32
-#define ACCEL_STRUCT_METADATA_HEADER_SIZE               36
-
-#ifdef __cplusplus
-static_assert(ACCEL_STRUCT_METADATA_HEADER_SIZE         == sizeof(AccelStructMetadataHeader), "Acceleration structure header mismatch");
-static_assert(ACCEL_STRUCT_METADATA_VA_LO_OFFSET        == offsetof(AccelStructMetadataHeader, addressLo), "");
-static_assert(ACCEL_STRUCT_METADATA_VA_HI_OFFSET        == offsetof(AccelStructMetadataHeader, addressHi), "");
-static_assert(ACCEL_STRUCT_METADATA_SIZE_OFFSET         == offsetof(AccelStructMetadataHeader, sizeInBytes), "");
-static_assert(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET == offsetof(AccelStructMetadataHeader, taskCounter), "");
-#endif
-
-//=====================================================================================================================
 // Acceleration structure result data offsets
-struct AccelStructOffsets
-{
-    uint internalNodes;     // Offset to internal box nodes
-    uint leafNodes;         // Offset to leaf nodes
-    uint geometryInfo;      // Offset to geometry desc info (bottom level only)
-    uint primNodePtrs;      // Offset to prim node pointers (BVH4 with triangle compression or ALLOW_UPDATE only)
-};
-
-#define ACCEL_STRUCT_OFFSETS_INTERNAL_NODES_OFFSET        0
-#define ACCEL_STRUCT_OFFSETS_LEAF_NODES_OFFSET            4
-#define ACCEL_STRUCT_OFFSETS_GEOMETRY_INFO_OFFSET         8
-#define ACCEL_STRUCT_OFFSETS_PRIM_NODE_PTRS_OFFSET       12
-#define ACCEL_STRUCT_OFFSETS_SIZE                        16
-
-#ifdef __cplusplus
-static_assert(ACCEL_STRUCT_OFFSETS_SIZE == sizeof(AccelStructOffsets), "Acceleration structure offsets mismatch");
-static_assert(ACCEL_STRUCT_OFFSETS_INTERNAL_NODES_OFFSET    == offsetof(AccelStructOffsets, internalNodes), "");
-static_assert(ACCEL_STRUCT_OFFSETS_LEAF_NODES_OFFSET        == offsetof(AccelStructOffsets, leafNodes), "");
-static_assert(ACCEL_STRUCT_OFFSETS_GEOMETRY_INFO_OFFSET     == offsetof(AccelStructOffsets, geometryInfo), "");
-static_assert(ACCEL_STRUCT_OFFSETS_PRIM_NODE_PTRS_OFFSET    == offsetof(AccelStructOffsets, primNodePtrs), "");
-#endif
-
-//=====================================================================================================================
-#ifdef __cplusplus
-union RayTracingAccelStructBuildInfo
-{
-    struct
-    {
-        uint type                       : 1;  /// AccelStructType
-        uint buildType                  : 1;  /// AccelStructBuilderType
-        uint mode                       : 4;  /// BvhBuildMode/BvhCpuBuildMode based on buildType
-        uint triCompression             : 3;  /// TriangleCompressionMode (Bottom level only)
-        uint fp16BoxNodesInBlasMode     : 2;  /// fp16BoxNodesInBlasMode
-        uint triangleSplitting          : 1;  /// enable TriangleSplitting
-        uint rebraid                    : 1;  /// enable Rebraid
-        uint fusedInstanceNode          : 1;  /// Acceleration structure uses fused instance nodes
-        uint reserved                   : 2;  /// Unused bits
-        uint flags                      : 16; /// AccelStructBuildFlags
-    };
-
-    uint u32All;
-};
-#endif
-
-#define ACCEL_STRUCT_HEADER_INFO_TYPE_SHIFT                             0
-#define ACCEL_STRUCT_HEADER_INFO_TYPE_MASK                              0x1
-#define ACCEL_STRUCT_HEADER_INFO_BUILD_TYPE_SHIFT                       1
-#define ACCEL_STRUCT_HEADER_INFO_BUILD_TYPE_MASK                        0x1
-#define ACCEL_STRUCT_HEADER_INFO_MODE_SHIFT                             2
-#define ACCEL_STRUCT_HEADER_INFO_MODE_MASK                              0xf
-#define ACCEL_STRUCT_HEADER_INFO_TRI_COMPRESS_SHIFT                     6
-#define ACCEL_STRUCT_HEADER_INFO_TRI_COMPRESS_MASK                      0x7
-#define ACCEL_STRUCT_HEADER_INFO_FP16_BOXNODE_IN_BLAS_MODE_SHIFT        9
-#define ACCEL_STRUCT_HEADER_INFO_FP16_BOXNODE_IN_BLAS_MODE_MASK         0x3
-#define ACCEL_STRUCT_HEADER_INFO_TRIANGLE_SPLITTING_FLAGS_SHIFT         11
-#define ACCEL_STRUCT_HEADER_INFO_TRIANGLE_SPLITTING_FLAGS_MASK          0x1
-#define ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_SHIFT                    12
-#define ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_MASK                     0x1
-#define ACCEL_STRUCT_HEADER_INFO_FUSED_INSTANCE_NODE_FLAGS_SHIFT        13
-#define ACCEL_STRUCT_HEADER_INFO_FUSED_INSTANCE_NODE_FLAGS_MASK         0x1
-#define ACCEL_STRUCT_HEADER_INFO_FLAGS_SHIFT                            16
-#define ACCEL_STRUCT_HEADER_INFO_FLAGS_MASK                             0xffff
-
-//=====================================================================================================================
-#ifdef __cplusplus
-union RayTracingAccelStructBuildInfo2
-{
-    struct
-    {
-        uint compacted     : 1;       /// This BVH has been compacted
-        uint reserved      : 1;       /// Unused bits
-        uint reserved2     : 30;      /// Unused bits
-    };
-
-    uint u32All;
-};
-#endif
-
-#define ACCEL_STRUCT_HEADER_INFO_2_BVH_COMPACTION_FLAGS_SHIFT    0
-#define ACCEL_STRUCT_HEADER_INFO_2_BVH_COMPACTION_FLAGS_MASK     0x1
-
-//=====================================================================================================================
-// 128 byte aligned acceleration structure header
-struct AccelStructHeader
-{
-    uint               info;                    // Type of acceleration structure (Top level or bottom level)
-    uint               metadataSizeInBytes;     // Total size of the metadata in bytes
-    uint               sizeInBytes;             // Total size of the structure in bytes (Including this header)
-    uint               numPrimitives;           // Number of primitives encoded in the structure
-    uint               numActivePrims;          // Tracks the number of active prims to add to bvh
-    uint               taskIdCounter;           // Counter for allocting IDs to tasks in a persistent thread group
-    uint               numDescs;                // Number of instance/geometry descs in the structure
-    uint               geometryType;            // Type of geometry contained in the bottom level structure
-    AccelStructOffsets offsets;                 // Offsets to different sections of the acceleration structure
-    uint               numInternalNodesFp32;    // Number of fp32 internal nodes used by the acceleration structure
-    uint               numInternalNodesFp16;    // Number of fp16 internal nodes used by the acceleration structure
-    uint               numLeafNodes;            // Number of leaf nodes used by the acceleration structure
-    uint               version;                 // GPURT version
-    uint               uuidLo;                  // Compatibility info - uuidLo
-    uint               uuidHi;                  // Compatibility info - uuidHi
-    uint               reserved;                // Reserved bits
-    uint               fp32RootBoxNode0;        // Root Float32BoxNode for bottom level acceleration structures
-    uint               fp32RootBoxNode1;
-    uint               fp32RootBoxNode2;
-    uint               fp32RootBoxNode3;
-    uint               fp32RootBoxNode4;
-    uint               fp32RootBoxNode5;
-    uint               info2;                   // Acceleration structure information
-    uint               nodeFlags;               // BLAS node flags
-    uint               compactedSizeInBytes;    // Total compacted size of the accel struct
-    uint               numChildPrims0;          // Number of primitives for 4 children for rebraid
-    uint               numChildPrims1;
-    uint               numChildPrims2;
-    uint               numChildPrims3;
-};
-
-#define ACCEL_STRUCT_HEADER_SIZE                               128
-#define ACCEL_STRUCT_HEADER_INFO_OFFSET                          0
-#define ACCEL_STRUCT_HEADER_METADATA_SIZE_OFFSET                 4
-#define ACCEL_STRUCT_HEADER_BYTE_SIZE_OFFSET                     8
-#define ACCEL_STRUCT_HEADER_NUM_PRIMS_OFFSET                    12
-#define ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET             16
-#define ACCEL_STRUCT_HEADER_TASK_ID_COUNTER                     20
-#define ACCEL_STRUCT_HEADER_NUM_DESCS_OFFSET                    24
-#define ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET                28
-#define ACCEL_STRUCT_HEADER_OFFSETS_OFFSET                      32
-#define ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP32_NODES_OFFSET      ACCEL_STRUCT_HEADER_OFFSETS_OFFSET + ACCEL_STRUCT_OFFSETS_SIZE
-#define ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP16_NODES_OFFSET      ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP32_NODES_OFFSET      + 4
-#define ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET               ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP16_NODES_OFFSET      + 4
-#define ACCEL_STRUCT_HEADER_VERSION_OFFSET                      ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET               + 4
-#define ACCEL_STRUCT_HEADER_UUID_LO_OFFSET                      ACCEL_STRUCT_HEADER_VERSION_OFFSET                      + 4
-#define ACCEL_STRUCT_HEADER_UUID_HI_OFFSET                      ACCEL_STRUCT_HEADER_UUID_LO_OFFSET                      + 4
-#define ACCEL_STRUCT_HEADER_RESERVED_OFFSET                     ACCEL_STRUCT_HEADER_UUID_HI_OFFSET                      + 4
-#define ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET                ACCEL_STRUCT_HEADER_RESERVED_OFFSET                     + 4
-#define ACCEL_STRUCT_HEADER_INFO_2_OFFSET                       ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET                + 24
-#define ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET                   ACCEL_STRUCT_HEADER_INFO_2_OFFSET                       + 4
-#define ACCEL_STRUCT_HEADER_COMPACTED_BYTE_SIZE_OFFSET          ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET                   + 4
-#define ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET              ACCEL_STRUCT_HEADER_COMPACTED_BYTE_SIZE_OFFSET          + 4
-
-// Acceleration structure root node starts immediately after the header
-#define ACCEL_STRUCT_ROOT_NODE_OFFSET ACCEL_STRUCT_HEADER_SIZE
-
-#ifdef __cplusplus
-static_assert(ACCEL_STRUCT_HEADER_SIZE == sizeof(AccelStructHeader), "Acceleration structure header mismatch");
-static_assert(ACCEL_STRUCT_HEADER_INFO_OFFSET                         == offsetof(AccelStructHeader, info),                 "");
-static_assert(ACCEL_STRUCT_HEADER_METADATA_SIZE_OFFSET                == offsetof(AccelStructHeader, metadataSizeInBytes),  "");
-static_assert(ACCEL_STRUCT_HEADER_BYTE_SIZE_OFFSET                    == offsetof(AccelStructHeader, sizeInBytes),          "");
-static_assert(ACCEL_STRUCT_HEADER_NUM_PRIMS_OFFSET                    == offsetof(AccelStructHeader, numPrimitives),        "");
-static_assert(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET             == offsetof(AccelStructHeader, numActivePrims),       "");
-static_assert(ACCEL_STRUCT_HEADER_TASK_ID_COUNTER                     == offsetof(AccelStructHeader, taskIdCounter),       "");
-static_assert(ACCEL_STRUCT_HEADER_NUM_DESCS_OFFSET                    == offsetof(AccelStructHeader, numDescs),             "");
-static_assert(ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET                == offsetof(AccelStructHeader, geometryType),         "");
-static_assert(ACCEL_STRUCT_HEADER_OFFSETS_OFFSET                      == offsetof(AccelStructHeader, offsets),              "");
-static_assert(ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP32_NODES_OFFSET      == offsetof(AccelStructHeader, numInternalNodesFp32), "");
-static_assert(ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP16_NODES_OFFSET      == offsetof(AccelStructHeader, numInternalNodesFp16), "");
-static_assert(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET               == offsetof(AccelStructHeader, numLeafNodes),         "");
-static_assert(ACCEL_STRUCT_HEADER_VERSION_OFFSET                      == offsetof(AccelStructHeader, version),               "");
-static_assert(ACCEL_STRUCT_HEADER_UUID_LO_OFFSET                      == offsetof(AccelStructHeader, uuidLo),               "");
-static_assert(ACCEL_STRUCT_HEADER_UUID_HI_OFFSET                      == offsetof(AccelStructHeader, uuidHi),               "");
-static_assert(ACCEL_STRUCT_HEADER_RESERVED_OFFSET                     == offsetof(AccelStructHeader, reserved),             "");
-static_assert(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET                == offsetof(AccelStructHeader, fp32RootBoxNode0),     "");
-static_assert(ACCEL_STRUCT_HEADER_INFO_2_OFFSET                       == offsetof(AccelStructHeader, info2),                "");
-static_assert(ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET                   == offsetof(AccelStructHeader, nodeFlags),            "");
-static_assert(ACCEL_STRUCT_HEADER_COMPACTED_BYTE_SIZE_OFFSET          == offsetof(AccelStructHeader, compactedSizeInBytes), "");
-static_assert(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET              == offsetof(AccelStructHeader, numChildPrims0),       "");
-#endif
+typedef AccelStructDataOffsets AccelStructOffsets;
 
 //=====================================================================================================================
 // Hardware 32-bit box node format and offsets
@@ -661,21 +413,17 @@ static_assert(FLOAT16_BOX_NODE_BB3_OFFSET    == offsetof(Float16BoxNode, bbox3),
 
 //=====================================================================================================================
 // Hardware triangle node format and offsets
+// Note: GPURT limits triangle compression to 2 triangles per node. As a result the remaining bytes in the triangle node
+// are used for sideband data. The geometry index is packed in bottom 24 bits and geometry flags in bits 25-26.
 #define TRIANGLE_NODE_V0_OFFSET 0
 #define TRIANGLE_NODE_V1_OFFSET 12
 #define TRIANGLE_NODE_V2_OFFSET 24
 #define TRIANGLE_NODE_V3_OFFSET 36
-#define TRIANGLE_NODE_V4_OFFSET 48
+#define TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET 48
+#define TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET         52
+#define TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET         56
 #define TRIANGLE_NODE_ID_OFFSET 60
 #define TRIANGLE_NODE_SIZE      64
-
-//=====================================================================================================================
-// Triangle node sideband data offsets when limiting triangle compression to 2 triangles per node
-// Geometry Index in bottom 24 bits and Geometry Flags in bits 25-26
-#define TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET TRIANGLE_NODE_V4_OFFSET
-#define TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET         TRIANGLE_NODE_V4_OFFSET + 4
-#define TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET         TRIANGLE_NODE_V4_OFFSET + 8
-#define TRIANGLE_NODE_PARENT_PTR_OFFSET               TRIANGLE_NODE_V3_OFFSET
 
 //=====================================================================================================================
 // Triangle ID contains 4 1-byte fields, 1 per triangle:
@@ -707,12 +455,14 @@ static_assert(FLOAT16_BOX_NODE_BB3_OFFSET    == offsetof(Float16BoxNode, bbox3),
 //=====================================================================================================================
 struct TriangleNode
 {
-    float3 v0;         // Vertex 0
-    float3 v1;         // Vertex 1
-    float3 v2;         // Vertex 2
-    float3 v3;         // Vertex 3
-    float3 v4;         // Vertex 4
-    uint   triangleId; // Triangle ID
+    float3 v0;                      // Vertex 0
+    float3 v1;                      // Vertex 1
+    float3 v2;                      // Vertex 2
+    float3 v3;                      // Vertex 3
+    uint   geometryIndexAndFlags;   // Geometry index and flags for pair of triangles
+    uint   primitiveIndex0;         // Primitive index for triangle 0
+    uint   primitiveIndex1;         // Primitive index for triangle 1
+    uint   triangleId;              // Triangle ID
 };
 
 #ifdef __cplusplus
@@ -721,7 +471,6 @@ static_assert(TRIANGLE_NODE_V0_OFFSET == offsetof(TriangleNode, v0), "");
 static_assert(TRIANGLE_NODE_V1_OFFSET == offsetof(TriangleNode, v1), "");
 static_assert(TRIANGLE_NODE_V2_OFFSET == offsetof(TriangleNode, v2), "");
 static_assert(TRIANGLE_NODE_V3_OFFSET == offsetof(TriangleNode, v3), "");
-static_assert(TRIANGLE_NODE_V4_OFFSET == offsetof(TriangleNode, v4), "");
 static_assert(TRIANGLE_NODE_ID_OFFSET == offsetof(TriangleNode, triangleId), "");
 #endif
 
@@ -743,6 +492,7 @@ struct ProceduralNode
     float3 bbox_min;
     float3 bbox_max;
     uint   padding1[6];
+    uint   geometryIndexAndFlags;
     uint   reserved;
     uint   primitiveIndex;
     uint   triangleId;
@@ -750,11 +500,11 @@ struct ProceduralNode
 
 #ifdef __cplusplus
 static_assert(USER_NODE_PROCEDURAL_SIZE == sizeof(ProceduralNode), "ProceduralNode structure mismatch");
-static_assert(USER_NODE_PROCEDURAL_MIN_OFFSET                       == offsetof(ProceduralNode, bbox_min), "");
-static_assert(USER_NODE_PROCEDURAL_MAX_OFFSET                       == offsetof(ProceduralNode, bbox_max), "");
-static_assert(USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET  == offsetof(ProceduralNode, geometryIndexAndFlags), "");
-static_assert(USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET           == offsetof(ProceduralNode, primitiveIndex), "");
-static_assert(USER_NODE_PROCEDURAL_TRIANGLE_ID_OFFSET               == offsetof(ProceduralNode, triangleId), "");
+static_assert(USER_NODE_PROCEDURAL_MIN_OFFSET == offsetof(ProceduralNode, bbox_min), "");
+static_assert(USER_NODE_PROCEDURAL_MAX_OFFSET == offsetof(ProceduralNode, bbox_max), "");
+static_assert(USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET == offsetof(ProceduralNode, geometryIndexAndFlags), "");
+static_assert(USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET == offsetof(ProceduralNode, primitiveIndex), "");
+static_assert(USER_NODE_PROCEDURAL_TRIANGLE_ID_OFFSET == offsetof(ProceduralNode, triangleId), "");
 #endif
 
 #ifdef __cplusplus
@@ -1108,6 +858,22 @@ struct ScratchNode
 #define SCRATCH_NODE_SIZE                             64
 
 //=====================================================================================================================
+struct InstanceSidebandData1_1
+{
+    uint   instanceIndex;
+    uint   blasNodePointer; // might not point to root
+    uint   blasMetadataSize;
+    uint   padding0;
+    float4 Transform[3]; // Non-inverse (original D3D12_RAYTRACING_INSTANCE_DESC.Transform)
+};
+
+#define RTIP1_1_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET        0
+#define RTIP1_1_INSTANCE_SIDEBAND_CHILD_POINTER_OFFSET         4
+#define RTIP1_1_INSTANCE_SIDEBAND_CHILD_METADATA_SIZE_OFFSET   8
+#define RTIP1_1_INSTANCE_SIDEBAND_OBJECT2WORLD_OFFSET         16
+#define RTIP1_1_INSTANCE_SIDEBAND_SIZE                        64
+
+//=====================================================================================================================
 // 64-byte aligned structure matching D3D12_RAYTRACING_INSTANCE_DESC
 struct InstanceDesc
 {
@@ -1138,43 +904,26 @@ static_assert(INSTANCE_DESC_VA_LO_OFFSET == offsetof(InstanceDesc, accelStructur
 static_assert(INSTANCE_DESC_VA_HI_OFFSET == offsetof(InstanceDesc, accelStructureAddressHiAndFlags), "");
 #endif
 
-//=====================================================================================================================
-struct InstanceExtraData
-{
-    uint   instanceIndex;
-    uint   blasNodePointer; // might not point to root
-    uint   blasMetadataSize;
-    uint   padding0;
-    float4 Transform[3]; // Non-inverse (original D3D12_RAYTRACING_INSTANCE_DESC.Transform)
-};
-
-#define INSTANCE_EXTRA_INDEX_OFFSET         0
-#define INSTANCE_EXTRA_NODE_POINTER_OFFSET  4
-#define INSTANCE_EXTRA_METADATA_SIZE_OFFSET 8
-#define INSTANCE_EXTRA_XFORM_OFFSET         16
-#define INSTANCE_EXTRA_DATA_SIZE            64
-#define INSTANCE_DESC_OBJECT_TO_WORLD_XFORM_OFFSET (INSTANCE_DESC_SIZE + INSTANCE_EXTRA_XFORM_OFFSET)
-
 #ifdef __cplusplus
-static_assert(INSTANCE_EXTRA_DATA_SIZE == sizeof(InstanceExtraData), "InstanceExtraData structure mismatch");
-static_assert(INSTANCE_EXTRA_INDEX_OFFSET        == offsetof(InstanceExtraData, instanceIndex), "");
-static_assert(INSTANCE_EXTRA_NODE_POINTER_OFFSET == offsetof(InstanceExtraData, blasNodePointer), "");
-static_assert(INSTANCE_EXTRA_XFORM_OFFSET        == offsetof(InstanceExtraData, Transform[0]), "");
+static_assert(RTIP1_1_INSTANCE_SIDEBAND_SIZE == sizeof(InstanceSidebandData1_1), "Instance sideband structure mismatch");
+static_assert(RTIP1_1_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET == offsetof(InstanceSidebandData1_1, instanceIndex), "");
+static_assert(RTIP1_1_INSTANCE_SIDEBAND_CHILD_POINTER_OFFSET == offsetof(InstanceSidebandData1_1, blasNodePointer), "");
+static_assert(RTIP1_1_INSTANCE_SIDEBAND_OBJECT2WORLD_OFFSET == offsetof(InstanceSidebandData1_1, Transform[0]), "");
 #endif
 
 //=====================================================================================================================
 struct FusedInstanceNode
 {
-    InstanceDesc      desc;
-    InstanceExtraData extra;
-    Float32BoxNode    blasRootNode;
+    InstanceDesc            desc;
+    InstanceSidebandData1_1 sideband;
+    Float32BoxNode          blasRootNode;
 };
 
 //=====================================================================================================================
 struct InstanceNode
 {
-    InstanceDesc      desc;
-    InstanceExtraData extra;
+    InstanceDesc            desc;
+    InstanceSidebandData1_1 sideband;
 };
 
 #define INSTANCE_NODE_DESC_OFFSET       0
@@ -1186,7 +935,7 @@ struct InstanceNode
 #ifdef __cplusplus
 static_assert(INSTANCE_NODE_SIZE == sizeof(InstanceNode), "InstanceNode structure mismatch");
 static_assert(INSTANCE_NODE_DESC_OFFSET == offsetof(InstanceNode, desc), "InstanceNode structure mismatch");
-static_assert(INSTANCE_NODE_EXTRA_OFFSET == offsetof(InstanceNode, extra), "InstanceNode structure mismatch");
+static_assert(INSTANCE_NODE_EXTRA_OFFSET == offsetof(InstanceNode, sideband), "InstanceNode structure mismatch");
 #endif
 
 //=====================================================================================================================
@@ -1196,6 +945,12 @@ static uint64_t PackUint64(uint lowBits, uint highBits)
     uint64_t addr = highBits;
     addr = (addr << 32) | lowBits;
     return addr;
+}
+
+//=====================================================================================================================
+static uint2 SplitUint64(uint64_t x)
+{
+    return uint2(x, (x >> 32));
 }
 
 #if GPURT_BUILD_RTIP2
@@ -1481,9 +1236,7 @@ static uint CalcMetadataSizeInBytes(
 static uint CreateRootNodePointer(
 )
 {
-    {
-        return PackNodePointer(NODE_TYPE_BOX_FLOAT32, ACCEL_STRUCT_HEADER_SIZE);
-    }
+    return PackNodePointer(NODE_TYPE_BOX_FLOAT32, ACCEL_STRUCT_HEADER_SIZE);
 }
 
 //=====================================================================================================================
@@ -1775,31 +1528,6 @@ struct IndexBufferInfo
 #define UPDATE_SCRATCH_TASK_COUNT_OFFSET        4
 
 //=====================================================================================================================
-// Layout sans header
-struct RayTracingDstBufferLayout
-{
-    DataOffsetAndSize metadata;          // Offset and size of internal metadata
-    DataOffsetAndSize internalNodes;     // Offset and size of internal box nodes
-    DataOffsetAndSize leafNodes;         // Offset and size of leaf nodes
-    DataOffsetAndSize geometryInfo;      // Offset and size of geometry desc info (bottom level only)
-    DataOffsetAndSize sortedPrimIndices; // Offset and size of sorted primitive indices (ALLOW_UPDATE only)
-    DataOffsetAndSize activePrimCount;   // Offset and size of active primitive count (ALLOW_UPDATE only)
-    DataOffsetAndSize scratchNodes;      // Offset and size of scratch nodes (ALLOW_UPDATE only)
-    DataOffsetAndSize primNodePtrs;      // Offset and size of prim node pointers (BVH4 with triangle compression and ALLOW_UPDATE only)
-    uint              sizeInBytes;       // Total size in bytes
-};
-
-//=====================================================================================================================
-struct RayTracingUpdateBufferLayout
-{
-    DataOffsetAndSize scratchNodes;      // Offset and size of internal scratch nodes
-    DataOffsetAndSize propagationFlags;  // Offset and size of propagation flags buffer
-    DataOffsetAndSize bvh4Stack;         // Offset and size of stack for BVH4 update
-    DataOffsetAndSize bvh4StackPtrs;     // Offset and size of stack pointers for BVH4 update
-    uint              sizeInBytes;       // Total size in bytes
-};
-
-//=====================================================================================================================
 #ifdef AMD_VULKAN
 //=====================================================================================================================
 ///@note Enum is a reserved keyword in glslang. To workaround this limitation, define static constants to replace the
@@ -1819,130 +1547,8 @@ enum RebraidType : uint
     V2  = 2, // Second version of Rebraid
 };
 #endif
-//=====================================================================================================================
-// Settings constant buffer specified at compile time in the driver
-struct BuildSettingsData
-{
-    uint topLevelBuild;
-    uint buildMode;
-    uint triangleCompressionMode;
-    uint doTriangleSplitting;
-    uint doCollapse;
-    uint fp16BoxNodesMode;
-    float fp16BoxModeMixedSaThreshhold;
-    uint radixSortScanLevel;
-    uint emitCompactSize;
-    uint enableBVHBuildDebugCounters;
-    uint plocRadius;
-    uint enablePairCostCheck;
-    uint enableVariableBitsMortonCode;
-    uint rebraidType;
-    uint enableTopDownBuild;
-    uint useMortonCode30;
-    uint enableMergeSort;
-    uint fastBuildThreshold;
-    uint bvhBuilderNodeSortType;
-    uint bvhBuilderNodeSortHeuristic;
-    uint enableFusedInstanceNode;
-    uint sahQbvh;
-    float tsPriority;
-    uint noCopySortedNodes;
-    uint enableSAHCost;
-    uint doEncode;
-    uint enableEarlyPairCompression;
-    uint enableFastLBVH;
-};
 
-#define BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_OFFSET                        0
-#define BUILD_SETTINGS_DATA_BUILD_MODE_OFFSET                             4
-#define BUILD_SETTINGS_DATA_TRIANGLE_COMPRESSION_MODE_OFFSET              8
-#define BUILD_SETTINGS_DATA_DO_TRIANGLE_SPLITTING_OFFSET                  12
-#define BUILD_SETTINGS_DATA_DO_COLLAPSE_OFFSET                            16
-#define BUILD_SETTINGS_DATA_FP16_BOX_NODES_MODE_OFFSET                    20
-#define BUILD_SETTINGS_DATA_FP16_BOX_MODE_MIXED_SA_THRESHHOLD_OFFSET      24
-#define BUILD_SETTINGS_DATA_RADIX_SORT_SCAN_LEVEL_OFFSET                  28
-#define BUILD_SETTINGS_DATA_EMIT_COMPACT_SIZE_OFFSET                      32
-#define BUILD_SETTINGS_DATA_ENABLE_BVH_BUILD_DEBUG_COUNTERS_OFFSET        36
-#define BUILD_SETTINGS_DATA_PLOC_RADIUS                                   40
-#define BUILD_SETTINGS_DATA_ENABLE_PAIR_COST_CHECK_OFFSET                 44
-#define BUILD_SETTINGS_DATA_ENABLE_VARIABLE_BITS_MC_OFFSET                48
-#define BUILD_SETTINGS_DATA_REBRAID_TYPE_OFFSET                           52
-#define BUILD_SETTINGS_DATA_ENABLE_TOP_DOWN_BUILD_OFFSET                  56
-#define BUILD_SETTINGS_DATA_USE_MORTON_CODE_30_OFFSET                     60
-#define BUILD_SETTINGS_DATA_ENABLE_MERGE_SORT_OFFSET                      64
-#define BUILD_SETTINGS_DATA_FAST_BUILD_THRESHOLD_OFFSET                   68
-#define BUILD_SETTINGS_DATA_BVH_BUILDER_NODE_SORT_TYPE_OFFSET             72
-#define BUILD_SETTINGS_DATA_BVH_BUILDER_NODE_SORT_HEURISTIC_OFFSET        76
-#define BUILD_SETTINGS_DATA_ENABLE_FUSED_INSTANCE_NODE_OFFSET             80
-#define BUILD_SETTINGS_DATA_SAH_QBVH_OFFSET                               84
-#define BUILD_SETTINGS_DATA_TS_PRIORITY_OFFSET                            88
-#define BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_OFFSET                   92
-#define BUILD_SETTINGS_DATA_ENABLE_SAH_COST_OFFSET                        96
-#define BUILD_SETTINGS_DATA_USE_GROWTH_IN_LTD_OFFSET                      100
-#define BUILD_SETTINGS_DATA_DO_ENCODE                                     104
-#define BUILD_SETTINGS_DATA_LTD_PACK_CENTROIDS_OFFSET                     108
-#define BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_OFFSET          112
-#define BUILD_SETTINGS_DATA_ENABLE_FAST_LBVH_OFFSET                       116
-#define BUILD_SETTINGS_DATA_SIZE                                          120
-
-#define BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_ID                        (BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_OFFSET / sizeof(uint))
-#define BUILD_SETTINGS_DATA_BUILD_MODE_ID                             (BUILD_SETTINGS_DATA_BUILD_MODE_OFFSET  / sizeof(uint))
-#define BUILD_SETTINGS_DATA_TRIANGLE_COMPRESSION_MODE_ID              (BUILD_SETTINGS_DATA_TRIANGLE_COMPRESSION_MODE_OFFSET  / sizeof(uint))
-#define BUILD_SETTINGS_DATA_DO_TRIANGLE_SPLITTING_ID                  (BUILD_SETTINGS_DATA_DO_TRIANGLE_SPLITTING_OFFSET  / sizeof(uint))
-#define BUILD_SETTINGS_DATA_DO_COLLAPSE_ID                            (BUILD_SETTINGS_DATA_DO_COLLAPSE_OFFSET  / sizeof(uint))
-#define BUILD_SETTINGS_DATA_FP16_BOX_NODES_MODE_ID                    (BUILD_SETTINGS_DATA_FP16_BOX_NODES_MODE_OFFSET  / sizeof(uint))
-#define BUILD_SETTINGS_DATA_FP16_BOX_MODE_MIXED_SA_THRESHHOLD_ID      (BUILD_SETTINGS_DATA_FP16_BOX_MODE_MIXED_SA_THRESHHOLD_OFFSET  / sizeof(uint))
-#define BUILD_SETTINGS_DATA_RADIX_SORT_SCAN_LEVEL_ID                  (BUILD_SETTINGS_DATA_RADIX_SORT_SCAN_LEVEL_OFFSET  / sizeof(uint))
-#define BUILD_SETTINGS_DATA_EMIT_COMPACT_SIZE_ID                      (BUILD_SETTINGS_DATA_EMIT_COMPACT_SIZE_OFFSET  / sizeof(uint))
-#define BUILD_SETTINGS_DATA_ENABLE_BVH_BUILD_DEBUG_COUNTERS_ID        (BUILD_SETTINGS_DATA_ENABLE_BVH_BUILD_DEBUG_COUNTERS_OFFSET  / sizeof(uint))
-#define BUILD_SETTINGS_DATA_PLOC_RADIUS_ID                            (BUILD_SETTINGS_DATA_PLOC_RADIUS  / sizeof(uint))
-#define BUILD_SETTINGS_DATA_ENABLE_PAIR_COST_CHECK_ID                 (BUILD_SETTINGS_DATA_ENABLE_PAIR_COST_CHECK_OFFSET  / sizeof(uint))
-#define BUILD_SETTINGS_DATA_ENABLE_VARIABLE_BITS_MC_ID                (BUILD_SETTINGS_DATA_ENABLE_VARIABLE_BITS_MC_OFFSET / sizeof(uint))
-#define BUILD_SETTINGS_DATA_REBRAID_TYPE_ID                           (BUILD_SETTINGS_DATA_REBRAID_TYPE_OFFSET / sizeof(uint))
-#define BUILD_SETTINGS_DATA_ENABLE_TOP_DOWN_BUILD_ID                  (BUILD_SETTINGS_DATA_ENABLE_TOP_DOWN_BUILD_OFFSET / sizeof(uint))
-#define BUILD_SETTINGS_DATA_USE_MORTON_CODE_30_ID                     (BUILD_SETTINGS_DATA_USE_MORTON_CODE_30_OFFSET / sizeof(uint))
-#define BUILD_SETTINGS_DATA_ENABLE_MERGE_SORT_ID                      (BUILD_SETTINGS_DATA_ENABLE_MERGE_SORT_OFFSET / sizeof(uint))
-#define BUILD_SETTINGS_DATA_FAST_BUILD_THRESHOLD_ID                   (BUILD_SETTINGS_DATA_FAST_BUILD_THRESHOLD_OFFSET / sizeof(uint))
-#define BUILD_SETTINGS_DATA_BVH_BUILDER_NODE_SORT_TYPE_ID             (BUILD_SETTINGS_DATA_BVH_BUILDER_NODE_SORT_TYPE_OFFSET / sizeof(uint))
-#define BUILD_SETTINGS_DATA_BVH_BUILDER_NODE_SORT_HEURISTIC_ID        (BUILD_SETTINGS_DATA_BVH_BUILDER_NODE_SORT_HEURISTIC_OFFSET / sizeof(uint))
-#define BUILD_SETTINGS_DATA_ENABLE_FUSED_INSTANCE_NODE_ID             (BUILD_SETTINGS_DATA_ENABLE_FUSED_INSTANCE_NODE_OFFSET / sizeof(uint))
-#define BUILD_SETTINGS_DATA_SAH_QBVH_ID                               (BUILD_SETTINGS_DATA_SAH_QBVH_OFFSET / sizeof(uint))
-#define BUILD_SETTINGS_DATA_TS_PRIORITY_ID                            (BUILD_SETTINGS_DATA_TS_PRIORITY_OFFSET / sizeof(uint))
-#define BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_ID                   (BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_OFFSET / sizeof(uint))
-#define BUILD_SETTINGS_DATA_ENABLE_SAH_COST_ID                        (BUILD_SETTINGS_DATA_ENABLE_SAH_COST_OFFSET / sizeof(uint))
-#define BUILD_SETTINGS_DATA_DO_ENCODE_ID                              (BUILD_SETTINGS_DATA_DO_ENCODE / sizeof(uint))
-#define BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_ID          (BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_OFFSET / sizeof(uint))
-#define BUILD_SETTINGS_DATA_ENABLE_FAST_LBVH_ID                       (BUILD_SETTINGS_DATA_ENABLE_FAST_LBVH_OFFSET / sizeof(uint))
-
-#ifdef __cplusplus
-static_assert(BUILD_SETTINGS_DATA_SIZE                                          == sizeof(BuildSettingsData), "BuildSettingsData structure header mismatch");
-static_assert(BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_OFFSET                        == offsetof(BuildSettingsData, topLevelBuild), "");
-static_assert(BUILD_SETTINGS_DATA_BUILD_MODE_OFFSET                             == offsetof(BuildSettingsData, buildMode), "");
-static_assert(BUILD_SETTINGS_DATA_TRIANGLE_COMPRESSION_MODE_OFFSET              == offsetof(BuildSettingsData, triangleCompressionMode), "");
-static_assert(BUILD_SETTINGS_DATA_DO_TRIANGLE_SPLITTING_OFFSET                  == offsetof(BuildSettingsData, doTriangleSplitting), "");
-static_assert(BUILD_SETTINGS_DATA_DO_COLLAPSE_OFFSET                            == offsetof(BuildSettingsData, doCollapse), "");
-static_assert(BUILD_SETTINGS_DATA_FP16_BOX_NODES_MODE_OFFSET                    == offsetof(BuildSettingsData, fp16BoxNodesMode), "");
-static_assert(BUILD_SETTINGS_DATA_FP16_BOX_MODE_MIXED_SA_THRESHHOLD_OFFSET      == offsetof(BuildSettingsData, fp16BoxModeMixedSaThreshhold), "");
-static_assert(BUILD_SETTINGS_DATA_RADIX_SORT_SCAN_LEVEL_OFFSET                  == offsetof(BuildSettingsData, radixSortScanLevel), "");
-static_assert(BUILD_SETTINGS_DATA_EMIT_COMPACT_SIZE_OFFSET                      == offsetof(BuildSettingsData, emitCompactSize), "");
-static_assert(BUILD_SETTINGS_DATA_PLOC_RADIUS                                   == offsetof(BuildSettingsData, plocRadius), "");
-static_assert(BUILD_SETTINGS_DATA_ENABLE_PAIR_COST_CHECK_OFFSET                 == offsetof(BuildSettingsData, enablePairCostCheck), "");
-static_assert(BUILD_SETTINGS_DATA_ENABLE_BVH_BUILD_DEBUG_COUNTERS_OFFSET        == offsetof(BuildSettingsData, enableBVHBuildDebugCounters), "");
-static_assert(BUILD_SETTINGS_DATA_ENABLE_VARIABLE_BITS_MC_OFFSET                == offsetof(BuildSettingsData, enableVariableBitsMortonCode), "");
-static_assert(BUILD_SETTINGS_DATA_USE_MORTON_CODE_30_OFFSET                     == offsetof(BuildSettingsData, useMortonCode30), "");
-static_assert(BUILD_SETTINGS_DATA_ENABLE_MERGE_SORT_OFFSET                      == offsetof(BuildSettingsData, enableMergeSort), "");
-static_assert(BUILD_SETTINGS_DATA_FAST_BUILD_THRESHOLD_OFFSET                   == offsetof(BuildSettingsData, fastBuildThreshold), "");
-static_assert(BUILD_SETTINGS_DATA_BVH_BUILDER_NODE_SORT_TYPE_OFFSET             == offsetof(BuildSettingsData, bvhBuilderNodeSortType), "");
-static_assert(BUILD_SETTINGS_DATA_BVH_BUILDER_NODE_SORT_HEURISTIC_OFFSET        == offsetof(BuildSettingsData, bvhBuilderNodeSortHeuristic), "");
-static_assert(BUILD_SETTINGS_DATA_ENABLE_FUSED_INSTANCE_NODE_OFFSET             == offsetof(BuildSettingsData, enableFusedInstanceNode), "");
-static_assert(BUILD_SETTINGS_DATA_SAH_QBVH_OFFSET                               == offsetof(BuildSettingsData, sahQbvh), "");
-static_assert(BUILD_SETTINGS_DATA_TS_PRIORITY_OFFSET                            == offsetof(BuildSettingsData, tsPriority), "");
-static_assert(BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_OFFSET                   == offsetof(BuildSettingsData, noCopySortedNodes), "");
-static_assert(BUILD_SETTINGS_DATA_ENABLE_SAH_COST_OFFSET                        == offsetof(BuildSettingsData, enableSAHCost), "");
-static_assert(BUILD_SETTINGS_DATA_DO_ENCODE                                     == offsetof(BuildSettingsData, doEncode), "");
-static_assert(BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_OFFSET          == offsetof(BuildSettingsData, enableEarlyPairCompression), "");
-static_assert(BUILD_SETTINGS_DATA_ENABLE_FAST_LBVH_OFFSET                       == offsetof(BuildSettingsData, enableFastLBVH), "");
-#endif
+typedef CompileTimeBuildSettings BuildSettingsData;
 
 #define BUILD_MODE_LINEAR   0
 // BUILD_MODE_AC was 1, but it has been removed.
@@ -1962,7 +1568,7 @@ static uint CalcNumQBVHNodes(uint numPrimitives)
 
 #define BUILD_FLAGS_COLLAPSE                 1
 #define BUILD_FLAGS_TRIANGLE_SPLITTING       2
-#define BUILD_FLAGS_PAIR_COMPRESSION         4
+#define BUILD_FLAGS_LATE_PAIR_COMPRESSION    4
 #define BUILD_FLAGS_PAIR_COST_CHECK          8
 
 #define SAH_COST_TRIANGLE_INTERSECTION       1.5
@@ -2104,53 +1710,6 @@ struct RayQueryInternal
 #ifdef AMD_VULKAN
     uint             rayQueryObjId;
 #endif
-};
-
-//=====================================================================================================================
-struct DispatchRaysInfoData
-{
-    uint RayGenerationTableLow;                         ///< d1.x
-    uint RayGenerationTableHigh;                        ///< d1.y
-    uint RayGridWidth;                                  ///< d1.z
-    uint RayGridHeight;                                 ///< d1.w
-    uint RayGridDepth;                                  ///< d2.x
-    uint MissShaderTableStartAddressLow;                ///< d2.y
-    uint MissShaderTableStartAddressHigh;               ///< d2.z
-    uint MissShaderTableStrideInBytes;                  ///< d2.w
-    uint MaxRecursion;                                  ///< d3.x
-    uint HitGroupTableStartAddressLow;                  ///< d3.y
-    uint HitGroupTableStartAddressHigh;                 ///< d3.z
-    uint HitGroupTableStrideInBytes;                    ///< d3.w
-    uint MaxAttributeSize;                              ///< d4.x
-    uint CallableShaderStartAddressLow;                 ///< d4.y
-    uint CallableShaderStartAddressHigh;                ///< d4.z
-    uint CallableShaderStrideInBytes;                   ///< d4.w
-
-    // Profiling only
-    uint ProfileRayFlags;                               ///< d5.x
-    uint MaxIterations;                                 ///< d5.y
-
-    // Driver reserved for indirect function support
-    uint TraceRaysGpuVaLo;                              ///< d5.z
-    uint TraceRaysGpuVaHi;                              ///< d5.w
-
-    // Counters only
-    uint CounterMode;                                   ///< d6.x
-    uint RayIdRangeBegin;                               ///< d6.y
-    uint RayIdRangeEnd;                                 ///< d6.z
-    uint cpsStackOffsetInBytes;                         ///< d6.w
-};
-
-//=====================================================================================================================
-struct DispatchRaysDynamicInfoData
-{
-    // The following order matches driver Pal::Rect { origin, extents }
-    uint2 TileOrigin;
-    uint2 TileDimension; //could be smaller than tile size
-    uint  TileDepth;
-
-    uint  CurrentRecursionCount;
-    uint  CurrentShaderIndex; // Unused in driver implementation. Driver generates these as compile time constants
 };
 
 //=====================================================================================================================

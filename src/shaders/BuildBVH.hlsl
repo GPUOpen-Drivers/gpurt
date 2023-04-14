@@ -79,6 +79,8 @@ struct FastLBVHArgs
     bool ltdPackCentroids;
     int4 numMortonBits;
     uint enableInstancePrimCount;
+    uint enableEarlyPairCompression;
+    uint unsortedNodesBaseOffset;
 };
 
 //=====================================================================================================================
@@ -290,6 +292,8 @@ void FastAgglomerativeLbvhImpl(
     refitArgs.ltdPackCentroids            = args.ltdPackCentroids;
     refitArgs.numMortonBits               = args.numMortonBits;
     refitArgs.enableInstancePrimCount     = args.enableInstancePrimCount;
+    refitArgs.unsortedNodesBaseOffset     = args.unsortedNodesBaseOffset;
+    refitArgs.enableEarlyPairCompression  = args.enableEarlyPairCompression;
 
     // Total number of internal nodes is N - 1
     const uint numInternalNodes = args.numActivePrims - 1;
@@ -418,9 +422,9 @@ void SplitInternalNodeLbvh(
     ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_LEFT_OFFSET,  c1idx);
     ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_RIGHT_OFFSET, c2idx);
     ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_FLAGS_OFFSET, 0);
-    {
-        ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_TYPE_OFFSET, NODE_TYPE_BOX_FLOAT32);
-    }
+
+    const uint nodeType = GetInternalNodeType();
+    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_TYPE_OFFSET, nodeType);
 }
 
 //======================================================================================================================
@@ -466,9 +470,9 @@ void FastBuildBVH(
             ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_LEFT_OFFSET,  childLeft);
             ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_RIGHT_OFFSET, childRight);
             ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_FLAGS_OFFSET, 0);
-            {
-                ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_TYPE_OFFSET, NODE_TYPE_BOX_FLOAT32);
-            }
+
+            const uint nodeType = GetInternalNodeType();
+            ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_TYPE_OFFSET, nodeType);
 
             const uint childLeftNodeOffset  = CalcScratchNodeOffset(bvhNodesOffset, childLeft);
             const uint childRightNodeOffset = CalcScratchNodeOffset(bvhNodesOffset, childRight);

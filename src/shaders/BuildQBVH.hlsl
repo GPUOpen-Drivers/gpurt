@@ -37,19 +37,17 @@ struct BuildQbvhArgs
     uint emitCompactSize;
     uint encodeArrayOfPointers;
     uint topDownBuild;
-    uint bvhBuilderNodeSortType;        // bvhBuilder node sort Type
-    uint bvhBuilderNodeSortHeuristic;   // bvhBuilder node sort heuristic
     uint enableFusedInstanceNode;
-    uint sahQbvh;                       // Apply SAH into QBVH build
     uint enableFastLBVH;                // Enable the Fast LBVH path
     uint fastLBVHRootNodeIndex;
     uint captureChildNumPrimsForRebraid;
     uint enableSAHCost;
     uint enableEarlyPairCompression;
+    uint unsortedBvhLeafNodesOffset;
 };
 
 #if NO_SHADER_ENTRYPOINT == 0
-#define RootSig "RootConstants(num32BitConstants=22, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=23, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
@@ -194,8 +192,8 @@ static void InitBuildQbvhImpl(
         // Source node index in linear memory
         stackPtrs.stackPtrSrcNodeId = 1;
         // Node destination in linear memory. Counts in 64B chunks.
-        stackPtrs.stackPtrNodeDest  = 2;
-        stackPtrs.numLeafsDone      = 0;
+        stackPtrs.stackPtrNodeDest = 2;
+        stackPtrs.numLeafsDone = 0;
 
         ScratchBuffer.Store<StackPtrs>(args.stackPtrsScratchOffset, stackPtrs);
 
@@ -273,9 +271,7 @@ uint WriteInstanceNode(
     if (args.encodeArrayOfPointers != 0)
     {
         GpuVirtualAddress addr = InstanceDescBuffer.Load<GpuVirtualAddress>(instanceIndex * GPU_VIRTUAL_ADDRESS_SIZE);
-        {
-            instanceDesc = FetchInstanceDesc(addr, 0);
-        }
+        instanceDesc = FetchInstanceDescAddr(addr);
     }
     else
     {
@@ -340,9 +336,8 @@ uint WritePrimitiveNode(
 
     uint destIndex;
     {
-        if (IsTriangleNode(nodeType)
-            && ((args.triangleCompressionMode != NO_TRIANGLE_COMPRESSION)
-            || DoTriSplitting(args)))
+        if (IsTriangleNode(nodeType) &&
+            ((args.triangleCompressionMode != NO_TRIANGLE_COMPRESSION) || DoTriSplitting(args)))
         {
             destIndex = numLeafsDone;
         }
@@ -375,8 +370,17 @@ uint WritePrimitiveNode(
         }
 
         DstBuffer.Store(nodeOffset + TRIANGLE_NODE_ID_OFFSET, triangleId);
+
+        const bool isPairCompressed = (args.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
+                                      (scratchNode.splitBox_or_nodePointer != INVALID_IDX);
+
+        // Pair compressed triangles nodes are referenced by triangle 1
+        nodeType = isPairCompressed ? NODE_TYPE_TRIANGLE_1 : NODE_TYPE_TRIANGLE_0;
+
         {
             DstBuffer.Store(nodeOffset + TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
+            DstBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + (nodeType * 4),
+                            scratchNode.left_or_primIndex_or_instIndex);
         }
 
         uint3 vertexOffsets;
@@ -393,25 +397,19 @@ uint WritePrimitiveNode(
         DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.y, scratchNode.bbox_max_or_v1);
         DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.z, scratchNode.sah_or_v2_or_instBasePtr);
 
-        DstBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + (nodeType * 4),
-                        scratchNode.left_or_primIndex_or_instIndex);
-
         // For PAIR_TRIANGLE_COMPRESSION, the other node is not linked in the BVH tree, so we need to find it and
         // store it as well if it exists.
-        if ((args.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
-            (scratchNode.splitBox_or_nodePointer != INVALID_IDX) &&
-            // TODO: When EarlyPairCompression is ON, will actually need to fetch paired triangle from a different
-            // scratch offset. Thus this will be updated once the EarlyPairCompression is implemented.
-            (args.enableEarlyPairCompression == false))
+        if (isPairCompressed)
         {
-            const ScratchNode otherNode = FetchScratchNode(args.scratchNodesScratchOffset,
-                                                           scratchNode.splitBox_or_nodePointer);
-            const uint otherNodeType = GetNodeType(otherNode.type);
+            const uint baseScratchLeafNodeOffset =
+                args.enableEarlyPairCompression ? args.unsortedBvhLeafNodesOffset : args.scratchNodesScratchOffset;
+
+            const ScratchNode otherNode = FetchScratchNode(baseScratchLeafNodeOffset, scratchNode.splitBox_or_nodePointer);
 
             const float3 otherVerts[3] = { otherNode.bbox_min_or_v0,
                                            otherNode.bbox_max_or_v1,
                                            otherNode.sah_or_v2_or_instBasePtr };
-            const uint3 otherVertexOffsets = CalcTriangleCompressionVertexOffsets(otherNodeType, triangleId);
+            const uint3 otherVertexOffsets = CalcTriangleCompressionVertexOffsets(NODE_TYPE_TRIANGLE_0, triangleId);
             for (uint i = 0; i < 3; ++i)
             {
                 // Since the other node will always be of type NODE_TYPE_TRIANGLE_0, it is sufficient to store only
@@ -422,10 +420,12 @@ uint WritePrimitiveNode(
                 }
             }
 
-            DstBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + (otherNodeType * 4),
-                            otherNode.left_or_primIndex_or_instIndex);
+            {
+                DstBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET,
+                                otherNode.left_or_primIndex_or_instIndex);
+            }
 
-            const uint otherPrimNodePointer = PackNodePointer(otherNodeType, nodeOffset);
+            const uint otherPrimNodePointer = PackNodePointer(NODE_TYPE_TRIANGLE_0, nodeOffset);
             DstBuffer.Store(geometryPrimNodePtrsOffset + (otherNode.left_or_primIndex_or_instIndex * sizeof(uint)),
                             otherPrimNodePointer);
         }
@@ -461,13 +461,20 @@ BoundingBox GetScratchNodeBoundingBoxTS(
                                                node.sah_or_v2_or_instBasePtr);
 
             if ((args.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
-                (node.splitBox_or_nodePointer != INVALID_IDX) &&
-                // TODO: When EarlyPairCompression is ON, will actually need to fetch paired triangle from a different
-                // scratch offset. Thus this will be updated once the EarlyPairCompression is implemented.
-                (args.enableEarlyPairCompression == false))
+                (node.splitBox_or_nodePointer != INVALID_IDX))
             {
-                const ScratchNode otherNode = FetchScratchNode(args.scratchNodesScratchOffset,
-                                                               node.splitBox_or_nodePointer);
+                ScratchNode otherNode;
+                if (args.enableEarlyPairCompression)
+                {
+                    otherNode = FetchScratchNode(args.unsortedBvhLeafNodesOffset,
+                                                 node.splitBox_or_nodePointer);
+                }
+                else
+                {
+                    otherNode = FetchScratchNode(args.scratchNodesScratchOffset,
+                                                 node.splitBox_or_nodePointer);
+                }
+
                 const BoundingBox otherBbox = GenerateTriangleBoundingBox(otherNode.bbox_min_or_v0,
                                                                           otherNode.bbox_max_or_v1,
                                                                           otherNode.sah_or_v2_or_instBasePtr);
@@ -523,6 +530,7 @@ uint QBVHStackPopDestIdx(
     else if (topLevelBuild || (fp16BoxNodesInBlasMode == NO_NODES_IN_BLAS_AS_FP16))
     {
         destIndex = 2 * stackIndex;
+
     }
     // All but root node are fp16
     else
@@ -630,166 +638,18 @@ uint AllocQBVHStackNumItems(
 }
 
 //=====================================================================================================================
-// Note:
-// There are 2 sort type
-// 1-) 4-Way Sort:   Sort all 4 child of a box node, given 1 sort heuristic
-// 2-) 2-Level Sort: Sort left and right child of each level
-//
-// There are 4 sort heuristic in total
-// 1-) Sort nodes by SurfaceArea, Largest  -> Smallest
-// 2-) Sort nodes by SurfaceArea, Smallest -> Largest
-// 3-) Sort nodes by density (average primitive per surfaceArea), Largest  -> Smallest
-// 4-) Sort nodes by density (average primitive per surfaceArea), Smallest -> Largest
-//
-// TODO
-// 1-) Add "write numPrims (WriteScratchNodeNumPrimitives)" in TopDown Builder
-// 2-) Add more Sort Heuristic Support in 2-level sort, currently it only uses SurfaceArea
-// 3-) Add NodeSort support for Collapse
-
-#define SORT_LARGEST_FIRST(childA,childB,SurfaceA,SurfaceB) \
-if ((childB != INVALID_NODE && SurfaceB > SurfaceA) || childA == INVALID_NODE) \
-{float t0 = SurfaceA; uint t1 = childA;  childA = childB; SurfaceA = SurfaceB;  childB = t1; SurfaceB = t0;}
-
-// Sort node by SurceArea, Smallest -> Largest
-#define SORT_SMALLEST_FIRST(childA,childB,SurfaceA,SurfaceB) \
-if ((childB != INVALID_NODE && SurfaceB < SurfaceA) || childA == INVALID_NODE) \
-{float t0 = SurfaceA; uint t1 = childA;  childA = childB; SurfaceA = SurfaceB;  childB = t1; SurfaceB = t0;}
-
-//=====================================================================================================================
-void SortChildren(
-    in    BuildQbvhArgs args,
-    in    uint          numPrimitives[4],
-    inout uint          childNodePtr[4],
-    inout BoundingBox   bbox[4],
-    inout uint          nodeFlags[4],
-    inout float4        cost)
-{
-    const uint sortHeuristic = args.bvhBuilderNodeSortHeuristic;
-
-    float sortKeyBySurfaceArea[4];
-    float sortKeyByDensity[4];     // Average numPrimitive Per SurfaceArea
-    uint  sortedIdx[4];
-    uint  sortedChildNodePtr[4];
-    uint  sortedNodeFlags[4];
-    BoundingBox sortedBbox[4];
-
-    float sortedCost[4];
-
-    for (uint idx = 0; idx < 4; ++idx)
-    {
-        sortedIdx[idx] = (childNodePtr[idx] == INVALID_NODE) ? INVALID_NODE : idx;
-        sortKeyBySurfaceArea[idx] = ComputeBoxSurfaceArea(bbox[idx]);
-        sortKeyByDensity[idx] = numPrimitives[idx] / ComputeBoxSurfaceArea(bbox[idx]);
-    }
-
-    switch (sortHeuristic)
-    {
-    case SurfaceAreaLargestFirst:
-    {
-        SORT_LARGEST_FIRST(sortedIdx[0], sortedIdx[2], sortKeyBySurfaceArea[0], sortKeyBySurfaceArea[2])
-        SORT_LARGEST_FIRST(sortedIdx[1], sortedIdx[3], sortKeyBySurfaceArea[1], sortKeyBySurfaceArea[3])
-        SORT_LARGEST_FIRST(sortedIdx[0], sortedIdx[1], sortKeyBySurfaceArea[0], sortKeyBySurfaceArea[1])
-        SORT_LARGEST_FIRST(sortedIdx[2], sortedIdx[3], sortKeyBySurfaceArea[2], sortKeyBySurfaceArea[3])
-        SORT_LARGEST_FIRST(sortedIdx[1], sortedIdx[2], sortKeyBySurfaceArea[1], sortKeyBySurfaceArea[2])
-    }
-    break;
-
-    case SurfaceAreaSmallestFirst:
-    {
-        SORT_SMALLEST_FIRST(sortedIdx[0], sortedIdx[2], sortKeyBySurfaceArea[0], sortKeyBySurfaceArea[2])
-        SORT_SMALLEST_FIRST(sortedIdx[1], sortedIdx[3], sortKeyBySurfaceArea[1], sortKeyBySurfaceArea[3])
-        SORT_SMALLEST_FIRST(sortedIdx[0], sortedIdx[1], sortKeyBySurfaceArea[0], sortKeyBySurfaceArea[1])
-        SORT_SMALLEST_FIRST(sortedIdx[2], sortedIdx[3], sortKeyBySurfaceArea[2], sortKeyBySurfaceArea[3])
-        SORT_SMALLEST_FIRST(sortedIdx[1], sortedIdx[2], sortKeyBySurfaceArea[1], sortKeyBySurfaceArea[2])
-    }
-    break;
-
-    case DensityLargestFirst:
-    {
-        SORT_LARGEST_FIRST(sortedIdx[0], sortedIdx[2], sortKeyByDensity[0], sortKeyByDensity[2])
-        SORT_LARGEST_FIRST(sortedIdx[1], sortedIdx[3], sortKeyByDensity[1], sortKeyByDensity[3])
-        SORT_LARGEST_FIRST(sortedIdx[0], sortedIdx[1], sortKeyByDensity[0], sortKeyByDensity[1])
-        SORT_LARGEST_FIRST(sortedIdx[2], sortedIdx[3], sortKeyByDensity[2], sortKeyByDensity[3])
-        SORT_LARGEST_FIRST(sortedIdx[1], sortedIdx[2], sortKeyByDensity[1], sortKeyByDensity[2])
-    }
-    break;
-
-    case DensitySmallestFirst:
-    {
-        SORT_SMALLEST_FIRST(sortedIdx[0], sortedIdx[2], sortKeyByDensity[0], sortKeyByDensity[2])
-        SORT_SMALLEST_FIRST(sortedIdx[1], sortedIdx[3], sortKeyByDensity[1], sortKeyByDensity[3])
-        SORT_SMALLEST_FIRST(sortedIdx[0], sortedIdx[1], sortKeyByDensity[0], sortKeyByDensity[1])
-        SORT_SMALLEST_FIRST(sortedIdx[2], sortedIdx[3], sortKeyByDensity[2], sortKeyByDensity[3])
-        SORT_SMALLEST_FIRST(sortedIdx[1], sortedIdx[2], sortKeyByDensity[1], sortKeyByDensity[2])
-    }
-    break;
-
-    default:
-        // no sort
-        break;
-    }
-
-    // sort child node pointers, boxes and node flags using the sorted indices
-    uint combinedSortedNodeFlags = 0;
-    for (idx = 0; idx < 4; idx++)
-    {
-        if (sortedIdx[idx] != INVALID_NODE)
-        {
-            sortedChildNodePtr[idx] = childNodePtr[sortedIdx[idx]];
-            sortedBbox[idx]         = bbox[sortedIdx[idx]];
-            sortedNodeFlags[idx]    = nodeFlags[sortedIdx[idx]];
-            sortedCost[idx]         = cost[sortedIdx[idx]];
-        }
-        else
-        {
-            sortedChildNodePtr[idx] = INVALID_NODE;
-            sortedCost[idx]         = 0;
-        }
-    }
-
-    for (idx = 0; idx < 4; idx++)
-    {
-        childNodePtr[idx] = sortedChildNodePtr[idx];
-        bbox[idx]         = sortedBbox[idx];
-        nodeFlags[idx]    = sortedNodeFlags[idx];
-        cost[idx]         = sortedCost[idx];
-    }
-}
-
-//=====================================================================================================================
-// Currently 2-way sort only support Sort by SurfaceArea, largest fist
-// TODO: adding other sort methods here
-bool CompareBBoxAndCheckForSwap(
-    const BoundingBox bbox0,
-    const BoundingBox bbox1)
-{
-    const float sortKeyBySurfaceArea_0 = ComputeBoxSurfaceArea(bbox0);
-    const float sortKeyBySurfaceArea_1 = ComputeBoxSurfaceArea(bbox1);
-
-    // if node 1 is larger than node 0, do the swap
-    // otherwise, keep the default node order
-    return (sortKeyBySurfaceArea_1 > sortKeyBySurfaceArea_0);
-}
-
-//=====================================================================================================================
 static uint CreateBoxNodePointer(
     in BuildQbvhArgs args,
     in uint nodeOffsetInBytes,
     in bool writeAsFp16BoxNode)
 {
-    uint boxNodePointer;
-
-    if (
-        writeAsFp16BoxNode)
+    uint nodeType = GetInternalNodeType();
+    if ((nodeType == NODE_TYPE_BOX_FLOAT32) && writeAsFp16BoxNode)
     {
-        boxNodePointer = PackNodePointer(NODE_TYPE_BOX_FLOAT16, nodeOffsetInBytes);
-    }
-    else
-    {
-        boxNodePointer = PackNodePointer(NODE_TYPE_BOX_FLOAT32, nodeOffsetInBytes);
+        nodeType = NODE_TYPE_BOX_FLOAT16;
     }
 
-    return boxNodePointer;
+    return PackNodePointer(nodeType, nodeOffsetInBytes);
 }
 
 //=====================================================================================================================
@@ -812,9 +672,7 @@ static uint ProcessNode(
         nodePointer = WriteInstanceNode(args, scratchNode, scratchNodeIndex, nodeOffset, offsets);
     }
 
-    if ((topLevelBuild == false) &&
-        (IsTriangleNode(nodeType)
-        || IsUserNodeProcedural(nodeType)))
+    if ((topLevelBuild == false) && (IsTriangleNode(nodeType) || IsUserNodeProcedural(nodeType)))
     {
         nodePointer = WritePrimitiveNode(args, scratchNode, nodeOffset, offsets);
     }
@@ -836,207 +694,16 @@ static uint ProcessNode(
 }
 
 //=====================================================================================================================
-static void PullUpLeftChildren(
-    in    BuildQbvhArgs      args,                   // Build args
-    in    uint               numActivePrims,         // Number of active primitives
-    in    bool               topLevelBuild,          // Compile time flag indicating whether this is top or bottom level build
-    in    bool               use2levelSort,          // Boolean indicating whether to use 2-level sort
-    in    bool               doSwapLevel0,           // Boolean indicating whether to swap the level 0 nodes in 2-level sort
-    in    bool               use4waySort,            // Boolean indicating whether to use 4-way sort
-    in    ScratchNode        node,                   // Parent BVH scratch node
-    in    ScratchNode        level0LeftChildNode,    // Level 0 left child BVH scratch node
-    in    uint               parentNodePtr,          // Parent QBVH node pointer
-    in    AccelStructOffsets offsets,                // Header offsets
-    in    uint               numRightChildren,       // Number of children from right BVH node
-    in    uint4              intChildDstIdx,         // Destination locations for child nodes
-    inout uint               child[4],
-    inout BoundingBox        bbox[4],
-    inout uint               nodeFlags[4],
-    inout uint               numPrimitives[4],
-    inout float4             cost)
-{
-    bool doSwapLevel1Left = false;
-
-    if (IsLeafNode(node.left_or_primIndex_or_instIndex, numActivePrims) == false)
-    {
-        const ScratchNode c00 =
-            FetchScratchNode(args.scratchNodesScratchOffset, level0LeftChildNode.left_or_primIndex_or_instIndex);
-        const ScratchNode c01 =
-            FetchScratchNode(args.scratchNodesScratchOffset, level0LeftChildNode.right_or_geometryIndex);
-
-        const BoundingBox bb00 = GetScratchNodeBoundingBoxTS(args, topLevelBuild, c00);
-        const BoundingBox bb01 = GetScratchNodeBoundingBoxTS(args, topLevelBuild, c01);
-
-        if (use2levelSort)
-        {
-            // check to see if we need to "swap" the order of the 2 children
-            doSwapLevel1Left = CompareBBoxAndCheckForSwap(bb00, bb01);
-        }
-
-        if (use4waySort || args.captureChildNumPrimsForRebraid)
-        {
-            numPrimitives[0] = FetchScratchNodeNumPrimitives(args.scratchNodesScratchOffset,
-                                                             level0LeftChildNode.left_or_primIndex_or_instIndex,
-                                                             IsLeafNode(level0LeftChildNode.left_or_primIndex_or_instIndex,
-                                                                        numActivePrims));
-
-            numPrimitives[1] = FetchScratchNodeNumPrimitives(args.scratchNodesScratchOffset,
-                                                             level0LeftChildNode.right_or_geometryIndex,
-                                                             IsLeafNode(level0LeftChildNode.right_or_geometryIndex,
-                                                                        numActivePrims));
-
-            cost[0] = IsLeafNode(level0LeftChildNode.left_or_primIndex_or_instIndex, numActivePrims) ?
-                      FetchScratchLeafNodeCost(c00) : FetchScratchInternalNodeCost(c00);
-            cost[1] = IsLeafNode(level0LeftChildNode.right_or_geometryIndex, numActivePrims) ?
-                      FetchScratchLeafNodeCost(c01) : FetchScratchInternalNodeCost(c01);
-        }
-
-        const uint idx_c00 = use2levelSort ? ((doSwapLevel0 ? numRightChildren : 0) + (doSwapLevel1Left ? 1 : 0)) : 0;
-        const uint idx_c01 = use2levelSort ? ((doSwapLevel0 ? numRightChildren : 0) + (doSwapLevel1Left ? 0 : 1)) : 1;
-
-        const uint c00NodeIndex = level0LeftChildNode.left_or_primIndex_or_instIndex;
-        const uint c01NodeIndex = level0LeftChildNode.right_or_geometryIndex;
-
-        child[idx_c00] = ProcessNode(args, topLevelBuild, c00, c00NodeIndex, intChildDstIdx[0], parentNodePtr, offsets);
-        child[idx_c01] = ProcessNode(args, topLevelBuild, c01, c01NodeIndex, intChildDstIdx[1], parentNodePtr, offsets);
-
-        bbox[idx_c00] = bb00;
-        bbox[idx_c01] = bb01;
-
-        nodeFlags[idx_c00] = ExtractNodeFlagsField(level0LeftChildNode.flags, 0);
-        nodeFlags[idx_c01] = ExtractNodeFlagsField(level0LeftChildNode.flags, 1);
-    }
-    else
-    {
-        if (use4waySort || args.captureChildNumPrimsForRebraid)
-        {
-            numPrimitives[0] = FetchScratchNodeNumPrimitives(args.scratchNodesScratchOffset,
-                                                             node.left_or_primIndex_or_instIndex,
-                                                             true);
-
-            cost[0] = FetchScratchNodeCost(args.scratchNodesScratchOffset,
-                                           node.left_or_primIndex_or_instIndex,
-                                           true);
-        }
-
-        const uint idx_c0 = use2levelSort ? (doSwapLevel0 ? numRightChildren : 0) : 0;
-
-        const uint c0NodeIndex = node.left_or_primIndex_or_instIndex;
-
-        child[idx_c0] = ProcessNode(args, topLevelBuild, level0LeftChildNode, c0NodeIndex, intChildDstIdx[0], parentNodePtr, offsets);
-
-        bbox[idx_c0] = GetScratchNodeBoundingBoxTS(args, topLevelBuild, level0LeftChildNode);
-
-        nodeFlags[idx_c0] = ExtractNodeFlagsField(node.flags, 0);
-    }
-}
-
-//=====================================================================================================================
-static void PullUpRightChildren(
-    in    BuildQbvhArgs      args,                  // Build args
-    in    uint               numActivePrims,        // Number of active primitives
-    in    bool               topLevelBuild,         // Compile time flag indicating whether this is top or bottom level build
-    in    bool               use2levelSort,         // Boolean indicating whether to use 2-level sort
-    in    bool               doSwapLevel0,          // Boolean indicating whether to swap the level 0 nodes in 2-level sort
-    in    bool               use4waySort,           // Boolean indicating whether to use 4-way sort
-    in    ScratchNode        node,                  // Parent BVH scratch node
-    in    ScratchNode        level0RightChildNode,  // Level 0 right child BVH scratch node
-    in    uint               parentNodePtr,         // Parent QBVH node pointer
-    in    AccelStructOffsets offsets,               // Header offsets
-    in    uint               numLeftChildren,       // Number of children from left BVH node
-    in    uint4              intChildDstIdx,        // Destination locations for child nodes
-    inout uint               child[4],
-    inout BoundingBox        bbox[4],
-    inout uint               nodeFlags[4],
-    inout uint               numPrimitives[4],
-    inout float4             cost)
-{
-    bool doSwapLevel1Right = false;
-
-    if (IsLeafNode(node.right_or_geometryIndex, numActivePrims) == false)
-    {
-        const ScratchNode c10 =
-            FetchScratchNode(args.scratchNodesScratchOffset, level0RightChildNode.left_or_primIndex_or_instIndex);
-        const ScratchNode c11 =
-            FetchScratchNode(args.scratchNodesScratchOffset, level0RightChildNode.right_or_geometryIndex);
-
-        const BoundingBox bb10 = GetScratchNodeBoundingBoxTS(args, topLevelBuild, c10);
-        const BoundingBox bb11 = GetScratchNodeBoundingBoxTS(args, topLevelBuild, c11);
-
-        if (use2levelSort)
-        {
-            // check to see if we need to "swap" the order of the 2 children
-            doSwapLevel1Right = CompareBBoxAndCheckForSwap(bb10, bb11);
-        }
-
-        if (use4waySort || args.captureChildNumPrimsForRebraid)
-        {
-            numPrimitives[numLeftChildren] =
-                FetchScratchNodeNumPrimitives(args.scratchNodesScratchOffset,
-                                              level0RightChildNode.left_or_primIndex_or_instIndex,
-                                              IsLeafNode(level0RightChildNode.left_or_primIndex_or_instIndex, numActivePrims));
-
-            numPrimitives[numLeftChildren + 1] =
-                FetchScratchNodeNumPrimitives(args.scratchNodesScratchOffset,
-                                              level0RightChildNode.right_or_geometryIndex,
-                                              IsLeafNode(level0RightChildNode.right_or_geometryIndex, numActivePrims));
-
-            cost[numLeftChildren] = IsLeafNode(level0RightChildNode.left_or_primIndex_or_instIndex, numActivePrims) ?
-                                    FetchScratchLeafNodeCost(c10) : FetchScratchInternalNodeCost(c10);
-            cost[numLeftChildren + 1] = IsLeafNode(level0RightChildNode.right_or_geometryIndex, numActivePrims) ?
-                                        FetchScratchLeafNodeCost(c11) : FetchScratchInternalNodeCost(c11);
-        }
-
-        const uint idx_c10 = use2levelSort ? ((doSwapLevel0 ? 0 : numLeftChildren) + (doSwapLevel1Right ? 1 : 0)) : numLeftChildren;
-        const uint idx_c11 = use2levelSort ? ((doSwapLevel0 ? 0 : numLeftChildren) + (doSwapLevel1Right ? 0 : 1)) : (numLeftChildren + 1);
-
-        const uint c10NodeIndex = level0RightChildNode.left_or_primIndex_or_instIndex;
-        const uint c11NodeIndex = level0RightChildNode.right_or_geometryIndex;
-
-        child[idx_c10] = ProcessNode(args, topLevelBuild, c10, c10NodeIndex, intChildDstIdx[2], parentNodePtr, offsets);
-        child[idx_c11] = ProcessNode(args, topLevelBuild, c11, c11NodeIndex, intChildDstIdx[3], parentNodePtr, offsets);
-
-        bbox[idx_c10] = bb10;
-        bbox[idx_c11] = bb11;
-
-        nodeFlags[idx_c10] = ExtractNodeFlagsField(level0RightChildNode.flags, 0);
-        nodeFlags[idx_c11] = ExtractNodeFlagsField(level0RightChildNode.flags, 1);
-    }
-    else
-    {
-        if (use4waySort || args.captureChildNumPrimsForRebraid)
-        {
-            numPrimitives[numLeftChildren] = FetchScratchNodeNumPrimitives(args.scratchNodesScratchOffset,
-                                                                           node.right_or_geometryIndex,
-                                                                           true);
-
-            cost[numLeftChildren] = FetchScratchNodeCost(args.scratchNodesScratchOffset, node.right_or_geometryIndex, true);
-        }
-
-        const uint idx_c1 = use2levelSort ? (doSwapLevel0 ? 0 : numLeftChildren) : numLeftChildren;
-
-        const uint c1NodeIndex = node.right_or_geometryIndex;
-
-        child[idx_c1] = ProcessNode(args, topLevelBuild, level0RightChildNode, c1NodeIndex, intChildDstIdx[2], parentNodePtr, offsets);
-
-        bbox[idx_c1] = GetScratchNodeBoundingBoxTS(args, topLevelBuild, level0RightChildNode);
-
-        nodeFlags[idx_c1] = ExtractNodeFlagsField(node.flags, 1);
-    }
-}
-
-//=====================================================================================================================
 static void PullUpChildren(
     in    BuildQbvhArgs           args,
     in    bool                    topLevelBuild,
-    in    bool                    use4waySort,
     in    uint                    qbvhNodePtr,
     in    AccelStructOffsets      offsets,
     in    uint4                   nodeIdx,
     in    uint4                   dstIdx,
     inout uint                    child[4],
     inout BoundingBox             bbox[4],
-    inout uint                    flags[4],
+    inout uint                    boxNodeFlags,
     inout uint                    numPrimitives[4],
     inout float4                  cost,
     in    uint                    numActivePrims)
@@ -1048,7 +715,7 @@ static void PullUpChildren(
 
         if (primIndex != INVALID_IDX)
         {
-            if (use4waySort || args.captureChildNumPrimsForRebraid)
+            if (args.captureChildNumPrimsForRebraid)
             {
                 numPrimitives[i] = FetchScratchNodeNumPrimitives(args.scratchNodesScratchOffset,
                                                                  primIndex,
@@ -1062,7 +729,13 @@ static void PullUpChildren(
             const ScratchNode n = FetchScratchNode(args.scratchNodesScratchOffset, primIndex);
             child[i]            = ProcessNode(args, topLevelBuild, n, primIndex, dstIdx[i], qbvhNodePtr, offsets);
             bbox[i]             = GetScratchNodeBoundingBoxTS(args, topLevelBuild, n);
-            flags[i]            = CalcNodeFlags(n);
+            boxNodeFlags        = SetNodeFlagsField(boxNodeFlags, CalcNodeFlags(n), i);
+        }
+        else
+        {
+            // Note, box node flags are combined together by using an AND operation. Thus, we need to initialise
+            // invalid child flags as 0xff
+            boxNodeFlags = SetNodeFlagsField(boxNodeFlags, 0xff, i);
         }
     }
 
@@ -1230,15 +903,6 @@ void BuildQbvhImpl(
         return;
     }
 
-    bool use4waySort   = ((args.bvhBuilderNodeSortType == FourWaySortOnBoth) ||
-                                (topLevelBuild ?
-                                 (args.bvhBuilderNodeSortType == FourWaySortOnTLAS) :
-                                 (args.bvhBuilderNodeSortType == FourWaySortOnBLAS)));
-    bool use2levelSort = ((args.bvhBuilderNodeSortType == TwoLevelSortOnBoth) ||
-                                (topLevelBuild ?
-                                 (args.bvhBuilderNodeSortType == TwoLevelSortOnTLAS) :
-                                 (args.bvhBuilderNodeSortType == TwoLevelSortOnBLAS)));
-
     // This isn't necessary, but not using a boolean seems to cause a shader hang. See comment at the end of
     // while loop
     bool isDone = false;
@@ -1291,12 +955,10 @@ void BuildQbvhImpl(
                 // Total number of 64 byte destination chunks to allocate for the children
                 uint  childDstCount64B = 0;
 
-                if (args.sahQbvh)
-                {
-                    // Apply Surface Area Heuristic to select which 2 nodes to open up in BVH2.
-                    // Selectd nodes can be the children or grandchildren of the currently processed node.
-                    // Selectd nodes' children will be pulled up to be the new children in the QBVH.
-                    ApplyHeuristic(
+                // Apply Surface Area Heuristic to select which 2 nodes to open up in BVH2.
+                // Selectd nodes can be the children or grandchildren of the currently processed node.
+                // Selectd nodes' children will be pulled up to be the new children in the QBVH.
+                ApplyHeuristic(
                         localId,
                         args,
                         numActivePrims,
@@ -1305,57 +967,6 @@ void BuildQbvhImpl(
                         intChildNodeIdx,
                         intChildDstIdx,
                         childDstCount64B);
-                }
-                else
-                {
-                    {
-                        // If this is an internal node, we need to fetch its child nodes
-                        c0 = FetchScratchNode(args.scratchNodesScratchOffset, node.left_or_primIndex_or_instIndex);
-                        c1 = FetchScratchNode(args.scratchNodesScratchOffset, node.right_or_geometryIndex);
-
-                        if (IsLeafNode(node.left_or_primIndex_or_instIndex, numActivePrims) == false)
-                        {
-                            c00 = FetchScratchNode(args.scratchNodesScratchOffset, c0.left_or_primIndex_or_instIndex);
-                            c01 = FetchScratchNode(args.scratchNodesScratchOffset, c0.right_or_geometryIndex);
-
-                            intChildNodeIdx[0] = c0.left_or_primIndex_or_instIndex;
-                            intChildNodeIdx[1] = c0.right_or_geometryIndex;
-
-                            compChildInfo |= (IsBoxNode(c00.type) ? (1u << 0) : 0);
-                            compChildInfo |= (IsBoxNode(c01.type) ? (1u << 1) : 0);
-                            intChildDstIdx[0] = childDstCount64B;
-                            childDstCount64B += GetNum64BChunks(args, c00, numActivePrims);
-                            intChildDstIdx[1] = childDstCount64B;
-                            childDstCount64B += GetNum64BChunks(args, c01, numActivePrims);
-                        }
-                        else
-                        {
-                            intChildDstIdx[0] = childDstCount64B;
-                            childDstCount64B += GetNum64BChunks(args, c0, numActivePrims);
-                        }
-
-                        if (IsLeafNode(node.right_or_geometryIndex, numActivePrims) == false)
-                        {
-                            c10 = FetchScratchNode(args.scratchNodesScratchOffset, c1.left_or_primIndex_or_instIndex);
-                            c11 = FetchScratchNode(args.scratchNodesScratchOffset, c1.right_or_geometryIndex);
-
-                            intChildNodeIdx[2] = c1.left_or_primIndex_or_instIndex;
-                            intChildNodeIdx[3] = c1.right_or_geometryIndex;
-
-                            compChildInfo |= (IsBoxNode(c10.type) ? (1u << 2) : 0);
-                            compChildInfo |= (IsBoxNode(c11.type) ? (1u << 3) : 0);
-                            intChildDstIdx[2] = childDstCount64B;
-                            childDstCount64B += GetNum64BChunks(args, c10, numActivePrims);
-                            intChildDstIdx[3] = childDstCount64B;
-                            childDstCount64B += GetNum64BChunks(args, c11, numActivePrims);
-                        }
-                        else
-                        {
-                            intChildDstIdx[2] = childDstCount64B;
-                            childDstCount64B += GetNum64BChunks(args, c1, numActivePrims);
-                        }
-                    }
-                }
 
                 const uint origStackIdx = AllocQBVHStackNumItems(args,
                                                                  topLevelBuild,
@@ -1366,15 +977,15 @@ void BuildQbvhImpl(
             }
 
             // Each stack writes to linear QBVH memory indexed by stack index
-            const uint qbvhNodeType           = GetNodeType(node.type);
+            const uint qbvhNodeType = GetNodeType(node.type);
             bool writeAsFp16BoxNode = false;
             {
                 writeAsFp16BoxNode = (args.fp16BoxNodesInBlasMode != NO_NODES_IN_BLAS_AS_FP16) &&
                                      (qbvhNodeType == NODE_TYPE_BOX_FLOAT16);
             }
-            const uint bvhNodeDstIdx          = QBVHStackPopDestIdx(args, topLevelBuild, stackIndex);
-            const uint qbvhNodeAddr           = CalcQbvhInternalNodeOffset(bvhNodeDstIdx, true);
-            const uint qbvhNodePtr            = CreateBoxNodePointer(args, qbvhNodeAddr, writeAsFp16BoxNode);
+            const uint bvhNodeDstIdx = QBVHStackPopDestIdx(args, topLevelBuild, stackIndex);
+            const uint qbvhNodeAddr  = CalcQbvhInternalNodeOffset(bvhNodeDstIdx, true);
+            const uint qbvhNodePtr   = CreateBoxNodePointer(args, qbvhNodeAddr, writeAsFp16BoxNode);
 
             const uint nodeTypeToAccum =
                    (writeAsFp16BoxNode ? ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP16_NODES_OFFSET
@@ -1387,98 +998,26 @@ void BuildQbvhImpl(
             // Temporary child node pointers and bounds
             uint        child[4]     = { INVALID_IDX, INVALID_IDX, INVALID_IDX, INVALID_IDX };
             BoundingBox bbox[4]      = { (BoundingBox)0, (BoundingBox)0, (BoundingBox)0, (BoundingBox)0 };
-            uint        nodeFlags[4] = { 0xff, 0xff, 0xff, 0xff };
+            uint        boxNodeFlags = 0;
 
             // Temporary data used for four-way sort and rebraid
             uint numPrimitives[4] = { 0, 0, 0, 0 };
 
             float4 cost = float4(0, 0, 0, 0);
 
-            if (args.sahQbvh)
-            {
-                // Pull up the nodes chosen by SAH to be the new children in QBVH
-                PullUpChildren(args,
-                               topLevelBuild,
-                               use4waySort,
-                               qbvhNodePtr,
-                               offsets,
-                               intChildNodeIdx,
-                               intChildDstIdx,
-                               child,
-                               bbox,
-                               nodeFlags,
-                               numPrimitives,
-                               cost,
-                               numActivePrims);
-            }
-            else
-            {
-                {
-                    bool doSwapLevel0 = false;
-                    if (use2levelSort)
-                    {
-                        // check to see if we need to "swap" the order of the 2 children
-                        doSwapLevel0 = CompareBBoxAndCheckForSwap(GetScratchNodeBoundingBoxTS(args, topLevelBuild, c0),
-                                                                  GetScratchNodeBoundingBoxTS(args, topLevelBuild, c1));
-                    }
-
-                    // Needed if swapping level-0 nodes in two-level sort
-                    const uint numRightChildren = IsLeafNode(node.right_or_geometryIndex, numActivePrims) ? 1 : 2;
-
-                    // Fetch next level children and pull them into the QBVH
-                    PullUpLeftChildren(args,
-                                       numActivePrims,
-                                       topLevelBuild,
-                                       use2levelSort,
-                                       doSwapLevel0,
-                                       use4waySort,
-                                       node,
-                                       c0,
-                                       qbvhNodePtr,
-                                       offsets,
-                                       numRightChildren,
-                                       intChildDstIdx,
-                                       child,
-                                       bbox,
-                                       nodeFlags,
-                                       numPrimitives,
-                                       cost);
-
-                    // Needed if swapping level-0 nodes in two-level sort
-                    const uint numLeftChildren = IsLeafNode(node.left_or_primIndex_or_instIndex, numActivePrims) ? 1 : 2;
-
-                    // Fetch next level children and pull them into the QBVH
-                    PullUpRightChildren(args,
-                                        numActivePrims,
-                                        topLevelBuild,
-                                        use2levelSort,
-                                        doSwapLevel0,
-                                        use4waySort,
-                                        node,
-                                        c1,
-                                        qbvhNodePtr,
-                                        offsets,
-                                        numLeftChildren,
-                                        intChildDstIdx,
-                                        child,
-                                        bbox,
-                                        nodeFlags,
-                                        numPrimitives,
-                                        cost);
-                }
-            }
-
-            if (use4waySort)
-            {
-                SortChildren(args, numPrimitives, child, bbox, nodeFlags, cost);
-            }
-
-            // Combine the node flags
-            uint combinedNodeFlags = 0;
-            for (int idx = 0; idx < 4; idx++)
-            {
-                combinedNodeFlags = SetNodeFlagsField(combinedNodeFlags, nodeFlags[idx], idx);
-            }
+            // Pull up the nodes chosen by SAH to be the new children in QBVH
+            PullUpChildren(args,
+                           topLevelBuild,
+                           qbvhNodePtr,
+                           offsets,
+                           intChildNodeIdx,
+                           intChildDstIdx,
+                           child,
+                           bbox,
+                           boxNodeFlags,
+                           numPrimitives,
+                           cost,
+                           numActivePrims);
 
             if (writeAsFp16BoxNode)
             {
@@ -1509,7 +1048,7 @@ void BuildQbvhImpl(
                 fp32BoxNode.bbox2_max      = bbox[2].max;
                 fp32BoxNode.bbox3_min      = bbox[3].min;
                 fp32BoxNode.bbox3_max      = bbox[3].max;
-                fp32BoxNode.flags          = combinedNodeFlags;
+                fp32BoxNode.flags          = boxNodeFlags;
                 fp32BoxNode.numPrimitives  = FetchScratchNodeNumPrimitives(node, false);
 
                 {

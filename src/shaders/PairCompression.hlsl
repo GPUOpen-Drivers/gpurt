@@ -222,14 +222,10 @@ void WriteCompressedNodes(
     {
         const Quad quad = quadArray[x];
 
-        uint pairScratchIndices[2] = { INVALID_IDX, INVALID_IDX };
         uint keptIndex = GetQuadScratchNodeIndex(quad.scratchNodeIndexAndOffset[0]);
 
         if (quad.scratchNodeIndexAndOffset[1] != INVALID_IDX)
         {
-            pairScratchIndices[0] = GetQuadScratchNodeIndex(quad.scratchNodeIndexAndOffset[1]);
-            pairScratchIndices[1] = GetQuadScratchNodeIndex(quad.scratchNodeIndexAndOffset[0]);
-
             WriteBatchIndex(localId, numEliminated, GetQuadScratchNodeIndex(quad.scratchNodeIndexAndOffset[0]));
             numEliminated++;
 
@@ -238,38 +234,32 @@ void WriteCompressedNodes(
 
         WriteBatchIndex(localId, PAIR_BATCH_SIZE - 1 - x, keptIndex);
 
-        const uint quadScratchIndex = GetQuadScratchNodeIndex(quad.scratchNodeIndexAndOffset[0]);
-        const ScratchNode triangleNode = FetchScratchNode(scratchNodesScratchOffset, quadScratchIndex);
-        const uint geometryFlags = triangleNode.flags;
+        // Initialise pair triangle ID from triangle 0
+        const uint scratchIdxTri0 = GetQuadScratchNodeIndex(quad.scratchNodeIndexAndOffset[0]);
+        const ScratchNode triangleNode = FetchScratchNode(scratchNodesScratchOffset, scratchIdxTri0);
 
-        const uint numFaces = 2;
+        uint triangleId = WriteTriangleIdField(0,
+                                               NODE_TYPE_TRIANGLE_0,
+                                               GetQuadScratchNodeVertexOffset(quad.scratchNodeIndexAndOffset[0]),
+                                               triangleNode.flags);
 
-        uint triangleId = 0;
-        uint i;
-        for (i = 0; i < numFaces; ++i)
+        // If this quad has another triangle, update triangle ID for the pair and update referenced scratch
+        // triangle node
+        if (quad.scratchNodeIndexAndOffset[1] != INVALID_IDX)
         {
-            if (quad.scratchNodeIndexAndOffset[i] != INVALID_IDX)
-            {
-                triangleId = WriteTriangleIdField(
-                    triangleId, i, GetQuadScratchNodeVertexOffset(quad.scratchNodeIndexAndOffset[i]), geometryFlags);
-            }
-        }
+            triangleId = WriteTriangleIdField(triangleId,
+                                              NODE_TYPE_TRIANGLE_1,
+                                              GetQuadScratchNodeVertexOffset(quad.scratchNodeIndexAndOffset[1]),
+                                              triangleNode.flags);
 
-        for (i = 0; i < numFaces; ++i)
-        {
-            if (quad.scratchNodeIndexAndOffset[i] != INVALID_IDX)
-            {
-                const uint scratchNodeOffset = scratchNodesScratchOffset +
-                                               (GetQuadScratchNodeIndex(quad.scratchNodeIndexAndOffset[i]) * sizeof(ScratchNode));
+            const uint scratchNodeOffset = scratchNodesScratchOffset + (keptIndex * sizeof(ScratchNode));
 
-                // Store triangle type and triangle Id
-                const uint triangleTypeAndId = (triangleId << 3) | i;
-                ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_TYPE_OFFSET, triangleTypeAndId);
+            // Store triangle Id only. The triangle node type is determined at BuildQBVH
+            const uint triangleTypeAndId = (triangleId << 3);
+            ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_TYPE_OFFSET, triangleTypeAndId);
 
-                // Repurpose the node pointer for saving the index of the other node in the pair.
-                ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_NODE_POINTER_OFFSET,
-                                    pairScratchIndices[i]);
-            }
+            // Repurpose the node pointer for saving the index of the other node in the pair.
+            ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_NODE_POINTER_OFFSET, scratchIdxTri0);
         }
     }
 }
@@ -460,30 +450,6 @@ uint EncodeTwoTrianglesPerNodeQBVHCompression(
 }
 
 //=====================================================================================================================
-BoundingBox FetchScratchNodeBoundingBoxPair(
-    uint baseScratchNodesOffset,
-    uint nodeIndex,
-    uint numActivePrims)
-{
-    const ScratchNode scratchNode = FetchScratchNode(baseScratchNodesOffset, nodeIndex);
-
-    BoundingBox bbox = GetScratchNodeBoundingBox(scratchNode);
-
-    // If this is a pair, get the other triangle's bounding box and merge.
-    if (IsLeafNode(nodeIndex, numActivePrims) && (scratchNode.splitBox_or_nodePointer != INVALID_IDX))
-    {
-        const ScratchNode otherNode = FetchScratchNode(baseScratchNodesOffset,
-                                                       scratchNode.splitBox_or_nodePointer);
-        const BoundingBox otherBbox = GetScratchNodeBoundingBox(otherNode);
-
-        bbox.min = min(bbox.min, otherBbox.min);
-        bbox.max = max(bbox.max, otherBbox.max);
-    }
-
-    return bbox;
-}
-
-//=====================================================================================================================
 void PairCompressionImpl(
     uint                globalId,
     uint                localId,
@@ -646,30 +612,19 @@ void PairCompressionImpl(
             const ScratchNode rightNode = FetchScratchNode(args.scratchNodesScratchOffset, rc);
 
             // Fetch bounding children bounding boxes
-            BoundingBox bboxRightChild;
-            BoundingBox bboxLeftChild;
+            BoundingBox bboxRightChild = FetchScratchNodeBoundingBox(rightNode,
+                                                                     IsLeafNode(rc, numActivePrims),
+                                                                     false,
+                                                                     0,
+                                                                     true,
+                                                                     args.scratchNodesScratchOffset);
 
-            if (IsLeafNode(rc, numActivePrims))
-            {
-                bboxRightChild = FetchScratchNodeBoundingBoxPair(args.scratchNodesScratchOffset,
-                                                                 rc,
-                                                                 numActivePrims);
-            }
-            else
-            {
-                bboxRightChild = GetScratchNodeBoundingBox(rightNode);
-            }
-
-            if (IsLeafNode(lc, numActivePrims))
-            {
-                bboxLeftChild = FetchScratchNodeBoundingBoxPair(args.scratchNodesScratchOffset,
-                                                                lc,
-                                                                numActivePrims);
-            }
-            else
-            {
-                bboxLeftChild = GetScratchNodeBoundingBox(leftNode);
-            }
+            BoundingBox bboxLeftChild = FetchScratchNodeBoundingBox(leftNode,
+                                                                    IsLeafNode(lc, numActivePrims),
+                                                                    false,
+                                                                    0,
+                                                                    true,
+                                                                    args.scratchNodesScratchOffset);
 
             // Merge bounding boxes up to parent
             const float3 bboxMinParent = min(bboxLeftChild.min, bboxRightChild.min);

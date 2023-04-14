@@ -60,6 +60,8 @@ set(gpurtHlsl
     EmitAS.hlsl
     EncodeCommon.hlsl
     EncodeNodes.hlsl
+    EncodePairedTriangle.hlsl
+    EncodePairedTriangleImpl.hlsl
     EncodeTopLevel.hlsl
     Extensions.hlsl
     GenerateMortonCodes.hlsl

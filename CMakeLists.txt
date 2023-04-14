@@ -52,6 +52,11 @@ endif()
 # GPU Ray Tracing requires PAL as a dependency
 target_link_libraries(gpurt PUBLIC pal)
 
+#if GPURT_BUILD_RTIP2
+# Enable GpuRT defines for Gfx11 builds
+target_compile_definitions(gpurt PUBLIC GPURT_BUILD_RTIP2=1)
+#endif
+
 # Enable gpu developer mode if the client wants it.
 if (GPURT_DEVELOPER_MODE)
     target_compile_definitions(gpurt PUBLIC GPURT_DEVELOPER=1)

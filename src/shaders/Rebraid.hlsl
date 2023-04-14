@@ -159,9 +159,7 @@ float CalculatePriorityUsingSAHComparison(RebraidArgs args, ScratchNode leaf)
     {
         const GpuVirtualAddress addr = InstanceDescBuffer.Load<GpuVirtualAddress>(leaf.left_or_primIndex_or_instIndex *
                                                                                   GPU_VIRTUAL_ADDRESS_SIZE);
-        {
-            desc = FetchInstanceDesc(addr, 0);
-        }
+        desc = FetchInstanceDescAddr(addr);
     }
     else
     {
@@ -440,9 +438,7 @@ void RebraidImpl(
                             {
                                 const GpuVirtualAddress addr = InstanceDescBuffer.Load<GpuVirtualAddress>(leaf.left_or_primIndex_or_instIndex *
                                                                                                     GPU_VIRTUAL_ADDRESS_SIZE);
-                                {
-                                    desc = FetchInstanceDesc(addr, 0);
-                                }
+                                desc = FetchInstanceDescAddr(addr);
                             }
                             else
                             {
@@ -556,9 +552,7 @@ void RebraidImpl(
                         {
                             const GpuVirtualAddress addr = InstanceDescBuffer.Load<GpuVirtualAddress>(leaf.left_or_primIndex_or_instIndex *
                                                                                                       GPU_VIRTUAL_ADDRESS_SIZE);
-                            {
-                                desc = FetchInstanceDesc(addr, 0);
-                            }
+                            desc = FetchInstanceDescAddr(addr);
                         }
                         else
                         {

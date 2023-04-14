@@ -22,7 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#define RootSig "RootConstants(num32BitConstants=13, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=15, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
@@ -34,6 +34,7 @@ struct Constants
 {
     uint  FlagsScratchOffset;        // Offset to flags in scratch buffer
     uint  ScratchNodesScratchOffset; // Offset to scratch nodes in build scratch buffer
+    uint  UnsortedNodesBaseOffset;   // Offset to unsorted leaf nodes in build scratch buffer
     uint  Fp16BoxNodesInBlasMode;    // Mode used for which BLAS interior nodes are FP16
     float Fp16BoxModeMixedSaThresh;  // For fp16 mode "mixed", surface area threshold
     uint  DoCollapse;
@@ -45,6 +46,7 @@ struct Constants
     uint  BatchIndicesScratchOffset;
     uint  NoCopySortedNodes;
     uint  sortedPrimIndicesOffset;
+    uint  enableEarlyPairCompression;
 };
 
 //=====================================================================================================================
@@ -72,11 +74,13 @@ void RefitBounds(
                         numActivePrims,
                         ShaderConstants.FlagsScratchOffset,
                         ShaderConstants.ScratchNodesScratchOffset,
+                        ShaderConstants.UnsortedNodesBaseOffset,
                         ShaderConstants.sortedPrimIndicesOffset,
                         ShaderConstants.DoCollapse,
                         ShaderConstants.DoTriangleSplitting,
                         ShaderConstants.NoCopySortedNodes,
                         ShaderConstants.EnablePairCompression,
+                        ShaderConstants.enableEarlyPairCompression,
                         ShaderConstants.EnablePairCostCheck,
                         ShaderConstants.SplitBoxesByteOffset,
                         ShaderConstants.NumBatchesScratchOffset,

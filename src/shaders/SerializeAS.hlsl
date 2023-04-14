@@ -76,7 +76,7 @@ void SerializeAS(in uint3 globalThreadId : SV_DispatchThreadID)
     {
         // 0 - DataDriverMatchingIdentifier
         DstBuffer.Store4(0, uint4(GPURT_AMD_GUID_0, GPURT_AMD_GUID_1, GPURT_AMD_GUID_2, GPURT_AMD_GUID_3));
-        DstBuffer.Store4(16, uint4(header.uuidLo, header.uuidHi, header.version, 0));
+        DstBuffer.Store4(16, uint4(header.uuidLo, header.uuidHi, header.accelStructVersion, 0));
 
         // 1 - SerializedSizeInBytesIncludingHeader
         DstBuffer.Store2(SERIALIZED_AS_HEADER_SERIALIZED_SIZE_OFFSET, uint2(header.sizeInBytes + serializedHeaderSize, 0));
@@ -118,26 +118,25 @@ void SerializeAS(in uint3 globalThreadId : SV_DispatchThreadID)
             // indicated by an invalid node pointer.
             uint32_t apiInstanceIndex = i;
 
-            uint64_t gpuVa = 0ull;
-
             // Skip inactive instances which have their node pointers set to invalid. Note, these only appear with
             // rebraid disabled
+            uint64_t gpuVa = 0;
+
             if (currentInstNodePtr != INVALID_IDX)
             {
-                const uint currentInstNodeOffset = metadataSizeInBytes + ExtractNodePointerOffset(currentInstNodePtr);
+                InstanceDesc apiInstanceDesc = DecodeApiInstanceDesc(SrcBuffer, header, currentInstNodePtr);
 
-                // Fetch acceleration structure base address in TLAS instance
-                {
-                    gpuVa = FetchApiInstanceBaseAddress(SrcBuffer, currentInstNodeOffset);
-                }
+                gpuVa = PackUint64(apiInstanceDesc.accelStructureAddressLo, apiInstanceDesc.accelStructureAddressHiAndFlags);
 
                 // Fetch API instance index from instance node. With rebraid enabled the instance node pointers
                 // in memory are in sorted order with no deactivated instances in between. The re-braided instances
                 // are mixed in this array so we need to read the instance index from memory to account for
                 // all API instances. There is some duplication here since we may have multiple leaf nodes
                 // pointing to same instance but Serialize performance is not of great concern.
-                apiInstanceIndex =
-                    SrcBuffer.Load(currentInstNodeOffset + INSTANCE_NODE_EXTRA_OFFSET + INSTANCE_EXTRA_INDEX_OFFSET);
+
+                {
+                    apiInstanceIndex = FetchInstanceIndex(SrcBuffer, 0, header, currentInstNodePtr);
+                }
             }
 
             if (apiInstanceIndex < header.numDescs)

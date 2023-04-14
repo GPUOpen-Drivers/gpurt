@@ -62,6 +62,7 @@ namespace EncodeNodes
         uint32 sceneBoundsCalculationType;
         uint32 enableTriangleSplitting;
         uint32 enableEarlyPairCompression;
+        uint32 trianglePairingSearchRadius;    // Search radius for triangles that could be paired together
         uint32 enableFastLBVH;
     };
     // Add 4 DWORD padding to avoid page faults when the compiler uses a multi-DWORD load straddling the end of the
@@ -109,6 +110,8 @@ namespace BuildBVHPLOC
         uint32 primIndicesSortedScratchOffset;
         uint32 numLeafNodes;
         uint32 noCopySortedNodes;
+        uint32 enableEarlyPairCompression;
+        uint32 unsortedBvhLeafNodesOffset;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
@@ -180,20 +183,20 @@ namespace BuildQBVH
         uint32 qbvhGlobalStackPtrsScratchOffset;
         uint32 triangleCompressionMode;          // Triangle node compression mode
         uint32 fp16BoxNodesInBlasMode;           // Mode for which internal nodes in BLAS are fp16
-        uint32 doTriangleSplitting;
+        uint32 flags;
         uint32 splitBoxesByteOffset;
         uint32 emitCompactSize;
         uint32 encodeArrayOfPointers;
         uint32 topDownBuild;
 
-        uint32 bvhBuilderNodeSortType;           // bvhBuilder node sort
-        uint32 bvhBuilderNodeSortHeuristic;
-
         uint32 enableFusedInstanceNode;
-        uint32 sahQbvh;                          // Apply SAH into QBVH build
 
+        uint32 enableFastLBVH;
+        uint32 fastLBVHRootNodeIndex;
         uint32 captureChildNumPrimsForRebraid;
         uint32 enableSAHCost;
+        uint32 enableEarlyPairCompression;
+        uint32 unsortedBvhLeafNodesOffset;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
@@ -250,6 +253,7 @@ namespace RefitBounds
     {
         uint32 propagationFlagsScratchOffset;
         uint32 scratchNodesScratchOffset;
+        uint32 bvhLeafNodeDataScratchOffset;
         uint32 fp16BoxNodesInBlasMode;      // Mode for which internal nodes in BLAS are fp16
         float  fp16BoxModeMixedSaThresh;    // For fp16 mode "mixed", surface area threshold.
         uint32 doCollapse;
@@ -261,6 +265,7 @@ namespace RefitBounds
         uint32 batchIndicesScratchOffset;
         uint32 noCopySortedNodes;
         uint32 sortedPrimIndicesOffset;
+        uint32 enableEarlyPairCompression;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));

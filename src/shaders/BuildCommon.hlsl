@@ -83,6 +83,8 @@ struct RefitArgs
     bool ltdPackCentroids;
     int4 numMortonBits;
     uint enableInstancePrimCount;
+    uint unsortedNodesBaseOffset;
+    uint enableEarlyPairCompression;
 };
 
 //=====================================================================================================================
@@ -360,6 +362,13 @@ bool IsNodeActive(ScratchNode node)
 }
 
 //=====================================================================================================================
+bool IsNodeLinkedOnly(ScratchNode node)
+{
+    // if this the "2nd" triangle of a set of paired triangle
+    return (node.splitBox_or_nodePointer == PAIRED_TRI_LINKONLY);
+}
+
+//=====================================================================================================================
 uint CalcScratchNodeOffset(
     uint baseScratchNodesOffset,
     uint nodeIndex)
@@ -378,16 +387,14 @@ uint CalcNodeFlags(ScratchNode node)
 {
     uint nodeFlags = 0;
 
-    if (IsTriangleNode(node.type) ||
-        IsUserNodeProcedural(node.type))
+    if (IsTriangleNode(node.type) || IsUserNodeProcedural(node.type))
     {
         // Determine opacity from geometry flags
         nodeFlags |= (node.flags & D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE) ? 1u << BOX_NODE_FLAGS_ONLY_OPAQUE_SHIFT
                                                                           : 1u << BOX_NODE_FLAGS_ONLY_NON_OPAQUE_SHIFT;
 
-        nodeFlags |= IsTriangleNode(node.type)
-                                                ? 1u << BOX_NODE_FLAGS_ONLY_TRIANGLES_SHIFT
-                                                : 1u << BOX_NODE_FLAGS_ONLY_PROCEDURAL_SHIFT;
+        nodeFlags |= IsTriangleNode(node.type) ? 1u << BOX_NODE_FLAGS_ONLY_TRIANGLES_SHIFT
+                                               : 1u << BOX_NODE_FLAGS_ONLY_PROCEDURAL_SHIFT;
     }
     else if (IsUserNodeInstance(node.type))
     {
@@ -445,8 +452,8 @@ uint4 UnpackUint64ToUint32x4(uint64_t v, uint4 numBits)
 //=====================================================================================================================
 uint CalcQbvhInternalNodeOffset(uint index, bool useFp16BoxNodesInBlas)
 {
-    const uint nodeOffset = useFp16BoxNodesInBlas ? (index << QBVH_NODE_16_STRIDE_SHIFT)
-                                                  : (index << QBVH_NODE_32_STRIDE_SHIFT);
+    const uint nodeOffset = useFp16BoxNodesInBlas ? (index << BVH4_NODE_16_STRIDE_SHIFT)
+                                                  : (index << BVH4_NODE_32_STRIDE_SHIFT);
 
     // Node offset includes header size
     return ACCEL_STRUCT_HEADER_SIZE + nodeOffset;
@@ -461,8 +468,8 @@ uint CalcQbvhInternalNodeIndex(
     offset -= ACCEL_STRUCT_HEADER_SIZE;
 
     {
-        return useFp16BoxNodesInBlas ? (offset >> QBVH_NODE_16_STRIDE_SHIFT)
-                                     : (offset >> QBVH_NODE_32_STRIDE_SHIFT);
+        return useFp16BoxNodesInBlas ? (offset >> BVH4_NODE_16_STRIDE_SHIFT)
+                                     : (offset >> BVH4_NODE_32_STRIDE_SHIFT);
     }
 }
 
@@ -734,6 +741,65 @@ void PushNodeToUpdateStack(
 }
 
 //=====================================================================================================================
+// Note, srcBuffer and dstBuffer point to the beginning of the acceleration structure buffer
+void CopyChildPointersAndFlags(
+    RWByteAddressBuffer srcBuffer,
+    RWByteAddressBuffer dstBuffer,
+    uint                nodePointer,
+    uint                metadataSize)
+{
+    const uint nodeOffset = metadataSize + ExtractNodePointerOffset(nodePointer);
+
+    const uint4 childPointers = srcBuffer.Load<uint4>(nodeOffset);
+    dstBuffer.Store<uint4>(nodeOffset, childPointers);
+
+    if (IsBoxNode32(nodePointer))
+    {
+        const uint sourceFlags = srcBuffer.Load(nodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET);
+        dstBuffer.Store(nodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, sourceFlags);
+    }
+
+}
+
+//=====================================================================================================================
+uint ComputeChildIndexAndValidBoxCount(
+    in BuildSettingsData settings,
+    RWByteAddressBuffer  srcBuffer,
+    in uint              parentNodeOffset,
+    in uint              childNodePointer,
+    out_param(uint)      boxNodeCount)
+{
+    const uint4 childPointers = srcBuffer.Load<uint4>(parentNodeOffset);
+
+    // Find child index in parent (assumes child pointer 0 is always valid)
+    uint childIdx = 0;
+    if (childNodePointer == childPointers.y)
+    {
+        childIdx = 1;
+    }
+
+    if (childNodePointer == childPointers.z)
+    {
+        childIdx = 2;
+    }
+
+    if (childNodePointer == childPointers.w)
+    {
+        childIdx = 3;
+    }
+
+    // Note, IsBoxNode() will return false for invalid nodes.
+    boxNodeCount = 0;
+
+    boxNodeCount += IsBoxNode(childPointers.x) ? 1 : 0;
+    boxNodeCount += IsBoxNode(childPointers.y) ? 1 : 0;
+    boxNodeCount += IsBoxNode(childPointers.z) ? 1 : 0;
+    boxNodeCount += IsBoxNode(childPointers.w) ? 1 : 0;
+
+    return childIdx;
+}
+
+//=====================================================================================================================
 uint ReadParentPointer(
     RWByteAddressBuffer SrcBuffer,
     in uint             metadataSizeInBytes,
@@ -776,6 +842,12 @@ uint GetChildCount(
     }
 
     return count;
+}
+
+//=====================================================================================================================
+uint GetInternalNodeType()
+{
+    return NODE_TYPE_BOX_FLOAT32;
 }
 
 //=====================================================================================================================
@@ -836,13 +908,13 @@ static Float32BoxNode FetchFloat32BoxNode(
 
 //=====================================================================================================================
 void WriteInstanceDescriptor(
-    RWByteAddressBuffer dstBuffer,
-    in InstanceDesc     desc,
-    in uint             index,
-    in uint             instanceNodeOffset,
-    in uint             metadataSize,
-    in uint             blasRootNodePointer,
-    in bool             isFusedInstanceNode)
+    RWByteAddressBuffer   dstBuffer,
+    in InstanceDesc       desc,
+    in uint               index,
+    in uint               instanceNodeOffset,
+    in uint               metadataSize,
+    in uint               blasRootNodePointer,
+    in bool               isFusedInstanceNode)
 {
     {
         InstanceNode node;
@@ -852,13 +924,13 @@ void WriteInstanceDescriptor(
         node.desc.accelStructureAddressLo                       = desc.accelStructureAddressLo;
         node.desc.accelStructureAddressHiAndFlags               = desc.accelStructureAddressHiAndFlags;
 
-        node.extra.Transform[0]     = desc.Transform[0];
-        node.extra.Transform[1]     = desc.Transform[1];
-        node.extra.Transform[2]     = desc.Transform[2];
-        node.extra.instanceIndex    = index;
-        node.extra.padding0         = 0;
-        node.extra.blasMetadataSize = metadataSize;
-        node.extra.blasNodePointer  = blasRootNodePointer;
+        node.sideband.Transform[0]     = desc.Transform[0];
+        node.sideband.Transform[1]     = desc.Transform[1];
+        node.sideband.Transform[2]     = desc.Transform[2];
+        node.sideband.instanceIndex    = index;
+        node.sideband.padding0         = 0;
+        node.sideband.blasMetadataSize = metadataSize;
+        node.sideband.blasNodePointer  = blasRootNodePointer;
 
         // invert matrix
         float3x4 temp    = CreateMatrix(desc.Transform);
@@ -883,8 +955,7 @@ void WriteInstanceDescriptor(
                 blasRootNode = FetchFloat32BoxNode(address,
                                                    blasRootNodePointer);
             }
-            else if (IsBoxNode16(blasRootNodePointer)
-                    )
+            else if (IsBoxNode16(blasRootNodePointer))
             {
                 blasRootNode = FetchFloat16BoxNodeAsFp32(address, blasRootNodePointer);
             }

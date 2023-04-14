@@ -40,11 +40,11 @@ static void TraceRayInlineCommon(
     in    uint                    instanceMask,
     in    RayDesc                 rayDesc,
     in    uint3                   dispatchThreadId,
-    in    uint                    rtHwVersion)
+    in    uint                    rtIpLevel)
 {
-    switch (rtHwVersion)
+    switch (rtIpLevel)
     {
-        case RTIP1_1:
+        case GPURT_RTIP1_1:
             TraceRayInlineImpl1_1(rayQuery,
                                   accelStructLo,
                                   accelStructHi,
@@ -55,7 +55,7 @@ static void TraceRayInlineCommon(
                                   dispatchThreadId);
             break;
 #if GPURT_BUILD_RTIP2
-        case RTIP2_0:
+        case GPURT_RTIP2_0:
             TraceRayInlineImpl2_0(rayQuery,
                                   accelStructLo,
                                   accelStructHi,
@@ -77,20 +77,20 @@ static bool RayQueryProceedCommon(
     inout_param(RayQueryInternal) rayQuery,
     in    uint                    constRayFlags,
     in    uint3                   dispatchThreadId,
-    in    uint                    rtHwVersion
+    in    uint                    rtIpLevel
 )
 {
     bool continueTraversal = false;
 
-    switch (rtHwVersion)
+    switch (rtIpLevel)
     {
-        case RTIP1_1:
+        case GPURT_RTIP1_1:
             continueTraversal = RayQueryProceedImpl1_1(rayQuery,
                                                        constRayFlags,
                                                        dispatchThreadId);
             break;
 #if GPURT_BUILD_RTIP2
-        case RTIP2_0:
+        case GPURT_RTIP2_0:
             continueTraversal = RayQueryProceedImpl2_0(rayQuery,
                                                        constRayFlags,
                                                        dispatchThreadId);
@@ -98,6 +98,7 @@ static bool RayQueryProceedCommon(
 #endif
         default: break;
     }
+
 #if DEVELOPER
     if (EnableTraversalCounter())
     {

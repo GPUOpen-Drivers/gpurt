@@ -67,6 +67,8 @@ struct BuildPlocArgs
     uint  primIndicesSortedScratchOffset;
     uint  numLeafNodes;
     uint  noCopySortedNodes;
+    uint  enableEarlyPairCompression;
+    uint  unsortedBvhLeafNodesOffset;
 };
 
 #define PLOC_RADIUS_MAX         10
@@ -85,7 +87,7 @@ struct BuildPlocArgs
 #if NO_SHADER_ENTRYPOINT == 0
 #include "Common.hlsl"
 
-#define RootSig "RootConstants(num32BitConstants=19, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=21, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
@@ -424,17 +426,15 @@ void FindNearestNeighbour(
         if ((clusterIndex2 >= 0) && (clusterIndex2 < numClusters))
         {
             const uint nodeIndex = ReadClusterList(args, clusterListIndex, clusterIndex2);
+            const ScratchNode scratchNode = FetchScratchNode(args.scratchNodesScratchOffset, nodeIndex);
 
-            BoundingBox aabb;
-
-            if (args.flags & BUILD_FLAGS_TRIANGLE_SPLITTING)
-            {
-                aabb = FetchScratchNodeBoundingBoxTS(args.scratchNodesScratchOffset, args.splitBoxesByteOffset, nodeIndex);
-            }
-            else
-            {
-                aabb = FetchScratchNodeBoundingBox(args.scratchNodesScratchOffset, nodeIndex);
-            }
+            // Would need to fetch paired triangle BBox here, if "enableEarlyPairCompression" is ON
+            BoundingBox aabb = FetchScratchNodeBoundingBox(scratchNode,
+                                                           IsLeafNode(nodeIndex, numActivePrims),
+                                                           (args.flags & BUILD_FLAGS_TRIANGLE_SPLITTING),
+                                                           args.splitBoxesByteOffset,
+                                                           args.enableEarlyPairCompression,
+                                                           args.unsortedBvhLeafNodesOffset);
 
             StoreLdsBoundingBox(t + plocRadius, aabb);
         }
@@ -664,7 +664,7 @@ void FindNearestNeighbour(
             ScratchBuffer.Store(mergedNodeOffset + SCRATCH_NODE_RIGHT_OFFSET, rightNodeIndex);
 
             const bool enableCollapse        = (args.flags & BUILD_FLAGS_COLLAPSE);
-            const bool enablePairCompression = (args.flags & BUILD_FLAGS_PAIR_COMPRESSION);
+            const bool enablePairCompression = (args.flags & BUILD_FLAGS_LATE_PAIR_COMPRESSION);
 
             uint numLeft = FetchScratchNodeNumPrimitives(args.scratchNodesScratchOffset,
                                                          leftNodeIndex,
@@ -941,7 +941,7 @@ void BuildBvhPlocImpl(
 
     if (numActivePrims <= 1)
     {
-        if ((args.flags & BUILD_FLAGS_PAIR_COMPRESSION) && (globalId == 0) && (numActivePrims == 1))
+        if ((args.flags & BUILD_FLAGS_LATE_PAIR_COMPRESSION) && (globalId == 0) && (numActivePrims == 1))
         {
             // Ensure that a batch index is written out for single-primitive acceleration structures.
             WriteScratchBatchIndex(args.numBatchesScratchOffset, args.baseBatchIndicesScratchOffset, 0);

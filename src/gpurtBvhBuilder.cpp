@@ -35,7 +35,6 @@
 #include "gpurtInternal.h"
 #include "gpurtInternalShaderBindings.h"
 #include "gpurtBvhBuilder.h"
-#include "gpurtCpuBvhBuilder.h"
 
 #include <float.h>
 
@@ -173,7 +172,7 @@ static uint32 CalculateRayTracingAABBCount(
 
 // =====================================================================================================================
 // Helper function that dispatches of size {numGroups, 1, 1}
-void GpuBvhBuilder::Dispatch(
+void BvhBuilder::Dispatch(
     uint32 numGroups)
 {
 #if PAL_CLIENT_INTERFACE_MAJOR_VERSION < 771
@@ -418,6 +417,7 @@ void Swap(
 // =====================================================================================================================
 // Explicit ray tracing bvh builder constructor
 BvhBuilder::BvhBuilder(
+    Pal::ICmdBuffer*             pCmdBuf,         // The associated PAL cmdbuffer
     Internal::Device*      const pDevice,         // GPURT device pointer.
     const Pal::DeviceProperties& deviceProps,     // PAL device properties
     ClientCallbacks              clientCb,        // Client cb table
@@ -427,7 +427,12 @@ BvhBuilder::BvhBuilder(
     m_deviceSettings(deviceSettings),
     m_clientCb(clientCb),
     m_buildArgs(),
-    m_deviceProps(deviceProps)
+    m_deviceProps(deviceProps),
+    m_pPalCmdBuffer(pCmdBuf),
+    m_buildSettings({}),
+    m_radixSortConfig(GetRadixSortConfig(deviceSettings)),
+    m_emitCompactDstGpuVa(0ull),
+    m_buildSettingsHash(0)
 {
 }
 
@@ -439,7 +444,7 @@ BvhBuilder::~BvhBuilder()
 
 // =====================================================================================================================
 // Override build mode
-BvhBuildMode GpuBvhBuilder::OverrideBuildMode(
+BvhBuildMode BvhBuilder::OverrideBuildMode(
     const AccelStructBuildInfo& buildInfo)
 {
     BvhBuildMode mode = m_buildConfig.buildMode;
@@ -472,33 +477,6 @@ BvhBuildMode GpuBvhBuilder::OverrideBuildMode(
 }
 
 // =====================================================================================================================
-GpuBvhBuilder::GpuBvhBuilder(
-    Pal::ICmdBuffer*             pCmdBuf,
-    Internal::Device*            pDevice,
-    const Pal::DeviceProperties& deviceProps,
-    ClientCallbacks              clientCb,
-    const DeviceSettings&        deviceSettings)
-    :
-    BvhBuilder(
-        pDevice,
-        deviceProps,
-        clientCb,
-        deviceSettings
-    ),
-    m_pPalCmdBuffer(pCmdBuf),
-    m_buildSettings({}),
-    m_radixSortConfig(GetRadixSortConfig(deviceSettings)),
-    m_emitCompactDstGpuVa(0ull),
-    m_buildSettingsHash(0)
-{
-}
-
-// =====================================================================================================================
-GpuBvhBuilder::~GpuBvhBuilder()
-{
-}
-
-// =====================================================================================================================
 // Calculates the result buffer offsets and returns the total result memory size
 uint32 BvhBuilder::CalculateResultBufferInfo(
     AccelStructDataOffsets* pOffsets,
@@ -515,7 +493,7 @@ uint32 BvhBuilder::CalculateResultBufferInfo(
     //  AccelStructHeader
     //  Internal Nodes                              : BVHNode (BVH2) or Float32BoxNode (BVH4)
     //  Leaf Nodes                                  : BVHNode (BVH2), TriangleNode (BVH4) or InstanceNode (TopLevel)
-    //  Per-geometry description info               : Bottom Level Only
+    //  Per-geometry description info               : Geometry info in Bottom Level
     //  Per-leaf node pointers (uint32)
     //-----------------------------------------------------------------------------------------------------------//
     AccelStructDataOffsets offsets = {};
@@ -548,8 +526,7 @@ uint32 BvhBuilder::CalculateResultBufferInfo(
     }
 
     // Metadata section is at the beginning of the acceleration structure buffer
-    uint32 metadataSizeInBytes = CalcMetadataSizeInBytes(internalNodeSize,
-        leafNodeSize);
+    uint32 metadataSizeInBytes = CalcMetadataSizeInBytes(internalNodeSize, leafNodeSize);
 
     // Align metadata size to cache line
     metadataSizeInBytes = Util::Pow2Align(metadataSizeInBytes, 128);
@@ -572,7 +549,7 @@ uint32 BvhBuilder::CalculateResultBufferInfo(
 
 // =====================================================================================================================
 // Calculates the scratch buffer offsets and returns the total scratch memory size
-uint32 GpuBvhBuilder::CalculateScratchBufferInfo(
+uint32 BvhBuilder::CalculateScratchBufferInfo(
     RayTracingScratchDataOffsets* pOffsets)
 {
     //-----------------------------------------------------------------------------------------------------------//
@@ -1042,7 +1019,7 @@ uint32 GpuBvhBuilder::CalculateScratchBufferInfo(
 
 // =====================================================================================================================
 // Calculates the update scratch buffer offsets and returns the total update scratch memory size
-uint32 GpuBvhBuilder::CalculateUpdateScratchBufferInfo(
+uint32 BvhBuilder::CalculateUpdateScratchBufferInfo(
     RayTracingScratchDataOffsets* pOffsets)
 {
     uint32 runningOffset = 0;
@@ -1152,17 +1129,6 @@ void BvhBuilder::InitBuildConfig(
         m_buildConfig.triangleCompressionMode :
         TriangleCompressionMode::None;
 
-    m_buildConfig.bvhBuilderNodeSortType = m_deviceSettings.bvhBuilderNodeSortType;
-    m_buildConfig.bvhBuilderNodeSortHeuristic = m_deviceSettings.bvhBuilderNodeSortHeuristic;
-}
-
-// =====================================================================================================================
-// Forward BuildConfig initialization to BvhBuilder
-void GpuBvhBuilder::InitBuildConfig(
-    const AccelStructBuildInfo& buildArgs)
-{
-    BvhBuilder::InitBuildConfig(buildArgs);
-
     m_buildConfig.allowTopDownBuild = (m_buildConfig.topLevelBuild) &&
         ((m_deviceSettings.topDownBuild == true) || (m_deviceSettings.rebraidType == RebraidType::V1));
 
@@ -1248,8 +1214,14 @@ void GpuBvhBuilder::InitBuildConfig(
     // Only enable earlyPairCompression if
     // -) triangleCompressionMode is set to be "Pair", and
     // -) deviceSettings chose to enable EarlyPairCompression
-    m_buildConfig.enableEarlyPairCompression =
-        (m_buildConfig.triangleCompressionMode == TriangleCompressionMode::Pair) ? m_deviceSettings.enableEarlyPairCompression : false;
+    // -) "NoCopySortedNodes" is set to true
+    //     (because it preserves the unsorted scratch leaf without additional memory required)
+    m_buildConfig.enableEarlyPairCompression = false;
+    if ((m_buildConfig.triangleCompressionMode == TriangleCompressionMode::Pair) &&
+        (m_buildConfig.noCopySortedNodes == true))
+    {
+        m_buildConfig.enableEarlyPairCompression = m_deviceSettings.enableEarlyPairCompression;
+    }
 
     // Max geometries we can fit in the SRD table for merged encode build/update
     const uint32 maxGeometriesInSrdTable =
@@ -1264,7 +1236,7 @@ void GpuBvhBuilder::InitBuildConfig(
         (buildArgs.inputs.inputElemCount > maxGeometriesInSrdTable);
 }
 // =====================================================================================================================
-AccelStructMetadataHeader GpuBvhBuilder::InitAccelStructMetadataHeader()
+AccelStructMetadataHeader BvhBuilder::InitAccelStructMetadataHeader()
 {
     AccelStructMetadataHeader metaHeader = {};
     // Make sure the address for empty top levels is 0 so we avoid tracing them. Set a valid address for empty bottom
@@ -1279,7 +1251,7 @@ AccelStructMetadataHeader GpuBvhBuilder::InitAccelStructMetadataHeader()
 }
 
 // =====================================================================================================================
-AccelStructHeader GpuBvhBuilder::InitAccelStructHeader()
+AccelStructHeader BvhBuilder::InitAccelStructHeader()
 {
     const uint32 accelStructSize = CalculateResultBufferInfo(&m_resultOffsets, &m_metadataSizeInBytes);
 
@@ -1323,7 +1295,7 @@ AccelStructHeader GpuBvhBuilder::InitAccelStructHeader()
 
 // =====================================================================================================================
 // Setup a typed buffer view for the provided triangle geometry.
-Pal::BufferViewInfo GpuBvhBuilder::SetupVertexBuffer(
+Pal::BufferViewInfo BvhBuilder::SetupVertexBuffer(
     const GeometryTriangles& desc,
     uint32*                  pStride,
     uint32*                  pVertexCompCount
@@ -1383,7 +1355,7 @@ Pal::BufferViewInfo GpuBvhBuilder::SetupVertexBuffer(
 
 // =====================================================================================================================
 // Create a descriptor table containing a vertex buffer SRD and write the address to user data
-uint32 GpuBvhBuilder::WriteVertexBufferTable(
+uint32 BvhBuilder::WriteVertexBufferTable(
     const GeometryTriangles* pTriGeometry,
     EncodeNodes::Constants*  pEncodeConstants,
     uint32                   userDataOffset)
@@ -1407,7 +1379,7 @@ uint32 GpuBvhBuilder::WriteVertexBufferTable(
 
 // =====================================================================================================================
 // Return integer expansion factor which determines the number of flag slots each thread clears during Encode.
-uint32 GpuBvhBuilder::GetLeafNodeExpansion() const
+uint32 BvhBuilder::GetLeafNodeExpansion() const
 {
     return (m_buildConfig.numPrimitives == 0) ?
         0 : Util::RoundUpQuotient(m_buildConfig.numLeafNodes, m_buildConfig.numPrimitives);
@@ -1415,7 +1387,7 @@ uint32 GpuBvhBuilder::GetLeafNodeExpansion() const
 
 // =====================================================================================================================
 // Executes the encode triangle nodes shader
-void GpuBvhBuilder::EncodeTriangleNodes(
+void BvhBuilder::EncodeTriangleNodes(
     uint32                                             primitiveOffset,  // Offset of the primitive
     const GeometryTriangles*                           pDesc,            // Triangles description
     uint32                                             primitiveCount,   // Number of primitives
@@ -1477,6 +1449,7 @@ void GpuBvhBuilder::EncodeTriangleNodes(
         static_cast<uint32>(m_buildConfig.sceneCalcType),
         m_buildConfig.triangleSplitting,
         m_buildConfig.enableEarlyPairCompression,
+        m_deviceSettings.trianglePairingSearchRadius,
         m_buildConfig.enableFastLBVH
     };
 
@@ -1532,7 +1505,7 @@ void GpuBvhBuilder::EncodeTriangleNodes(
 
 // =====================================================================================================================
 // Create a descriptor table containing a typed buffer SRD pointing to AABBs and write the address to user data
-uint32 GpuBvhBuilder::WriteAabbGeometryTable(
+uint32 BvhBuilder::WriteAabbGeometryTable(
     const GeometryAabbs* pAabbGeometry,
     uint32*              pStrideConstant,
     uint32               userDataOffset)
@@ -1575,7 +1548,7 @@ uint32 GpuBvhBuilder::WriteAabbGeometryTable(
 
 // =====================================================================================================================
 // Executes the encode AABB nodes shader
-void GpuBvhBuilder::EncodeAABBNodes(
+void BvhBuilder::EncodeAABBNodes(
     uint32                                         primitiveOffset,  // Offset of the primitive
     const GeometryAabbs*                           pDesc,            // AABBs description
     uint32                                         primitiveCount,   // Number of primitives
@@ -1613,6 +1586,7 @@ void GpuBvhBuilder::EncodeAABBNodes(
         static_cast<uint32>(m_buildConfig.sceneCalcType),
         false,
         false,
+        0,
         m_buildConfig.enableFastLBVH
     };
 
@@ -1660,7 +1634,7 @@ void GpuBvhBuilder::EncodeAABBNodes(
 
 // =====================================================================================================================
 // Executes the encode instances shader
-void GpuBvhBuilder::EncodeInstances(
+void BvhBuilder::EncodeInstances(
     gpusize            instanceDescVa, // GPUVA of the instance description buffer
     uint32             numDesc,        // Number of instance descriptions
     InputElementLayout descLayout)     // The layout of the instance descriptions
@@ -1713,7 +1687,7 @@ void GpuBvhBuilder::EncodeInstances(
 }
 
 // =====================================================================================================================
-void GpuBvhBuilder::WriteImmediateSingle(
+void BvhBuilder::WriteImmediateSingle(
     gpusize                 destVa,
     uint64                  value,
     Pal::ImmediateDataWidth width)
@@ -1731,7 +1705,7 @@ void GpuBvhBuilder::WriteImmediateSingle(
 // =====================================================================================================================
 // Use pre-CS (ME) CP writes to write the specified value to the destination VA.
 template<typename T>
-void GpuBvhBuilder::WriteImmediateData(
+void BvhBuilder::WriteImmediateData(
     gpusize  destVa, // Destination address
     const T& data)   // Data value to write
 {
@@ -1744,7 +1718,7 @@ void GpuBvhBuilder::WriteImmediateData(
 
 // =====================================================================================================================
 // Use pre-CS (ME) CP writes to write the specified value to the destination VA.
-void GpuBvhBuilder::WriteOrZeroDataImmediate(
+void BvhBuilder::WriteOrZeroDataImmediate(
     gpusize       destVa,       // Destination address
     const uint32* pData,        // Data to write or null. Zeros will be written if no data is provided.
     uint32        dwordCount)   // Number of dwords to write.
@@ -1812,7 +1786,7 @@ uint32 FloatToUintForCompare(
 
 // =====================================================================================================================
 // Initialize an acceleration structure into a valid state to begin building
-void GpuBvhBuilder::InitAccelerationStructure(
+void BvhBuilder::InitAccelerationStructure(
     uint32 accelStructSize) // Total size in bytes including headers and metadata
 {
     RGP_PUSH_MARKER("Init Acceleration Structure");
@@ -1879,7 +1853,7 @@ void GpuBvhBuilder::InitAccelerationStructure(
 
 // =====================================================================================================================
 // Reset the task counter in the metadata header to 0
-void GpuBvhBuilder::ResetTaskCounter(
+void BvhBuilder::ResetTaskCounter(
     gpusize metadataHeaderGpuVa)
 {
     const gpusize taskCounterVa =
@@ -1891,7 +1865,7 @@ void GpuBvhBuilder::ResetTaskCounter(
 
 // =====================================================================================================================
 // Reset the taskQueue build counters
-void GpuBvhBuilder::ResetTaskQueueCounters(
+void BvhBuilder::ResetTaskQueueCounters(
     uint32 offset)
 {
     // Task queue counters packed at the beginning of PLOCState or TDState struct
@@ -1905,7 +1879,7 @@ void GpuBvhBuilder::ResetTaskQueueCounters(
 
 #if GPURT_DEVELOPER
 // =====================================================================================================================
-void GpuBvhBuilder::PushRGPMarker(
+void BvhBuilder::PushRGPMarker(
     const char* pFormat,
     ...)
 {
@@ -1921,13 +1895,13 @@ void GpuBvhBuilder::PushRGPMarker(
 }
 
 // =====================================================================================================================
-void GpuBvhBuilder::PopRGPMarker()
+void BvhBuilder::PopRGPMarker()
 {
     m_clientCb.pfnInsertRGPMarker(m_pPalCmdBuffer, nullptr, false);
 }
 
 // =====================================================================================================================
-const char* GpuBvhBuilder::ConvertBuildModeToString()
+const char* BvhBuilder::ConvertBuildModeToString()
 {
     static_assert(static_cast<uint32>(BvhBuildMode::Linear)   == 0, "BvhBuildMode enum mismatch");
     static_assert(static_cast<uint32>(BvhBuildMode::Reserved) == 1, "BvhBuildMode enum mismatch");
@@ -1949,7 +1923,7 @@ const char* GpuBvhBuilder::ConvertBuildModeToString()
 }
 
 // =====================================================================================================================
-const char* GpuBvhBuilder::ConvertRebraidTypeToString()
+const char* BvhBuilder::ConvertRebraidTypeToString()
 {
     static_assert(static_cast<uint32>(RebraidType::Off) == 0, "RebraidType enum mismatch");
     static_assert(static_cast<uint32>(RebraidType::V1)  == 1, "RebraidType enum mismatch");
@@ -1968,7 +1942,7 @@ const char* GpuBvhBuilder::ConvertRebraidTypeToString()
 }
 
 // =====================================================================================================================
-const char* GpuBvhBuilder::ConvertTriCompressionTypeToString()
+const char* BvhBuilder::ConvertTriCompressionTypeToString()
 {
     static_assert(static_cast<uint32>(TriangleCompressionMode::None) == 0,
         "TriangleCompressionMode enum mismatch");
@@ -1990,7 +1964,7 @@ const char* GpuBvhBuilder::ConvertTriCompressionTypeToString()
 }
 
 // =====================================================================================================================
-const char* GpuBvhBuilder::ConvertFp16ModeToString()
+const char* BvhBuilder::ConvertFp16ModeToString()
 {
     static_assert(static_cast<uint32>(Fp16BoxNodesInBlasMode::NoNodes)    == 0,
         "Fp16BoxNodesInBlasMode enum mismatch");
@@ -2017,7 +1991,7 @@ const char* GpuBvhBuilder::ConvertFp16ModeToString()
 }
 
 // =====================================================================================================================
-void GpuBvhBuilder::OutputBuildInfo()
+void BvhBuilder::OutputBuildInfo()
 {
     constexpr uint32 MaxStrLength     = 1024;
     char buildShaderInfo[MaxStrLength];
@@ -2091,7 +2065,7 @@ void GpuBvhBuilder::OutputBuildInfo()
 }
 
 // =====================================================================================================================
-void GpuBvhBuilder::OutputPipelineName(
+void BvhBuilder::OutputPipelineName(
     InternalRayTracingCsType type)
 {
     constexpr uint32 MaxStrLength = 256;
@@ -2105,7 +2079,7 @@ void GpuBvhBuilder::OutputPipelineName(
 
 // =====================================================================================================================
 // Initalize the compile time constant buffer containing settings for the build shaders.
-void GpuBvhBuilder::InitBuildSettings()
+void BvhBuilder::InitBuildSettings()
 {
     m_buildSettings = {};
 
@@ -2131,11 +2105,7 @@ void GpuBvhBuilder::InitBuildSettings()
     m_buildSettings.enableMergeSort              = m_deviceSettings.enableMergeSort;
     m_buildSettings.fastBuildThreshold           = m_deviceSettings.fastBuildThreshold;
 
-    m_buildSettings.bvhBuilderNodeSortType       = static_cast<uint32>(m_buildConfig.bvhBuilderNodeSortType);
-    m_buildSettings.bvhBuilderNodeSortHeuristic  = static_cast<uint32>(m_buildConfig.bvhBuilderNodeSortHeuristic);
-
     m_buildSettings.enableFusedInstanceNode      = m_deviceSettings.enableFusedInstanceNode;
-    m_buildSettings.sahQbvh                      = m_deviceSettings.sahQbvh;
 
     m_buildSettings.tsPriority                   = m_deviceSettings.tsPriority;
     // Force priority to 1 if the client set it to 0
@@ -2150,6 +2120,8 @@ void GpuBvhBuilder::InitBuildSettings()
 
     m_buildSettings.enableEarlyPairCompression = m_buildConfig.enableEarlyPairCompression;
     m_buildSettings.enableFastLBVH      = m_buildConfig.enableFastLBVH;
+
+    m_buildSettings.rtIpLevel = static_cast<uint32>(m_pDevice->GetRtIpLevel());
 
     uint32 emitBufferCount = 0;
     for (uint32 i = 0; i < m_buildArgs.postBuildInfoDescCount; ++i)
@@ -2184,7 +2156,7 @@ void GpuBvhBuilder::InitBuildSettings()
 
 // =====================================================================================================================
 // Gets prebuild information about the acceleration structure to be built eventually.
-void GpuBvhBuilder::GetAccelerationStructurePrebuildInfo(
+void BvhBuilder::GetAccelerationStructurePrebuildInfo(
     const AccelStructBuildInputs& buildInfo,     // Build args
     AccelStructPrebuildInfo*      pPrebuildInfo) // Output prebuild info struct
 {
@@ -2209,16 +2181,6 @@ void GpuBvhBuilder::GetAccelerationStructurePrebuildInfo(
 
         prebuildInfo.scratchDataSizeInBytes       = scratchDataSize;
         prebuildInfo.updateScratchDataSizeInBytes = updateDataSize;
-
-        // Calculate the amount of scratch space needed during the construction process.
-        prebuildInfo.cpuScratchSizeInBytes = CpuBvhBuilder::CalculateScratchBufferInfo(m_buildConfig, nullptr);
-
-        prebuildInfo.cpuUpdateScratchSizeInBytes = 0;
-
-        if (Util::TestAnyFlagSet(buildInfo.flags, AccelStructBuildFlagAllowUpdate))
-        {
-            prebuildInfo.cpuUpdateScratchSizeInBytes = CpuBvhBuilder::CalculateUpdateScratchBufferInfo(m_buildConfig, nullptr);
-        }
     }
     else
     {
@@ -2226,9 +2188,6 @@ void GpuBvhBuilder::GetAccelerationStructurePrebuildInfo(
         // @note We set the ScratchData and UpdateScratchData size to 1 instead of 0, because some apps crash otherwise.
         prebuildInfo.scratchDataSizeInBytes       = 1;
         prebuildInfo.updateScratchDataSizeInBytes = 1;
-
-        prebuildInfo.cpuScratchSizeInBytes        = 0;
-        prebuildInfo.cpuUpdateScratchSizeInBytes  = 0;
     }
 
     prebuildInfo.resultDataMaxSizeInBytes = resultDataMaxSize;
@@ -2255,10 +2214,6 @@ void GpuBvhBuilder::GetAccelerationStructurePrebuildInfo(
             Util::Max(prebuildInfo.scratchDataSizeInBytes, alternatePrebuildInfo.scratchDataSizeInBytes);
         prebuildInfo.updateScratchDataSizeInBytes =
             Util::Max(prebuildInfo.updateScratchDataSizeInBytes, alternatePrebuildInfo.updateScratchDataSizeInBytes);
-        prebuildInfo.cpuScratchSizeInBytes =
-            Util::Max(prebuildInfo.cpuScratchSizeInBytes, alternatePrebuildInfo.cpuScratchSizeInBytes);
-        prebuildInfo.cpuUpdateScratchSizeInBytes =
-            Util::Max(prebuildInfo.cpuUpdateScratchSizeInBytes, alternatePrebuildInfo.cpuUpdateScratchSizeInBytes);
         prebuildInfo.maxPrimitiveCount =
             Util::Max(prebuildInfo.maxPrimitiveCount, alternatePrebuildInfo.maxPrimitiveCount);
     }
@@ -2268,7 +2223,7 @@ void GpuBvhBuilder::GetAccelerationStructurePrebuildInfo(
 
 // =====================================================================================================================
 // Builds or updates an acceleration structure by executing several shaders
-void GpuBvhBuilder::BuildRaytracingAccelerationStructure(
+void BvhBuilder::BuildRaytracingAccelerationStructure(
     const AccelStructBuildInfo& buildArgs) // Build args
 {
     if (m_deviceSettings.enableInsertBarriersInBuildAS == true)
@@ -2548,7 +2503,7 @@ void GpuBvhBuilder::BuildRaytracingAccelerationStructure(
 
 // =====================================================================================================================
 // Handles writing any requested postbuild information.
-void GpuBvhBuilder::EmitPostBuildInfo(
+void BvhBuilder::EmitPostBuildInfo(
     uint32 resultDataSize)
 {
     const bool isBottomLevel = (m_buildArgs.inputs.type == AccelStructType::BottomLevel);
@@ -2599,7 +2554,7 @@ void GpuBvhBuilder::EmitPostBuildInfo(
                     uint64 numBlasPointers;
                 } info;
 
-                info.numBlasPointers = (isBottomLevel) ? 0 : m_buildConfig.numLeafNodes;
+                info.numBlasPointers = (isBottomLevel) ? 0 : m_buildArgs.inputs.inputElemCount;
 
                 info.serializedSizeInBytes = RayTracingSerializedAsHeaderSize +
                                              resultDataSize                   +
@@ -2624,7 +2579,7 @@ void GpuBvhBuilder::EmitPostBuildInfo(
 // Emits post-build properties for a set of acceleration structures.
 // This enables applications to know the output resource requirements for performing acceleration structure
 // operations via CopyRaytracingAccelerationStructure()
-void GpuBvhBuilder::EmitAccelerationStructurePostBuildInfo(
+void BvhBuilder::EmitAccelerationStructurePostBuildInfo(
     const AccelStructPostBuildInfo& postBuildInfo) // Postbuild info
 {
     switch (postBuildInfo.desc.infoType)
@@ -2655,7 +2610,7 @@ void GpuBvhBuilder::EmitAccelerationStructurePostBuildInfo(
 // Emits post-build properties for a set of acceleration structures.
 // This enables applications to know the output resource requirements for performing acceleration structure
 // operations via CopyRaytracingAccelerationStructure()
-void GpuBvhBuilder::EmitASCurrentSize(
+void BvhBuilder::EmitASCurrentSize(
     const AccelStructPostBuildInfo& postBuildInfo) // Postbuild info
 {
     uint32 entryOffset = 0;
@@ -2690,7 +2645,7 @@ void GpuBvhBuilder::EmitASCurrentSize(
 // Emits post-build properties for a set of acceleration structures.
 // This enables applications to know the output resource requirements for performing acceleration structure
 // operations via CopyRaytracingAccelerationStructure()
-void GpuBvhBuilder::EmitASCompactedType(
+void BvhBuilder::EmitASCompactedType(
     const AccelStructPostBuildInfo& postBuildInfo) // Postbuild info
 {
     uint32 entryOffset = 0;
@@ -2725,7 +2680,7 @@ void GpuBvhBuilder::EmitASCompactedType(
 // Emits post-build properties for a set of acceleration structures.
 // This enables applications to know the output resource requirements for performing acceleration structure
 // operations via CopyRaytracingAccelerationStructure()
-void GpuBvhBuilder::EmitASToolsVisualizationType(
+void BvhBuilder::EmitASToolsVisualizationType(
     const AccelStructPostBuildInfo& postBuildInfo) // Postbuild info
 {
     uint32 entryOffset = 0;
@@ -2760,7 +2715,7 @@ void GpuBvhBuilder::EmitASToolsVisualizationType(
 // Emits post-build properties for a set of acceleration structures.
 // This enables applications to know the output resource requirements for performing acceleration structure
 // operations via CopyRaytracingAccelerationStructure()
-void GpuBvhBuilder::EmitASSerializationType(
+void BvhBuilder::EmitASSerializationType(
     const AccelStructPostBuildInfo& postBuildInfo) // Postbuild info
 {
     uint32 entryOffset = 0;
@@ -2793,7 +2748,7 @@ void GpuBvhBuilder::EmitASSerializationType(
 
 // =====================================================================================================================
 // Takes a source acceleration structure and copies it to destination memory
-void GpuBvhBuilder::CopyAccelerationStructure(
+void BvhBuilder::CopyAccelerationStructure(
     const AccelStructCopyInfo& copyArgs) // Copy arguments
 {
     switch (copyArgs.mode)
@@ -2826,7 +2781,7 @@ void GpuBvhBuilder::CopyAccelerationStructure(
 
 // =====================================================================================================================
 // Takes a source acceleration structure and copies it to a same sized destination memory
-void GpuBvhBuilder::CopyASCloneMode(
+void BvhBuilder::CopyASCloneMode(
     const AccelStructCopyInfo& copyArgs) // Copy arguments
 {
     uint32 entryOffset = 0;
@@ -2856,7 +2811,7 @@ void GpuBvhBuilder::CopyASCloneMode(
 
 // =====================================================================================================================
 // Compacts a source acceleration structure into a smaller destination memory
-void GpuBvhBuilder::CopyASCompactMode(
+void BvhBuilder::CopyASCompactMode(
     const AccelStructCopyInfo& copyArgs) // Copy arguments
 {
     uint32 entryOffset = 0;
@@ -2886,7 +2841,7 @@ void GpuBvhBuilder::CopyASCompactMode(
 
 // =====================================================================================================================
 // Takes a source acceleration structure and copies it in a serialized manner to the destination memory
-void GpuBvhBuilder::CopyASSerializeMode(
+void BvhBuilder::CopyASSerializeMode(
     const AccelStructCopyInfo& copyArgs) // Copy arguments
 {
     uint32 entryOffset = 0;
@@ -2917,7 +2872,7 @@ void GpuBvhBuilder::CopyASSerializeMode(
 
 // =====================================================================================================================
 // Takes a source acceleration structure and copies it in a deserialized manner to the destination memory
-void GpuBvhBuilder::CopyASDeserializeMode(
+void BvhBuilder::CopyASDeserializeMode(
     const AccelStructCopyInfo& copyArgs) // Copy arguments
 {
     BindPipeline(InternalRayTracingCsType::DeserializeAS);
@@ -2954,7 +2909,7 @@ void GpuBvhBuilder::CopyASDeserializeMode(
 
 // =====================================================================================================================
 // Takes a source acceleration structure and copies it to the destination memory
-void GpuBvhBuilder::CopyASToolsVisualizationMode(
+void BvhBuilder::CopyASToolsVisualizationMode(
     const AccelStructCopyInfo& copyArgs) // Copy arguments
 {
     if (m_deviceSettings.bvhCollapse)
@@ -2992,7 +2947,7 @@ void GpuBvhBuilder::CopyASToolsVisualizationMode(
 
 // =====================================================================================================================
 // Builds an acceleration structure by executing several shaders
-void GpuBvhBuilder::BuildAccelerationStructure()
+void BvhBuilder::BuildAccelerationStructure()
 {
     // if rebraid type == v1 then force to non-build parallel for now
     // BuildParallel only supports RebraidType::v2
@@ -3085,7 +3040,7 @@ void GpuBvhBuilder::BuildAccelerationStructure()
 
 // =====================================================================================================================
 // Updates an acceleration structure by executing several shaders
-void GpuBvhBuilder::UpdateAccelerationStructure()
+void BvhBuilder::UpdateAccelerationStructure()
 {
     if (m_deviceSettings.enableParallelUpdate)
     {
@@ -3102,7 +3057,7 @@ void GpuBvhBuilder::UpdateAccelerationStructure()
 
 // =====================================================================================================================
 // Performs a generic barrier that's used to synchronize internal ray tracing shaders
-void GpuBvhBuilder::Barrier()
+void BvhBuilder::Barrier()
 {
     if (m_deviceSettings.enableAcquireReleaseInterface)
     {
@@ -3145,7 +3100,7 @@ void GpuBvhBuilder::Barrier()
 
 // =====================================================================================================================
 // Executes merge sort shader to sort the input keys and values
-void GpuBvhBuilder::MergeSort()
+void BvhBuilder::MergeSort()
 {
     BindPipeline(InternalRayTracingCsType::MergeSort);
 
@@ -3178,7 +3133,7 @@ void GpuBvhBuilder::MergeSort()
 
 // =====================================================================================================================
 // Executes the generates morton codes shader
-void GpuBvhBuilder::GenerateMortonCodes()
+void BvhBuilder::GenerateMortonCodes()
 {
     const GenerateMortonCodes::Constants shaderConstants =
     {
@@ -3210,7 +3165,7 @@ void GpuBvhBuilder::GenerateMortonCodes()
 
 // =====================================================================================================================
 // Executes the build BVH shader
-void GpuBvhBuilder::BuildBVH()
+void BvhBuilder::BuildBVH()
 {
     uint32 entryOffset = 0;
 
@@ -3249,7 +3204,7 @@ void GpuBvhBuilder::BuildBVH()
 
 // =====================================================================================================================
 // Executes the build BVH shader
-void GpuBvhBuilder::BuildBVHTD()
+void BvhBuilder::BuildBVHTD()
 {
     const uint32 threadGroupSize = DefaultThreadGroupSize;
     const uint32 numThreadGroups = GetNumPersistentThreadGroups(m_buildConfig.numLeafNodes, threadGroupSize);
@@ -3305,7 +3260,7 @@ void GpuBvhBuilder::BuildBVHTD()
 
 // =====================================================================================================================
 // Executes the build BVH PLOC shader
-void GpuBvhBuilder::BuildBVHPLOC()
+void BvhBuilder::BuildBVHPLOC()
 {
     const uint32 numThreadGroups = GetNumPersistentThreadGroups(m_buildConfig.numLeafNodes);
 
@@ -3332,6 +3287,8 @@ void GpuBvhBuilder::BuildBVHPLOC()
         m_scratchOffsets.primIndicesSorted,
         m_buildConfig.numLeafNodes,
         m_buildConfig.noCopySortedNodes,
+        m_buildConfig.enableEarlyPairCompression,
+        m_scratchOffsets.bvhLeafNodeData,
     };
 
     ResetTaskCounter(HeaderBufferBaseVa());
@@ -3355,7 +3312,7 @@ void GpuBvhBuilder::BuildBVHPLOC()
 // =====================================================================================================================
 // Executes the update QBVH shader
 // Refits internal node bounding boxes based on updated geometry
-void GpuBvhBuilder::UpdateQBVH()
+void BvhBuilder::UpdateQBVH()
 {
     BindPipeline(InternalRayTracingCsType::UpdateQBVH);
 
@@ -3397,7 +3354,7 @@ void GpuBvhBuilder::UpdateQBVH()
 
 // =====================================================================================================================
 // Executes the UpdateParallel shader
-void GpuBvhBuilder::UpdateParallel()
+void BvhBuilder::UpdateParallel()
 {
     BindPipeline(InternalRayTracingCsType::UpdateParallel);
 
@@ -3446,7 +3403,7 @@ void GpuBvhBuilder::UpdateParallel()
 
 // =====================================================================================================================
 // Setup per-geometry constant buffer
-Pal::BufferViewInfo GpuBvhBuilder::AllocGeometryConstants(
+Pal::BufferViewInfo BvhBuilder::AllocGeometryConstants(
     const Geometry& geometry,
     uint32          geometryIndex,
     uint32*         pPrimitiveOffset,
@@ -3512,6 +3469,8 @@ Pal::BufferViewInfo GpuBvhBuilder::AllocGeometryConstants(
         uint32(m_buildConfig.sceneCalcType),
         m_buildConfig.triangleSplitting,
         m_buildConfig.enableEarlyPairCompression,
+        m_deviceSettings.trianglePairingSearchRadius,
+        m_buildConfig.enableFastLBVH
     };
 
     constexpr uint32 AlignedSizeDw = Util::Pow2Align(EncodeNodes::NumEntries, 4);
@@ -3531,7 +3490,7 @@ Pal::BufferViewInfo GpuBvhBuilder::AllocGeometryConstants(
 
 // =====================================================================================================================
 // Setup the SRD tables for each per-geometry input buffer (constants, vertex, index, transform)
-uint32 GpuBvhBuilder::WriteBufferSrdTable(
+uint32 BvhBuilder::WriteBufferSrdTable(
     const Pal::BufferViewInfo* pBufferViews,
     uint32                     count,
     bool                       typedBuffer,
@@ -3572,7 +3531,7 @@ uint32 GpuBvhBuilder::WriteBufferSrdTable(
 
 // =====================================================================================================================
 // Setup the SRD tables for each per-geometry input buffer (constants, vertex, index, transform)
-uint32 GpuBvhBuilder::WriteTriangleGeometrySrdTables(
+uint32 BvhBuilder::WriteTriangleGeometrySrdTables(
     uint32 entryOffset) // Current user data entry offset
 {
     const uint32 geometryCount = m_buildArgs.inputs.inputElemCount;
@@ -3626,7 +3585,7 @@ uint32 GpuBvhBuilder::WriteTriangleGeometrySrdTables(
 
 // =====================================================================================================================
 // Perform geometry encoding and update in one dispatch
-void GpuBvhBuilder::EncodeUpdate()
+void BvhBuilder::EncodeUpdate()
 {
     BindPipeline(InternalRayTracingCsType::Update);
 
@@ -3676,7 +3635,7 @@ void GpuBvhBuilder::EncodeUpdate()
 
 // =====================================================================================================================
 // Executes the build QBVH shader
-void GpuBvhBuilder::BuildQBVH()
+void BvhBuilder::BuildQBVH()
 {
     const uint32 nodeCount       = CalcNumQBVHInternalNodes(m_buildConfig.numLeafNodes);
     const uint32 numThreadGroups = GetNumPersistentThreadGroups(nodeCount);
@@ -3695,13 +3654,14 @@ void GpuBvhBuilder::BuildQBVH()
         m_scratchOffsets.triangleSplitBoxes,
         m_buildSettings.emitCompactSize,
         0,
-        0,
-        m_buildSettings.bvhBuilderNodeSortType,
-        m_buildSettings.bvhBuilderNodeSortHeuristic,
+        (m_buildConfig.rebraidType != GpuRt::RebraidType::Off),
         m_buildSettings.enableFusedInstanceNode,
-        m_buildSettings.sahQbvh,
-        0,
-        0,
+        m_buildConfig.enableFastLBVH,
+        m_scratchOffsets.fastLBVHRootNodeIndex,
+        (m_buildConfig.topLevelBuild == false),
+        m_buildSettings.enableSAHCost,
+        m_buildConfig.enableEarlyPairCompression,
+        m_scratchOffsets.bvhLeafNodeData,
     };
 
     ResetTaskCounter(HeaderBufferBaseVa());
@@ -3751,7 +3711,7 @@ void GpuBvhBuilder::BuildQBVH()
 
 // =====================================================================================================================
 // Executes the build top QBVH shader
-void GpuBvhBuilder::BuildQBVHTop()
+void BvhBuilder::BuildQBVHTop()
 {
     const uint32 nodeCount       = CalcNumQBVHInternalNodes(m_buildConfig.numLeafNodes);
     const uint32 numThreadGroups = GetNumPersistentThreadGroups(nodeCount);
@@ -3771,12 +3731,13 @@ void GpuBvhBuilder::BuildQBVHTop()
         m_buildSettings.emitCompactSize,
         (m_buildArgs.inputs.inputElemLayout == InputElementLayout::ArrayOfPointers),
         m_buildConfig.topDownBuild,
-        m_buildSettings.bvhBuilderNodeSortType,
-        m_buildSettings.bvhBuilderNodeSortHeuristic,
         m_buildSettings.enableFusedInstanceNode,
-        m_buildSettings.sahQbvh,
+        m_buildConfig.enableFastLBVH,
+        m_scratchOffsets.fastLBVHRootNodeIndex,
         0,
-        0
+        0,
+        false,
+        0                                           // unsortedBvhLeafNodeOffset
     };
 
     ResetTaskCounter(HeaderBufferBaseVa());
@@ -3817,7 +3778,7 @@ void GpuBvhBuilder::BuildQBVHTop()
 
 // =====================================================================================================================
 // Executes the refit bounds shader
-void GpuBvhBuilder::RefitBounds()
+void BvhBuilder::RefitBounds()
 {
     BindPipeline(InternalRayTracingCsType::RefitBounds);
 
@@ -3825,6 +3786,7 @@ void GpuBvhBuilder::RefitBounds()
     {
         m_scratchOffsets.propagationFlags,
         m_scratchOffsets.bvhNodeData,
+        m_scratchOffsets.bvhLeafNodeData,
         m_buildSettings.fp16BoxNodesMode,
         m_deviceSettings.fp16BoxModeMixedSaThresh,
         m_buildConfig.collapse,
@@ -3836,6 +3798,7 @@ void GpuBvhBuilder::RefitBounds()
         m_scratchOffsets.batchIndices,
         m_buildConfig.noCopySortedNodes,
         m_scratchOffsets.primIndicesSorted,
+        m_buildConfig.enableEarlyPairCompression
     };
 
     uint32 entryOffset = 0;
@@ -3854,7 +3817,7 @@ void GpuBvhBuilder::RefitBounds()
 
 // =====================================================================================================================
 // Executes the pair compression shader
-void GpuBvhBuilder::PairCompression()
+void BvhBuilder::PairCompression()
 {
     BindPipeline(InternalRayTracingCsType::PairCompression);
 
@@ -3884,7 +3847,7 @@ void GpuBvhBuilder::PairCompression()
 
 // =====================================================================================================================
 // Executes the clear buffer shader
-void GpuBvhBuilder::ClearBuffer(
+void BvhBuilder::ClearBuffer(
     gpusize bufferVa,   // GPUVA of the buffer to clear
     uint32  numDwords,  // Number of dwords to clear
     uint32  clearValue) // Value to clear the buffer to
@@ -3913,7 +3876,7 @@ void GpuBvhBuilder::ClearBuffer(
 
 // =====================================================================================================================
 // Executes the copy buffer shader
-void GpuBvhBuilder::CopyBufferRaw(
+void BvhBuilder::CopyBufferRaw(
     gpusize dstBufferVa,    // Destination buffer GPU VA
     gpusize srcBufferVa,    // Source buffer GPU VA
     uint32  numDwords)      // Number of Dwords to copy
@@ -3942,7 +3905,7 @@ void GpuBvhBuilder::CopyBufferRaw(
 
 // =====================================================================================================================
 // Executes the bit histogram shader
-void GpuBvhBuilder::BitHistogram(
+void BvhBuilder::BitHistogram(
     uint32 inputArrayOffset,  // Scratch offset of the input array
     uint32 outputArrayOffset, // Scratch offset of the output array
     uint32 bitShiftSize,      // Number of bits to shift
@@ -3978,7 +3941,7 @@ void GpuBvhBuilder::BitHistogram(
 
 // =====================================================================================================================
 // Executes the scatter keys and values shader
-void GpuBvhBuilder::ScatterKeysAndValues(
+void BvhBuilder::ScatterKeysAndValues(
     uint32 inputKeysOffset,    // Scratch offset of the input keys buffer
     uint32 inputValuesOffset,  // Scratch offset of the input values buffer
     uint32 histogramsOffset,   // Scratch offset of the histograms buffer
@@ -4020,7 +3983,7 @@ void GpuBvhBuilder::ScatterKeysAndValues(
 
 // =====================================================================================================================
 // Executes multiple passes of several shaders to sort the input keys and values
-void GpuBvhBuilder::SortRadixInt32()
+void BvhBuilder::SortRadixInt32()
 {
     const uint32 inputKeysOffset    = m_scratchOffsets.mortonCodes;
     const uint32 outputKeysOffset   = m_scratchOffsets.mortonCodesSorted;
@@ -4086,7 +4049,7 @@ void GpuBvhBuilder::SortRadixInt32()
 
 // =====================================================================================================================
 // BVH build implementation with no barriers and a single dispatch.
-void GpuBvhBuilder::BuildParallel()
+void BvhBuilder::BuildParallel()
 {
     if (m_buildConfig.radixSortScanLevel > 0)
     {
@@ -4258,7 +4221,7 @@ void GpuBvhBuilder::BuildParallel()
 
 // =====================================================================================================================
 // Executes the appropriate exclusive scan shader depending on the number of elements
-void GpuBvhBuilder::ScanExclusiveAdd(
+void BvhBuilder::ScanExclusiveAdd(
     uint32 inOutArrayOffset,  // Scratch offset of the input/output array buffer
     uint32 numElems)          // Number of elements
 {
@@ -4303,7 +4266,7 @@ void GpuBvhBuilder::ScanExclusiveAdd(
 
 // =====================================================================================================================
 // Executes the work group exclusive scan shader
-void GpuBvhBuilder::ScanExclusiveAddOneLevel(
+void BvhBuilder::ScanExclusiveAddOneLevel(
     uint32 inOutArrayOffset,  // Scratch offset of the input/output array buffer
     uint32 numElems,          // Number of elements
     uint32 numWorkGroups)     // Number of work groups
@@ -4332,7 +4295,7 @@ void GpuBvhBuilder::ScanExclusiveAddOneLevel(
 
 // =====================================================================================================================
 // Executes the partial scan shader
-void GpuBvhBuilder::ScanExclusiveAddPartial(
+void BvhBuilder::ScanExclusiveAddPartial(
     uint32 inOutArrayOffset,  // Scratch offset of the input/output array buffer
     uint32 partSumsOffset,    // Partial sum offset in scratch
     uint32 numElems,          // Number of elements
@@ -4365,7 +4328,7 @@ void GpuBvhBuilder::ScanExclusiveAddPartial(
 
 // =====================================================================================================================
 // Executes the partial sum distribution shader
-void GpuBvhBuilder::ScanExclusiveDistributeSums(
+void BvhBuilder::ScanExclusiveDistributeSums(
     uint32 inOutArrayOffset,  // Scratch offset of the input/output array buffer
     uint32 partSumsOffset,    // Partial sum offset in scratch
     uint32 numElems,          // Number of elements
@@ -4397,7 +4360,7 @@ void GpuBvhBuilder::ScanExclusiveDistributeSums(
 
 // =====================================================================================================================
 // Executes the two level exclusive scan pass
-void GpuBvhBuilder::ScanExclusiveAddTwoLevel(
+void BvhBuilder::ScanExclusiveAddTwoLevel(
     uint32 inOutArrayOffset,  // Scratch offset of the input/output array buffer
     uint32 numElems)          // Number of elements
 {
@@ -4436,7 +4399,7 @@ void GpuBvhBuilder::ScanExclusiveAddTwoLevel(
 
 // =====================================================================================================================
 // Executes the three level exclusive scan pass
-void GpuBvhBuilder::ScanExclusiveAddThreeLevel(
+void BvhBuilder::ScanExclusiveAddThreeLevel(
     uint32 inOutArrayOffset,  // Scratch offset of the input/output array buffer
     uint32 numElems)          // Number of elements
 {
@@ -4486,7 +4449,7 @@ void GpuBvhBuilder::ScanExclusiveAddThreeLevel(
 
 // =====================================================================================================================
 // Executes the DLB exclusive scan pass
-void GpuBvhBuilder::ScanExclusiveAddDLB(
+void BvhBuilder::ScanExclusiveAddDLB(
     uint32 inOutArrayOffset,  // Scratch offset of the input/output array buffer
     uint32 numElems)          // Number of elements
 {
@@ -4537,7 +4500,7 @@ void GpuBvhBuilder::ScanExclusiveAddDLB(
 
 // =====================================================================================================================
 // Binds the pipeline that corresponds with the provided compute shader type
-void GpuBvhBuilder::BindPipeline(
+void BvhBuilder::BindPipeline(
     InternalRayTracingCsType type) // Ray Tracing pipeline type
 {
     const Pal::IPipeline* pPipeline = m_pDevice->GetInternalPipeline(type, m_buildSettings, m_buildSettingsHash);
@@ -4556,7 +4519,7 @@ void GpuBvhBuilder::BindPipeline(
 
 // =====================================================================================================================
 // Writes the provided entries into the compute shader user data slots
-uint32 GpuBvhBuilder::WriteUserDataEntries(
+uint32 BvhBuilder::WriteUserDataEntries(
     const void* pEntries,    // User data entries
     uint32      numEntries,  // Number of entries
     uint32      entryOffset) // Offset of the first entry
@@ -4566,7 +4529,7 @@ uint32 GpuBvhBuilder::WriteUserDataEntries(
 
 // =====================================================================================================================
 // Writes a gpu virtual address for a buffer into the compute shader user data slots
-uint32 GpuBvhBuilder::WriteBufferVa(
+uint32 BvhBuilder::WriteBufferVa(
     gpusize virtualAddress, // GPUVA of the buffer
     uint32  entryOffset)    // Offset of the first entry
 {
@@ -4575,7 +4538,7 @@ uint32 GpuBvhBuilder::WriteBufferVa(
 
 // =====================================================================================================================
 // Helper function to that calculates the number of primitives after applying the triangle split factor
-uint32 GpuBvhBuilder::NumPrimitivesAfterSplit(
+uint32 BvhBuilder::NumPrimitivesAfterSplit(
     uint32 primitiveCount, // Number of primitives
     float  splitFactor)    // Number of triangle split factor
 {
@@ -4584,7 +4547,7 @@ uint32 GpuBvhBuilder::NumPrimitivesAfterSplit(
 
 // =====================================================================================================================
 // Calculates the optimal number of thread groups to be launched based on the current hardware being run
-uint32 GpuBvhBuilder::GetOptimalNumThreadGroups(
+uint32 BvhBuilder::GetOptimalNumThreadGroups(
     uint32 threadGroupSize) // Calculate number of thread groups to launch based on thread group size
 {
     const auto*  pProps        = &m_deviceProps.gfxipProperties.shaderCore;
@@ -4594,7 +4557,7 @@ uint32 GpuBvhBuilder::GetOptimalNumThreadGroups(
 }
 
 // =====================================================================================================================
-uint32 GpuBvhBuilder::WriteDestBuffers(
+uint32 BvhBuilder::WriteDestBuffers(
     uint32 entryOffset) // Offset of the first entry
 {
     // Set output buffer
@@ -4610,7 +4573,7 @@ uint32 GpuBvhBuilder::WriteDestBuffers(
 }
 
 // =====================================================================================================================
-uint32 GpuBvhBuilder::BuildModeFlags()
+uint32 BvhBuilder::BuildModeFlags()
 {
     uint32 buildModeFlags = 0;
 

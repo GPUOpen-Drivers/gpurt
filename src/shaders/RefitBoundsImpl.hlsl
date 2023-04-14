@@ -30,10 +30,12 @@ void RefitBoundsImpl(
     uint                numActivePrims,
     uint                baseFlagsOffset,
     uint                baseScratchNodesOffset,
+    uint                unsortedNodesBaseOffset,
     uint                sortedPrimIndicesOffset,
     uint                doCollapse,
     uint                doTriangleSplitting,
     uint                noCopySortedNodes,
+    uint                enableEarlyPairCompression,
     uint                enablePairCompression,
     uint                enablePairCostCheck,
     uint                splitBoxesOffset,
@@ -47,7 +49,8 @@ void RefitBoundsImpl(
     int4                reservedUint4,
     uint                enableInstancePrimCount)
 {
-    if (enablePairCompression && (primIndex == 0) && (numActivePrims == 1))
+    const bool doLatePairCompression = enablePairCompression && (!enableEarlyPairCompression);
+    if (doLatePairCompression && (primIndex == 0) && (numActivePrims == 1))
     {
         // Ensure that a batch index is written out for single-primitive acceleration structures.
         WriteScratchBatchIndex(numBatchesOffset, baseBatchIndicesOffset, 0);
@@ -112,16 +115,12 @@ void RefitBoundsImpl(
             {
                 const bool isLeafNode = IsLeafNode(rc, numActivePrims);
 
-                if (doTriangleSplitting && isLeafNode)
-                {
-                    bboxRightChild =
-                        ScratchBuffer.Load<BoundingBox>(splitBoxesOffset +
-                                                        sizeof(BoundingBox) * rightNode.splitBox_or_nodePointer);
-                }
-                else
-                {
-                    bboxRightChild = GetScratchNodeBoundingBox(rightNode);
-                }
+                bboxRightChild = FetchScratchNodeBoundingBox(rightNode,
+                                                             isLeafNode,
+                                                             doTriangleSplitting,
+                                                             splitBoxesOffset,
+                                                             enableEarlyPairCompression,
+                                                             unsortedNodesBaseOffset);
 
                 rightCost = isLeafNode ? FetchScratchLeafNodeCost(rightNode) : FetchScratchInternalNodeCost(rightNode);
                 numMortonCells += isLeafNode ? 1 : rightNode.splitBox_or_nodePointer;
@@ -131,16 +130,12 @@ void RefitBoundsImpl(
             {
                 const bool isLeafNode = IsLeafNode(lc, numActivePrims);
 
-                if (doTriangleSplitting && isLeafNode)
-                {
-                    bboxLeftChild =
-                        ScratchBuffer.Load<BoundingBox>(splitBoxesOffset +
-                                                        sizeof(BoundingBox) * leftNode.splitBox_or_nodePointer);
-                }
-                else
-                {
-                    bboxLeftChild = GetScratchNodeBoundingBox(leftNode);
-                }
+                bboxLeftChild = FetchScratchNodeBoundingBox(leftNode,
+                                                            isLeafNode,
+                                                            doTriangleSplitting,
+                                                            splitBoxesOffset,
+                                                            enableEarlyPairCompression,
+                                                            unsortedNodesBaseOffset);
 
                 leftCost = isLeafNode ? FetchScratchLeafNodeCost(leftNode) : FetchScratchInternalNodeCost(leftNode);
                 numMortonCells += isLeafNode ? 1 : leftNode.splitBox_or_nodePointer;
@@ -166,7 +161,7 @@ void RefitBoundsImpl(
             float bestCost = leftCost + rightCost + Ci * mergedBoxSurfaceArea;
             bool isCollapsed = false;
 
-            if (doCollapse || enablePairCompression)
+            if (doCollapse || doLatePairCompression)
             {
                 const float splitCost    = Ci + leftCost / mergedBoxSurfaceArea + rightCost / mergedBoxSurfaceArea;
                 const float collapseCost = Ct * numTris;
@@ -181,9 +176,9 @@ void RefitBoundsImpl(
                 // Limit number of triangles collapsed in a single bounding box to MAX_COLLAPSED_TRIANGLES
                 if ((useCostCheck && (collapseCost > splitCost)) ||
                     (numTris > MAX_COLLAPSED_TRIANGLES) ||
-                    (enablePairCompression && ((collapseBothSides == false) || (parentNodeIndex == 0))))
+                    (doLatePairCompression && ((collapseBothSides == false) || (parentNodeIndex == 0))))
                 {
-                    if (enablePairCompression)
+                    if (doLatePairCompression)
                     {
                         if (leftCollapse)
                         {

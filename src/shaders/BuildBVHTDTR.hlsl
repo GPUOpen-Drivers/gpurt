@@ -69,6 +69,7 @@ struct TDArgs
 
 #include "IntersectCommon.hlsl"
 #include "BuildCommon.hlsl"
+#include "BuildCommonScratch.hlsl"
 
 groupshared uint SharedIndex;
 
@@ -214,10 +215,7 @@ uint AllocScratchNode(uint parent, BoundingBox box, TDArgs args)
     internalNode.right_or_geometryIndex = 0; // not set yet
     internalNode.sah_or_v2_or_instBasePtr = float3(0, ComputeBoxSurfaceArea(box), 0);
     internalNode.parent = parent;
-
-    {
-        internalNode.type = NODE_TYPE_BOX_FLOAT32;
-    }
+    internalNode.type = GetInternalNodeType();
 
     // Initialize box node flags to 1. These will be updated with the leaf node flags as the tree is constructed.
     internalNode.flags = 0xF | (0xF << BOX_NODE_FLAGS_BIT_STRIDE);
@@ -722,7 +720,12 @@ void WriteFp16BoxNodeChildrenTreeRefList(
 }
 
 //=====================================================================================================================
-void WriteChildrenTreeRefList(uint replaceIndex, uint startIndex, TDRefScratch ref, out BoundingBox centroidBox, TDArgs args)
+void WriteChildrenTreeRefList(
+    uint            replaceIndex,
+    uint            startIndex,
+    TDRefScratch    ref,
+    out BoundingBox centroidBox,
+    TDArgs          args)
 {
     ScratchNode node = ScratchBuffer.Load<ScratchNode>(args.BvhLeafNodeDataScratchOffset +
                                                        ref.primitiveIndex * sizeof(ScratchNode));
@@ -733,11 +736,8 @@ void WriteChildrenTreeRefList(uint replaceIndex, uint startIndex, TDRefScratch r
     InstanceDesc desc;
     if (args.EncodeArrayOfPointers != 0)
     {
-        GpuVirtualAddress addr = InstanceDescBuffer.Load<GpuVirtualAddress>(ref.primitiveIndex *
-                                                                            GPU_VIRTUAL_ADDRESS_SIZE);
-        {
-            desc = FetchInstanceDesc(addr, 0);
-        }
+        GpuVirtualAddress addr = InstanceDescBuffer.Load<GpuVirtualAddress>(ref.primitiveIndex * GPU_VIRTUAL_ADDRESS_SIZE);
+        desc = FetchInstanceDescAddr(addr);
     }
     else
     {
@@ -791,7 +791,8 @@ void BuildRefList(uint globalIndex, TDArgs args)
             ref.nodeIndex = 0;
 
             // calc centroid
-            const BoundingBox bounds = GetScratchNodeBoundingBox(leafNode);
+            // in TDTR, no TriangleSplitting or TriangleCompression
+            const BoundingBox bounds = FetchScratchNodeBoundingBox(leafNode, false, false, false, 0, 0);
 
             ref.box = bounds;
 

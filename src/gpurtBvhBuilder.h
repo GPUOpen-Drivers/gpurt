@@ -47,7 +47,15 @@ struct Constants;
 class BvhBuilder
 {
 public:
-    virtual ~BvhBuilder();
+    // Constructor for the ray tracing bvh builder class
+    explicit BvhBuilder(Pal::ICmdBuffer*             pCmdBuf,
+                        Internal::Device*      const pDevice,
+                        const Pal::DeviceProperties& deviceProps,
+                        ClientCallbacks              clientCb,
+                        const DeviceSettings&        deviceSettings);
+
+    // Destructor for the ray tracing bvh builder class
+    ~BvhBuilder();
 
     // Helper function to determine buffer size
     uint32 CalculateResultBufferInfo(
@@ -77,132 +85,8 @@ public:
         uint32 numGeometryDescs);
 
     // Builds or updates an acceleration structure and stores it in a result buffer
-    virtual void BuildRaytracingAccelerationStructure(
-        const AccelStructBuildInfo& buildInfo) = 0;
-
-protected:
-
-    // Configs that change within build calls, private to the bvh builder.
-    struct BuildConfig
-    {
-        BvhBuildMode                    buildMode;
-        BvhCpuBuildMode                 cpuBuildMode;
-
-        uint32                          numPrimitives;
-        uint32                          numLeafNodes;
-
-        // All function calls requiring Geometry/RebraidType should pass it in instead. For now leave this.
-        GeometryType                    geometryType;
-        RebraidType                     rebraidType;
-        TriangleCompressionMode         triangleCompressionMode;      // Triangle compression modes.
-        Fp16BoxNodesInBlasMode          fp16BoxNodesInBlasMode;       // Mode for which interior nodes in BLAS are FP16
-
-        // Radix sort info
-        uint32                          numHistogramElements;
-        uint32                          radixSortScanLevel;
-
-        uint32                          numMortonSizeBits;
-
-        // bvhBuilder NodeSort Heuristics
-        BvhBuilderNodeSortType          bvhBuilderNodeSortType;
-        BvhBuilderNodeSortHeuristic     bvhBuilderNodeSortHeuristic;
-        SceneBoundsCalculation          sceneCalcType;
-        bool                            topLevelBuild;
-        bool                            triangleSplitting;            // Triangle Splitting Enabled
-        bool                            collapse;                     // Collapse Enabled
-        bool                            allowTopDownBuild;            // Is accel structure top level
-                                                                      // and has top down enabled or rebraid
-        // Top down build in TLAS (topDownAllowed && prim count is not larger than max count)
-        bool                            topDownBuild;
-        bool                            noCopySortedNodes;
-        bool                            needEncodeDispatch;
-        bool                            enableEarlyPairCompression;
-        bool                            enableFastLBVH;
-    };
-
-    BvhBuilder(
-        Internal::Device*    const   pDevice,
-        const Pal::DeviceProperties& deviceProps,
-        ClientCallbacks              clientCb,
-        const DeviceSettings&        deviceSettings);
-
-    static uint32 GetLeafNodeSize(
-        const DeviceSettings& settings, const BuildConfig& config);
-
-    static uint32 GetNumHistogramElements(
-        const RadixSortConfig& config,
-        uint32                 primitiveCount);
-
-    void InitBuildConfig(
-        const AccelStructBuildInfo& buildArgs);
-
-    void UpdateBuildConfig();
-
-    bool UpdateAllowed() const
-    {
-        return Util::TestAnyFlagSet(m_buildArgs.inputs.flags, AccelStructBuildFlagAllowUpdate);
-    }
-
-    bool IsUpdate() const
-    {
-        return Util::TestAnyFlagSet(m_buildArgs.inputs.flags, AccelStructBuildFlagPerformUpdate);
-    }
-
-    gpusize HeaderBufferBaseVa() const
-    {
-        return m_buildArgs.dstAccelStructGpuAddr;
-    }
-
-    gpusize SourceHeaderBufferBaseVa() const
-    {
-        return IsUpdate() ? m_buildArgs.srcAccelStructGpuAddr : m_buildArgs.dstAccelStructGpuAddr;
-    }
-
-    gpusize ResultBufferBaseVa() const
-    {
-        PAL_ASSERT(IsUpdate() == false);
-        return m_buildArgs.dstAccelStructGpuAddr + m_metadataSizeInBytes;
-    }
-
-    gpusize SourceBufferBaseVa() const
-    {
-        PAL_ASSERT(IsUpdate() == false);
-        return SourceHeaderBufferBaseVa() + m_metadataSizeInBytes;
-    }
-
-    bool IsUpdateInPlace() const
-    {
-        return m_buildArgs.srcAccelStructGpuAddr == m_buildArgs.dstAccelStructGpuAddr;
-    }
-
-    Internal::Device*           const m_pDevice;             // GPURT device
-    ClientCallbacks                   m_clientCb;            // Function Cb table
-    const DeviceSettings&             m_deviceSettings;      // Device settings
-    BuildConfig                       m_buildConfig;         // Build info on the accel struct
-    AccelStructDataOffsets            m_resultOffsets;       // Result offsets for the build
-    AccelStructBuildInfo              m_buildArgs;           // Accel struct build arguments
-    const Pal::DeviceProperties&      m_deviceProps;         // PAL device properties
-    uint32                            m_metadataSizeInBytes; // Metadata size in bytes
-
-private:
-    GeometryType GetGeometryType(
-        const AccelStructBuildInputs inputs);
-};
-
-// =====================================================================================================================
-// Helper class used by GPURT to perform various BVH operations like building, copying, etc.
-class GpuBvhBuilder : public BvhBuilder
-{
-public:
-    // Constructor for the ray tracing bvh builder class
-    explicit GpuBvhBuilder(Pal::ICmdBuffer*             pCmdBuf,
-                           Internal::Device*            pDevice,
-                           const Pal::DeviceProperties& deviceProps,
-                           ClientCallbacks              clientCb,
-                           const DeviceSettings&        deviceSettings);
-
-    // Destructor for the ray tracing bvh builder class
-    ~GpuBvhBuilder();
+    void BuildRaytracingAccelerationStructure(
+        const AccelStructBuildInfo& buildInfo);
 
     uint32 CalculateScratchBufferInfo(
         RayTracingScratchDataOffsets* pOffsets);
@@ -238,10 +122,6 @@ public:
     void GetAccelerationStructurePrebuildInfo(
         const AccelStructBuildInputs& buildInfo,
         AccelStructPrebuildInfo*      pPrebuildInfo);
-
-    // Builds or updates an acceleration structure and stores it in a result buffer
-    void BuildRaytracingAccelerationStructure(
-        const AccelStructBuildInfo& buildInfo) override;
 
     // Performs a barrier that synchronizes any active BVH builder operations.
     void Barrier();
@@ -283,8 +163,98 @@ public:
 
 private:
 
+    // Configs that change within build calls, private to the bvh builder.
+    struct BuildConfig
+    {
+        BvhBuildMode                    buildMode;
+        BvhCpuBuildMode                 cpuBuildMode;
+
+        uint32                          numPrimitives;
+        uint32                          numLeafNodes;
+
+        // All function calls requiring Geometry/RebraidType should pass it in instead. For now leave this.
+        GeometryType                    geometryType;
+        RebraidType                     rebraidType;
+        TriangleCompressionMode         triangleCompressionMode;      // Triangle compression modes.
+        Fp16BoxNodesInBlasMode          fp16BoxNodesInBlasMode;       // Mode for which interior nodes in BLAS are FP16
+
+        // Radix sort info
+        uint32                          numHistogramElements;
+        uint32                          radixSortScanLevel;
+
+        uint32                          numMortonSizeBits;
+
+        SceneBoundsCalculation          sceneCalcType;
+        bool                            topLevelBuild;
+        bool                            triangleSplitting;            // Triangle Splitting Enabled
+        bool                            collapse;                     // Collapse Enabled
+        bool                            allowTopDownBuild;            // Is accel structure top level
+                                                                      // and has top down enabled or rebraid
+        // Top down build in TLAS (topDownAllowed && prim count is not larger than max count)
+        bool                            topDownBuild;
+        bool                            noCopySortedNodes;
+        bool                            needEncodeDispatch;
+        bool                            enableEarlyPairCompression;
+        bool                            enableFastLBVH;
+    };
+
+    BvhBuilder(
+        Internal::Device*    const   pDevice,
+        const Pal::DeviceProperties& deviceProps,
+        ClientCallbacks              clientCb,
+        const DeviceSettings&        deviceSettings);
+
+    static uint32 GetLeafNodeSize(
+        const DeviceSettings& settings, const BuildConfig& config);
+
+    static uint32 GetNumHistogramElements(
+        const RadixSortConfig& config,
+        uint32                 primitiveCount);
+
     void InitBuildConfig(
         const AccelStructBuildInfo& buildArgs);
+
+    void UpdateBuildConfig();
+
+    GeometryType GetGeometryType(
+        const AccelStructBuildInputs inputs);
+
+    bool UpdateAllowed() const
+    {
+        return Util::TestAnyFlagSet(m_buildArgs.inputs.flags, AccelStructBuildFlagAllowUpdate);
+    }
+
+    bool IsUpdate() const
+    {
+        return Util::TestAnyFlagSet(m_buildArgs.inputs.flags, AccelStructBuildFlagPerformUpdate);
+    }
+
+    gpusize HeaderBufferBaseVa() const
+    {
+        return m_buildArgs.dstAccelStructGpuAddr;
+    }
+
+    gpusize SourceHeaderBufferBaseVa() const
+    {
+        return IsUpdate() ? m_buildArgs.srcAccelStructGpuAddr : m_buildArgs.dstAccelStructGpuAddr;
+    }
+
+    gpusize ResultBufferBaseVa() const
+    {
+        PAL_ASSERT(IsUpdate() == false);
+        return m_buildArgs.dstAccelStructGpuAddr + m_metadataSizeInBytes;
+    }
+
+    gpusize SourceBufferBaseVa() const
+    {
+        PAL_ASSERT(IsUpdate() == false);
+        return SourceHeaderBufferBaseVa() + m_metadataSizeInBytes;
+    }
+
+    bool IsUpdateInPlace() const
+    {
+        return m_buildArgs.srcAccelStructGpuAddr == m_buildArgs.dstAccelStructGpuAddr;
+    }
 
     AccelStructMetadataHeader InitAccelStructMetadataHeader();
 
@@ -510,8 +480,16 @@ private:
     const char* ConvertTriCompressionTypeToString();
     const char* ConvertFp16ModeToString();
 
-    Pal::ICmdBuffer*                  m_pPalCmdBuffer;      // The associated PAL cmdbuffer
-    RayTracingScratchDataOffsets      m_scratchOffsets;     // Scratch offsets for the build
+    Internal::Device*           const m_pDevice;             // GPURT device
+    ClientCallbacks                   m_clientCb;            // Function Cb table
+    const DeviceSettings&             m_deviceSettings;      // Device settings
+    BuildConfig                       m_buildConfig;         // Build info on the accel struct
+    AccelStructDataOffsets            m_resultOffsets;       // Result offsets for the build
+    AccelStructBuildInfo              m_buildArgs;           // Accel struct build arguments
+    const Pal::DeviceProperties&      m_deviceProps;         // PAL device properties
+    uint32                            m_metadataSizeInBytes; // Metadata size in bytes
+    Pal::ICmdBuffer*                  m_pPalCmdBuffer;       // The associated PAL cmdbuffer
+    RayTracingScratchDataOffsets      m_scratchOffsets;      // Scratch offsets for the build
     CompileTimeBuildSettings          m_buildSettings;
     const RadixSortConfig             m_radixSortConfig;
     uint64                            m_emitCompactDstGpuVa;

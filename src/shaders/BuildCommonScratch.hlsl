@@ -72,36 +72,54 @@ ScratchNode FetchScratchNode(
 }
 
 //=====================================================================================================================
-BoundingBox FetchScratchNodeBoundingBox(
-    uint baseScratchNodesOffset,
-    uint nodeIndex)
+// Calculate BBox for scratch node for BVH2 builder
+static BoundingBox FetchScratchNodeBoundingBox(
+    in ScratchNode node,
+    in bool        isLeafNode,
+    in bool        doTriangleSplit,
+    in uint        splitBoxesByteOffset,
+    in bool        doTriangleCompression,
+    in uint        baseScratchNodesOffset)
 {
-    const ScratchNode scratchNode = FetchScratchNode(baseScratchNodesOffset, nodeIndex);
-
-    return GetScratchNodeBoundingBox(scratchNode);
-}
-
-//=====================================================================================================================
-BoundingBox FetchScratchNodeBoundingBoxTS(
-    uint baseScratchNodesOffset,
-    uint baseSplitBoxesOffset,
-    uint nodeIndex)
-{
-    const ScratchNode scratchNode = FetchScratchNode(baseScratchNodesOffset, nodeIndex);
-
     BoundingBox bbox;
 
     // For triangle geometry we need to generate bounding box from split boxes
-    if (IsTriangleNode(scratchNode.type))
+    if (IsTriangleNode(node.type))
     {
-        bbox = ScratchBuffer.Load<BoundingBox>(baseSplitBoxesOffset +
-                                               sizeof(BoundingBox) * scratchNode.splitBox_or_nodePointer);
+        if (doTriangleSplit && isLeafNode)
+        {
+            bbox = ScratchBuffer.Load<BoundingBox>(splitBoxesByteOffset +
+                                                   sizeof(BoundingBox) * node.splitBox_or_nodePointer);
+        }
+        else
+        {
+            // Generate the BoundingBox of given triangle node
+            bbox = GenerateTriangleBoundingBox(node.bbox_min_or_v0,
+                                               node.bbox_max_or_v1,
+                                               node.sah_or_v2_or_instBasePtr);
+
+            // if TriangleCompression is on, and this is a leaf node
+            // need to fetch the "pairedNode" (if any) and update boundingbox
+            if (doTriangleCompression && isLeafNode && (node.splitBox_or_nodePointer != INVALID_IDX))
+            {
+                BoundingBox nodeBbox = bbox;
+                ScratchNode pairedNode = FetchScratchNode(baseScratchNodesOffset,
+                                                          node.splitBox_or_nodePointer);
+
+                BoundingBox pairedNodeBbox = GenerateTriangleBoundingBox(pairedNode.bbox_min_or_v0,
+                                                                         pairedNode.bbox_max_or_v1,
+                                                                         pairedNode.sah_or_v2_or_instBasePtr);
+
+                bbox.min = min(nodeBbox.min, pairedNodeBbox.min);
+                bbox.max = max(nodeBbox.max, pairedNodeBbox.max);
+            }
+        }
     }
     else
     {
         // Internal nodes and AABB geometry encodes bounding box in scratch node
-        bbox.min = scratchNode.bbox_min_or_v0;
-        bbox.max = scratchNode.bbox_max_or_v1;
+        bbox.min = node.bbox_min_or_v0;
+        bbox.max = node.bbox_max_or_v1;
     }
 
     return bbox;
@@ -301,7 +319,9 @@ void WriteScratchNodeType(
     float3 nodeBboxMin,
     float3 nodeBboxMax)
 {
-    uint nodeType = 0;
+    uint nodeType = GetInternalNodeType();
+
+    if (nodeType == NODE_TYPE_BOX_FLOAT32)
     {
         // Parents of leaves are marked to avoid propagating FP16 throughout the entire tree
         const uint nodeTypeLeafParentFp16 = (NODE_TYPE_BOX_FLOAT16 | NODE_POINTER_MASK_MSB);
@@ -696,39 +716,29 @@ void RefitNode(
     uint numMortonCells = 0;
 
     // Right child
+    // need to fetch "other paired node" if earlyPairCompression is enabled
     {
         const bool isLeafNode = IsLeafNode(rc, args.numActivePrims);
-
-        if (args.doTriangleSplitting && isLeafNode)
-        {
-            bboxRightChild =
-                ScratchBuffer.Load<BoundingBox>(args.splitBoxesOffset +
-                                                sizeof(BoundingBox) * rightNode.splitBox_or_nodePointer);
-        }
-        else
-        {
-            bboxRightChild = GetScratchNodeBoundingBox(rightNode);
-        }
-
+        bboxRightChild = FetchScratchNodeBoundingBox(rightNode,
+                                                     isLeafNode,
+                                                     args.doTriangleSplitting,
+                                                     args.splitBoxesOffset,
+                                                     args.enableEarlyPairCompression,
+                                                     args.unsortedNodesBaseOffset);
         rightCost = isLeafNode ? FetchScratchLeafNodeCost(rightNode) : FetchScratchInternalNodeCost(rightNode);
         numMortonCells += isLeafNode ? 1 : rightNode.splitBox_or_nodePointer;
     }
 
     // Left child
+    // need to fetch "other paired node" if earlyPairCompression is enabled
     {
         const bool isLeafNode = IsLeafNode(lc, args.numActivePrims);
-
-        if (args.doTriangleSplitting && isLeafNode)
-        {
-            bboxLeftChild =
-                ScratchBuffer.Load<BoundingBox>(args.splitBoxesOffset +
-                                                sizeof(BoundingBox) * leftNode.splitBox_or_nodePointer);
-        }
-        else
-        {
-            bboxLeftChild = GetScratchNodeBoundingBox(leftNode);
-        }
-
+        bboxLeftChild = FetchScratchNodeBoundingBox(leftNode,
+                                                    isLeafNode,
+                                                    args.doTriangleSplitting,
+                                                    args.splitBoxesOffset,
+                                                    args.enableEarlyPairCompression,
+                                                    args.unsortedNodesBaseOffset);
         leftCost = isLeafNode ? FetchScratchLeafNodeCost(leftNode) : FetchScratchInternalNodeCost(leftNode);
         numMortonCells += isLeafNode ? 1 : leftNode.splitBox_or_nodePointer;
     }

@@ -66,12 +66,22 @@ struct AccelStructDataOffsets
 {
     uint32 internalNodes;       // Offset to internal box nodes
     uint32 leafNodes;           // Offset to leaf nodes
-    uint32 geometryInfo;        // Offset to geometry desc info (bottom level only)
+    uint32 geometryInfo;        // Offset to geometry desc info (bottom level acceleration structure)
     uint32 primNodePtrs;        // Offset to prim node pointers (BVH4 with triangle compression or ALLOW_UPDATE only)
 };
 
+#define ACCEL_STRUCT_OFFSETS_INTERNAL_NODES_OFFSET        0
+#define ACCEL_STRUCT_OFFSETS_LEAF_NODES_OFFSET            4
+#define ACCEL_STRUCT_OFFSETS_GEOMETRY_INFO_OFFSET         8
+#define ACCEL_STRUCT_OFFSETS_PRIM_NODE_PTRS_OFFSET       12
+#define ACCEL_STRUCT_OFFSETS_SIZE                        16
+
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_OFFSETS_INTERNAL_NODES_OFFSET == offsetof(AccelStructDataOffsets, internalNodes), "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_OFFSETS_LEAF_NODES_OFFSET == offsetof(AccelStructDataOffsets, leafNodes), "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_OFFSETS_GEOMETRY_INFO_OFFSET == offsetof(AccelStructDataOffsets, geometryInfo), "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_OFFSETS_PRIM_NODE_PTRS_OFFSET == offsetof(AccelStructDataOffsets, primNodePtrs), "");
 GPURT_STATIC_ASSERT(sizeof(AccelStructDataOffsets) == 16,
-                    "AccelStructDataOffsets size cannot change because it is embedded in AccelStructHeader.");
+    "AccelStructDataOffsets size cannot change because it is embedded in AccelStructHeader.");
 
 // =====================================================================================================================
 // Header for acceleration structure metadata
@@ -88,6 +98,23 @@ struct AccelStructMetadataHeader
     uint32 reserved2;           // Reserved
     uint32 reserved3;           // Reserved
 };
+
+#define ACCEL_STRUCT_METADATA_VA_LO_OFFSET              0
+#define ACCEL_STRUCT_METADATA_VA_HI_OFFSET              4
+#define ACCEL_STRUCT_METADATA_SIZE_OFFSET               8
+#define ACCEL_STRUCT_METADATA_RESERVED_0                12
+#define ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET       16
+#define ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET     20
+#define ACCEL_STRUCT_METADATA_RESERVED_1                24
+#define ACCEL_STRUCT_METADATA_RESERVED_2                28
+#define ACCEL_STRUCT_METADATA_RESERVED_3                32
+#define ACCEL_STRUCT_METADATA_HEADER_SIZE               36
+
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_HEADER_SIZE == sizeof(AccelStructMetadataHeader), "Acceleration structure header mismatch");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_VA_LO_OFFSET == offsetof(AccelStructMetadataHeader, addressLo), "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_VA_HI_OFFSET == offsetof(AccelStructMetadataHeader, addressHi), "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_SIZE_OFFSET == offsetof(AccelStructMetadataHeader, sizeInBytes), "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET == offsetof(AccelStructMetadataHeader, taskCounter), "");
 
 #ifdef __cplusplus
 // =====================================================================================================================
@@ -123,9 +150,9 @@ union AccelStructHeaderInfo2
 {
     struct
     {
-        uint32 compacted     : 1;   // This BVH has been compacted
-        uint32 reserved      : 1;   // Unused bits
-        uint32 reserved2     : 30;  // Unused bits
+        uint32 compacted              : 1;   // This BVH has been compacted
+        uint32 reserved               : 2;   // Unused bits
+        uint32 reserved2              : 29;  // Unused bits
     };
 
     uint32 u32All;
@@ -133,6 +160,28 @@ union AccelStructHeaderInfo2
 #else
 typedef uint32 AccelStructHeaderInfo2;
 #endif
+
+#define ACCEL_STRUCT_HEADER_INFO_TYPE_SHIFT                             0
+#define ACCEL_STRUCT_HEADER_INFO_TYPE_MASK                              0x1
+#define ACCEL_STRUCT_HEADER_INFO_BUILD_TYPE_SHIFT                       1
+#define ACCEL_STRUCT_HEADER_INFO_BUILD_TYPE_MASK                        0x1
+#define ACCEL_STRUCT_HEADER_INFO_MODE_SHIFT                             2
+#define ACCEL_STRUCT_HEADER_INFO_MODE_MASK                              0xf
+#define ACCEL_STRUCT_HEADER_INFO_TRI_COMPRESS_SHIFT                     6
+#define ACCEL_STRUCT_HEADER_INFO_TRI_COMPRESS_MASK                      0x7
+#define ACCEL_STRUCT_HEADER_INFO_FP16_BOXNODE_IN_BLAS_MODE_SHIFT        9
+#define ACCEL_STRUCT_HEADER_INFO_FP16_BOXNODE_IN_BLAS_MODE_MASK         0x3
+#define ACCEL_STRUCT_HEADER_INFO_TRIANGLE_SPLITTING_FLAGS_SHIFT         11
+#define ACCEL_STRUCT_HEADER_INFO_TRIANGLE_SPLITTING_FLAGS_MASK          0x1
+#define ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_SHIFT                    12
+#define ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_MASK                     0x1
+#define ACCEL_STRUCT_HEADER_INFO_FUSED_INSTANCE_NODE_FLAGS_SHIFT        13
+#define ACCEL_STRUCT_HEADER_INFO_FUSED_INSTANCE_NODE_FLAGS_MASK         0x1
+#define ACCEL_STRUCT_HEADER_INFO_FLAGS_SHIFT                            16
+#define ACCEL_STRUCT_HEADER_INFO_FLAGS_MASK                             0xffff
+
+#define ACCEL_STRUCT_HEADER_INFO_2_BVH_COMPACTION_FLAGS_SHIFT    0
+#define ACCEL_STRUCT_HEADER_INFO_2_BVH_COMPACTION_FLAGS_MASK     0x1
 
 // =====================================================================================================================
 // Primary acceleration structure header.
@@ -178,7 +227,76 @@ struct AccelStructHeader
     uint32                 numChildPrims2;
     uint32                 numChildPrims3;
 #endif
+
+    uint32 GetInfo()
+    {
+#ifdef __cplusplus
+        return info.u32All;
+#else
+        return info;
+#endif
+    }
+
+    uint32 GetInfo2()
+    {
+#ifdef __cplusplus
+        return info2.u32All;
+#else
+        return info2;
+#endif
+    }
+
 };
+
+#define ACCEL_STRUCT_HEADER_SIZE                               128
+#define ACCEL_STRUCT_HEADER_INFO_OFFSET                          0
+#define ACCEL_STRUCT_HEADER_METADATA_SIZE_OFFSET                 4
+#define ACCEL_STRUCT_HEADER_BYTE_SIZE_OFFSET                     8
+#define ACCEL_STRUCT_HEADER_NUM_PRIMS_OFFSET                    12
+#define ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET             16
+#define ACCEL_STRUCT_HEADER_TASK_ID_COUNTER                     20
+#define ACCEL_STRUCT_HEADER_NUM_DESCS_OFFSET                    24
+#define ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET                28
+#define ACCEL_STRUCT_HEADER_OFFSETS_OFFSET                      32
+#define ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP32_NODES_OFFSET      48
+#define ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP16_NODES_OFFSET      52
+#define ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET               56
+#define ACCEL_STRUCT_HEADER_VERSION_OFFSET                      60
+#define ACCEL_STRUCT_HEADER_UUID_LO_OFFSET                      64
+#define ACCEL_STRUCT_HEADER_UUID_HI_OFFSET                      68
+#define ACCEL_STRUCT_HEADER_RESERVED_OFFSET                     72
+#define ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET                76
+#define ACCEL_STRUCT_HEADER_INFO_2_OFFSET                       100
+#define ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET                   104
+#define ACCEL_STRUCT_HEADER_COMPACTED_BYTE_SIZE_OFFSET          108
+#define ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET              112
+
+// Acceleration structure root node starts immediately after the header
+#define ACCEL_STRUCT_ROOT_NODE_OFFSET ACCEL_STRUCT_HEADER_SIZE
+
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_SIZE == sizeof(AccelStructHeader),
+    "Acceleration structure header mismatch");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_INFO_OFFSET                    == offsetof(AccelStructHeader, info),                 "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_METADATA_SIZE_OFFSET           == offsetof(AccelStructHeader, metadataSizeInBytes),  "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_BYTE_SIZE_OFFSET               == offsetof(AccelStructHeader, sizeInBytes),          "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_NUM_PRIMS_OFFSET               == offsetof(AccelStructHeader, numPrimitives),        "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET        == offsetof(AccelStructHeader, numActivePrims),       "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_TASK_ID_COUNTER                == offsetof(AccelStructHeader, taskIdCounter),        "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_NUM_DESCS_OFFSET               == offsetof(AccelStructHeader, numDescs),             "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET           == offsetof(AccelStructHeader, geometryType),         "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_OFFSETS_OFFSET                 == offsetof(AccelStructHeader, offsets),              "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP32_NODES_OFFSET == offsetof(AccelStructHeader, numInternalNodesFp32), "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP16_NODES_OFFSET == offsetof(AccelStructHeader, numInternalNodesFp16), "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET          == offsetof(AccelStructHeader, numLeafNodes),         "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_VERSION_OFFSET                 == offsetof(AccelStructHeader, accelStructVersion),   "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_UUID_LO_OFFSET                 == offsetof(AccelStructHeader, uuidLo),               "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_UUID_HI_OFFSET                 == offsetof(AccelStructHeader, uuidHi),               "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_RESERVED_OFFSET                == offsetof(AccelStructHeader, reserved),             "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET           == offsetof(AccelStructHeader, fp32RootBoundingBox),  "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_INFO_2_OFFSET                  == offsetof(AccelStructHeader, info2),                "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET              == offsetof(AccelStructHeader, nodeFlags),            "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_COMPACTED_BYTE_SIZE_OFFSET     == offsetof(AccelStructHeader, compactedSizeInBytes), "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET         == offsetof(AccelStructHeader, numChildPrims0),       "");
 
 #ifdef __cplusplus
 // =====================================================================================================================
@@ -219,6 +337,6 @@ struct RawAccelStructRdfChunkHeader
 };
 
 #ifdef __cplusplus
-};
+}
 #endif
 #endif

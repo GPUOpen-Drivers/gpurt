@@ -23,6 +23,7 @@
  *
  **********************************************************************************************************************/
 #include "Common.hlsl"
+#include "../../gpurt/gpurtDispatch.h"
 
 #define RootSig "CBV(b0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
@@ -55,36 +56,6 @@ enum ExecuteIndirectArgType : uint
 
 #define MAX_SUPPORTED_INDIRECT_COUNTERS 8
 #define MAX_SUPPORTED_BUFFER_SRD_DWORDS 4
-
-struct InitExecuteIndirectConstants
-{
-    uint  inputBytesPerDispatch;
-    uint  outputBytesPerDispatch;
-    uint  bindingArgsSize;
-    uint  maxDispatchCount;
-#if AMD_VULKAN
-    uint  indirectMode;
-    uint  dispatchDimSwizzleMode;
-    uint3 rtThreadGroupSize;
-#else
-    uint  rtThreadGroupSize;
-#endif
-    uint  unused; // Deprecated.
-    uint  pipelineCount;
-    uint  maxIterations;
-    uint  profileRayFlags;
-    uint  traceRayFunctionAddrLo;
-    uint  traceRayFunctionAddrHi;
-    uint  internalDescriptorTableVaLo;
-    uint  outputConstantsVaLo;
-    uint  outputConstantsVaHi;
-    uint  counterMode;
-    uint  counterRayIdRangeBegin;
-    uint  counterRayIdRangeEnd;
-    uint3 padding; // Padding for 16-byte alignment.
-    uint4 internalUavSrd[MAX_SUPPORTED_INDIRECT_COUNTERS];
-    uint4 accelStructTrackerSrd;
-};
 
 struct AddressRange
 {
@@ -144,18 +115,13 @@ struct IndirectCounterMetadata
 [[vk::binding(2, 0)]] RWByteAddressBuffer      InputArgBuffer  : register(u2);
 [[vk::binding(3, 0)]] RWByteAddressBuffer      OutputArgBuffer : register(u3);
 
-[[vk::binding(4, 0)]] RWStructuredBuffer<DispatchRaysInfoData>        OutputConstants       : register(u4);
+[[vk::binding(4, 0)]] RWStructuredBuffer<DispatchRaysConstantData>    OutputConstants       : register(u4);
 [[vk::binding(5, 0)]] RWStructuredBuffer<DispatchRaysDescriptorTable> OutputDescriptorTable : register(u5);
 [[vk::binding(6, 0)]] RWStructuredBuffer<IndirectCounterMetadata>     CounterMetadata       : register(u6);
 
 uint CalcDispatchDim(uint threadCount, uint tgSize)
 {
     return ((threadCount + (tgSize - 1)) / tgSize);
-}
-
-uint2 SplitUint64(uint64_t x)
-{
-    return uint2(LowPart(x), HighPart(x));
 }
 
 #if AMD_VULKAN
@@ -181,9 +147,9 @@ void InitExecuteIndirect(
             dispatchRaysDescDim = dispatchRaysDesc;
 
             // Note there is one internal constant buffer per app dispatch
-            OutputConstants[dispatchIdx].RayGridWidth  = dispatchRaysDesc.width;
-            OutputConstants[dispatchIdx].RayGridHeight = dispatchRaysDesc.height;
-            OutputConstants[dispatchIdx].RayGridDepth  = dispatchRaysDesc.depth;
+            OutputConstants[dispatchIdx].rayDispatchWidth  = dispatchRaysDesc.width;
+            OutputConstants[dispatchIdx].rayDispatchHeight = dispatchRaysDesc.height;
+            OutputConstants[dispatchIdx].rayDispatchDepth  = dispatchRaysDesc.depth;
         }
         else
         {
@@ -196,22 +162,22 @@ void InitExecuteIndirect(
 
             // Note there is one internal constant buffer per app dispatch
             // Save dispatch dims
-            OutputConstants[dispatchIdx].RayGridWidth  = dispatchRaysDesc.width;
-            OutputConstants[dispatchIdx].RayGridHeight = dispatchRaysDesc.height;
-            OutputConstants[dispatchIdx].RayGridDepth  = dispatchRaysDesc.depth;
+            OutputConstants[dispatchIdx].rayDispatchWidth  = dispatchRaysDesc.width;
+            OutputConstants[dispatchIdx].rayDispatchHeight = dispatchRaysDesc.height;
+            OutputConstants[dispatchIdx].rayDispatchDepth  = dispatchRaysDesc.depth;
 
             // Save shader table
-            OutputConstants[dispatchIdx].RayGenerationTableLow           = LowPart(dispatchRaysDesc.rayGenShaderTable.address);
-            OutputConstants[dispatchIdx].RayGenerationTableHigh          = HighPart(dispatchRaysDesc.rayGenShaderTable.address);
-            OutputConstants[dispatchIdx].MissShaderTableStartAddressLow  = LowPart(dispatchRaysDesc.missShaderTable.range.address);
-            OutputConstants[dispatchIdx].MissShaderTableStartAddressHigh = HighPart(dispatchRaysDesc.missShaderTable.range.address);
-            OutputConstants[dispatchIdx].MissShaderTableStrideInBytes    = uint(dispatchRaysDesc.missShaderTable.stride);
-            OutputConstants[dispatchIdx].HitGroupTableStartAddressLow    = LowPart(dispatchRaysDesc.hitGroupTable.range.address);
-            OutputConstants[dispatchIdx].HitGroupTableStartAddressHigh   = HighPart(dispatchRaysDesc.hitGroupTable.range.address);
-            OutputConstants[dispatchIdx].HitGroupTableStrideInBytes      = uint(dispatchRaysDesc.hitGroupTable.stride);
-            OutputConstants[dispatchIdx].CallableShaderStartAddressLow   = LowPart(dispatchRaysDesc.callableShaderTable.range.address);
-            OutputConstants[dispatchIdx].CallableShaderStartAddressHigh  = HighPart(dispatchRaysDesc.callableShaderTable.range.address);
-            OutputConstants[dispatchIdx].CallableShaderStrideInBytes     = uint(dispatchRaysDesc.callableShaderTable.stride);
+            OutputConstants[dispatchIdx].rayGenerationTableAddressLo = LowPart(dispatchRaysDesc.rayGenShaderTable.address);
+            OutputConstants[dispatchIdx].rayGenerationTableAddressHi = HighPart(dispatchRaysDesc.rayGenShaderTable.address);
+            OutputConstants[dispatchIdx].missTableBaseAddressLo      = LowPart(dispatchRaysDesc.missShaderTable.range.address);
+            OutputConstants[dispatchIdx].missTableBaseAddressHi      = HighPart(dispatchRaysDesc.missShaderTable.range.address);
+            OutputConstants[dispatchIdx].missTableStrideInBytes      = uint(dispatchRaysDesc.missShaderTable.stride);
+            OutputConstants[dispatchIdx].hitGroupTableBaseAddressLo  = LowPart(dispatchRaysDesc.hitGroupTable.range.address);
+            OutputConstants[dispatchIdx].hitGroupTableBaseAddressHi  = HighPart(dispatchRaysDesc.hitGroupTable.range.address);
+            OutputConstants[dispatchIdx].hitGroupTableStrideInBytes  = uint(dispatchRaysDesc.hitGroupTable.stride);
+            OutputConstants[dispatchIdx].callableTableBaseAddressLo  = LowPart(dispatchRaysDesc.callableShaderTable.range.address);
+            OutputConstants[dispatchIdx].callableTableBaseAddressHi  = HighPart(dispatchRaysDesc.callableShaderTable.range.address);
+            OutputConstants[dispatchIdx].callableTableStrideInBytes  = uint(dispatchRaysDesc.callableShaderTable.stride);
         }
 
         uint outputOffset = 0;
@@ -220,9 +186,9 @@ void InitExecuteIndirect(
         switch (Constants.dispatchDimSwizzleMode)
         {
         case DISPATCH_DIM_SWIZZLE_MODE_NATIVE:
-            dispatchDim.x = CalcDispatchDim(dispatchRaysDescDim.width,  Constants.rtThreadGroupSize.x);
-            dispatchDim.y = CalcDispatchDim(dispatchRaysDescDim.height, Constants.rtThreadGroupSize.y);
-            dispatchDim.z = CalcDispatchDim(dispatchRaysDescDim.depth,  Constants.rtThreadGroupSize.z);
+            dispatchDim.x = CalcDispatchDim(dispatchRaysDescDim.width,  Constants.rtThreadGroupSizeX);
+            dispatchDim.y = CalcDispatchDim(dispatchRaysDescDim.height, Constants.rtThreadGroupSizeY);
+            dispatchDim.z = CalcDispatchDim(dispatchRaysDescDim.depth,  Constants.rtThreadGroupSizeZ);
             break;
         case DISPATCH_DIM_SWIZZLE_MODE_FLATTEN_WIDTH_HEIGHT:
             {
@@ -230,14 +196,14 @@ void InitExecuteIndirect(
                 if ((dispatchRaysDescDim.width > 1) && (dispatchRaysDescDim.height > 1))
                 {
                     const uint paddedWidth  = Pow2Align(dispatchRaysDescDim.width,  8);
-                    const uint paddedHeight = Pow2Align(dispatchRaysDescDim.height, Constants.rtThreadGroupSize.x / 8);
+                    const uint paddedHeight = Pow2Align(dispatchRaysDescDim.height, Constants.rtThreadGroupSizeX / 8);
                     dispatchSize = paddedWidth * paddedHeight;
                 }
                 else
                 {
                     dispatchSize = dispatchRaysDescDim.width * dispatchRaysDescDim.height;
                 }
-                dispatchDim.x = CalcDispatchDim(dispatchSize,  Constants.rtThreadGroupSize.x);
+                dispatchDim.x = CalcDispatchDim(dispatchSize,  Constants.rtThreadGroupSizeY);
                 dispatchDim.y = dispatchRaysDescDim.depth;
                 dispatchDim.z = 1;
             }
@@ -272,35 +238,35 @@ void InitExecuteIndirect(
         // Note there is one internal constant buffer per app dispatch
         if (pipelineIdx == 0)
         {
-            DispatchRaysInfoData info = (DispatchRaysInfoData)0;
-            info.RayGridWidth                  = dispatchRaysDesc.width;
-            info.RayGridHeight                 = dispatchRaysDesc.height;
-            info.RayGridDepth                  = dispatchRaysDesc.depth;
-            info.RayGenerationTableLow         = LowPart(dispatchRaysDesc.rayGenShaderTable.address);
-            info.RayGenerationTableHigh        = HighPart(dispatchRaysDesc.rayGenShaderTable.address);
-            info.MissShaderTableStartAddressLow  = LowPart(dispatchRaysDesc.missShaderTable.range.address);
-            info.MissShaderTableStartAddressHigh = HighPart(dispatchRaysDesc.missShaderTable.range.address);
-            info.MissShaderTableStrideInBytes    = uint(dispatchRaysDesc.missShaderTable.stride);
-            info.HitGroupTableStartAddressLow    = LowPart(dispatchRaysDesc.hitGroupTable.range.address);
-            info.HitGroupTableStartAddressHigh   = HighPart(dispatchRaysDesc.hitGroupTable.range.address);
-            info.HitGroupTableStrideInBytes      = uint(dispatchRaysDesc.hitGroupTable.stride);
-            info.CallableShaderStartAddressLow   = LowPart(dispatchRaysDesc.callableShaderTable.range.address);
-            info.CallableShaderStartAddressHigh  = HighPart(dispatchRaysDesc.callableShaderTable.range.address);
-            info.CallableShaderStrideInBytes     = uint(dispatchRaysDesc.callableShaderTable.stride);
-            info.ProfileRayFlags                 = Constants.profileRayFlags;
-            info.MaxIterations                   = Constants.maxIterations;
-            info.TraceRaysGpuVaLo                = Constants.traceRayFunctionAddrLo;
-            info.TraceRaysGpuVaHi                = Constants.traceRayFunctionAddrHi;
+            DispatchRaysConstantData info = (DispatchRaysConstantData)0;
+            info.rayDispatchWidth            = dispatchRaysDesc.width;
+            info.rayDispatchHeight           = dispatchRaysDesc.height;
+            info.rayDispatchDepth            = dispatchRaysDesc.depth;
+            info.rayGenerationTableAddressLo = LowPart(dispatchRaysDesc.rayGenShaderTable.address);
+            info.rayGenerationTableAddressHi = HighPart(dispatchRaysDesc.rayGenShaderTable.address);
+            info.missTableBaseAddressLo      = LowPart(dispatchRaysDesc.missShaderTable.range.address);
+            info.missTableBaseAddressHi      = HighPart(dispatchRaysDesc.missShaderTable.range.address);
+            info.missTableStrideInBytes      = uint(dispatchRaysDesc.missShaderTable.stride);
+            info.hitGroupTableBaseAddressLo  = LowPart(dispatchRaysDesc.hitGroupTable.range.address);
+            info.hitGroupTableBaseAddressHi  = HighPart(dispatchRaysDesc.hitGroupTable.range.address);
+            info.hitGroupTableStrideInBytes  = uint(dispatchRaysDesc.hitGroupTable.stride);
+            info.callableTableBaseAddressLo  = LowPart(dispatchRaysDesc.callableShaderTable.range.address);
+            info.callableTableBaseAddressHi  = HighPart(dispatchRaysDesc.callableShaderTable.range.address);
+            info.callableTableStrideInBytes  = uint(dispatchRaysDesc.callableShaderTable.stride);
+            info.profileRayFlags             = Constants.profileRayFlags;
+            info.profileMaxIterations        = Constants.maxIterations;
+            info.traceRayGpuVaLo             = Constants.traceRayFunctionAddrLo;
+            info.traceRayGpuVaHi             = Constants.traceRayFunctionAddrHi;
 
-            info.CounterMode                     = Constants.counterMode;
-            info.RayIdRangeBegin                 = Constants.counterRayIdRangeBegin;
-            info.RayIdRangeEnd                   = Constants.counterRayIdRangeEnd;
+            info.counterMode                 = Constants.counterMode;
+            info.counterRayIdRangeBegin      = Constants.counterRayIdRangeBegin;
+            info.counterRayIdRangeEnd        = Constants.counterRayIdRangeEnd;
 
             OutputConstants[dispatchIdx] = info;
 
             // Setup constant buffer pointing to the constants filled in above
             GpuVirtualAddress constantsVa = MakeGpuVirtualAddress(Constants.outputConstantsVaLo, Constants.outputConstantsVaHi);
-            constantsVa += dispatchIdx * sizeof(DispatchRaysInfoData);
+            constantsVa += dispatchIdx * sizeof(DispatchRaysConstantData);
 
             DispatchRaysDescriptorTable table = (DispatchRaysDescriptorTable)0;
             table.staticConstants = constantsVa;
@@ -308,10 +274,10 @@ void InitExecuteIndirect(
             // Bind internal UAV for counters etc.
             if ((Constants.counterMode != 0) && (dispatchIdx < MAX_SUPPORTED_INDIRECT_COUNTERS))
             {
-                table.internalUavSrd0[0] = Constants.internalUavSrd[dispatchIdx].x;
-                table.internalUavSrd0[1] = Constants.internalUavSrd[dispatchIdx].y;
-                table.internalUavSrd0[2] = Constants.internalUavSrd[dispatchIdx].z;
-                table.internalUavSrd0[3] = Constants.internalUavSrd[dispatchIdx].w;
+                table.internalUavSrd0[0] = Constants.internalUavSrd[dispatchIdx][0];
+                table.internalUavSrd0[1] = Constants.internalUavSrd[dispatchIdx][1];
+                table.internalUavSrd0[2] = Constants.internalUavSrd[dispatchIdx][2];
+                table.internalUavSrd0[3] = Constants.internalUavSrd[dispatchIdx][3];
 
                 // Write counter metadata
                 const uint2 rayGenShaderId = LoadDwordAtAddrx2(dispatchRaysDesc.rayGenShaderTable.address);
@@ -322,10 +288,10 @@ void InitExecuteIndirect(
                 CounterMetadata[dispatchIdx].dispatchDimensionZ = dispatchRaysDesc.depth;
             }
 
-            table.accelStructTrackerSrd[0] = Constants.accelStructTrackerSrd.x;
-            table.accelStructTrackerSrd[1] = Constants.accelStructTrackerSrd.y;
-            table.accelStructTrackerSrd[2] = Constants.accelStructTrackerSrd.z;
-            table.accelStructTrackerSrd[3] = Constants.accelStructTrackerSrd.w;
+            table.accelStructTrackerSrd[0] = Constants.accelStructTrackerSrd[0];
+            table.accelStructTrackerSrd[1] = Constants.accelStructTrackerSrd[1];
+            table.accelStructTrackerSrd[2] = Constants.accelStructTrackerSrd[2];
+            table.accelStructTrackerSrd[3] = Constants.accelStructTrackerSrd[3];
 
             OutputDescriptorTable[dispatchIdx] = table;
         }
@@ -347,7 +313,7 @@ void InitExecuteIndirect(
         if (Constants.bindingArgsSize > 0)
         {
             const uint internalTableSize    = sizeof(DispatchRaysDescriptorTable);
-            const uint perDispatchTableVaLo = Constants.internalDescriptorTableVaLo + dispatchIdx * internalTableSize;
+            const uint perDispatchTableVaLo = Constants.internalTableVaLo + dispatchIdx * internalTableSize;
 
             OutputArgBuffer.Store(outputOffset, perDispatchTableVaLo);
             outputOffset += sizeof(uint);

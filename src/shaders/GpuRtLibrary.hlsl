@@ -26,12 +26,6 @@
 #ifndef _GPURT_LIBRARY_HLSL
 #define _GPURT_LIBRARY_HLSL
 
-#define RTIP1_1 1
-
-#if GPURT_BUILD_RTIP2
-#define RTIP2_0 2
-#endif
-
 // Following order matters as AccelStructTracker relies on defines from TraceRayCommon.hlsl
 #include "TraceRayCommon.hlsl"
 #include "AccelStructTracker.hlsl"
@@ -78,7 +72,7 @@ export void TraceRay1_1(
         0,
         0,
         true,
-        RTIP1_1
+        GPURT_RTIP1_1
     );
 }
 
@@ -115,7 +109,8 @@ export void TraceRayUsingRayQuery1_1(uint  accelStructLo,
                                 dirY,
                                 dirZ,
                                 tMax,
-                                RTIP1_1);
+                                GPURT_RTIP1_1
+    );
 }
 
 //=====================================================================================================================
@@ -158,7 +153,7 @@ export void TraceRayUsingHitToken1_1(
         blasPointer,
         tlasPointer,
         false,
-        RTIP1_1
+        GPURT_RTIP1_1
     );
 }
 
@@ -201,7 +196,7 @@ export void TraceRay2_0(
         0,
         0,
         true,
-        RTIP2_0
+        GPURT_RTIP2_0
     );
 }
 
@@ -239,7 +234,8 @@ export void TraceRayUsingRayQuery2_0(
                                 dirY,
                                 dirZ,
                                 tMax,
-                                RTIP2_0);
+                                GPURT_RTIP2_0
+);
 }
 
 //=====================================================================================================================
@@ -282,7 +278,7 @@ export void TraceRayUsingHitToken2_0(
         blasPointer,
         tlasPointer,
         false,
-        RTIP2_0
+        GPURT_RTIP2_0
     );
 }
 #endif
@@ -298,7 +294,7 @@ export bool RayQueryProceed1_1(
         rayQuery,
         constRayFlags,
         dispatchThreadId,
-        RTIP1_1
+        GPURT_RTIP1_1
     );
 }
 
@@ -314,7 +310,7 @@ export bool RayQueryProceed2_0(
         rayQuery,
         constRayFlags,
         dispatchThreadId,
-        RTIP2_0
+        GPURT_RTIP2_0
     );
 }
 #endif
@@ -339,7 +335,7 @@ export void TraceRayInline1_1(
                          instanceMask,
                          rayDesc,
                          dispatchThreadId,
-                         RTIP1_1);
+                         GPURT_RTIP1_1);
 }
 
 #if GPURT_BUILD_RTIP2
@@ -363,7 +359,7 @@ export void TraceRayInline2_0(
                          instanceMask,
                          rayDesc,
                          dispatchThreadId,
-                         RTIP2_0);
+                         GPURT_RTIP2_0);
 }
 #endif
 
@@ -381,7 +377,7 @@ export uint GetInstanceID(
 export uint GetInstanceIndex(
     in uint64_t instanceNodePtr) // 64-bit instance node address
 {
-    return LoadDwordAtAddr(instanceNodePtr + INSTANCE_DESC_SIZE + INSTANCE_EXTRA_INDEX_OFFSET);
+    return LoadDwordAtAddr(instanceNodePtr + INSTANCE_DESC_SIZE + RTIP1_1_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET);
 }
 
 //=====================================================================================================================
@@ -392,7 +388,10 @@ export float GetObjectToWorldTransform(
     in uint32_t col)             // column index
 {
     const uint32_t elementOffset = (row * sizeof(float4)) + (col * sizeof(float));
-    return asfloat(LoadDwordAtAddr(instanceNodePtr + INSTANCE_DESC_OBJECT_TO_WORLD_XFORM_OFFSET + elementOffset));
+    return asfloat(LoadDwordAtAddr(instanceNodePtr +
+                                   INSTANCE_DESC_SIZE +
+                                   RTIP1_1_INSTANCE_SIDEBAND_OBJECT2WORLD_OFFSET +
+                                   elementOffset));
 }
 
 //=====================================================================================================================
