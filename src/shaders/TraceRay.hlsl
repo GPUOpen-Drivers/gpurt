@@ -30,15 +30,15 @@
 #endif
 
 //=====================================================================================================================
-// Default path
 static IntersectionResult TraceRayInternal(
-    in GpuVirtualAddress topLevelBvh,               ///< Top-level acceleration structure to use
-    in uint              rayFlags,                  ///< Ray flags
-    in uint              traceRayParameters,        ///< Packed trace ray parameters
-    in RayDesc           ray,                       ///< Ray to be traced
-    in uint              rayId,                     ///< Ray ID for profiling
-    in uint              rtIpLevel                ///< HW version to determine TraceRay implementation
+    in GpuVirtualAddress topLevelBvh,             // Top-level acceleration structure to use
+    in uint              rayFlags,                // Ray flags
+    in uint              traceRayParameters,      // Packed trace ray parameters
+    in RayDesc           rayDesc,                 // Ray to be traced
+    in uint              rayId,                   // Ray ID for profiling
+    in uint              rtIpLevel                // HW version to determine TraceRay implementation
 )
+// Default path
 {
     switch (rtIpLevel)
     {
@@ -47,7 +47,7 @@ static IntersectionResult TraceRayInternal(
             topLevelBvh,
             rayFlags,
             traceRayParameters,
-            ray,
+            rayDesc,
             rayId
         );
 #if GPURT_BUILD_RTIP2
@@ -56,11 +56,10 @@ static IntersectionResult TraceRayInternal(
             topLevelBvh,
             rayFlags,
             traceRayParameters,
-            ray,
+            rayDesc,
             rayId
         );
 #endif
-
         default: return (IntersectionResult) 0;
     }
 }
@@ -110,7 +109,8 @@ static bool TraceRayCommon(
 #if DEVELOPER
     rayFlags |= DispatchRaysConstBuf.profileRayFlags;
     TraversalCounter counter;
-    uint64_t timerBegin = SampleGpuTimer();
+    uint64_t timerBegin   = SampleGpuTimer();
+    uint parentId = AmdTraceRayGetParentId();
 #endif
 
     // Capture parameters so they can be used to implement HLSL intrinsic functions.
@@ -130,13 +130,14 @@ static bool TraceRayCommon(
 
     IntersectionResult result = (IntersectionResult)0;
 
-    const GpuVirtualAddress accelStruct = MakeGpuVirtualAddress(accelStructLo, accelStructHi);
+    const GpuVirtualAddress accelStruct = FetchAccelStructBaseAddr(accelStructLo, accelStructHi);
     uint rayId = 0;
-
+    uint dynamicId  = 0;
 #if DEVELOPER
     if (EnableTraversalCounter())
     {
-        rayId = GetRayId(AmdTraceRayDispatchRaysIndex());
+        rayId     = GetRayId(AmdTraceRayDispatchRaysIndex());
+        dynamicId = AllocateRayHistoryDynamicId();
     }
 #endif
 
@@ -149,7 +150,15 @@ static bool TraceRayCommon(
 #if DEVELOPER
     if (EnableTraversalCounter())
     {
-        WriteRayHistoryTokenBegin(rayId, AmdTraceRayDispatchRaysIndex(), accelStruct, rayFlags, packedTraceParams, ray);
+        WriteRayHistoryTokenBegin(rayId,
+                                  AmdTraceRayDispatchRaysIndex(),
+                                  accelStruct,
+                                  rayFlags,
+                                  packedTraceParams,
+                                  ray,
+                                  AmdTraceRayGetStaticId(),
+                                  dynamicId,
+                                  parentId);
         WriteRayHistoryTokenTimeStamp(rayId, timerBegin);
     }
 #endif
@@ -199,12 +208,28 @@ static bool TraceRayCommon(
 
         if (result.nodeIndex != INVALID_NODE)
         {
-            WriteRayHistoryTokenEnd(rayId, uint2(result.primitiveIndex, result.geometryIndex));
+            const GpuVirtualAddress nodeAddr64 = accelStruct + ExtractNodePointerOffset(result.instNodePtr);
+            uint instNodeIndex = FetchInstanceIdx(nodeAddr64);
+
+            WriteRayHistoryTokenEnd(rayId,
+                                    uint2(result.primitiveIndex, result.geometryIndex),
+                                    instNodeIndex,
+                                    result.numIterations,
+                                    result.instanceIntersections,
+                                    result.hitkind,
+                                    result.t);
         }
         else
         {
-            WriteRayHistoryTokenEnd(rayId, uint2(~0, ~0));
+            WriteRayHistoryTokenEnd(rayId,
+                                    uint2(~0, ~0),
+                                    uint(~0),
+                                    result.numIterations,
+                                    result.instanceIntersections,
+                                    uint(~0),
+                                    (tMax - tMin));
         }
+        AmdTraceRaySetParentId(dynamicId);
 
         counter.data[TCID_NUM_RAY_BOX_TEST] = result.numRayBoxTest;
         counter.data[TCID_NUM_RAY_TRIANGLE_TEST] = result.numRayTriangleTest;
@@ -227,7 +252,7 @@ static bool TraceRayCommon(
                                                          result.geometryIndex,
                                                          instanceContribution);
 
-            const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(accelStruct, result.instNodePtr, rtIpLevel);
+            const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(accelStruct, result.instNodePtr);
 
             // Set intersection attributes
             AmdTraceRaySetHitAttributes(result.t,
@@ -350,7 +375,7 @@ static void TraceRayUsingRayQueryCommon(uint  accelStructLo,
                          AmdTraceRayDispatchRaysIndex(),
                          rtIpLevel);
 
-    const GpuVirtualAddress accelStruct = MakeGpuVirtualAddress(accelStructLo, accelStructHi);
+    const GpuVirtualAddress accelStruct = FetchAccelStructBaseAddr(accelStructLo, accelStructHi);
     const bool raySkipProcedural        = (rayQuery.rayFlags & RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES);
     const bool isValid                  = IsValidTrace(rayQuery.rayDesc, accelStruct, instanceInclusionMask, rayQuery.rayFlags, AmdTraceRayGetStaticFlags());
     bool  continueTraversal             = true;
@@ -376,7 +401,7 @@ static void TraceRayUsingRayQueryCommon(uint  accelStructLo,
             uint  status  = HIT_STATUS_IGNORE;
             uint  hitkind = 0;
 
-            const uint64_t candidateInstNodePtr64 = CalculateInstanceNodePtr64(accelStruct, rayQuery.candidate.instNodePtr, rtIpLevel);
+            const uint64_t candidateInstNodePtr64 = CalculateInstanceNodePtr64(accelStruct, rayQuery.candidate.instNodePtr);
 
             // Handle candidate hits and calling intersection/anyhit shaders
             if ((raySkipProcedural == false) && (rayQuery.candidateType != CANDIDATE_NON_OPAQUE_TRIANGLE))
@@ -492,7 +517,7 @@ static void TraceRayUsingRayQueryCommon(uint  accelStructLo,
                     }
 
                     const uint64_t committedInstNodePtr64 =
-                        CalculateInstanceNodePtr64(accelStruct, rayQuery.committed.instNodePtr, rtIpLevel);
+                        CalculateInstanceNodePtr64(accelStruct, rayQuery.committed.instNodePtr);
 
                     // Set intersection attributes
                     AmdTraceRaySetHitAttributes(rayQuery.committed.rayTCurrent,

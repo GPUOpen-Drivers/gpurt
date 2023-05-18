@@ -207,8 +207,8 @@ void CopyUnsortedScratchLeafNode(
 
     // DO NOT COPY PARENT!!!
 
-    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_TYPE_OFFSET,            unsortedNode.type);
-    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_FLAGS_OFFSET,           unsortedNode.flags);
+    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_TYPE_OFFSET, unsortedNode.type);
+    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, unsortedNode.flags_and_instanceMask);
     ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, unsortedNode.splitBox_or_nodePointer);
     ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET, unsortedNode.numPrimitivesAndDoCollapse);
 }
@@ -421,7 +421,7 @@ void SplitInternalNodeLbvh(
 
     ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_LEFT_OFFSET,  c1idx);
     ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_RIGHT_OFFSET, c2idx);
-    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_FLAGS_OFFSET, 0);
+    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, 0);
 
     const uint nodeType = GetInternalNodeType();
     ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_TYPE_OFFSET, nodeType);
@@ -453,7 +453,7 @@ void FastBuildBVH(
             ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_V2_OFFSET,             node.sah_or_v2_or_instBasePtr);
 
             ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_TYPE_OFFSET,            node.type);
-            ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_FLAGS_OFFSET,           node.flags);
+            ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, node.flags_and_instanceMask);
             ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, node.splitBox_or_nodePointer);
             ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET, node.numPrimitivesAndDoCollapse);
         }
@@ -469,7 +469,7 @@ void FastBuildBVH(
 
             ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_LEFT_OFFSET,  childLeft);
             ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_RIGHT_OFFSET, childRight);
-            ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_FLAGS_OFFSET, 0);
+            ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, 0);
 
             const uint nodeType = GetInternalNodeType();
             ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_TYPE_OFFSET, nodeType);

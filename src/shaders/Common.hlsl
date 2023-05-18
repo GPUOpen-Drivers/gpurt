@@ -55,6 +55,9 @@ struct BuiltInTriangleIntersectionAttributes
 
 #endif
 
+//=====================================================================================================================
+// static definitions
+
 #ifndef INT_MAX
 #define INT_MAX 0x7FFFFFFF
 #endif
@@ -62,11 +65,67 @@ struct BuiltInTriangleIntersectionAttributes
 #define FLT_MAX 3.402823466e+38F
 #endif
 
+// Note: log(+/-0) always produces -inf. Reverse polarity here
+#ifndef INFINITY
+#define INFINITY -log(0.0)
+#endif
+
+#define INVALID_IDX       0xffffffff
+
+// Node pointer values with special meanings
+#define INVALID_NODE      0xffffffff
+#define TERMINAL_NODE     0xfffffffe
+#define SKIP_0_3          0xfffffffd
+#define SKIP_4_7          0xfffffffb
+#define SKIP_0_7          0xfffffff9
+#define END_SEARCH        0xfffffff8
+
 #include "Extensions.hlsl"
+
+//=====================================================================================================================
+// Helper function for extracting a single bit from a 32-bit field
+inline uint bit(uint index)
+{
+    return 1u << index;
+}
+
+//=====================================================================================================================
+// Helper function for generating a 32-bit bit mask
+inline uint bits(uint bitcount)
+{
+    return (1u << bitcount) - 1;
+}
+
+//=====================================================================================================================
+// Helper function for inserting data into a src bitfield and returning the output
+static uint bitFieldInsert(
+    in uint src,
+    in uint bitOffset,
+    in uint numBits,
+    in uint data)
+{
+    src &= ~(bits(numBits) << bitOffset);
+    return (src | (data << bitOffset));
+}
+
+//=====================================================================================================================
+// Helper function for extracting data from a src bitfield
+static uint bitFieldExtract(
+    in uint src,
+    in uint bitOffset,
+    in uint numBits)
+{
+    return (src >> bitOffset) & bits(numBits);
+}
 
 // Workaround for lack of 64 bit literals and casts in glslang
 static const uint64_t OneU64 = 1;
+
+#ifdef __cplusplus
+static const float NaN = std::numeric_limits<float>::quiet_NaN();
+#else
 static const float NaN =  (0.0 / 0.0);
+#endif
 
 static const BoundingBox InvalidBoundingBox =
 {
@@ -97,6 +156,9 @@ static const BoundingBox InvalidBoundingBox =
 #define PIPELINE_FLAG_ENABLE_TRAVERSAL_CTR           0x08000000
 #define PIPELINE_FLAG_RESERVED                       0x04000000
 #define PIPELINE_FLAG_ENABLE_FUSED_INSTANCE          0x02000000
+#define PIPELINE_FLAG_RESERVED2                      0x01000000
+#define PIPELINE_FLAG_RESERVED3                      0x00800000
+#define PIPELINE_FLAG_RESERVED4                      0x00400000
 
 #define HIT_KIND_TRIANGLE_FRONT_FACE 0xFE
 #define HIT_KIND_TRIANGLE_BACK_FACE  0xFF
@@ -215,6 +277,12 @@ static uint64_t GetInstanceBasePointer(in InstanceDesc desc)
 }
 
 //=====================================================================================================================
+static uint FetchInstanceIdx(in uint64_t instanceNodePtr)
+{
+    return LoadDwordAtAddr(instanceNodePtr + INSTANCE_DESC_SIZE + RTIP1_1_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET);
+}
+
+//=====================================================================================================================
 static uint64_t PackInstanceBasePointer(GpuVirtualAddress instanceVa, uint instanceFlags, uint geometryType)
 {
     uint64_t instanceBasePointer = instanceVa >> 3;
@@ -269,7 +337,7 @@ static bool IsBoxNode16(uint pointer)
 //=====================================================================================================================
 static bool IsBoxNode(
     uint pointer
-                     )
+)
 {
     {
         return IsBoxNode16(pointer) || IsBoxNode32(pointer);
@@ -277,24 +345,14 @@ static bool IsBoxNode(
 }
 
 //=====================================================================================================================
-static bool IsBoxNodeBasedOnStaticPipelineFlags(uint pointer)
+static uint CreateRootNodePointer(
+)
 {
-    {
-        return IsBoxNode16(pointer) || IsBoxNode32(pointer);
-    }
-
+    return PackNodePointer(NODE_TYPE_BOX_FLOAT32, ACCEL_STRUCT_HEADER_SIZE);
 }
 
 //=====================================================================================================================
-static bool IsTriangleNode(
-    uint nodePtr)
-{
-    return (GetNodeType(nodePtr) <= NODE_TYPE_TRIANGLE_1);
-}
-
-//=====================================================================================================================
-static bool IsTriangleNodeBasedOnStaticPipelineFlags(
-    uint nodePtr)
+static bool IsTriangleNode(uint nodePtr)
 {
     return (GetNodeType(nodePtr) <= NODE_TYPE_TRIANGLE_1);
 }
@@ -782,14 +840,6 @@ static uint32_t GetInstanceSidebandOffset(
 
     return sidebandOffset;
 }
-
-// Node pointer values with special meanings
-#define INVALID_NODE      0xffffffff
-#define TERMINAL_NODE     0xfffffffe
-#define SKIP_0_3          0xfffffffd
-#define SKIP_4_7          0xfffffffb
-#define SKIP_0_7          0xfffffff9
-#define END_SEARCH        0xfffffff8
 
 //=====================================================================================================================
 // Node pointers with all upper bits set are sentinels: INVALID_NODE, TERMINAL_NODE, SKIP_*

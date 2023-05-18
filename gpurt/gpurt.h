@@ -84,6 +84,9 @@ enum class StaticPipelineFlag : uint32
     EnableTraversalCounter         = (1u << 27),   // Enable Traversal counters
     Reserved                       = (1u << 26),
     EnableFusedInstanceNodes       = (1u << 25),   // Enable fused instance nodes
+    Reserved2                      = (1u << 24),
+    Reserved3                      = (1u << 23),
+    Reserved4                      = (1u << 22),
 };
 // TODO #gpurt: Abstract these?  Some of these probably should come from PAL device properties
 
@@ -178,7 +181,6 @@ constexpr uint32 RayTracingBvhSrdBoxExpansionShift = 23;
 // BVH SRD Disable Box Sort constant
 constexpr uint32 RayTracingBvhSrdBoxSortDisable = 3;
 
-// #define D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT 256
 constexpr uint32 RayTraceAccelerationStructureByteAlignment = 256;
 
 // Maximum number of geometries in a bottom level acceleration structure: 2^24
@@ -886,6 +888,7 @@ struct EntryFunctionTable
     {
         const char* pProceed;
         const char* pTraceRayInline;
+        const char* pGet64BitInstanceNodePtr;
     } rayQuery;
 
     struct
@@ -997,6 +1000,39 @@ using InternalPipelineMap = Util::HashMap<
     Util::DefaultEqualFunc,
     Util::HashAllocator<Util::GenericAllocatorTracked>,
     sizeof(InternalPipelineMemoryPair) * 16>;
+
+// Ray history trace
+enum class RtPipelineType
+{
+    RayTracing,
+    Compute,
+    Graphics, // Not currently supported for ray history capture
+};
+
+struct ShaderTable
+{
+    Pal::gpusize addr;
+    Pal::gpusize size;
+    Pal::gpusize stride;
+};
+
+struct RtDispatchInfo
+{
+    uint32 dimX;
+    uint32 dimY;
+    uint32 dimZ;
+
+    uint32 pipelineShaderCount;
+    uint64 stateObjectHash;
+
+    uint32 boxSortMode;
+    uint32 usesNodePtrFlags;
+
+    ShaderTable raygenShaderTable;
+    ShaderTable missShaderTable;
+    ShaderTable hitGroupTable;
+    ShaderTable callableShaderTable;
+};
 
 #if GPURT_DEVELOPER
 // Client-defined callback to push or pop an RGP marker through the given command buffer.  These are used to
@@ -1418,6 +1454,15 @@ public:
         const AccelStructBuildInfo&   buildInfo
     )= 0;
 
+    // Writes commands into a command buffer to build multiple acceleration structures
+    //
+    // @param pCmdBuffer           [in] Command buffer where commands will be written
+    // @param buildInfo            [in] Acceleration structure build info
+    virtual void BuildAccelStructs(
+        Pal::ICmdBuffer*                       pCmdBuffer,
+        Util::Span<const AccelStructBuildInfo> buildInfo
+    )= 0;
+
     // Writes commands into a command buffer to emit post-build information about an acceleration structure
     //
     // @param pCmdBuffer           [in] Command buffer where commands will be written
@@ -1478,6 +1523,35 @@ public:
     // Returns the matching status
     virtual DataDriverMatchingIdentifierStatus CheckSerializedAccelStructVersion(
         const DataDriverMatchingIdentifier* identifier) = 0;
+
+    // Returns true if the ray history trace source is currently available for use.
+    virtual bool RayHistoryTraceAvailable() const = 0;
+
+    // Returns true if a trace is active. If true, the client should call TraceRtDispatch() for each direct dispatch
+    // and TraceIndirectRtDispatch() for each indirect dispatch.
+    virtual bool RayHistoryTraceActive() const = 0;
+
+    // Notifies GPURT about an RT dispatch, triggers a trace buffer allocation, and outputs a buffer view for the trace
+    // buffer.
+    virtual void TraceRtDispatch(
+        Pal::ICmdBuffer*       pCmdBuffer,
+        RtPipelineType         pipelineType,
+        RtDispatchInfo         dispatchInfo,
+        DispatchRaysConstants* pConstants) = 0;
+
+    // Notifies GPURT about an indirect RT dispatch similar to TraceRtDispatch(). Multiple disptches may occur in
+    // one invocation, and the max count must be provided. At most MaxSupportedIndirectCounters will be traced.
+    //
+    // @param pCounterMetadataVa [out] GPUVA pointing to an array of maxDispatchCount IndirectCounterMetadata structs.
+    //                                 This GPUVA must be used to initialize InitExecuteIndirectUserData.outputCounterMetaVa.
+    //
+    // @param pIndirectConstants [out] InitExecuteIndirectConstants for RT pipelines and DispatchRaysConstants otherwise.
+    virtual void TraceIndirectRtDispatch(
+        RtPipelineType                pipelineType,
+        RtDispatchInfo                dispatchInfo,
+        uint32                        maxDispatchCount,
+        Pal::gpusize*                 pCounterMetadataVa,
+        void*                         pIndirectConstants) = 0;
 
 protected:
 

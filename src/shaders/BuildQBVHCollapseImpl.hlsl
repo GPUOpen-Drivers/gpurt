@@ -338,15 +338,13 @@ void BuildQbvhCollapseImpl(
                     intChildNodeIdx.y = c0.right_or_geometryIndex;
 
                     intChildDstIdx.x  = childDstCount64B;
-                    compChildInfo |= (IsBoxNode(c00Type)
-                                                             ? 0x1 : 0);
+                    compChildInfo |= (IsBoxNode(c00Type) ? 0x1 : 0);
                     {
                         childDstCount64B += (IsBoxNode32(c00Type) ? 2 : (IsBoxNode16(c00Type) ? 1 : 0));
                     }
 
                     intChildDstIdx.y  = childDstCount64B;
-                    compChildInfo |= (IsBoxNode(c01Type)
-                                                             ? 0x2 : 0);
+                    compChildInfo |= (IsBoxNode(c01Type) ? 0x2 : 0);
                     {
                         childDstCount64B += (IsBoxNode32(c01Type) ? 2 : (IsBoxNode16(c01Type) ? 1 : 0));
                     }
@@ -364,15 +362,13 @@ void BuildQbvhCollapseImpl(
                     intChildNodeIdx.w = c1.right_or_geometryIndex;
 
                     intChildDstIdx.z  = childDstCount64B;
-                    compChildInfo |= (IsBoxNode(c10Type)
-                                                             ? 0x4 : 0);
+                    compChildInfo |= (IsBoxNode(c10Type) ? 0x4 : 0);
                     {
                         childDstCount64B += (IsBoxNode32(c10Type) ? 2 : (IsBoxNode16(c10Type) ? 1 : 0));
                     }
 
                     intChildDstIdx.w  = childDstCount64B;
-                    compChildInfo |= (IsBoxNode(c11Type)
-                                                             ? 0x8 : 0);
+                    compChildInfo |= (IsBoxNode(c11Type) ? 0x8 : 0);
                     {
                         childDstCount64B += (IsBoxNode32(c11Type) ? 2 : (IsBoxNode16(c11Type) ? 1 : 0));
                     }
@@ -404,7 +400,7 @@ void BuildQbvhCollapseImpl(
             // Fetch node destination offset
             const bool nodeTypesMixed = (args.fp16BoxNodesInBlasMode == LEAF_NODES_IN_BLAS_AS_FP16) ||
                                         (args.fp16BoxNodesInBlasMode == MIXED_NODES_IN_BLAS_AS_FP16);
-            const uint bvhNodeDstIdx  = (nodeTypesMixed ? task.nodeDestIndex : QBVHStackPopDestIdx(args, false, stackIndex));
+            const uint bvhNodeDstIdx  = (nodeTypesMixed ? task.nodeDestIndex : GetDestIdx(args, false, stackIndex));
 
             // Each stack writes to linear QBVH memory indexed by stack index
             const uint qbvhNodeAddr = CalcQbvhInternalNodeOffset(bvhNodeDstIdx, true);
@@ -437,6 +433,7 @@ void BuildQbvhCollapseImpl(
                     task.leafIndex = 0;
                     task.numPrimitives = 0;
                     task.parentOfCollapseNodeIndex = INVALID_IDX;
+
                     const uint parentPtr = CreateRootNodePointer();
                     const uint ptr       = WritePrimitiveNodeCollapse(args, node, parentPtr, offsets, task);
 
@@ -444,7 +441,7 @@ void BuildQbvhCollapseImpl(
 
                     WriteQbvhInternalNodeNumPrimitives(node, qbvhNodeAddr, writeAsFp16BoxNode, true);
 
-                    WriteQbvhInternalNodeFlags(CalcNodeFlags(node),
+                    WriteQbvhInternalNodeFlags(ExtractScratchNodeFlags(node.flags_and_instanceMask),
                                                qbvhNodeAddr,
                                                writeAsFp16BoxNode);
                 }
@@ -505,10 +502,7 @@ void BuildQbvhCollapseImpl(
 
                         //child0 will point to the starting of the prim list
                         DstBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[1], INVALID_IDX);
-                        nodeFlags = SetNodeFlagsField(nodeFlags, 0xFF, 1);
-
-                        const uint leftScratchNodeFlags = ExtractNodeFlagsField(node.flags, 0);
-                        nodeFlags = SetNodeFlagsField(nodeFlags, leftScratchNodeFlags, 0);
+                        nodeFlags = ExtractScratchNodeFlags(node.flags_and_instanceMask);
 
                         numPrimitives = c0.numPrimitivesAndDoCollapse >> 1;
 
@@ -520,7 +514,7 @@ void BuildQbvhCollapseImpl(
                         WriteQbvhInternalNodeBbox(args, c00, 0, qbvhNodeAddr, writeAsFp16BoxNode);
                         WriteQbvhInternalNodeBbox(args, c01, 1, qbvhNodeAddr, writeAsFp16BoxNode);
 
-                        nodeFlags = SetNodeFlagsField(nodeFlags, c0.flags, 0);
+                        nodeFlags = ExtractScratchNodeFlags(node.flags_and_instanceMask);
                     }
                 }
                 else //full node collapse
@@ -620,10 +614,8 @@ void BuildQbvhCollapseImpl(
 
                     DstBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[0], ptr0);
                     DstBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[1], INVALID_IDX);
-                    nodeFlags = SetNodeFlagsField(nodeFlags, 0xFF, 1);
 
-                    const uint leftScratchNodeFlags = ExtractNodeFlagsField(node.flags, 0);
-                    nodeFlags = SetNodeFlagsField(nodeFlags, leftScratchNodeFlags, 0);
+                    nodeFlags = ExtractScratchNodeFlags(node.flags_and_instanceMask);
                 }
             }
 
@@ -648,10 +640,10 @@ void BuildQbvhCollapseImpl(
 
                         //child2 will point to the starting of the prim list
                         DstBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[3], INVALID_IDX);
-                        nodeFlags = SetNodeFlagsField(nodeFlags, 0xFF, 3);
+                        nodeFlags = SetBoxNodeFlagsField(nodeFlags, 0xFF, 3);
 
-                        const uint rightScratchNodeFlags = ExtractNodeFlagsField(node.flags, 1);
-                        nodeFlags = SetNodeFlagsField(nodeFlags, rightScratchNodeFlags, 2);
+                        const uint rightScratchNodeFlags = ExtractScratchNodeFlags(node.flags_and_instanceMask);
+                        nodeFlags = SetBoxNodeFlagsField(nodeFlags, rightScratchNodeFlags, 2);
 
                         numPrimitives = c1.numPrimitivesAndDoCollapse >> 1;
                         //bit-packing is for the index into the 4 child pointers
@@ -662,7 +654,7 @@ void BuildQbvhCollapseImpl(
                         WriteQbvhInternalNodeBbox(args, c10, 2, qbvhNodeAddr, writeAsFp16BoxNode);
                         WriteQbvhInternalNodeBbox(args, c11, 3, qbvhNodeAddr, writeAsFp16BoxNode);
 
-                        nodeFlags = SetNodeFlagsField(nodeFlags, c1.flags, 2);
+                        nodeFlags = SetBoxNodeFlagsField(nodeFlags, c1.flags_and_instanceMask, 2);
                     }
                 }
                 else //full node collapse
@@ -762,10 +754,10 @@ void BuildQbvhCollapseImpl(
 
                     DstBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[2], ptr2);
                     DstBuffer.Store(qbvhNodeAddr + boxUsedChildOffset[3], INVALID_IDX);
-                    nodeFlags = SetNodeFlagsField(nodeFlags, 0xFF, 3);
+                    nodeFlags = SetBoxNodeFlagsField(nodeFlags, 0xFF, 3);
 
-                    const uint rightScratchNodeFlags = ExtractNodeFlagsField(node.flags, 1);
-                    nodeFlags = SetNodeFlagsField(nodeFlags, rightScratchNodeFlags, 2);
+                    const uint rightScratchNodeFlags = ExtractScratchNodeFlags(node.flags_and_instanceMask);
+                    nodeFlags = SetBoxNodeFlagsField(nodeFlags, rightScratchNodeFlags, 2);
                 }
             }
 
@@ -789,13 +781,7 @@ void BuildQbvhCollapseImpl(
 
         DstBuffer.Store3(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET, asuint(bbox.min));
         DstBuffer.Store3(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET + 12, asuint(bbox.max));
-
-        // Merge the internal node flags
-        const uint flags0 = ExtractNodeFlagsField(rootScratchNode.flags, 0);
-        const uint flags1 = ExtractNodeFlagsField(rootScratchNode.flags, 1);
-
-        const uint mergedNodeFlags = flags0 & flags1;
-        DstBuffer.Store(ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET, mergedNodeFlags);
+        DstBuffer.Store(ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET, ExtractScratchNodeFlags(rootScratchNode.flags_and_instanceMask));
 
         WriteParentPointer(args.metadataSizeInBytes,
                            rootNodePtr,

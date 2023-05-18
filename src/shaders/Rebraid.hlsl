@@ -715,8 +715,7 @@ void RebraidImpl(
                         else // no openings
                         {
                             // point instance to the root
-                            ScratchBuffer.Store<uint>(scratchNodeOffset +
-                                                      SCRATCH_NODE_NODE_POINTER_OFFSET,
+                            ScratchBuffer.Store<uint>(scratchNodeOffset + SCRATCH_NODE_NODE_POINTER_OFFSET,
                                                       CreateRootNodePointer());
 
                             if (args.enableSAHCost)

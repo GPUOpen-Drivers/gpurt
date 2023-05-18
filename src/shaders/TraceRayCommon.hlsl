@@ -30,30 +30,6 @@
 #endif
 #include "../../gpurt/gpurtDispatch.h"
 
-//=====================================================================================================================
-// Shader types
-#define SHADER_TYPE_CALLABLE    0
-#define SHADER_TYPE_MISS        1
-#define SHADER_TYPE_CHS         2
-#define SHADER_TYPE_AHS         3
-#define SHADER_TYPE_IS          4
-#define SHADER_TYPE_RGS         5
-
-// Shader priorities for continuation scheduling. Higher values mean higher scheduling precedence.
-// Reserve priority 0 as invalid value. This way, 0-initialized priorities in metadata-annotated
-// function pointers (e.g. from relocations) can be detected.
-#define SCHEDULING_PRIORITY_INVALID   0
-#define SCHEDULING_PRIORITY_RGS       1
-#define SCHEDULING_PRIORITY_CHS       2
-#define SCHEDULING_PRIORITY_MISS      2
-#define SCHEDULING_PRIORITY_TRAVERSAL 3
-// Give IS higher prio than AHS so AHS called by ReportHit
-// have a chance to run together with AHS called by Traversal.
-#define SCHEDULING_PRIORITY_AHS       4
-#define SCHEDULING_PRIORITY_IS        5
-// TODO Decide on the callable shader priority
-#define SCHEDULING_PRIORITY_CALLABLE  6
-
 // Driver reserved space ID and resource bindings
 #ifdef AMD_VULKAN
 
@@ -102,43 +78,9 @@ static uint ExtractMissShaderIndex(in uint traceRayParameters)
 }
 
 //=====================================================================================================================
-// The VPC (vector program counter) is a 64-bit value containing the lower half of an actual function pointer in its
-// lower half, and 32 metadata bits in the upper half. The metadata includes a VGPR count and a scheduling priority.
-// This function sets that scheduling priority in a given VPC, and returns the modified value.
-static uint2 GetVPCWithPriority(in uint2 vpc, in uint priority)
-{
-    uint2 retVal;
-    retVal.x = vpc.x;
-    retVal.y = (priority << 16) | (vpc.y & 0xFFFF);
-    return retVal;
-}
-
-//=====================================================================================================================
-static uint GetPriorityForShaderType(uint shaderType)
-{
-    switch (shaderType)
-    {
-    case SHADER_TYPE_CALLABLE:  return SCHEDULING_PRIORITY_CALLABLE;
-    case SHADER_TYPE_MISS:      return SCHEDULING_PRIORITY_MISS;
-    case SHADER_TYPE_CHS:       return SCHEDULING_PRIORITY_CHS;
-    case SHADER_TYPE_AHS:       return SCHEDULING_PRIORITY_AHS;
-    case SHADER_TYPE_IS:        return SCHEDULING_PRIORITY_IS;
-    case SHADER_TYPE_RGS:       return SCHEDULING_PRIORITY_RGS;
-    default:                    return SCHEDULING_PRIORITY_INVALID;
-    }
-}
-
-//=====================================================================================================================
 static uint2 GetShaderId(GpuVirtualAddress tableAddress, uint index, uint stride)
 {
     return LoadDwordAtAddrx2(tableAddress + stride * index);
-}
-
-//=====================================================================================================================
-static uint2 GetShaderIdWithPriority(GpuVirtualAddress tableAddress, uint index, uint stride, uint priority)
-{
-    uint2 shaderId = GetShaderId(tableAddress, index, stride);
-    return GetVPCWithPriority(shaderId, priority);
 }
 
 //=====================================================================================================================
@@ -195,31 +137,9 @@ static HitGroupInfo GetHitGroupInfo(
 }
 
 //=====================================================================================================================
-static uint2 GetAnyHitId(
-    in uint traceParameters,
-    in uint geometryContributionToHitGroupIndex,
-    in uint instanceContributionToHitGroupIndex)
-{
-    const uint hitGroupRecordIndex =
-        CalculateHitGroupRecordAddress(ExtractRayContributionToHitIndex(traceParameters),
-                                       ExtractMultiplierForGeometryContributionToHitIndex(traceParameters),
-                                       geometryContributionToHitGroupIndex,
-                                       instanceContributionToHitGroupIndex);
-
-    const uint offset = DispatchRaysConstBuf.hitGroupTableStrideInBytes * hitGroupRecordIndex;
-
-    const GpuVirtualAddress tableVa =
-        PackUint64(DispatchRaysConstBuf.hitGroupTableBaseAddressLo, DispatchRaysConstBuf.hitGroupTableBaseAddressHi);
-
-    const uint2 anyHitId  = LoadDwordAtAddrx2(tableVa + offset + 8);
-    return GetVPCWithPriority(anyHitId, SCHEDULING_PRIORITY_AHS);
-}
-
-//=====================================================================================================================
 static uint64_t CalculateInstanceNodePtr64(
     in uint64_t instanceBaseAddr,
-    in uint32_t instanceNodePtr,
-    in uint32_t rtIpLevel)
+    in uint32_t instanceNodePtr)
 {
     return CalculateNodeAddr64(instanceBaseAddr, instanceNodePtr);
 }
@@ -233,6 +153,43 @@ static uint GetRayId(in uint3 dispatchRaysIndex)
         (dispatchRaysIndex.z * DispatchRaysConstBuf.rayDispatchWidth * DispatchRaysConstBuf.rayDispatchHeight);
 
     return flatRayIndex;
+}
+
+//=====================================================================================================================
+static uint AllocateRayHistoryDynamicId()
+{
+    uint waveIdx;
+
+    if (WaveIsFirstLane())
+    {
+        Counters.InterlockedAdd(RAY_TRACING_COUNTER_RAY_ID_BYTE_OFFSET, 1, waveIdx);
+    }
+    return WaveReadLaneFirst(waveIdx);
+}
+
+//=====================================================================================================================
+static uint GetRayQueryMaxStackDepth(inout_param(RayQueryInternal) rayQuery)
+{
+    return rayQuery.maxStackDepthAndDynamicId & 0x0000FFFF;
+}
+
+//=====================================================================================================================
+static uint GetRayQueryDynamicId(in RayQueryInternal rayQuery)
+{
+    // Upper 16 bits is used to store rayId
+    return rayQuery.maxStackDepthAndDynamicId >> 16;
+}
+
+//=====================================================================================================================
+static void SetRayQueryMaxStackDepth(inout_param(RayQueryInternal) rayQuery, in uint value)
+{
+    rayQuery.maxStackDepthAndDynamicId = (value & 0x0000FFFF) | GetRayQueryDynamicId(rayQuery);
+}
+
+//=====================================================================================================================
+static void SetRayQueryDynamicId(inout_param(RayQueryInternal) rayQuery, in uint value)
+{
+    rayQuery.maxStackDepthAndDynamicId = (value << 16) | GetRayQueryMaxStackDepth(rayQuery);
 }
 
 //=====================================================================================================================
@@ -341,22 +298,27 @@ static void WriteRayHistoryTokenBottomLevel(
 // rayFlags          : API ray flags
 // traceRayParams    : TraceRay parameters packed into a 32-bit integer. See RayHistoryTokenBeginData.packedTraceRayParams
 // ray               : API ray description
-//
+// staticId          : Unique identifier to the shader call site.
+// dynamicId         : Unique identifier generated on traversal begin. Uniform across the wave.
+// parentId          : Unique identifier of the dynamicId for the parent traversal.
 static void WriteRayHistoryTokenBegin(
     in uint     id,
     in uint3    dispatchRaysIndex,
     in uint64_t topLevelBvh,
     in uint     rayFlags,
     in uint     traceRayParams,
-    in RayDesc  ray)
+    in RayDesc  ray,
+    in uint     staticId,
+    in uint     dynamicId,
+    in uint     parentId)
 {
     if (LogCounters(id, TRACERAY_COUNTER_MODE_RAYHISTORY_FULL) ||
         LogCounters(id, TRACERAY_COUNTER_MODE_RAYHISTORY_LIGHT))
     {
         // Write ray history begin tokens
         uint offset = WriteRayHistoryControlToken(id,
-                                                  RAY_HISTORY_TOKEN_TYPE_BEGIN,
-                                                  RAY_HISTORY_TOKEN_BEGIN_SIZE,
+                                                  RAY_HISTORY_TOKEN_TYPE_BEGIN_V2,
+                                                  RAY_HISTORY_TOKEN_BEGIN_V2_SIZE,
                                                   0);
 
         Counters.Store4(offset,
@@ -370,6 +332,8 @@ static void WriteRayHistoryTokenBegin(
 
         Counters.Store4(offset + 0x30,
             uint4(asuint(ray.Direction.x), asuint(ray.Direction.y), asuint(ray.Direction.z), asuint(ray.TMax)));
+
+        Counters.Store3(offset + 0x40, uint3(staticId, dynamicId, parentId));
     }
 }
 
@@ -381,16 +345,25 @@ static void WriteRayHistoryTokenBegin(
 //
 static void WriteRayHistoryTokenEnd(
     in uint  id,
-    in uint2 data)
+    in uint2 data,
+    in uint  instanceIndex,
+    in uint  numIterations,
+    in uint  numInstanceIntersections,
+    in uint  hitKind,
+    in float hitT)
 {
     if (LogCounters(id, TRACERAY_COUNTER_MODE_RAYHISTORY_FULL))
     {
         uint offset = WriteRayHistoryControlToken(id,
-                                                  RAY_HISTORY_TOKEN_TYPE_END,
-                                                  RAY_HISTORY_TOKEN_END_SIZE,
+                                                  RAY_HISTORY_TOKEN_TYPE_INTERSECTION_RESULT_V2,
+                                                  RAY_HISTORY_TOKEN_INTERSECTION_RESULT_V2_SIZE,
                                                   0);
 
         Counters.Store2(offset, data);
+        Counters.Store4(offset + 8, uint4(instanceIndex | (hitKind << 24),
+                                          numIterations,
+                                          numInstanceIntersections,
+                                          asuint(hitT)));
     }
 }
 
@@ -456,8 +429,8 @@ static void WriteRayHistoryTokenProceduralIntersectionStatus(
     if (LogCounters(id, TRACERAY_COUNTER_MODE_RAYHISTORY_LIGHT))
     {
         uint offset = WriteRayHistoryControlToken(id,
-                                                  RAY_HISTORY_TOKEN_TYPE_PROC_ISECT_STATUS,
-                                                  RAY_HISTORY_TOKEN_PROC_ISECT_DATA_SIZE,
+                                                  RAY_HISTORY_TOKEN_TYPE_CANDIDATE_INTERSECTION_RESULT,
+                                                  RAY_HISTORY_TOKEN_CANDIDATE_INTERSECTION_RESULT_SIZE,
                                                   status);
         Counters.Store2(offset, uint2(asuint(hitT), hitKind));
     }
@@ -513,7 +486,7 @@ static void WriteTraversalCounter(inout_param(RayQueryInternal) rayQuery, in uin
     counter.data[TCID_NUM_RAY_BOX_TEST]       = rayQuery.numRayBoxTest;
     counter.data[TCID_NUM_RAY_TRIANGLE_TEST]  = rayQuery.numRayTriangleTest;
     counter.data[TCID_NUM_ITERATION]          = rayQuery.numIterations;
-    counter.data[TCID_MAX_TRAVERSAL_DEPTH]    = rayQuery.maxStackDepth;
+    counter.data[TCID_MAX_TRAVERSAL_DEPTH]    = GetRayQueryMaxStackDepth(rayQuery);
     counter.data[TCID_NUM_ANYHIT_INVOCATION]  = 0;
     counter.data[TCID_SHADER_ID]              = 0;
     counter.data[TCID_SHADER_RECORD_INDEX]    = 0;
@@ -559,15 +532,13 @@ static void WriteDispatchCounters(
 }
 
 //=====================================================================================================================
-static void UpdateWaveTraversalStatistics(
-    in uint nodePtr
-)
+static void UpdateWaveTraversalStatistics(in uint nodePtr)
 {
     if (LogCounters(0, TRACERAY_COUNTER_MODE_DISPATCH))
     {
         const uint activeLaneCount = WaveActiveCountBits(true);
         uint4 laneCnt;
-        laneCnt.x = WaveActiveCountBits(IsBoxNode(nodePtr));
+        laneCnt.x = WaveActiveCountBits(IsBoxNodeBasedOnStaticPipelineFlags(nodePtr));
         laneCnt.y = WaveActiveCountBits(IsTriangleNode(nodePtr));
         laneCnt.z = WaveActiveCountBits(IsUserNodeInstance(nodePtr));
         laneCnt.w = WaveActiveCountBits(IsUserNodeProcedural(nodePtr));

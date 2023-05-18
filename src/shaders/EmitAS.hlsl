@@ -96,29 +96,16 @@ void EmitSerializeDesc(in uint3 globalThreadId : SV_DispatchThreadID)
     const AccelStructHeader header = FetchAccelStructHeader(SrcBuffer);
 
     const uint type = (header.info & ACCEL_STRUCT_HEADER_INFO_TYPE_MASK);
-    if (type == TOP_LEVEL)
-    {
-        // D3D12_GPU_VIRTUAL_ADDRESS * numberPrimitives
-        const uint sizeOfPtrs = GPUVA_SIZE * header.numPrimitives;
 
-        // SerializedSizeInBytes
-        uint2 serializedSizeInBytes = uint2(SERIALIZED_AS_HEADER_SIZE + sizeOfPtrs + header.sizeInBytes, 0);
-        DstBuffer.Store2(ShaderConstants.offset, serializedSizeInBytes);
+    const uint numBlasPointers = (type == TOP_LEVEL ? header.numDescs : 0);
 
-        // NumBottomLevelAccelerationStructurePointers
-        uint2 numPtrs = uint2(header.numPrimitives, 0);
-        DstBuffer.Store2(ShaderConstants.offset + 8, numPtrs);
-    }
-    else
-    {
-        // SerializedSizeInBytes
-        uint2 serializedSizeInBytes = uint2(header.sizeInBytes + SERIALIZED_AS_HEADER_SIZE, 0);
-        DstBuffer.Store2(ShaderConstants.offset, serializedSizeInBytes);
+    const uint serializedSizeInBytes = SERIALIZED_AS_HEADER_SIZE + header.sizeInBytes + GPUVA_SIZE * numBlasPointers;
 
-        // NumBottomLevelAccelerationStructurePointers
-        uint2 numPtrs = uint2(0, 0);
-        DstBuffer.Store2(ShaderConstants.offset + 8, numPtrs);
-    }
+    // SerializedSizeInBytes
+    DstBuffer.Store2(ShaderConstants.offset, uint2(serializedSizeInBytes, 0));
+
+    // NumBottomLevelAccelerationStructurePointers
+    DstBuffer.Store2(ShaderConstants.offset + 8, uint2(numBlasPointers, 0));
 }
 
 //=====================================================================================================================

@@ -25,7 +25,7 @@
 #include "Common.hlsl"
 #include "DecodeCommon.hlsl"
 
-#define RootSig "RootConstants(num32BitConstants=3, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=4, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
@@ -38,6 +38,7 @@ struct InputArgs
     uint AddressLo;
     uint AddressHi;
     uint NumThreads;
+    uint rtIpLevel;
 };
 
 [[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);

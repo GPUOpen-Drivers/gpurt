@@ -609,7 +609,7 @@ void TriangleSplittingImpl(
 
                     ScratchNode node = FetchScratchNode(args.scratchLeafNodesScratchOffset, i);
 
-                    if ((node.flags & D3D12_RAYTRACING_GEOMETRY_FLAG_NO_DUPLICATE_ANYHIT_INVOCATION) ||
+                    if ((node.flags_and_instanceMask & SCRATCH_NODE_FLAGS_DISABLE_TRIANGLE_SPLIT_MASK) ||
                         (IsNodeActive(node) == false) ||
                         (IsTriangleNode(node.type) == false))
                     {

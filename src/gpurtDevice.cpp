@@ -76,6 +76,7 @@ enum class RtIntrinsicFunction : uint32
     GetInstanceIndex,
     GetObjectToWorldTransform,
     GetWorldToObjectTransform,
+    GetRayQuery64BitInstanceNodePtr,
     _Count
 };
 
@@ -92,6 +93,7 @@ constexpr const char* FunctionTableRTIP1_1[] =
     "\01?GetInstanceIndex@@YAI_K@Z",
     "\01?GetObjectToWorldTransform@@YAM_KII@Z",
     "\01?GetWorldToObjectTransform@@YAM_KII@Z",
+    "\01?GetRayQuery64BitInstanceNodePtr@@YA_K_KI@Z",
 };
 
 #if GPURT_BUILD_RTIP2
@@ -108,6 +110,7 @@ constexpr const char* FunctionTableRTIP2_0[] =
     "\01?GetInstanceIndex@@YAI_K@Z",
     "\01?GetObjectToWorldTransform@@YAM_KII@Z",
     "\01?GetWorldToObjectTransform@@YAM_KII@Z",
+    "\01?GetRayQuery64BitInstanceNodePtr@@YA_K_KI@Z",
 };
 #endif
 
@@ -151,6 +154,8 @@ static Pal::Result QueryRayTracingEntryFunctionTableInternal(
             ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::TraceRayInline)];
         pEntryFunctionTable->rayQuery.pProceed =
             ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::RayQueryProceed)];
+        pEntryFunctionTable->rayQuery.pGet64BitInstanceNodePtr =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::GetRayQuery64BitInstanceNodePtr)];
 
         pEntryFunctionTable->intrinsic.pGetInstanceID =
             ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::GetInstanceID)];
@@ -361,7 +366,9 @@ Device::Device(
     m_pipelineMap(64, &m_allocator),
     m_tlasCaptureList(this),
     m_isTraceActive(false),
-    m_accelStructTraceSource(this)
+    m_accelStructTraceSource(this),
+    m_rayHistoryTraceSource(this),
+    m_rayHistoryTraceList(this)
 {
 }
 
@@ -406,6 +413,7 @@ Pal::Result Device::Init()
     Pal::IPlatform* pPlatform = m_info.pPalPlatform;
     GpuUtil::TraceSession* pTraceSession = pPlatform->GetTraceSession();
     pTraceSession->RegisterSource(&m_accelStructTraceSource);
+    pTraceSession->RegisterSource(&m_rayHistoryTraceSource);
 #endif
 
     // Merged encode/build only works with parallel build
@@ -918,6 +926,514 @@ void Device::NotifyTlasBuild(
 }
 
 // =====================================================================================================================
+void Device::TraceRtDispatch(
+    Pal::ICmdBuffer*                pCmdBuffer,
+    RtPipelineType                  pipelineType,
+    RtDispatchInfo                  dispatchInfo,
+    DispatchRaysConstants*          pConstants)
+{
+    Util::MutexAuto lock(&m_traceRayHistoryLock);
+
+    // TraceRayCounterRayHistoryLight
+    pConstants->constData.counterMode            = 1;
+    pConstants->constData.counterRayIdRangeBegin = 0;
+    pConstants->constData.counterRayIdRangeEnd   = 0xFFFFFFFF;
+
+    RayHistoryTraceListInfo traceListInfo = {};
+
+    // The header for all ray history chunks
+    RayHistoryRdfChunkHeader header = {};
+    header.dispatchID = m_rayHistoryTraceSource.GetDispatchID();
+
+    traceListInfo.rayHistoryRdfChunkHeader = header;
+
+    uint64 traceSizeInBytes = GetRayHistoryBufferSizeInBytes();
+    uint32 shaderTableSizeInBytes =
+        dispatchInfo.raygenShaderTable.size +
+        dispatchInfo.missShaderTable.size +
+        dispatchInfo.hitGroupTable.size;
+
+    // Ray history trace
+    // Shader table info * 3
+    // Total of Shader table data
+    uint64 totalSizeInBytes =
+        traceSizeInBytes +
+        sizeof(ShaderTableInfo) * 3 +
+        shaderTableSizeInBytes;
+
+    Pal::gpusize destGpuVa = 0;
+    ClientGpuMemHandle gpuMem = nullptr;
+    void* pMappedData = nullptr;
+
+    // Memory allocation for ray history trace buffer data
+    Pal::Result result = m_clientCb.pfnAllocateGpuMemory(m_info, totalSizeInBytes, &gpuMem, &destGpuVa, &pMappedData);
+    if (result == Pal::Result::Success)
+    {
+        // Create inlined raw buffer view
+        Pal::BufferViewInfo viewInfo = {};
+        viewInfo.gpuAddr = destGpuVa;
+        viewInfo.range = traceSizeInBytes;
+
+        Pal::IDevice* pPalDevice = m_info.pPalDevice;
+        pPalDevice->CreateUntypedBufferViewSrds(1, &viewInfo, pConstants->descriptorTable.internalUavBufferSrd);
+
+        // First data slot is reserved for token counts
+        memset(pMappedData, 0, RAY_TRACING_COUNTER_RESERVED_BYTE_SIZE);
+        traceListInfo.pRayHistoryTraceBuffer = pMappedData;
+        traceListInfo.traceBufferGpuMem      = gpuMem;
+        traceListInfo.isIndirect             = false;
+
+        AddMetadataToList(dispatchInfo, pipelineType, &traceListInfo);
+
+        uint64 runningOffsetGpuVa = 0;
+
+        traceListInfo.shaderTableRayGenOffset = traceSizeInBytes;
+        runningOffsetGpuVa = traceSizeInBytes + sizeof(ShaderTableInfo);
+
+        WriteShaderTableData(
+            pCmdBuffer,
+            runningOffsetGpuVa,
+            destGpuVa,
+            traceListInfo.shaderTableRayGenOffset,
+            pMappedData,
+            ShaderTableType::RayGen,
+            dispatchInfo.raygenShaderTable,
+            &traceListInfo.shaderTableRayGenInfo);
+
+        traceListInfo.shaderTableMissOffset =
+            traceListInfo.shaderTableRayGenOffset + dispatchInfo.raygenShaderTable.size;
+
+        runningOffsetGpuVa += dispatchInfo.raygenShaderTable.size + sizeof(ShaderTableInfo);
+
+        WriteShaderTableData(
+            pCmdBuffer,
+            runningOffsetGpuVa,
+            destGpuVa,
+            traceListInfo.shaderTableMissOffset,
+            pMappedData,
+            ShaderTableType::Miss,
+            dispatchInfo.missShaderTable,
+            &traceListInfo.shaderTableMissInfo);
+
+        traceListInfo.shaderTableHitGroupOffset =
+            traceListInfo.shaderTableMissOffset + dispatchInfo.missShaderTable.size;
+
+        runningOffsetGpuVa += dispatchInfo.missShaderTable.size + sizeof(ShaderTableInfo);
+
+        WriteShaderTableData(
+            pCmdBuffer,
+            runningOffsetGpuVa,
+            destGpuVa,
+            traceListInfo.shaderTableHitGroupOffset,
+            pMappedData,
+            ShaderTableType::HitGroup,
+            dispatchInfo.hitGroupTable,
+            &traceListInfo.shaderTableHitGroupInfo);
+
+        traceListInfo.shaderTableCallableOffset =
+            traceListInfo.shaderTableHitGroupOffset + dispatchInfo.hitGroupTable.size;
+
+        runningOffsetGpuVa += dispatchInfo.hitGroupTable.size + sizeof(ShaderTableInfo);
+
+        WriteShaderTableData(
+            pCmdBuffer,
+            runningOffsetGpuVa,
+            destGpuVa,
+            traceListInfo.shaderTableCallableOffset,
+            pMappedData,
+            ShaderTableType::Callable,
+            dispatchInfo.callableShaderTable,
+            &traceListInfo.shaderTableCallableInfo);
+
+        m_rayHistoryTraceList.PushBack(traceListInfo);
+    }
+    else
+    {
+        // Failed to allocate memory
+    }
+}
+
+// =====================================================================================================================
+void Device::AddMetadataToList(
+    RtDispatchInfo              dispatchInfo,
+    RtPipelineType              pipelineType,
+    RayHistoryTraceListInfo*    pTraceListInfo)
+{
+    CounterInfo counterInfo = {};
+    counterInfo.dispatchRayDimensionX  = dispatchInfo.dimX;
+    counterInfo.dispatchRayDimensionY  = dispatchInfo.dimY;
+    counterInfo.dispatchRayDimensionZ  = dispatchInfo.dimZ;
+    counterInfo.pipelineType           = uint32(pipelineType);
+    counterInfo.rayCounterDataSize     = GetRayHistoryBufferSizeInBytes();
+    counterInfo.counterMask            = 0;
+    counterInfo.counterStride          = sizeof(uint32);
+    counterInfo.counterMode            = 1;
+    counterInfo.counterRayIdRangeBegin = 0;
+    counterInfo.counterRayIdRangeEnd   = 0xFFFFFFFF;
+
+    if (dispatchInfo.hitGroupTable.stride > 0ULL)
+    {
+        counterInfo.hitGroupShaderRecordCount =
+            uint32(dispatchInfo.hitGroupTable.size / dispatchInfo.hitGroupTable.stride);
+    }
+    if (dispatchInfo.missShaderTable.stride > 0ULL)
+    {
+        counterInfo.missShaderRecordCount =
+            uint32(dispatchInfo.missShaderTable.size / dispatchInfo.missShaderTable.stride);
+    }
+    pTraceListInfo->counterInfo = counterInfo;
+
+    DispatchDimensions dispatchDims = {};
+    dispatchDims.dimX = dispatchInfo.dimX;
+    dispatchDims.dimY = dispatchInfo.dimY;
+    dispatchDims.dimZ = dispatchInfo.dimZ;
+
+    pTraceListInfo->dispatchDims = dispatchDims;
+
+    RayHistoryTraversalFlags traversalFlags = {};
+    traversalFlags.boxSortMode      = dispatchInfo.boxSortMode;
+    traversalFlags.usesNodePtrFlags = dispatchInfo.usesNodePtrFlags;
+
+    pTraceListInfo->traversalFlags = traversalFlags;
+}
+
+// =====================================================================================================================
+void Device::WriteShaderTableData(
+    Pal::ICmdBuffer*       pCmdBuffer,
+    uint64                 runningOffsetGpuVa,
+    Pal::gpusize           destGpuVa,
+    uint64                 runningOffset,
+    void*                  pMappedData,
+    ShaderTableType        shaderTableType,
+    ShaderTable            shaderTable,
+    ShaderTableInfo*       pOutShaderTableInfo
+    )
+{
+    // Store ShaderTableInfo in the GPU allocation so the allocation layout matches the shader table RDF chunk.
+    // It is passed directly to WriteDataChunk().
+    auto* pShaderTableInfo = static_cast<ShaderTableInfo*>(Util::VoidPtrInc(pMappedData, runningOffset));
+    pShaderTableInfo->type        = shaderTableType;
+    pShaderTableInfo->stride      = shaderTable.stride;
+    pShaderTableInfo->sizeInBytes = shaderTable.size;
+
+    pOutShaderTableInfo->type = shaderTableType;
+    pOutShaderTableInfo->stride = shaderTable.stride;
+    pOutShaderTableInfo->sizeInBytes = shaderTable.size;
+
+    Pal::MemoryCopyRegion region = {};
+    region.srcOffset = 0;
+    region.copySize  = shaderTable.size;
+
+    pCmdBuffer->CmdCopyMemoryByGpuVa(
+        shaderTable.addr,
+        destGpuVa + runningOffsetGpuVa,
+        1,
+        &region);
+}
+
+// =====================================================================================================================
+void Device::TraceIndirectRtDispatch(
+    RtPipelineType                pipelineType,
+    RtDispatchInfo                dispatchInfo,
+    uint32                        maxDispatchCount,
+    Pal::gpusize*                 pCounterMetadataVa,
+    void*                         pIndirectConstants)
+{
+    const uint32 maxSrdCount = (pipelineType != GpuRt::RtPipelineType::RayTracing) ?
+        Util::Min(maxDispatchCount, 1u) :
+        Util::Min(maxDispatchCount, GpuRt::MaxSupportedIndirectCounters);
+
+    const uint64 traceSizeInBytes = GetRayHistoryBufferSizeInBytes();
+
+    Pal::gpusize destGpuVa = 0;
+    ClientGpuMemHandle gpuMem = nullptr;
+    void* pMappedData = nullptr;
+
+    const Pal::gpusize bufferSize = maxSrdCount * (sizeof(IndirectCounterMetadata) + traceSizeInBytes);
+
+    Pal::Result result = m_clientCb.pfnAllocateGpuMemory(m_info, bufferSize, &gpuMem, &destGpuVa, &pMappedData);
+    if (result == Pal::Result::Success)
+    {
+        uint64 traceBufferGpuVa = 0;
+        void* pIndirectCounterMetadata = nullptr;
+        if (pCounterMetadataVa != nullptr)
+        {
+            // All metadata at the start then trace buffers follow
+            *pCounterMetadataVa = destGpuVa;
+
+            traceBufferGpuVa = *pCounterMetadataVa + (maxSrdCount * sizeof(IndirectCounterMetadata));
+
+            pIndirectCounterMetadata = pMappedData;
+
+            // Offset to trace buffer data
+            pMappedData = Util::VoidPtrInc(pMappedData, (maxSrdCount * sizeof(IndirectCounterMetadata)));
+        }
+        else
+        {
+            traceBufferGpuVa = destGpuVa;
+        }
+
+        for (uint32 i = 0; i < maxSrdCount; ++i)
+        {
+            RayHistoryTraceListInfo traceListInfo = {};
+
+            const uint64 runningOffset = i * traceSizeInBytes;
+
+            Pal::BufferViewInfo viewInfo = {};
+            viewInfo.gpuAddr = traceBufferGpuVa + runningOffset;
+            viewInfo.range = traceSizeInBytes;
+
+            Pal::IDevice* pPalDevice = m_info.pPalDevice;
+
+            if (pipelineType != GpuRt::RtPipelineType::RayTracing)
+            {
+                auto* pConstants = static_cast<DispatchRaysConstants*>(pIndirectConstants);
+                pPalDevice->CreateUntypedBufferViewSrds(1, &viewInfo, &pConstants->descriptorTable.internalUavBufferSrd[0]);
+
+                // TraceRayCounterRayHistoryLight
+                pConstants->constData.counterMode            = 1;
+                pConstants->constData.counterRayIdRangeBegin = 0;
+                pConstants->constData.counterRayIdRangeEnd   = 0xFFFFFFFF;
+            }
+            else
+            {
+                auto* pConstants = static_cast<InitExecuteIndirectConstants*>(pIndirectConstants);
+                pPalDevice->CreateUntypedBufferViewSrds(1, &viewInfo, &pConstants->internalUavSrd[i]);
+
+                // TraceRayCounterRayHistoryLight
+                pConstants->counterMode            = 1;
+                pConstants->counterRayIdRangeBegin = 0;
+                pConstants->counterRayIdRangeEnd   = 0xFFFFFFFF;
+            }
+
+            traceListInfo.pRayHistoryTraceBuffer             = Util::VoidPtrInc(pMappedData, runningOffset);
+
+            // First data slot is reserved for token counts
+            memset(traceListInfo.pRayHistoryTraceBuffer, 0, RAY_TRACING_COUNTER_RESERVED_BYTE_SIZE);
+
+            // On indirect dispatches, we only allocate Gpu memory once for all trace buffers, set Gpu handle to last entry
+            traceListInfo.traceBufferGpuMem                  = (i == (maxSrdCount - 1)) ? gpuMem : nullptr;
+
+            traceListInfo.counterInfo.counterMask            = 0;
+            traceListInfo.counterInfo.counterStride          = sizeof(uint32);
+            traceListInfo.counterInfo.counterMode            = 1;
+            traceListInfo.counterInfo.counterRayIdRangeBegin = 0;
+            traceListInfo.counterInfo.counterRayIdRangeEnd   = 0xFFFFFFFF;
+            traceListInfo.counterInfo.stateObjectHash        = dispatchInfo.stateObjectHash;
+            traceListInfo.counterInfo.pipelineShaderCount    = dispatchInfo.pipelineShaderCount;
+            traceListInfo.counterInfo.pipelineType           = uint32(pipelineType);
+            traceListInfo.counterInfo.rayCounterDataSize     = traceSizeInBytes;
+            traceListInfo.traversalFlags.boxSortMode         = dispatchInfo.boxSortMode;
+            traceListInfo.traversalFlags.usesNodePtrFlags    = dispatchInfo.usesNodePtrFlags;
+            traceListInfo.isIndirect                         = true;
+
+            if (pCounterMetadataVa != nullptr)
+            {
+                traceListInfo.pIndirectCounterMetadata =
+                    static_cast<IndirectCounterMetadata*>(Util::VoidPtrInc(pIndirectCounterMetadata,
+                        (i * sizeof(IndirectCounterMetadata))));
+            }
+            else
+            {
+                traceListInfo.pIndirectCounterMetadata = nullptr;
+            }
+
+            m_rayHistoryTraceList.PushBack(traceListInfo);
+        }
+    }
+    else
+    {
+        // Failed to allocate memory
+    }
+}
+
+// =====================================================================================================================
+void Device::WriteRayHistoryChunks(
+    GpuUtil::ITraceSource* pTraceSource)
+{
+#if PAL_BUILD_RDF
+    Pal::IPlatform* pPlatform = m_info.pPalPlatform;
+    GpuUtil::TraceSession* pTraceSession = pPlatform->GetTraceSession();
+#endif
+    GpuUtil::TraceChunkInfo info = {};
+    RayHistoryRdfChunkHeader header = {};
+
+    // HistoryTokensRaw fits exactly in the 16 characters of the ID and no null terminator is required
+    const char chunkId[] = "HistoryTokensRaw";
+    memcpy(info.id, chunkId, strlen(chunkId));
+
+    info.version           = GPURT_COUNTER_VERSION;
+    info.headerSize        = sizeof(GpuRt::RayHistoryRdfChunkHeader);
+    info.enableCompression = true;
+
+    uint32 traceBufferCount = m_rayHistoryTraceList.NumElements();
+    for (uint32 i = 0; i < traceBufferCount; ++i)
+    {
+        bool isIndirect = m_rayHistoryTraceList.At(i).isIndirect;
+
+        if (m_rayHistoryTraceList.At(i).pIndirectCounterMetadata)
+        {
+            auto* pIndirectCounterMetadata = m_rayHistoryTraceList.At(i).pIndirectCounterMetadata;
+            m_rayHistoryTraceList.At(i).counterInfo.dispatchRayDimensionX = pIndirectCounterMetadata->dispatchRayDimensionX;
+            m_rayHistoryTraceList.At(i).counterInfo.dispatchRayDimensionY = pIndirectCounterMetadata->dispatchRayDimensionY;
+            m_rayHistoryTraceList.At(i).counterInfo.dispatchRayDimensionZ = pIndirectCounterMetadata->dispatchRayDimensionZ;
+
+            m_rayHistoryTraceList.At(i).dispatchDims.dimX = pIndirectCounterMetadata->dispatchRayDimensionX;
+            m_rayHistoryTraceList.At(i).dispatchDims.dimY = pIndirectCounterMetadata->dispatchRayDimensionY;
+            m_rayHistoryTraceList.At(i).dispatchDims.dimZ = pIndirectCounterMetadata->dispatchRayDimensionZ;
+        }
+
+        CounterInfo counterInfo = m_rayHistoryTraceList.At(i).counterInfo;
+
+        // First two slot contain the token request and log counts
+        const char* pDispatchData = static_cast<char*>(m_rayHistoryTraceList.At(i).pRayHistoryTraceBuffer);
+
+        const uint32 tokenRequests = *(reinterpret_cast<const uint32*>(pDispatchData));
+        if (tokenRequests > 0)
+        {
+            counterInfo.rayCounterDataSize -= RAY_TRACING_COUNTER_RESERVED_BYTE_SIZE;
+
+            // if we lost tokens, adjust the counter size to skip partial counter dump
+            if (tokenRequests > counterInfo.rayCounterDataSize)
+            {
+                // determine valid counter data size
+                const uint32 validCounterSize =
+                    Util::RoundDownToMultiple(counterInfo.rayCounterDataSize, counterInfo.counterStride);
+
+                // Report partial tokens as lost
+                counterInfo.lostTokenBytes = tokenRequests - validCounterSize;
+
+                // Set valid counter size
+                counterInfo.rayCounterDataSize = validCounterSize;
+            }
+            else
+            {
+                counterInfo.rayCounterDataSize = tokenRequests;
+            }
+        }
+        else
+        {
+            counterInfo.rayCounterDataSize = 0;
+        }
+        m_rayHistoryTraceList.At(i).counterInfo = counterInfo;
+
+        header = m_rayHistoryTraceList.At(i).rayHistoryRdfChunkHeader;
+        info.pHeader = &header;
+
+        info.pData = Util::VoidPtrInc(m_rayHistoryTraceList.At(i).pRayHistoryTraceBuffer,
+            RAY_TRACING_COUNTER_RESERVED_BYTE_SIZE);
+        info.dataSize = counterInfo.rayCounterDataSize;
+
+#if PAL_BUILD_RDF
+        pTraceSession->WriteDataChunk(pTraceSource, info);
+#endif
+
+        WriteRayHistoryMetaDataChunks(
+            m_rayHistoryTraceList.At(i),
+            pTraceSource);
+
+        // Shader tables are not captured for indirect dispatches
+        if (!isIndirect)
+        {
+            WriteShaderTableChunks(
+                m_rayHistoryTraceList.At(i),
+                pTraceSource);
+        }
+
+        if (isIndirect)
+        {
+            if (m_rayHistoryTraceList.At(i).traceBufferGpuMem != nullptr)
+            {
+                m_clientCb.pfnFreeGpuMem(m_info, m_rayHistoryTraceList.At(i).traceBufferGpuMem);
+            }
+        }
+        else
+        {
+            m_clientCb.pfnFreeGpuMem(m_info, m_rayHistoryTraceList.At(i).traceBufferGpuMem);
+        }
+    }
+    m_rayHistoryTraceList.Clear();
+}
+
+// =====================================================================================================================
+void Device::WriteRayHistoryMetaDataChunks(
+    const RayHistoryTraceListInfo& traceListInfo,
+    GpuUtil::ITraceSource*         pTraceSource)
+{
+#if PAL_BUILD_RDF
+    Pal::IPlatform* pPlatform = m_info.pPalPlatform;
+    GpuUtil::TraceSession* pTraceSession = pPlatform->GetTraceSession();
+#endif
+
+    GpuUtil::TraceChunkInfo info = {};
+
+    const char chunkId[] = "HistoryMetadata";
+    memcpy(info.id, chunkId, strlen(chunkId));
+
+    info.version           = GPURT_COUNTER_VERSION;
+    info.headerSize        = sizeof(GpuRt::RayHistoryRdfChunkHeader);
+    info.pHeader           = &traceListInfo.rayHistoryRdfChunkHeader;
+    info.enableCompression = true;
+
+    RayHistoryMetadata rayHistoryMetadata = {};
+
+    rayHistoryMetadata.counterInfo.kind              = RayHistoryMetadataKind::CounterInfo;
+    rayHistoryMetadata.counterInfo.sizeInByte        = sizeof(CounterInfo);
+    rayHistoryMetadata.counter                       = traceListInfo.counterInfo;
+
+    rayHistoryMetadata.dispatchDimsInfo.kind         = RayHistoryMetadataKind::DispatchDimensions;
+    rayHistoryMetadata.dispatchDimsInfo.sizeInByte   = sizeof(DispatchDimensions);
+    rayHistoryMetadata.dispatchDims                  = traceListInfo.dispatchDims;
+
+    rayHistoryMetadata.traversalFlagsInfo.kind       = RayHistoryMetadataKind::TraversalFlags;
+    rayHistoryMetadata.traversalFlagsInfo.sizeInByte = sizeof(RayHistoryTraversalFlags);
+    rayHistoryMetadata.traversalFlags                = traceListInfo.traversalFlags;
+
+    info.pData = &rayHistoryMetadata;
+    info.dataSize = sizeof(RayHistoryMetadata);
+
+#if PAL_BUILD_RDF
+    pTraceSession->WriteDataChunk(&m_rayHistoryTraceSource, info);
+#endif
+}
+
+// =====================================================================================================================
+void Device::WriteShaderTableChunks(
+    const RayHistoryTraceListInfo& traceListInfo,
+    GpuUtil::ITraceSource*         pTraceSource)
+{
+#if PAL_BUILD_RDF
+    Pal::IPlatform* pPlatform = m_info.pPalPlatform;
+    GpuUtil::TraceSession* pTraceSession = pPlatform->GetTraceSession();
+#endif
+    RayHistoryRdfChunkHeader pRayHistoryRdfChunkHeader =
+        traceListInfo.rayHistoryRdfChunkHeader;
+
+    GpuUtil::TraceChunkInfo info = {};
+    const char chunkId[] = "ShaderTable";
+    memcpy(info.id, chunkId, strlen(chunkId));
+
+    info.version           = GPURT_COUNTER_VERSION;
+    info.headerSize        = sizeof(RayHistoryRdfChunkHeader);
+    info.pHeader           = &pRayHistoryRdfChunkHeader;
+    info.enableCompression = true;
+
+    // Point to the first shader table info (RayGen)
+    auto* pShaderTableInfo = static_cast<ShaderTableInfo*>(Util::VoidPtrInc(traceListInfo.pRayHistoryTraceBuffer,
+        GetRayHistoryBufferSizeInBytes()));
+
+    info.pData    = pShaderTableInfo;
+    info.dataSize = (sizeof(ShaderTableInfo) * 3) +
+        traceListInfo.shaderTableRayGenInfo.sizeInBytes +
+        traceListInfo.shaderTableMissInfo.sizeInBytes +
+        traceListInfo.shaderTableHitGroupInfo.sizeInBytes;
+
+#if PAL_BUILD_RDF
+    pTraceSession->WriteDataChunk(pTraceSource, info);
+#endif
+}
+
+// =====================================================================================================================
 void Device::GetSerializedAccelStructVersion(
     const void*                 pData,
     uint64_t*                   pVersion)
@@ -1130,6 +1646,32 @@ void Device::BuildAccelStruct(
 }
 
 // =====================================================================================================================
+void Device::BuildAccelStructs(
+    Pal::ICmdBuffer*                       pCmdBuffer,
+    Util::Span<const AccelStructBuildInfo> buildInfo)
+{
+    PAL_ASSERT(pCmdBuffer != nullptr);
+
+    ClientCallbacks clientCb = {};
+    SetUpClientCallbacks(&clientCb);
+
+    pCmdBuffer->CmdSaveComputeState(Pal::ComputeStateAll);
+
+    for (const AccelStructBuildInfo& info : buildInfo)
+    {
+        BvhBuilder builder(pCmdBuffer,
+                           this,
+                           *m_info.pDeviceProperties,
+                           clientCb,
+                           m_info.deviceSettings);
+
+        builder.BuildRaytracingAccelerationStructure(info);
+    }
+
+    pCmdBuffer->CmdRestoreComputeState(Pal::ComputeStateAll);
+}
+
+// =====================================================================================================================
 void Device::EmitAccelStructPostBuildInfo(
     Pal::ICmdBuffer*                pCmdBuffer,
     const AccelStructPostBuildInfo& postBuildInfo
@@ -1265,6 +1807,29 @@ void Device::CopyBufferRaw(
 #endif
 
     RGP_POP_MARKER(pCmdBuffer);
+}
+
+// =====================================================================================================================
+// Uploads CPU memory to a GPU buffer
+void Device::UploadCpuMemory(
+    Pal::ICmdBuffer* pCmdBuffer,
+    Pal::gpusize     dstBufferVa,
+    const void*      pSrcData,
+    uint32           sizeInBytes)
+{
+    const uint32 embeddedDataLimitDwords = pCmdBuffer->GetEmbeddedDataLimit();
+    const uint32 uploadSizeDwords = Util::Pow2Align(sizeInBytes, 4);
+    PAL_ASSERT(uploadSizeDwords <= embeddedDataLimitDwords);
+
+    Pal::gpusize srcGpuVa = 0;
+    uint32* pMappedData = pCmdBuffer->CmdAllocateEmbeddedData(uploadSizeDwords, 1, &srcGpuVa);
+    std::memcpy(pMappedData, pSrcData, sizeInBytes);
+
+    Pal::MemoryCopyRegion region{};
+    region.srcOffset = 0;
+    region.dstOffset = 0;
+    region.copySize = sizeInBytes;
+    pCmdBuffer->CmdCopyMemoryByGpuVa(srcGpuVa, dstBufferVa, 1, &region);
 }
 
 // =====================================================================================================================

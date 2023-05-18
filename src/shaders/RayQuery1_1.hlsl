@@ -56,7 +56,8 @@ static void PushNodes(inout_param(RayQueryInternal) rayQuery, in uint4 nodes, in
     rayQuery.stackNumEntries += rayQuery.stackPtr;
 
 #if DEVELOPER
-    rayQuery.maxStackDepth = max(rayQuery.maxStackDepth, rayQuery.stackPtr);
+    const uint maxStackDepth = GetRayQueryMaxStackDepth(rayQuery);
+    SetRayQueryMaxStackDepth(rayQuery, max(maxStackDepth, rayQuery.stackPtr));
 #endif
 }
 
@@ -152,12 +153,12 @@ static void TraceRayInlineImpl1_1(
 
     rayQuery = (RayQueryInternal)0;
 
-    const GpuVirtualAddress accelStruct = MakeGpuVirtualAddress(accelStructLo, accelStructHi);
+    const GpuVirtualAddress accelStruct = FetchAccelStructBaseAddr(accelStructLo, accelStructHi);
 
-    rayQuery.bvhLo                 = accelStructLo;
-    rayQuery.bvhHi                 = accelStructHi;
-    rayQuery.topLevelBvhLo         = accelStructLo;
-    rayQuery.topLevelBvhHi         = accelStructHi;
+    rayQuery.bvhLo                 = LowPart(accelStruct);
+    rayQuery.bvhHi                 = HighPart(accelStruct);
+    rayQuery.topLevelBvhLo         = LowPart(accelStruct);
+    rayQuery.topLevelBvhHi         = HighPart(accelStruct);
 
     // OR the templated ray flag with the dynamic ray flag function parameter
     rayQuery.rayFlags              = constRayFlags | rayFlags;
@@ -188,8 +189,7 @@ static void TraceRayInlineImpl1_1(
     if (IsValidTrace(rayQuery.rayDesc, accelStruct, instanceMask, rayQuery.rayFlags, 0))
     {
         LogAccelStruct(accelStruct);
-
-        rayQuery.currNodePtr = CreateRootNodePointer();
+        rayQuery.currNodePtr = CreateRootNodePointerBasedOnStaticPipelineFlags();
     }
     else
     {
@@ -205,7 +205,16 @@ static void TraceRayInlineImpl1_1(
     if (EnableTraversalCounter())
     {
         const uint rayId = GetRayId(dispatchThreadId);
-        WriteRayHistoryTokenBegin(rayId, dispatchThreadId, accelStruct, rayQuery.rayFlags, instanceMask, rayDesc);
+        SetRayQueryDynamicId(rayQuery, AllocateRayHistoryDynamicId());
+        WriteRayHistoryTokenBegin(rayId,
+                                  dispatchThreadId,
+                                  accelStruct,
+                                  rayQuery.rayFlags,
+                                  instanceMask,
+                                  rayDesc,
+                                  AmdTraceRayGetStaticId(),
+                                  GetRayQueryDynamicId(rayQuery),
+                                  -1);
     }
 #endif
 }
@@ -255,7 +264,7 @@ static bool RayQueryProceedImpl1_1(
     GpuVirtualAddress bvhAddress          = GetRayQueryBvhAddress(rayQuery);
 
     // BLAS root node is always fp32 regardless of mode for fp16 box nodes
-    const uint blasRootNodePtr = CreateRootNodePointer();
+    const uint blasRootNodePtr = CreateRootNodePointerBasedOnStaticPipelineFlags();
 
     const bool rayForceOpaque    = (rayQuery.rayFlags & RAY_FLAG_FORCE_OPAQUE);
     const bool rayForceNonOpaque = (rayQuery.rayFlags & RAY_FLAG_FORCE_NON_OPAQUE);
@@ -350,7 +359,6 @@ static bool RayQueryProceedImpl1_1(
         {
             rayQuery.numIterations++;
             WriteRayHistoryTokenNodePtr(rayId, rayQuery.currNodePtr);
-
             UpdateWaveTraversalStatistics(rayQuery.currNodePtr);
         }
 #endif
@@ -374,7 +382,7 @@ static bool RayQueryProceedImpl1_1(
         rayQuery.currNodePtr = INVALID_NODE;
 
         // Check if it is an internal node
-        if (IsBoxNode(rayQuery.prevNodePtr))
+        if (IsBoxNodeBasedOnStaticPipelineFlags(rayQuery.prevNodePtr))
         {
 #if DEVELOPER
             if (EnableTraversalCounter())

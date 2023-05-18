@@ -77,14 +77,15 @@ bool IsFusedInstanceNode()
 }
 
 //=====================================================================================================================
-void WriteBoundingBoxNode(
+void WriteScratchInstanceNode(
     RWByteAddressBuffer buffer,
     uint                offset,
     uint                instanceIndex,
     in BoundingBox      bbox,
-    uint                nodeFlags,
+    uint                boxNodeFlags,
     uint                instanceBasePointerLo,
     uint                instanceBasePointerHi,
+    uint                instanceMask,
     uint                numActivePrims,
     float               cost)
 {
@@ -108,13 +109,18 @@ void WriteBoundingBoxNode(
     // enabled in traversal but not during this build, we need to set the pointer to the true root of the bottom level.
     const uint rootNodePointer = IsRebraidEnabled() ? 0 : CreateRootNodePointer();
 
+    // Note, we store the instance exclusion mask (instead of inclusion) so that we can combine the
+    // masks together using a AND operation similar to boxNodeFlags.
+    const uint exclusionMask = (~instanceMask & 0xff);
+    const uint packedFlags = ((exclusionMask << 8) | boxNodeFlags);
+
     // type, flags, nodePointer, numPrimitivesAndDoCollapse
-    data = uint4(NODE_TYPE_USER_NODE_INSTANCE, nodeFlags, rootNodePointer, asuint(cost));
+    data = uint4(NODE_TYPE_USER_NODE_INSTANCE, packedFlags, rootNodePointer, asuint(cost));
     buffer.Store4(offset + SCRATCH_NODE_TYPE_OFFSET, data);
 }
 
 //=====================================================================================================================
-uint CalcTopNodeFlags(
+uint CalcTopLevelBoxNodeFlags(
     uint geometryType,
     uint instanceFlags,
     uint blasNodeFlags)
@@ -226,16 +232,11 @@ void EncodeInstances(
 
             if (numActivePrims != 0)
             {
-                boundingBox = GenerateInstanceBoundingBox(instanceBasePointer, desc.Transform);
-
+                // Fetch root bounds from BLAS header
                 const uint64_t instanceBaseAddr = GetInstanceAddr(LowPart(instanceBasePointer), HighPart(instanceBasePointer));
+                const BoundingBox rootBbox = FetchHeaderRootBoundingBox(instanceBaseAddr);
 
-                const uint4 d0 = LoadDwordAtAddrx4(instanceBaseAddr + ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET);
-                const uint2 d1 = LoadDwordAtAddrx2(instanceBaseAddr + ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET + 0x10);
-
-                BoundingBox rootBbox = (BoundingBox)0;
-                rootBbox.min = asfloat(d0.xyz);
-                rootBbox.max = asfloat(uint3(d0.w, d1.xy));
+                boundingBox = GenerateInstanceBoundingBox(desc.Transform, rootBbox);
 
                 float origSA = ComputeBoxSurfaceArea(rootBbox);
                 float transformedSA = ComputeBoxSurfaceArea(boundingBox);
@@ -261,22 +262,25 @@ void EncodeInstances(
             }
 
             const uint blasNodeFlags = FetchHeaderField(baseAddrAccelStructHeader, ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET);
-            const uint nodeFlags = CalcTopNodeFlags(geometryType,
-                                                    desc.InstanceContributionToHitGroupIndex_and_Flags >> 24,
-                                                    blasNodeFlags);
+            const uint boxNodeFlags = CalcTopLevelBoxNodeFlags(geometryType,
+                                                               desc.InstanceContributionToHitGroupIndex_and_Flags >> 24,
+                                                               blasNodeFlags);
+
+            const uint instanceMask = desc.InstanceID_and_Mask >> 24;
 
             if (isUpdate == false)
             {
                 // Write scratch node
-                WriteBoundingBoxNode(ScratchBuffer,
-                                        destScratchNodeOffset,
-                                        index,
-                                        boundingBox,
-                                        nodeFlags,
-                                        desc.accelStructureAddressLo,
-                                        desc.accelStructureAddressHiAndFlags,
-                                        numActivePrims,
-                                        cost);
+                WriteScratchInstanceNode(ScratchBuffer,
+                                         destScratchNodeOffset,
+                                         index,
+                                         boundingBox,
+                                         boxNodeFlags,
+                                         desc.accelStructureAddressLo,
+                                         desc.accelStructureAddressHiAndFlags,
+                                         instanceMask,
+                                         numActivePrims,
+                                         cost);
 
                 if (numActivePrims != 0)
                 {
@@ -333,56 +337,65 @@ void EncodeInstances(
                                        parentNodePointer);
                 }
 
+                // Compute box node count and child index in parent node
+                uint boxNodeCount = 0;
+                uint childIdx = ComputeChildIndexAndValidBoxCount(SrcBuffer,
+                                                                  tlasMetadataSize,
+                                                                  parentNodePointer,
+                                                                  nodePointer,
+                                                                  boxNodeCount);
+
+                // If even a single child node is a box node, this is a node higher up the tree. Skip queueing parent node as another
+                // leaf at the bottom of the tree will queue its parent which will handle our parent node.
+
+                // B B B B --> 4 --> Not possible
+                // B x B x --> 2 --> Not possible
+                // B L B L --> 4 --> Skip queuing
+                // L x B x --> 1 --> Skip queuing
+                // L x x x --> 0 --> Queue parent node
+                // L x L x --> 0 --> Queue parent node
+                // L L L L --> 0 --> Queue parent node
+
+                const bool pushNodeToUpdateStack = (childIdx == 0) && (boxNodeCount == 0);
+
+                if (pushNodeToUpdateStack && (IsUpdateInPlace() == false))
                 {
-                    const uint parentNodeOffset = tlasMetadataSize + ExtractNodePointerOffset(parentNodePointer);
-
-                    // Compute box node count and child index in parent node
-                    uint boxNodeCount = 0;
-                    const uint childIdx = ComputeChildIndexAndValidBoxCount(Settings, SrcBuffer, parentNodeOffset, nodePointer, boxNodeCount);
-
-                    // If even a single child node is a box node, this is a node higher up the tree. Skip queueing parent node as another
-                    // leaf at the bottom of the tree will queue its parent which will handle our parent node.
-
-                    // B B B B --> 4 --> Not possible
-                    // B x B x --> 2 --> Not possible
-                    // B L B L --> 4 --> Skip queuing
-                    // L x B x --> 1 --> Skip queuing
-                    // L x x x --> 0 --> Queue parent node
-                    // L x L x --> 0 --> Queue parent node
-                    // L L L L --> 0 --> Queue parent node
-
-                    const uint boxOffset = childIdx * FLOAT32_BBOX_STRIDE;
-                    {
-                        DstMetadata.Store<float3>(parentNodeOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET + boxOffset, boundingBox.min);
-                        DstMetadata.Store<float3>(parentNodeOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET + boxOffset, boundingBox.max);
-
-                        // The instance flags can be changed in an update, so the node flags need to be updated.
-                        const uint fieldMask = 0xFFu << (childIdx * BOX_NODE_FLAGS_BIT_STRIDE);
-                        DstMetadata.InterlockedAnd(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, ~fieldMask);
-                        DstMetadata.InterlockedOr(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET,
-                                                  nodeFlags << (childIdx * BOX_NODE_FLAGS_BIT_STRIDE));
-                    }
-
-                    // If this is the first child in the parent node with all leaf children, queue parent pointer to
-                    // stack in scratch memory
-                    if ((childIdx == 0) && (boxNodeCount == 0))
-                    {
-                        PushNodeToUpdateStack(ScratchBuffer, ShaderConstants.baseUpdateStackScratchOffset, parentNodePointer);
-
-                        if (IsUpdateInPlace() == false)
-                        {
-                            const uint4 childPointers = SrcBuffer.Load<uint4>(parentNodeOffset);
-                            DstMetadata.Store<uint4>(parentNodeOffset, childPointers);
-
-                        }
-                    }
+                    // Copy child pointers and flags to destination buffer. Note, the new instance flags
+                    // get updated atomically below
+                    CopyChildPointersAndFlags(SrcBuffer, DstMetadata, parentNodePointer, tlasMetadataSize);
                 }
+
+                uint baseBoxNodeOffset = tlasMetadataSize + ExtractNodePointerOffset(parentNodePointer);
+
+                {
+
+                    const uint childBboxOffset = FLOAT32_BOX_NODE_BB0_MIN_OFFSET + (childIdx * FLOAT32_BBOX_STRIDE);
+                    DstMetadata.Store<BoundingBox>(baseBoxNodeOffset + childBboxOffset, boundingBox);
+
+                    const uint boxNodeFlagsClearBits = ~(0xFFu << (childIdx * BOX_NODE_FLAGS_BIT_STRIDE));
+                    const uint boxNodeFlagsSetBits = (boxNodeFlags << (childIdx * BOX_NODE_FLAGS_BIT_STRIDE));
+
+                    // The instance flags can be changed in an update, so the node flags need to be updated.
+                    DstMetadata.InterlockedAnd(baseBoxNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, boxNodeFlagsClearBits);
+                    DstMetadata.InterlockedOr(baseBoxNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, boxNodeFlagsSetBits);
+                }
+
+                // If this is the first child in the parent node with all leaf children, queue parent pointer to
+                // stack in scratch memory
+                if (pushNodeToUpdateStack)
+                {
+                    PushNodeToUpdateStack(ScratchBuffer, ShaderConstants.baseUpdateStackScratchOffset, parentNodePointer);
+                }
+
                 WriteInstanceDescriptor(DstMetadata,
+                                        tlasMetadataSize,
                                         desc,
                                         index,
-                                        nodeOffset,
+                                        nodePointer,
                                         blasMetadataSize,
                                         CreateRootNodePointer(),
+                                        boundingBox,
+                                        boxNodeFlags,
                                         IsFusedInstanceNode());
             }
         }
@@ -395,14 +408,12 @@ void EncodeInstances(
         }
 
         // ClearFlags for refit and update
+        const uint stride = ShaderConstants.leafNodeExpansionFactor * sizeof(uint);
+        const uint flagOffset = ShaderConstants.propagationFlagsScratchOffset + (index * stride);
+        const uint initValue = ShaderConstants.enableFastLBVH ? 0xffffffffu : 0;
+        for (uint i = 0; i < ShaderConstants.leafNodeExpansionFactor; ++i)
         {
-            const uint stride = ShaderConstants.leafNodeExpansionFactor * sizeof(uint);
-            const uint flagOffset = ShaderConstants.propagationFlagsScratchOffset + (index * stride);
-            const uint initValue = ShaderConstants.enableFastLBVH ? 0xffffffffu : 0;
-            for (uint i = 0; i < ShaderConstants.leafNodeExpansionFactor; ++i)
-            {
-                ScratchBuffer.Store(flagOffset + (i * sizeof(uint)), initValue);
-            }
+            ScratchBuffer.Store(flagOffset + (i * sizeof(uint)), initValue);
         }
 
         DeviceMemoryBarrier();

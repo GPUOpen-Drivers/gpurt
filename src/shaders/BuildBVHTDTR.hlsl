@@ -218,7 +218,7 @@ uint AllocScratchNode(uint parent, BoundingBox box, TDArgs args)
     internalNode.type = GetInternalNodeType();
 
     // Initialize box node flags to 1. These will be updated with the leaf node flags as the tree is constructed.
-    internalNode.flags = 0xF | (0xF << BOX_NODE_FLAGS_BIT_STRIDE);
+    internalNode.flags_and_instanceMask = 0xffffffff;
     internalNode.splitBox_or_nodePointer = 0;
     internalNode.numPrimitivesAndDoCollapse = 0;
 
@@ -328,18 +328,16 @@ void SetScratchNodeChildRight(uint index, uint rightIndex, TDArgs args)
 }
 
 //=====================================================================================================================
-void UpdateScratchNodeFlags(uint scratchNodeIndex, uint leafScratchNodeIndex, uint childIndex, TDArgs args)
+void UpdateScratchNodeFlags(uint scratchNodeIndex, uint leafScratchNodeIndex, TDArgs args)
 {
     const uint leafNodeOffset =
         args.BvhLeafNodeDataScratchOffset + (leafScratchNodeIndex * sizeof(ScratchNode));
 
-    const uint flags      = ScratchBuffer.Load(leafNodeOffset + SCRATCH_NODE_FLAGS_OFFSET);
-    const uint flagsShift = childIndex * BOX_NODE_FLAGS_BIT_STRIDE;
-    const uint flagsMask  = ~(0xFFu << flagsShift) | (flags << flagsShift);
+    const uint flagsAndInstanceMask = ScratchBuffer.Load(leafNodeOffset + SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET);
 
-    const uint nodeOffset = args.BvhNodeDataScratchOffset + (scratchNodeIndex * sizeof(ScratchNode));
-
-    ScratchBuffer.InterlockedAnd(nodeOffset + SCRATCH_NODE_FLAGS_OFFSET, flagsMask);
+    UpdateParentScratchNodeFlags(args.BvhNodeDataScratchOffset,
+                                 scratchNodeIndex,
+                                 flagsAndInstanceMask);
 }
 
 //=====================================================================================================================
@@ -1714,17 +1712,15 @@ void BuildBVHTDImpl(
                         if (orig == 2)
                         {
                             SetScratchNodeChildLeft(ref.nodeIndex, scratchLeafNodeBaseIndex + leafIndex, args);
-
-                            UpdateScratchNodeFlags(ref.nodeIndex, ref.primitiveIndex, 0, args);
                         }
                         else
                         {
                             SetScratchNodeChildRight(ref.nodeIndex, scratchLeafNodeBaseIndex + leafIndex, args);
-
-                            UpdateScratchNodeFlags(ref.nodeIndex, ref.primitiveIndex, 1, args);
                         }
 
                         SetScratchLeafNode(leafIndex, ref, scratchLeafNodeBaseIndex, args);
+
+                        UpdateScratchNodeFlags(ref.nodeIndex, ref.primitiveIndex, args);
 
                         continue;
                     }
@@ -1750,8 +1746,6 @@ void BuildBVHTDImpl(
 
                             SetScratchNodeChildLeft(ref.nodeIndex, scratchLeafNodeBaseIndex + leafIndex, args);
 
-                            UpdateScratchNodeFlags(ref.nodeIndex, ref.primitiveIndex, 0, args);
-
                             // leaf
                             UpdateTDRefSide(r, REF_SCRATCH_SIDE_LEAF, args);
 
@@ -1767,10 +1761,7 @@ void BuildBVHTDImpl(
 #else
                                 const uint leafIndex = ref.primitiveIndex;
 #endif
-
                                 SetScratchNodeChildRight(ref.nodeIndex, scratchLeafNodeBaseIndex + leafIndex, args);
-
-                                UpdateScratchNodeFlags(ref.nodeIndex, ref.primitiveIndex, 1, args);
 
                                 // leaf
                                 UpdateTDRefSide(r, REF_SCRATCH_SIDE_LEAF, args);
@@ -1784,8 +1775,6 @@ void BuildBVHTDImpl(
 
                                 // get scratch node
                                 ScratchNode scratchNode = GetScratchNode(ref.nodeIndex, args);
-
-                                UpdateScratchNodeFlags(ref.nodeIndex, ref.primitiveIndex, 1, args);
 
                                 // update ref's node owner
                                 UpdateTDNodeIndex(r, scratchNode.right_or_geometryIndex, args);
@@ -1814,8 +1803,6 @@ void BuildBVHTDImpl(
 
                                 SetScratchNodeChildLeft(ref.nodeIndex, scratchLeafNodeBaseIndex + leafIndex, args);
 
-                                UpdateScratchNodeFlags(ref.nodeIndex, ref.primitiveIndex, 0, args);
-
                                 // leaf
                                 UpdateTDRefSide(r, REF_SCRATCH_SIDE_LEAF, args);
 
@@ -1828,8 +1815,6 @@ void BuildBVHTDImpl(
 
                                 // get scratch node
                                 ScratchNode scratchNode = GetScratchNode(ref.nodeIndex, args);
-
-                                UpdateScratchNodeFlags(ref.nodeIndex, ref.primitiveIndex, 0, args);
 
                                 // update ref's node owner
                                 UpdateTDNodeIndex(r, scratchNode.left_or_primIndex_or_instIndex, args);
@@ -1851,8 +1836,6 @@ void BuildBVHTDImpl(
 
                                 SetScratchNodeChildRight(ref.nodeIndex, scratchLeafNodeBaseIndex + leafIndex, args);
 
-                                UpdateScratchNodeFlags(ref.nodeIndex, ref.primitiveIndex, 1, args);
-
                                 // leaf
                                 UpdateTDRefSide(r, REF_SCRATCH_SIDE_LEAF, args);
 
@@ -1866,8 +1849,6 @@ void BuildBVHTDImpl(
                                 // get scratch node
                                 ScratchNode scratchNode = GetScratchNode(ref.nodeIndex, args);
 
-                                UpdateScratchNodeFlags(ref.nodeIndex, ref.primitiveIndex, 1, args);
-
                                 // update ref's node owner
                                 UpdateTDNodeIndex(r, scratchNode.right_or_geometryIndex, args);
 
@@ -1877,6 +1858,8 @@ void BuildBVHTDImpl(
                             }
                         }
                     }
+
+                    UpdateScratchNodeFlags(ref.nodeIndex, ref.primitiveIndex, args);
                 }
 
                 if (EndTaskTD(localId, args))

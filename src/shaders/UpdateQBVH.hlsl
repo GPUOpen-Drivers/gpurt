@@ -68,13 +68,11 @@ void UpdateQBVH(
         return;
     }
 
-    {
-        UpdateQBVHImpl(globalThreadId.x,
-                       DstMetadata,
-                       ScratchBuffer,
-                       SrcBuffer,
-                       ShaderConstants.propagationFlagsScratchOffset,
-                       numWorkItems,
-                       numWorkItems);
-    }
+    UpdateQBVHImpl(globalThreadId.x,
+                   DstMetadata,
+                   ScratchBuffer,
+                   SrcBuffer,
+                   ShaderConstants.propagationFlagsScratchOffset,
+                   numWorkItems,
+                   numWorkItems);
 }

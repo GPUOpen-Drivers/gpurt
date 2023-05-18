@@ -81,13 +81,12 @@ void UpdateParallel(
 
     // Fetch number of nodes to process
     uint numWorkItems = ScratchBuffer.Load(UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET);
-    {
-        UpdateQBVHImpl(globalThreadId,
-                       DstMetadata,
-                       ScratchBuffer,
-                       SrcBuffer,
-                       ShaderConstants.propagationFlagsScratchOffset,
-                       numWorkItems,
-                       ShaderConstants.numThreads);
-    }
+
+    UpdateQBVHImpl(globalThreadId,
+                   DstMetadata,
+                   ScratchBuffer,
+                   SrcBuffer,
+                   ShaderConstants.propagationFlagsScratchOffset,
+                   numWorkItems,
+                   ShaderConstants.numThreads);
 }

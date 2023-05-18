@@ -62,8 +62,8 @@ uint UpdateParentPointer(
 }
 
 //=====================================================================================================================
-// Updates the child pointer in the parent of a dst node.
-void WriteParentNodeChildPointer(
+// Updates parent pointer in the metadata and the child pointer in the parent of a dst node.
+void UpdateParentPointerAndChildPointer(
     uint srcMetadataSizeInBytes,
     uint srcNodePointer,
     uint dstMetadataSizeInBytes,
@@ -160,7 +160,6 @@ void CopyFp32BoxNode(
 
     // Skip leaf child pointers because they will be updated while copying leaf nodes
 
-    // CopyFp32BoxNode is not called when HighPrecisionBoxNode is enabled.
     if ((node.child0 == INVALID_IDX) || IsBoxNode(node.child0))
     {
         DstMetadata.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_CHILD0_OFFSET, node.child0);
@@ -331,20 +330,19 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
     }
 
     // Add metadata size to get to absolute data offsets in source/destination memory
-    const uint srcOffsetDataInternalNodes = srcOffsets.internalNodes     + srcMetadataSizeInBytes;
-    const uint srcOffsetDataGeometryInfo  = srcOffsets.geometryInfo      + srcMetadataSizeInBytes;
-    const uint srcOffsetDataPrimNodePtrs  = srcOffsets.primNodePtrs      + srcMetadataSizeInBytes;
+    const uint srcOffsetDataInternalNodes = srcOffsets.internalNodes + srcMetadataSizeInBytes;
+    const uint srcOffsetDataLeafNodes     = srcOffsets.leafNodes     + srcMetadataSizeInBytes;
+    const uint srcOffsetDataGeometryInfo  = srcOffsets.geometryInfo  + srcMetadataSizeInBytes;
+    const uint srcOffsetDataPrimNodePtrs  = srcOffsets.primNodePtrs  + srcMetadataSizeInBytes;
 
-    const uint dstOffsetDataInternalNodes = dstOffsets.internalNodes     + dstMetadataSizeInBytes;
-    const uint dstOffsetDataGeometryInfo  = dstOffsets.geometryInfo      + dstMetadataSizeInBytes;
-    const uint dstOffsetDataPrimNodePtrs  = dstOffsets.primNodePtrs      + dstMetadataSizeInBytes;
+    const uint dstOffsetDataInternalNodes = dstOffsets.internalNodes + dstMetadataSizeInBytes;
+    const uint dstOffsetDataLeafNodes     = dstOffsets.leafNodes     + dstMetadataSizeInBytes;
+    const uint dstOffsetDataGeometryInfo  = dstOffsets.geometryInfo  + dstMetadataSizeInBytes;
+    const uint dstOffsetDataPrimNodePtrs  = dstOffsets.primNodePtrs  + dstMetadataSizeInBytes;
 
     {
         const uint fp16BoxNodesInBlasMode =
             (srcHeader.info >> ACCEL_STRUCT_HEADER_INFO_FP16_BOXNODE_IN_BLAS_MODE_SHIFT) & ACCEL_STRUCT_HEADER_INFO_FP16_BOXNODE_IN_BLAS_MODE_MASK;
-
-        const uint srcOffsetDataLeafNodes = srcOffsets.leafNodes + srcMetadataSizeInBytes;
-        const uint dstOffsetDataLeafNodes = dstOffsets.leafNodes + dstMetadataSizeInBytes;
 
         // Copy internal nodes
         // 16-bit internal nodes only apply to BLAS
@@ -452,11 +450,11 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
                 const uint srcNodePointer = PackNodePointer(NODE_TYPE_USER_NODE_INSTANCE, srcOffsets.leafNodes + nodeOffset);
                 const uint dstNodePointer = PackNodePointer(NODE_TYPE_USER_NODE_INSTANCE, dstOffsets.leafNodes + nodeOffset);
 
-                // Fix up the child pointer in the parent node
-                WriteParentNodeChildPointer(srcMetadataSizeInBytes,
-                                            srcNodePointer,
-                                            dstMetadataSizeInBytes,
-                                            dstNodePointer);
+                // Update the parent pointer and fix up the child pointer in the parent node
+                UpdateParentPointerAndChildPointer(srcMetadataSizeInBytes,
+                                                   srcNodePointer,
+                                                   dstMetadataSizeInBytes,
+                                                   dstNodePointer);
             }
         }
         else if (srcHeader.geometryType == GEOMETRY_TYPE_TRIANGLES)
@@ -483,11 +481,11 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
                     const uint srcNodePointer = PackNodePointer(nodeType, srcOffsets.leafNodes + nodeOffset);
                     const uint dstNodePointer = PackNodePointer(nodeType, dstOffsets.leafNodes + nodeOffset);
 
-                    // Fix up the child pointer in the parent node
-                    WriteParentNodeChildPointer(srcMetadataSizeInBytes,
-                                                srcNodePointer,
-                                                dstMetadataSizeInBytes,
-                                                dstNodePointer);
+                    // Update the parent pointer and fix up the child pointer in the parent node
+                    UpdateParentPointerAndChildPointer(srcMetadataSizeInBytes,
+                                                       srcNodePointer,
+                                                       dstMetadataSizeInBytes,
+                                                       dstNodePointer);
                 }
                 else
                 {
@@ -498,11 +496,11 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
                             const uint srcNodePointer = PackNodePointer(nodeType, srcOffsets.leafNodes + nodeOffset);
                             const uint dstNodePointer = PackNodePointer(nodeType, dstOffsets.leafNodes + nodeOffset);
 
-                            // Fix up the child pointer in the parent node
-                            WriteParentNodeChildPointer(srcMetadataSizeInBytes,
-                                                        srcNodePointer,
-                                                        dstMetadataSizeInBytes,
-                                                        dstNodePointer);
+                            // Update the parent pointer and fix up the child pointer in the parent node
+                            UpdateParentPointerAndChildPointer(srcMetadataSizeInBytes,
+                                                               srcNodePointer,
+                                                               dstMetadataSizeInBytes,
+                                                               dstNodePointer);
                         }
                     }
                 }
@@ -523,14 +521,14 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
                 const uint srcNodePointer = PackNodePointer(NODE_TYPE_USER_NODE_PROCEDURAL, srcOffsets.leafNodes + nodeOffset);
                 const uint dstNodePointer = PackNodePointer(NODE_TYPE_USER_NODE_PROCEDURAL, dstOffsets.leafNodes + nodeOffset);
 
-                // Fix up the child pointer in the parent node
-                WriteParentNodeChildPointer(srcMetadataSizeInBytes,
-                                            srcNodePointer,
-                                            dstMetadataSizeInBytes,
-                                            dstNodePointer);
+                // Update the parent pointer and fix up the child pointer in the parent node
+                UpdateParentPointerAndChildPointer(srcMetadataSizeInBytes,
+                                                   srcNodePointer,
+                                                   dstMetadataSizeInBytes,
+                                                   dstNodePointer);
             }
         }
-     }
+    }
 
     if (type == BOTTOM_LEVEL)
     {

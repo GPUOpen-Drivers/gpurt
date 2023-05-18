@@ -27,15 +27,6 @@
 
 #include "Common.hlsl"
 
-//=====================================================================================================================
-// static definitions
-// Note: log(+/-0) always produces -inf. Reverse polarity here
-#ifndef INFINITY
-#define INFINITY -log(0.0)
-#endif
-
-#define INVALID_IDX       0xffffffff
-
 #define SORT(childA,childB,distA,distB) if((childB!=INVALID_NODE&&distB<distA)||childA==INVALID_NODE){  float t0 = distA; uint t1 = childA;  childA = childB; distA = distB;  childB=t1; distB=t0; }
 
 #define INTERSECT_RAY_VERSION_1 1
@@ -43,20 +34,6 @@
 #if GPURT_BUILD_RTIP2
 #define INTERSECT_RAY_VERSION_2 2
 #endif
-
-//=====================================================================================================================
-// Helper function for extracting a single bit from a 32-bit field
-inline uint bit(uint index)
-{
-    return 1u << index;
-}
-
-//=====================================================================================================================
-// Helper function for generating a 32-bit bit mask
-inline uint bits(uint bitcount)
-{
-    return (1u << bitcount) - 1;
-}
 
 //=====================================================================================================================
 // Avoid tracing NaN rays or null acceleration structures.
@@ -95,6 +72,41 @@ static bool IsValidTrace(
     }
 
     return valid;
+}
+
+//=====================================================================================================================
+static bool IsBoxNodeBasedOnStaticPipelineFlags(uint pointer)
+{
+    return IsBoxNode(pointer
+                    );
+}
+
+//=====================================================================================================================
+static uint CreateRootNodePointerBasedOnStaticPipelineFlags()
+{
+    return CreateRootNodePointer(
+                                );
+}
+
+//=====================================================================================================================
+static GpuVirtualAddress FetchAccelStructBaseAddr(in GpuVirtualAddress bvhAddress)
+{
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION  >= 34
+    if (bvhAddress)
+    {
+        uint metaDataSize = LoadDwordAtAddr(bvhAddress + ACCEL_STRUCT_METADATA_SIZE_OFFSET);
+
+        // Fetch acceleration structure base pointer after metadata size
+        bvhAddress += metaDataSize;
+    }
+#endif
+    return bvhAddress;
+}
+
+//=====================================================================================================================
+static GpuVirtualAddress FetchAccelStructBaseAddr(in uint lowBits, in uint highBits)
+{
+    return FetchAccelStructBaseAddr(MakeGpuVirtualAddress(lowBits, highBits));
 }
 
 //=====================================================================================================================
@@ -752,6 +764,7 @@ static uint4 image_bvh64_intersect_ray_base(
     }
 #endif
 
+#if AMD_VULKAN && GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 33
     result = AmdExtD3DShaderIntrinsics_IntersectBvhNode(address,
                                                         rayExtent,
                                                         rayOrigin,
@@ -759,6 +772,16 @@ static uint4 image_bvh64_intersect_ray_base(
                                                         rayDirectionInverse,
                                                         boxSortHeuristic,
                                                         BOX_EXPANSION_DEFAULT_AMOUNT);
+#else
+    result = AmdExtD3DShaderIntrinsics_IntersectInternal(address,
+                                                         rayExtent,
+                                                         rayOrigin,
+                                                         rayDirection,
+                                                         rayDirectionInverse,
+                                                         boxSortHeuristic,
+                                                         BOX_EXPANSION_DEFAULT_AMOUNT);
+#endif
+
 #else
     uint64_t hwNodePtr = (bvhAddress >> 3) + nodePointer;
 

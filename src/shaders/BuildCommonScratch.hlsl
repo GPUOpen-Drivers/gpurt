@@ -62,6 +62,14 @@ void WriteScratchBatchIndex(
 }
 
 //=====================================================================================================================
+uint CalcScratchNodeOffset(
+    uint baseScratchNodesOffset,
+    uint nodeIndex)
+{
+    return baseScratchNodesOffset + (nodeIndex * SCRATCH_NODE_SIZE);
+}
+
+//=====================================================================================================================
 ScratchNode FetchScratchNode(
     uint baseScratchNodesOffset,
     uint nodeIndex)
@@ -126,31 +134,21 @@ static BoundingBox FetchScratchNodeBoundingBox(
 }
 
 //=====================================================================================================================
-uint FetchScratchNodeFlags(
-    uint baseScratchNodesOffset,
-    uint nodeIndex)
+// Extract node flags from scratch node
+uint ExtractScratchNodeFlags(
+    in uint flagsAndInstanceMask)
 {
-    const ScratchNode scratchNode = FetchScratchNode(baseScratchNodesOffset, nodeIndex);
-
-    return scratchNode.flags;
+    return (flagsAndInstanceMask & 0xff);
 }
 
 //=====================================================================================================================
-void WriteScratchNodeFlagsFromNodes(
-    uint        baseScratchNodesOffset,
-    uint        nodeIndex,
-    ScratchNode leftNode,
-    ScratchNode rightNode)
+// Extract instance mask from scratch node
+uint ExtractScratchNodeInstanceMask(
+    in uint flagsAndInstanceMask)
 {
-    const uint leftNodeFlags = CalcNodeFlags(leftNode);
-    const uint rightNodeFlags = CalcNodeFlags(rightNode);
-
-    uint nodeFlags = 0;
-    nodeFlags = SetNodeFlagsField(nodeFlags, leftNodeFlags, 0);
-    nodeFlags = SetNodeFlagsField(nodeFlags, rightNodeFlags, 1);
-
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-    ScratchBuffer.Store<uint>(nodeOffset + SCRATCH_NODE_FLAGS_OFFSET, nodeFlags);
+    // Note, we store the instance exclusion mask (instead of inclusion) so that we can combine the
+    // masks together using a AND operation similar to boxNodeFlags.
+    return (~flagsAndInstanceMask >> 8) & 0xff;
 }
 
 //=====================================================================================================================
@@ -160,21 +158,30 @@ void WriteScratchNodeFlags(
     uint nodeFlags)
 {
     const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-    ScratchBuffer.Store<uint>(nodeOffset + SCRATCH_NODE_FLAGS_OFFSET, nodeFlags);
+    ScratchBuffer.Store<uint>(nodeOffset + SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, nodeFlags);
 }
 
 //=====================================================================================================================
-void WriteParentScratchNodeFlags(
+void WriteScratchNodeFlagsFromNodes(
+    uint           baseScratchNodesOffset,
+    uint           nodeIndex,
+    in ScratchNode leftNode,
+    in ScratchNode rightNode)
+{
+    // Combine box node flags from child nodes and write to parent scratch node
+    const uint boxNodeFlags = leftNode.flags_and_instanceMask & rightNode.flags_and_instanceMask;
+    WriteScratchNodeFlags(baseScratchNodesOffset, nodeIndex, boxNodeFlags);
+}
+
+//=====================================================================================================================
+// Update node flags from child in parent scratch node
+void UpdateParentScratchNodeFlags(
     uint baseScratchNodesOffset,
     uint nodeIndex,
-    uint flags,
-    bool isLeft)
+    uint flagsAndInstanceMask)
 {
-    uint nodeFlags = 0;
-    nodeFlags = SetNodeFlagsField(nodeFlags, flags, !isLeft);
-
     const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-    ScratchBuffer.InterlockedOr(nodeOffset + SCRATCH_NODE_FLAGS_OFFSET, nodeFlags);
+    ScratchBuffer.InterlockedAnd(nodeOffset + SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, flagsAndInstanceMask);
 }
 
 //=====================================================================================================================
@@ -390,6 +397,20 @@ float FetchScratchLeafNodeCost(ScratchNode node)
 }
 
 //=====================================================================================================================
+bool IsNodeActive(ScratchNode node)
+{
+    // Inactive nodes force v0.x to NaN during encode
+    return !isnan(node.bbox_min_or_v0.x);
+}
+
+//=====================================================================================================================
+bool IsNodeLinkedOnly(ScratchNode node)
+{
+    // if this the "2nd" triangle of a set of paired triangle
+    return (node.splitBox_or_nodePointer == PAIRED_TRI_LINKONLY);
+}
+
+//=====================================================================================================================
 void WriteScratchNodeSurfaceArea(
     uint  baseScratchNodesOffset,
     uint  nodeIndex,
@@ -419,9 +440,9 @@ void WriteScratchNodeChild(
 {
     const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
 
-    const uint direction = isLeft ? SCRATCH_NODE_LEFT_OFFSET : SCRATCH_NODE_RIGHT_OFFSET;
+    const uint childOffset = isLeft ? SCRATCH_NODE_LEFT_OFFSET : SCRATCH_NODE_RIGHT_OFFSET;
 
-    ScratchBuffer.Store(nodeOffset + direction, child);
+    ScratchBuffer.Store(nodeOffset + childOffset, child);
 }
 
 //=====================================================================================================================

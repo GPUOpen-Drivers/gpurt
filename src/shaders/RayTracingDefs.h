@@ -72,7 +72,10 @@ enum PrimitiveType : uint
 #define DUMMY_UINT2_FUNC  { return uint2(0, 0); }
 #define DUMMY_UINT3_FUNC  { return uint3(0, 0, 0); }
 #define DUMMY_UINT4_FUNC  { return uint4(0, 0, 0, 0); }
-#define DUMMY_WIDE_INTERSECT_FUNC { return (DualIntersectResult)0; }
+#define DUMMY_FLOAT_FUNC  { return 0; }
+#define DUMMY_FLOAT2_FUNC { return float2(0, 0); }
+#define DUMMY_FLOAT3_FUNC { return float3(0, 0, 0); }
+#define DUMMY_GENERIC_FUNC(value) { return value; }
 #else
 #define DUMMY_BOOL_FUNC   ;
 #define DUMMY_VOID_FUNC   ;
@@ -80,7 +83,10 @@ enum PrimitiveType : uint
 #define DUMMY_UINT2_FUNC  ;
 #define DUMMY_UINT3_FUNC  ;
 #define DUMMY_UINT4_FUNC  ;
-#define DUMMY_WIDE_INTERSECT_FUNC ;
+#define DUMMY_FLOAT_FUNC  ;
+#define DUMMY_FLOAT2_FUNC ;
+#define DUMMY_FLOAT3_FUNC ;
+#define DUMMY_GENERIC_FUNC(value) ;
 #endif
 
 #if defined(__cplusplus)
@@ -825,13 +831,16 @@ struct ScratchNode
                                            // instanceNodeBasePointerLo, instanceNodeBasePointerHi for instance node
     uint   parent;
 
-    uint   type;                           // type [2:0], triangle id [18:3] for max of 2 compressed tris
-    uint   flags;
+    uint   type;                           // type [0:2], triangle id [3:18] for max of 2 compressed triangles
+    uint   flags_and_instanceMask;         // flags [0:7], instanceMask [8:15]
     uint   splitBox_or_nodePointer;        // TriangleSplitBox index for triangle nodes /
                                            // BLAS node pointer for instance nodes
     uint   numPrimitivesAndDoCollapse;     // number of tris collapsed, doCollapse is boolean bit in the LSB /
                                            // scratch node index of the tri in the pair in PAIR_TRIANGLE_COMPRESSION
 };
+
+#define SCRATCH_NODE_FLAGS_DISABLE_TRIANGLE_SPLIT_SHIFT 31
+#define SCRATCH_NODE_FLAGS_DISABLE_TRIANGLE_SPLIT_MASK (1 << SCRATCH_NODE_FLAGS_DISABLE_TRIANGLE_SPLIT_SHIFT)
 
 #define SCRATCH_NODE_BBOX_MIN_OFFSET                  0
 #define SCRATCH_NODE_V0_OFFSET                        SCRATCH_NODE_BBOX_MIN_OFFSET
@@ -850,7 +859,7 @@ struct ScratchNode
 #define SCRATCH_NODE_INSTANCE_NUM_PRIMS_OFFSET        SCRATCH_NODE_DENSITY_OFFSET
 #define SCRATCH_NODE_PARENT_OFFSET                    44
 #define SCRATCH_NODE_TYPE_OFFSET                      48
-#define SCRATCH_NODE_FLAGS_OFFSET                     52
+#define SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET   52
 #define SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET           56
 #define SCRATCH_NODE_NODE_POINTER_OFFSET              SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET
 #define SCRATCH_NODE_NUM_MORTON_CELLS_OFFSET          SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET
@@ -1230,13 +1239,6 @@ static uint CalcMetadataSizeInBytes(
     const uint metadataSizeInBytes = ACCEL_STRUCT_METADATA_HEADER_SIZE + linkDataSizeInBytes;
 
     return metadataSizeInBytes;
-}
-
-//=====================================================================================================================
-static uint CreateRootNodePointer(
-)
-{
-    return PackNodePointer(NODE_TYPE_BOX_FLOAT32, ACCEL_STRUCT_HEADER_SIZE);
 }
 
 //=====================================================================================================================
@@ -1703,7 +1705,7 @@ struct RayQueryInternal
     uint             numRayBoxTest;
     uint             numRayTriangleTest;
     uint             numIterations;
-    uint             maxStackDepth;
+    uint             maxStackDepthAndDynamicId;
     uint             clocks;
     uint             numCandidateHits;
     uint             instanceIntersections;

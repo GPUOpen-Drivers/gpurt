@@ -187,7 +187,7 @@ namespace BuildQBVH
         uint32 splitBoxesByteOffset;
         uint32 emitCompactSize;
         uint32 encodeArrayOfPointers;
-        uint32 topDownBuild;
+        uint32 rebraidEnabled;
 
         uint32 enableFusedInstanceNode;
 
@@ -576,6 +576,7 @@ namespace DecodeAS
         uint32 addressLo;               // Copy destination address after skipping header- low bits
         uint32 addressHi;               // Copy destination address after skipping header- high bits
         uint32 numThreads;              // Number of persistent threads
+        uint32 rtIpLevel;               // Raytracing IP level
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));

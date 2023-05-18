@@ -238,10 +238,14 @@ void WriteCompressedNodes(
         const uint scratchIdxTri0 = GetQuadScratchNodeIndex(quad.scratchNodeIndexAndOffset[0]);
         const ScratchNode triangleNode = FetchScratchNode(scratchNodesScratchOffset, scratchIdxTri0);
 
+        const uint geometryInfoOffset = header.offsets.geometryInfo + (triangleNode.right_or_geometryIndex * GEOMETRY_INFO_SIZE);
+        const uint packedGeometryInfoData = DstBuffer.Load(geometryInfoOffset + GEOMETRY_INFO_FLAGS_AND_NUM_PRIMS_OFFSET);
+        const uint geometryFlags = ExtractGeometryInfoFlags(packedGeometryInfoData);
+
         uint triangleId = WriteTriangleIdField(0,
                                                NODE_TYPE_TRIANGLE_0,
                                                GetQuadScratchNodeVertexOffset(quad.scratchNodeIndexAndOffset[0]),
-                                               triangleNode.flags);
+                                               geometryFlags);
 
         // If this quad has another triangle, update triangle ID for the pair and update referenced scratch
         // triangle node
@@ -250,7 +254,7 @@ void WriteCompressedNodes(
             triangleId = WriteTriangleIdField(triangleId,
                                               NODE_TYPE_TRIANGLE_1,
                                               GetQuadScratchNodeVertexOffset(quad.scratchNodeIndexAndOffset[1]),
-                                              triangleNode.flags);
+                                              geometryFlags);
 
             const uint scratchNodeOffset = scratchNodesScratchOffset + (keptIndex * sizeof(ScratchNode));
 

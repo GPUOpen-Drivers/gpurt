@@ -63,7 +63,7 @@ static IntersectionResult TraceRayImpl2_0(
 
     // Start from root node which follows acceleration structure header
     // BLAS root node is always fp32 regardless of mode for fp16 box nodes
-    const uint blasRootNodePtr = CreateRootNodePointer();
+    const uint blasRootNodePtr   = CreateRootNodePointerBasedOnStaticPipelineFlags();
     uint       packedNodePointer = blasRootNodePtr;
     uint       tlasNodePtr       = INVALID_IDX;
 
@@ -163,7 +163,7 @@ static IntersectionResult TraceRayImpl2_0(
                                           localRay.Direction,
                                           rcp(localRay.Direction));
 #if DEVELOPER
-        if (EnableTraversalCounter() && IsBoxNode(prevNodePtr))
+        if (EnableTraversalCounter() && IsBoxNodeBasedOnStaticPipelineFlags(prevNodePtr))
         {
             intersection.numRayBoxTest++;
         }
@@ -277,7 +277,7 @@ static IntersectionResult TraceRayImpl2_0(
                                                                 geometryIndex,
                                                                 instanceContribution);
 
-                        const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(topLevelBvh, instNodePtr, GPURT_RTIP2_0);
+                        const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(topLevelBvh, instNodePtr);
 
                         // Set intersection attributes
                         AmdTraceRaySetHitAttributes(candidateT,
@@ -417,7 +417,7 @@ static IntersectionResult TraceRayImpl2_0(
 
             if (isCulled == false)
             {
-                const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(topLevelBvh, instNodePtr, GPURT_RTIP2_0);
+                const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(topLevelBvh, instNodePtr);
 
                 // Set intersection attributes
                 AmdTraceRaySetHitAttributes(intersection.t,

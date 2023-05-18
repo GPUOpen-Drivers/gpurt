@@ -130,6 +130,8 @@ struct DispatchRaysConstantData
     uint32 cpsStackOffsetInBytes;       // The scratch memory used as stacks are divided into two parts:
                                         //  (a) Used by a compiler backend, start at offset 0.
                                         //  (b) Used by IR (Intermediate Representation), for a continuation passing shader.
+    uint32 cpsGlobalMemoryAddressLo;    // Separate CPS stack memory base address low 32-bits
+    uint32 cpsGlobalMemoryAddressHi;    // Separate CPS stack memory base address high 32-bits
 };
 #pragma pack(pop)
 

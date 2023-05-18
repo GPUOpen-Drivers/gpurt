@@ -149,7 +149,7 @@ static IntersectionResult TraceRayImpl1_1(
 
     // Start from root node which follows acceleration structure header
     // BLAS root node is always fp32 regardless of mode for fp16 box nodes
-    const uint blasRootNodePtr = CreateRootNodePointer();
+    const uint blasRootNodePtr   = CreateRootNodePointerBasedOnStaticPipelineFlags();
     uint       packedNodePointer = blasRootNodePtr;
     uint       tlasNodePtr       = INVALID_IDX;
 
@@ -199,7 +199,7 @@ static IntersectionResult TraceRayImpl1_1(
 
             intersection.numIterations++;
 
-            if (IsBoxNode(packedNodePointer))
+            if (IsBoxNodeBasedOnStaticPipelineFlags(packedNodePointer))
             {
                 intersection.numRayBoxTest++;
             }
@@ -211,6 +211,7 @@ static IntersectionResult TraceRayImpl1_1(
             {
                 intersection.instanceIntersections++;
             }
+
             UpdateWaveTraversalStatistics(packedNodePointer);
         }
 #endif
@@ -235,7 +236,7 @@ static IntersectionResult TraceRayImpl1_1(
         packedNodePointer = INVALID_NODE;
 
         // Check if it is an internal node
-        if (IsBoxNode(prevNodePtr))
+        if (IsBoxNodeBasedOnStaticPipelineFlags(prevNodePtr))
         {
             // Determine nodes to push to stack
             if (isGoingDown)
@@ -343,7 +344,7 @@ static IntersectionResult TraceRayImpl1_1(
                                                                    geometryIndex,
                                                                    instanceContribution);
 
-                            const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(topLevelBvh, instNodePtr, GPURT_RTIP1_1);
+                            const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(topLevelBvh, instNodePtr);
 
                             // Set intersection attributes
                             AmdTraceRaySetHitAttributes(candidateT,
@@ -462,7 +463,7 @@ static IntersectionResult TraceRayImpl1_1(
 
             if (isCulled == false)
             {
-                const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(topLevelBvh, instNodePtr, GPURT_RTIP1_1);
+                const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(topLevelBvh, instNodePtr);
 
                 // Set intersection attributes
                 AmdTraceRaySetHitAttributes(intersection.t,
@@ -666,6 +667,7 @@ static IntersectionResult TraceRayImpl1_1(
 #if DEVELOPER
     if (EnableTraversalCounter())
     {
+        AmdTraceRaySetParentId(rayId);
         intersection.maxStackDepth = stack.maxStackDepth;
     }
 #endif

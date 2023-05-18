@@ -58,7 +58,11 @@ __decl uint2 AmdExtD3DShaderIntrinsics_AtomicMinU64(
 #define AmdExtIntersectBvhNodeFlag_BoxSortEnable 0x1
 #endif
 
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 33
+__decl uint4 AmdExtD3DShaderIntrinsics_IntersectInternal(
+#else
 __decl uint4 AmdExtD3DShaderIntrinsics_IntersectBvhNode(
+#endif
     in uint2  nodePointer,
     in float  rayExtent,
     in float3 rayOrigin,
@@ -76,6 +80,15 @@ __decl uint4 AmdExtD3DShaderIntrinsics_IntersectBvhNode(
 // Floating point conversions
 __decl uint3 AmdExtD3DShaderIntrinsics_ConvertF32toF16NegInf(in float3 inVec) DUMMY_UINT3_FUNC
 __decl uint3 AmdExtD3DShaderIntrinsics_ConvertF32toF16PosInf(in float3 inVec) DUMMY_UINT3_FUNC
+
+//=====================================================================================================================
+// Floating point operations that set the round mode for the result
+__decl float AmdExtD3DShaderIntrinsics_FloatOpWithRoundMode(
+    uint roundMode, uint operation, float src0, float src1) DUMMY_FLOAT_FUNC
+__decl float2 AmdExtD3DShaderIntrinsics_FloatOpWithRoundMode(
+    uint roundMode, uint operation, float2 src0, float2 src1) DUMMY_FLOAT2_FUNC
+__decl float3 AmdExtD3DShaderIntrinsics_FloatOpWithRoundMode(
+    uint roundMode, uint operation, float3 src0, float3 src1) DUMMY_FLOAT3_FUNC
 
 #endif
 
@@ -187,6 +200,18 @@ __decl uint2 AmdTraceRayMakePC(uint pcVaLow) DUMMY_UINT2_FUNC
 // Ref: GpuRt::Device::GetStaticPipelineFlags
 __decl uint AmdTraceRayGetStaticFlags() DUMMY_UINT_FUNC
 
+//=====================================================================================================================
+// fetch data from LDS and return parent TraceRay rayId
+__decl uint AmdTraceRayGetParentId() DUMMY_UINT_FUNC
+
+//=====================================================================================================================
+// store the TraceRay rayId into LDS
+__decl void AmdTraceRaySetParentId(uint rayId) DUMMY_VOID_FUNC
+
+//=====================================================================================================================
+// Client drivers must generate a unique 32-bit identifier for unique TraceRay/TraceRayInline call site in the API shaders.
+__decl uint AmdTraceRayGetStaticId() DUMMY_UINT_FUNC;
+
 #if USE_TEMP_ARRAY_STACK
 //=====================================================================================================================
 // Register based stack (shared with __cplusplus path)
@@ -274,4 +299,141 @@ static uint4 LoadDwordAtAddrx4(GpuVirtualAddress addr)
     return retVal;
 #endif
 }
+
+#if defined(AMD_VULKAN) || defined(__cplusplus)
+#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TiesToEven     0x0
+#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardPositive 0x1
+#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardNegative 0x2
+#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardZero     0x3
+
+#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Add      0x0
+#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Subtract 0x1
+#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Multiply 0x2
+#endif
+
+#ifdef __cplusplus
+#include <cfenv>
+static constexpr uint RoundModeTable[] =
+{
+    FE_TONEAREST,
+    FE_UPWARD,
+    FE_DOWNWARD,
+    FE_TOWARDZERO,
+};
+
+//=====================================================================================================================
+static float FloatOpWithRoundMode(uint roundMode, uint operation, float src0, float src1)
+{
+    std::fesetround(RoundModeTable[roundMode]);
+
+    float result;
+
+    switch (operation)
+    {
+        case AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Add:
+            result = src0 + src1;
+            break;
+
+        case AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Subtract:
+            result = src0 - src1;
+            break;
+
+        case AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Multiply:
+            result = src0 * src1;
+            break;
+
+        default:
+            printf("Unknown operation for FloatOpWithRoundMode\n");
+            assert(false);
+            break;
+    }
+
+    std::fesetround(FE_TONEAREST);
+
+    return result;
+}
+
+//=====================================================================================================================
+static float2 FloatOpWithRoundMode(uint roundMode, uint operation, float2 src0, float2 src1)
+{
+    std::fesetround(RoundModeTable[roundMode]);
+
+    float2 result;
+
+    switch (operation)
+    {
+        case AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Add:
+            result = src0 + src1;
+            break;
+
+        case AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Subtract:
+            result = src0 - src1;
+            break;
+
+        case AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Multiply:
+            result = src0 * src1;
+            break;
+
+        default:
+            printf("Unknown operation for FloatOpWithRoundMode\n");
+            assert(false);
+            break;
+    }
+
+    std::fesetround(FE_TONEAREST);
+
+    return result;
+}
+
+//=====================================================================================================================
+static float3 FloatOpWithRoundMode(uint roundMode, uint operation, float3 src0, float3 src1)
+{
+    std::fesetround(RoundModeTable[roundMode]);
+
+    float3 result;
+
+    switch (operation)
+    {
+        case AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Add:
+            result = src0 + src1;
+            break;
+
+        case AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Subtract:
+            result = src0 - src1;
+            break;
+
+        case AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Multiply:
+            result = src0 * src1;
+            break;
+
+        default:
+            printf("Unknown operation for FloatOpWithRoundMode\n");
+            assert(false);
+            break;
+    }
+
+    std::fesetround(FE_TONEAREST);
+
+    return result;
+}
+#else
+//=====================================================================================================================
+static float FloatOpWithRoundMode(uint roundMode, uint operation, float src0, float src1)
+{
+    return AmdExtD3DShaderIntrinsics_FloatOpWithRoundMode(roundMode, operation, src0, src1);
+}
+
+//=====================================================================================================================
+static float2 FloatOpWithRoundMode(uint roundMode, uint operation, float2 src0, float2 src1)
+{
+    return AmdExtD3DShaderIntrinsics_FloatOpWithRoundMode(roundMode, operation, src0, src1);
+}
+
+//=====================================================================================================================
+static float3 FloatOpWithRoundMode(uint roundMode, uint operation, float3 src0, float3 src1)
+{
+    return AmdExtD3DShaderIntrinsics_FloatOpWithRoundMode(roundMode, operation, src0, src1);
+}
+#endif
+
 #endif

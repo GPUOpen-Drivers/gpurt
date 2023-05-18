@@ -355,72 +355,25 @@ uint64_t CalculateMortonCode64(in float3 p)
 }
 
 //=====================================================================================================================
-bool IsNodeActive(ScratchNode node)
-{
-    // Inactive nodes force v0.x to NaN during encode
-    return !isnan(node.bbox_min_or_v0.x);
-}
-
-//=====================================================================================================================
-bool IsNodeLinkedOnly(ScratchNode node)
-{
-    // if this the "2nd" triangle of a set of paired triangle
-    return (node.splitBox_or_nodePointer == PAIRED_TRI_LINKONLY);
-}
-
-//=====================================================================================================================
-uint CalcScratchNodeOffset(
-    uint baseScratchNodesOffset,
-    uint nodeIndex)
-{
-    return baseScratchNodesOffset + (nodeIndex * SCRATCH_NODE_SIZE);
-}
-
-//=====================================================================================================================
-uint ExtractNodeFlagsField(uint nodeFlags, uint childIndex)
+// Extract node flags from hardware box node flags
+uint ExtractBoxNodeFlagsField(
+    uint nodeFlags, uint childIndex)
 {
     return (nodeFlags >> (childIndex * BOX_NODE_FLAGS_BIT_STRIDE)) & 0xFF;
 }
 
 //=====================================================================================================================
-uint CalcNodeFlags(ScratchNode node)
-{
-    uint nodeFlags = 0;
-
-    if (IsTriangleNode(node.type) || IsUserNodeProcedural(node.type))
-    {
-        // Determine opacity from geometry flags
-        nodeFlags |= (node.flags & D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE) ? 1u << BOX_NODE_FLAGS_ONLY_OPAQUE_SHIFT
-                                                                          : 1u << BOX_NODE_FLAGS_ONLY_NON_OPAQUE_SHIFT;
-
-        nodeFlags |= IsTriangleNode(node.type) ? 1u << BOX_NODE_FLAGS_ONLY_TRIANGLES_SHIFT
-                                               : 1u << BOX_NODE_FLAGS_ONLY_PROCEDURAL_SHIFT;
-    }
-    else if (IsUserNodeInstance(node.type))
-    {
-        // The node flags in instance nodes were already set up during Encode from the instance flags and geometry type.
-        nodeFlags = node.flags;
-    }
-    else
-    {
-        // Merge the internal node flags
-        const uint leftFlags  = ExtractNodeFlagsField(node.flags, 0);
-        const uint rightFlags = ExtractNodeFlagsField(node.flags, 1);
-
-        nodeFlags = leftFlags & rightFlags;
-    }
-
-    return nodeFlags;
-}
-
-//=====================================================================================================================
-uint ClearNodeFlagsField(uint nodeFlags, uint childIndex)
+// Clear node flags field from hardware box node flags
+uint ClearBoxNodeFlagsField(
+    uint nodeFlags, uint childIndex)
 {
     return nodeFlags & ~(0xFFu << (childIndex * BOX_NODE_FLAGS_BIT_STRIDE));
 }
 
 //=====================================================================================================================
-uint SetNodeFlagsField(uint nodeFlags, uint childFlags, uint childIndex)
+// Set specific node flags field in hardware box node flags
+uint SetBoxNodeFlagsField(
+    uint nodeFlags, uint childFlags, uint childIndex)
 {
     return nodeFlags | (childFlags << (childIndex * BOX_NODE_FLAGS_BIT_STRIDE));
 }
@@ -600,21 +553,25 @@ BoundingBox TransformBoundingBox(BoundingBox box, float4 inputTransform[3])
 }
 
 //=====================================================================================================================
-BoundingBox GenerateInstanceBoundingBox(
-    in uint64_t instanceBasePointer,
-    float4      instanceTransform[3])
+BoundingBox FetchHeaderRootBoundingBox(
+    in uint64_t accelStructBaseAddr)
 {
-    // BLAS instance address points to acceleration structure header
-    const uint64_t instanceBaseAddr = GetInstanceAddr(LowPart(instanceBasePointer), HighPart(instanceBasePointer));
+    const uint4 d0 = LoadDwordAtAddrx4(accelStructBaseAddr + ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET);
+    const uint2 d1 = LoadDwordAtAddrx2(accelStructBaseAddr + ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET + 0x10);
 
-    const uint4 d0 = LoadDwordAtAddrx4(instanceBaseAddr + ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET);
-    const uint2 d1 = LoadDwordAtAddrx2(instanceBaseAddr + ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET + 0x10);
+    BoundingBox bbox = (BoundingBox)0;
+    bbox.min = asfloat(d0.xyz);
+    bbox.max = asfloat(uint3(d0.w, d1.xy));
 
-    BoundingBox rootBbox = (BoundingBox)0;
-    rootBbox.min = asfloat(d0.xyz);
-    rootBbox.max = asfloat(uint3(d0.w, d1.xy));
+    return bbox;
+}
 
-    BoundingBox instanceBbox = TransformBoundingBox(rootBbox, instanceTransform);
+//=====================================================================================================================
+BoundingBox GenerateInstanceBoundingBox(
+    float4         instanceTransform[3],
+    in BoundingBox blasRootBounds)
+{
+    BoundingBox instanceBbox = TransformBoundingBox(blasRootBounds, instanceTransform);
 
     if (any(isinf(instanceBbox.min)) || any(isinf(instanceBbox.max)))
     {
@@ -750,26 +707,38 @@ void CopyChildPointersAndFlags(
 {
     const uint nodeOffset = metadataSize + ExtractNodePointerOffset(nodePointer);
 
-    const uint4 childPointers = srcBuffer.Load<uint4>(nodeOffset);
-    dstBuffer.Store<uint4>(nodeOffset, childPointers);
-
-    if (IsBoxNode32(nodePointer))
     {
-        const uint sourceFlags = srcBuffer.Load(nodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET);
-        dstBuffer.Store(nodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, sourceFlags);
-    }
+        const uint4 childPointers = srcBuffer.Load<uint4>(nodeOffset);
+        dstBuffer.Store<uint4>(nodeOffset, childPointers);
 
+        if (IsBoxNode32(nodePointer))
+        {
+            const uint sourceFlags = srcBuffer.Load(nodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET);
+            dstBuffer.Store(nodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, sourceFlags);
+        }
+
+    }
+}
+
+//=====================================================================================================================
+uint4 LoadBoxNodeChildPointers(
+    RWByteAddressBuffer  srcBuffer,
+    in uint              nodeOffset)
+{
+    return srcBuffer.Load<uint4>(nodeOffset);
 }
 
 //=====================================================================================================================
 uint ComputeChildIndexAndValidBoxCount(
-    in BuildSettingsData settings,
     RWByteAddressBuffer  srcBuffer,
-    in uint              parentNodeOffset,
+    in uint              metadataSize,
+    in uint              parentNodePointer,
     in uint              childNodePointer,
     out_param(uint)      boxNodeCount)
 {
-    const uint4 childPointers = srcBuffer.Load<uint4>(parentNodeOffset);
+
+    const uint parentNodeOffset = metadataSize + ExtractNodePointerOffset(parentNodePointer);
+    const uint4 childPointers = LoadBoxNodeChildPointers(srcBuffer, parentNodeOffset);
 
     // Find child index in parent (assumes child pointer 0 is always valid)
     uint childIdx = 0;
@@ -790,7 +759,6 @@ uint ComputeChildIndexAndValidBoxCount(
 
     // Note, IsBoxNode() will return false for invalid nodes.
     boxNodeCount = 0;
-
     boxNodeCount += IsBoxNode(childPointers.x) ? 1 : 0;
     boxNodeCount += IsBoxNode(childPointers.y) ? 1 : 0;
     boxNodeCount += IsBoxNode(childPointers.z) ? 1 : 0;
@@ -909,13 +877,19 @@ static Float32BoxNode FetchFloat32BoxNode(
 //=====================================================================================================================
 void WriteInstanceDescriptor(
     RWByteAddressBuffer   dstBuffer,
+    in uint               bufferOffset,   // Additional buffer offset, 0 when dstBuffer points to header.
     in InstanceDesc       desc,
     in uint               index,
-    in uint               instanceNodeOffset,
-    in uint               metadataSize,
+    in uint               instNodePtr,
+    in uint               blasMetadataSize,
     in uint               blasRootNodePointer,
+    in BoundingBox        instanceBounds, // Transformed BLAS root bounds
+    in uint               boxNodeFlags,
     in bool               isFusedInstanceNode)
 {
+    const uint instanceNodeOffset = ExtractNodePointerOffset(instNodePtr);
+    const uint dstNodeOffset = bufferOffset + instanceNodeOffset;
+
     {
         InstanceNode node;
 
@@ -929,7 +903,7 @@ void WriteInstanceDescriptor(
         node.sideband.Transform[2]     = desc.Transform[2];
         node.sideband.instanceIndex    = index;
         node.sideband.padding0         = 0;
-        node.sideband.blasMetadataSize = metadataSize;
+        node.sideband.blasMetadataSize = blasMetadataSize;
         node.sideband.blasNodePointer  = blasRootNodePointer;
 
         // invert matrix
@@ -940,7 +914,7 @@ void WriteInstanceDescriptor(
         node.desc.Transform[1] = inverse[1];
         node.desc.Transform[2] = inverse[2];
 
-        dstBuffer.Store<InstanceNode>(instanceNodeOffset, node);
+        dstBuffer.Store<InstanceNode>(dstNodeOffset, node);
 
         // Write bottom-level root box node into fused instance node
         if (isFusedInstanceNode)
@@ -1047,7 +1021,7 @@ void WriteInstanceDescriptor(
             //
             blasRootNode.flags = 0;
 
-            const uint fusedBoxNodeOffset = instanceNodeOffset + FUSED_INSTANCE_NODE_ROOT_OFFSET;
+            const uint fusedBoxNodeOffset = dstNodeOffset + FUSED_INSTANCE_NODE_ROOT_OFFSET;
 
             // The DXC compiler fails validation due to undefined writes to UAV if we use the templated Store
             // instruction. Unrolling the stores works around this issue.

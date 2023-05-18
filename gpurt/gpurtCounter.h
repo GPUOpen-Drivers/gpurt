@@ -27,6 +27,19 @@
 #ifndef GPURT_COUNTER_H
 #define GPURT_COUNTER_H
 
+// Major version changes: The major version below must be incremented in the event that an incompatible change is
+// required. An incompatible change means that consumers of the data are required to make changes in order to interpret
+// the data structures correctly.
+//
+// Minor version changes: The minor version below must be incremented when fields are added or modified in any
+// structures. Fields may be added to the end of structures, and reserved fields may be changed to meaningful values.
+// Reserved fields are zeroed by GPURT until they have a purpose. If a structure is smaller than the size of the most
+// recent version, tools may assume the non-present fields are zero.
+
+#define GPURT_COUNTER_MAJOR_VERSION 1
+#define GPURT_COUNTER_MINOR_VERSION 0
+#define GPURT_COUNTER_VERSION       ((GPURT_COUNTER_MAJOR_VERSION << 16) | GPURT_COUNTER_MINOR_VERSION)
+
 #ifdef __cplusplus
 #include "pal.h"
 namespace GpuRt
@@ -92,6 +105,7 @@ struct CounterInfo
     uint32 lostTokenBytes;               // Total lost token bytes
     uint32 counterRayIdRangeBegin;       // Partial rayID range begin
     uint32 counterRayIdRangeEnd;         // Partial rayID range end
+    uint32 pipelineType;                 // Pipeline type (native RT or RayQuery). RayTracing=0, Compute=1, Graphics=2
 };
 #ifdef __cplusplus
 #pragma pack(pop)
@@ -130,26 +144,31 @@ struct TraversalCounter
 
 // ====================================================================================================================
 // Ray history token type
-#define RAY_HISTORY_TOKEN_TYPE_BEGIN                0
-#define RAY_HISTORY_TOKEN_TYPE_TOP_LEVEL            1
-#define RAY_HISTORY_TOKEN_TYPE_BOTTOM_LEVEL         2
-#define RAY_HISTORY_TOKEN_TYPE_END                  3
-#define RAY_HISTORY_TOKEN_TYPE_FUNC_CALL            4
-#define RAY_HISTORY_TOKEN_TYPE_GPU_TIME             5
-#define RAY_HISTORY_TOKEN_TYPE_ANYHIT_STATUS        6
-#define RAY_HISTORY_TOKEN_TYPE_FUNC_CALL_V2         7
-#define RAY_HISTORY_TOKEN_TYPE_PROC_ISECT_STATUS    8
-#define RAY_HISTORY_TOKEN_TYPE_RESERVED             0x8000
+#define RAY_HISTORY_TOKEN_TYPE_BEGIN                                 0
+#define RAY_HISTORY_TOKEN_TYPE_TOP_LEVEL                             1
+#define RAY_HISTORY_TOKEN_TYPE_BOTTOM_LEVEL                          2
+#define RAY_HISTORY_TOKEN_TYPE_INTERSECTION_RESULT                   3
+#define RAY_HISTORY_TOKEN_TYPE_FUNC_CALL                             4
+#define RAY_HISTORY_TOKEN_TYPE_GPU_TIME                              5
+#define RAY_HISTORY_TOKEN_TYPE_ANYHIT_STATUS                         6
+#define RAY_HISTORY_TOKEN_TYPE_FUNC_CALL_V2                          7
+#define RAY_HISTORY_TOKEN_TYPE_CANDIDATE_INTERSECTION_RESULT         8
+#define RAY_HISTORY_TOKEN_TYPE_INTERSECTION_RESULT_V2                9
+#define RAY_HISTORY_TOKEN_TYPE_BEGIN_V2                              10
+#define RAY_HISTORY_TOKEN_TYPE_RESERVED                              0x8000
+#define RAY_HISTORY_TOKEN_TYPE_UNKNOWN                               0xffff
 
-#define RAY_HISTORY_TOKEN_BEGIN_SIZE            16
-#define RAY_HISTORY_TOKEN_TOP_LEVEL_SIZE         2
-#define RAY_HISTORY_TOKEN_BOTTOM_LEVEL_SIZE      2
-#define RAY_HISTORY_TOKEN_FUNC_CALL_SIZE         2
-#define RAY_HISTORY_TOKEN_GPU_TIME_SIZE          2
-#define RAY_HISTORY_TOKEN_END_SIZE               2
-#define RAY_HISTORY_TOKEN_CONTROL_SIZE           2
-#define RAY_HISTORY_TOKEN_FUNC_CALL_V2_SIZE      3
-#define RAY_HISTORY_TOKEN_PROC_ISECT_DATA_SIZE   2
+#define RAY_HISTORY_TOKEN_BEGIN_SIZE                                 16
+#define RAY_HISTORY_TOKEN_TOP_LEVEL_SIZE                             2
+#define RAY_HISTORY_TOKEN_BOTTOM_LEVEL_SIZE                          2
+#define RAY_HISTORY_TOKEN_INTERSECTION_RESULT_SIZE                   2
+#define RAY_HISTORY_TOKEN_FUNC_CALL_SIZE                             2
+#define RAY_HISTORY_TOKEN_GPU_TIME_SIZE                              2
+#define RAY_HISTORY_TOKEN_CONTROL_SIZE                               2
+#define RAY_HISTORY_TOKEN_FUNC_CALL_V2_SIZE                          3
+#define RAY_HISTORY_TOKEN_CANDIDATE_INTERSECTION_RESULT_SIZE         2
+#define RAY_HISTORY_TOKEN_INTERSECTION_RESULT_V2_SIZE                6
+#define RAY_HISTORY_TOKEN_BEGIN_V2_SIZE                              19
 
 #define RAY_HISTORY_CONTROL_TOKEN_TYPE_MASK    0xFFFF
 #define RAY_HISTORY_CONTROL_TOKEN_LENGTH_MASK  0xFF
@@ -167,7 +186,8 @@ struct TraversalCounter
 #define RAY_HISTORY_FUNC_CALL_TYPE_INTERSECTION 4
 
 #define RAY_TRACING_COUNTER_REQUEST_BYTE_OFFSET 0
-#define RAY_TRACING_COUNTER_RESERVED_BYTE_SIZE  4
+#define RAY_TRACING_COUNTER_RAY_ID_BYTE_OFFSET  4
+#define RAY_TRACING_COUNTER_RESERVED_BYTE_SIZE  8
 
 #ifdef __cplusplus
 // ====================================================================================================================
@@ -236,7 +256,8 @@ struct RayTracingBinaryHeaderTraversalCounter : RayTracingBinaryHeader
 };
 
 // ====================================================================================================================
-// Ray identifier token
+// 32-bit unique ray identifier calculated as below.
+//      uint32_t id = threadID.x + (threadID.y * dim.x) + (threadID.z * dim.x * dim.y);
 struct RayID
 {
     uint32 id       : 30; // Unique identifier
@@ -251,12 +272,14 @@ enum RayHistoryTokenType : uint16
     RayHistoryTokenBegin,
     RayHistoryTokenTopLevel,
     RayHistoryTokenBottomLevel,
-    RayHistoryTokenEnd,
+    RayHistoryTokenIntersectionResult,
     RayHistoryTokenFunctionCall,
     RayHistoryTokenGpuTimestamp,
     RayHistoryTokenAnyHitStatus,
-    RayHistoryTokenFunctionCallV2,
-    RayHistoryTokenTypeProcIsectStatus,
+    RayHistoryTokenFunctionCall_v2,
+    RayHistoryTokenCandidateIntersectionResult,
+    RayHistoryTokenIntersectionResult_v2,
+    RayHistoryTokenBegin_v2,
 
     // Anything with the top bit set is reserved
     RayHistoryTokenReserved = 0x8000,
@@ -297,19 +320,90 @@ struct RayHistoryTokenBeginData
 };
 
 // ====================================================================================================================
+struct HwWaveIdGfx10
+{
+    uint32 wave_id : 5;
+    uint32 simd_id : 2;
+    uint32 wgp_id : 4;
+    uint32 sa_id : 1;
+    uint32 se_id : 3;
+    uint32 padding : 17;
+};
+
+// ====================================================================================================================
+// Ray history token begin data v2 format
+struct RayHistoryTokenBeginData_v2 : RayHistoryTokenBeginData
+{
+    uint32 staticId;  // 32-bit unique identifier, unique to a shader call site (TraceRay/RayQuery.TraceRayInline()
+    uint32 dynamicId; // 32-bit unique identifier generated on traversal begin that is uniform across the wave.
+    uint32 parentId;  // 32-bit unique identifier for parent traversal that invoked recursive traversal.
+};
+
+// ====================================================================================================================
+struct RayHistoryTokenNodePtrData
+{
+    uint32 nodePtr;
+};
+
+// ====================================================================================================================
+// Ray history token top level data format
+struct RayHistoryTokenTopLevelData
+{
+    uint64 baseAddr;
+};
+
+// ====================================================================================================================
+// Ray history token bottom level data format
+struct RayHistoryTokenBottomLevelData
+{
+    uint64 baseAddr;
+};
+
+// ====================================================================================================================
 // Ray history token end data format
-struct RayHistoryTokenEndData
+struct RayHistoryTokenIntersectionResultData
 {
     uint32 primitiveIndex; // Primitive index of the geometry hit by this ray (-1 for a miss)
     uint32 geometryIndex;  // Geometry index of the geometry hit by this ray (-1 for a miss)
 };
 
 // ====================================================================================================================
-// Ray history token procedural intersection data format
-struct RayHistoryTokenProcIsectData
+// Ray history extended token end data format
+struct RayHistoryTokenIntersectionResultData_v2 : RayHistoryTokenIntersectionResultData
 {
-    float  hitT;     // Hit T as reported by the intersection shader
-    uint32 hitKind;  // Hit kind as reported by the intersection shader (only lower 8-bits are valid)
+    uint32 instanceIndexAndHitKind;  // Instance index [0:23] and hit kind [24:31]
+    uint32 numIterations;            // Traversal iterations
+    uint32 numInstanceIntersections; // Number of instance intersections
+    float  hitT;                     // Closest intersection distance on ray
+};
+
+// ====================================================================================================================
+// Ray history token function call data format
+struct RayHistoryTokenFunctionCallData
+{
+    uint64 shaderId;
+};
+
+// ====================================================================================================================
+// Ray history extended token function call data format
+struct RayHistoryTokenFunctionCallData_v2 : RayHistoryTokenFunctionCallData
+{
+    uint32 shaderRecordIndex;
+};
+
+// ====================================================================================================================
+// Ray history token candidate intersection data format
+struct RayHistoryTokenCandidateIntersectionResultData
+{
+    float  hitT;     // Hit T as reported by the intersection shader or determined by fixed function triangle intersector
+    uint32 hitKind;  // Hit kind (only lower 8-bits are valid)
+};
+
+// ====================================================================================================================
+// Ray history token gpu timestamp data format
+struct RayHistoryTokenGpuTimestampData
+{
+    uint64_t clocks;
 };
 
 // ====================================================================================================================
@@ -324,6 +418,50 @@ union RayHistoryControlToken
     };
 
     uint32 u32;
+};
+
+// ====================================================================================================================
+// Ray history trace header format
+struct RayHistoryRdfChunkHeader
+{
+    uint32 dispatchID;
+};
+
+// ====================================================================================================================
+// Ray history trace metadata kind
+enum class RayHistoryMetadataKind : uint32
+{
+    CounterInfo        = 1,
+    DispatchDimensions = 2,
+    TraversalFlags     = 3,
+};
+
+// ====================================================================================================================
+// Ray history trace metadata chunk format
+struct RayHistoryMetadataInfo
+{
+    RayHistoryMetadataKind kind;
+    uint64                 sizeInByte;
+};
+
+// ====================================================================================================================
+// Ray history trace shader table type
+enum class ShaderTableType : uint32
+{
+    RayGen,
+    Miss,
+    HitGroup,
+    Callable,
+};
+
+// ====================================================================================================================
+// Ray history trace shader table chunk format
+struct ShaderTableInfo
+{
+    ShaderTableType type;
+    uint32          reserved;
+    uint64          stride;
+    uint64          sizeInBytes;
 };
 } // namespace GpuRt
 #endif

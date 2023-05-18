@@ -317,32 +317,29 @@ uint32 BvhBuilder::CalcMetadataSizeInBytes(
 uint32 BvhBuilder::CalculateInternalNodesSize()
 {
     const uint32 leafAabbCount = m_buildConfig.numLeafNodes;
-    const uint32 numInternalNodes = CalcNumQBVHInternalNodes(leafAabbCount);
 
+    uint32 numInternalNodes = CalcNumInternalNodes(leafAabbCount);
     uint32 numBox16Nodes = 0;
-    uint32 numBox32Nodes = 0;
     switch (m_buildConfig.fp16BoxNodesInBlasMode)
     {
     case Fp16BoxNodesInBlasMode::NoNodes:
         // All nodes are fp32
-        numBox32Nodes = numInternalNodes;
         break;
 
     case Fp16BoxNodesInBlasMode::LeafNodes:
         // Conservative estimate how many interior nodes can be converted to fp16
         numBox16Nodes = (leafAabbCount / 4);
-        numBox32Nodes = numInternalNodes - numBox16Nodes;
+        numInternalNodes -= numBox16Nodes;
         break;
 
     case Fp16BoxNodesInBlasMode::MixedNodes:
         // Conservative estimate: no fp32 nodes could be converted to fp16
         // BVH storage savings realized after compaction copy
-        numBox32Nodes = numInternalNodes;
         break;
 
     case Fp16BoxNodesInBlasMode::AllNodes:
         numBox16Nodes = numInternalNodes - 1;
-        numBox32Nodes = 1;
+        numInternalNodes = 1;
         break;
 
     default:
@@ -353,7 +350,8 @@ uint32 BvhBuilder::CalculateInternalNodesSize()
     const uint32 internalNodeSize = RayTracingQBVH32NodeSize;
 
     const uint32 sizeInBytes = (RayTracingQBVH16NodeSize * numBox16Nodes) +
-                               (internalNodeSize * numBox32Nodes);
+                               (internalNodeSize * numInternalNodes);
+
     return sizeInBytes;
 }
 
@@ -589,7 +587,9 @@ uint32 BvhBuilder::CalculateScratchBufferInfo(
     //  Collapse Stack Ptrs (StackPtrs StackPtrs)                                               -Bottom Level Only
     //-----------------------------------------------------------------------------------------------------------//
 
-    uint32 runningOffset = 0;
+    const bool willDumpScratchOffsets = m_deviceSettings.enableBuildAccelStructScratchDumping;
+    // Reserve the beginning of the scratch buffer for the offsets data if dumping.
+    uint32 runningOffset = willDumpScratchOffsets ? sizeof(RayTracingScratchDataOffsets) : 0;
 
     // Scratch data for storing internal BVH node data
     const uint32 bvhNodeData = runningOffset;
@@ -708,10 +708,18 @@ uint32 BvhBuilder::CalculateScratchBufferInfo(
     uint32 maxSize = runningOffset;
 
     const uint32 passOffset = runningOffset;
+    const auto ApplyPassOffset = [willDumpScratchOffsets, passOffset, &runningOffset]()
+    {
+        // Do not overwrite the running offset when dumping the scratch buffer offsets.
+        if (willDumpScratchOffsets == false)
+        {
+            runningOffset = passOffset;
+        }
+    };
 
     // ============ PASS 1 ============
 
-    runningOffset = passOffset;
+    ApplyPassOffset();
 
     uint32 bvhLeafNodeData = 0xFFFFFFFF; // Unsorted leaf buffer
     uint32 sceneBounds = 0xFFFFFFFF;
@@ -889,7 +897,7 @@ uint32 BvhBuilder::CalculateScratchBufferInfo(
 
     // ============ PASS 2 ============
 
-    runningOffset = passOffset;
+    ApplyPassOffset();
 
     uint32 clustersList0 = 0xFFFFFFFF;
     uint32 clustersList1 = 0xFFFFFFFF;
@@ -926,7 +934,7 @@ uint32 BvhBuilder::CalculateScratchBufferInfo(
 
     // ============ PASS 3 ============
 
-    runningOffset = passOffset;
+    ApplyPassOffset();
 
     uint32 qbvhGlobalStack = 0;
     uint32 qbvhGlobalStackPtrs = 0;
@@ -938,7 +946,7 @@ uint32 BvhBuilder::CalculateScratchBufferInfo(
     // ..and QBVH global stack
     qbvhGlobalStack = runningOffset;
 
-    const uint32 maxStackEntry = CalcNumQBVHInternalNodes(m_buildConfig.numLeafNodes);
+    const uint32 maxStackEntry = CalcNumInternalNodes(m_buildConfig.numLeafNodes);
 
     if ((m_buildConfig.topLevelBuild == false) && m_buildConfig.collapse)
     {
@@ -953,8 +961,9 @@ uint32 BvhBuilder::CalculateScratchBufferInfo(
         const bool intNodeTypesMixInBlas = intNodeTypesMix &&
             (m_buildArgs.inputs.type == AccelStructType::BottomLevel);
 
-        uint32 stackEntrySize = intNodeTypesMixInBlas ? 2u : 1u;
+        bool stackHasTwoEntries = intNodeTypesMixInBlas;
 
+        const uint32 stackEntrySize = stackHasTwoEntries ? 2u : 1u;
         runningOffset += maxStackEntry * stackEntrySize * sizeof(uint32);
     }
 
@@ -1042,8 +1051,7 @@ uint32 BvhBuilder::CalculateUpdateScratchBufferInfo(
 
     // Allocate space for the node flags
     offsets.propagationFlags = runningOffset;
-    runningOffset +=
-        m_buildConfig.numLeafNodes * sizeof(uint32);
+    runningOffset += m_buildConfig.numLeafNodes * sizeof(uint32);
 
     // Allocate space for update stack
     offsets.updateStack = runningOffset;
@@ -2488,6 +2496,12 @@ void BvhBuilder::BuildRaytracingAccelerationStructure(
                     dumpGpuVirtAddr + resultDataSize,
                     ScratchBufferBaseVa(),
                     scratchBufferSize >> 2);
+
+                // Upload the scratch buffer offsets data to the reserved portion of the scratch buffer
+                m_pDevice->UploadCpuMemory(m_pPalCmdBuffer,
+                    dumpGpuVirtAddr + resultDataSize,
+                    &m_scratchOffsets,
+                    sizeof(m_scratchOffsets));
             }
         }
     }
@@ -2923,11 +2937,13 @@ void BvhBuilder::CopyASToolsVisualizationMode(
 
     const uint32 numThreadGroups = GetNumThreadGroupsCopy();
 
+    // Note, build settings are not available for Copy paths.
     const DecodeAS::Constants shaderConstants =
     {
         static_cast<uint32>(copyArgs.dstAccelStructAddr.gpu),
         static_cast<uint32>(copyArgs.dstAccelStructAddr.gpu >> 32),
-        numThreadGroups * DefaultThreadGroupSize
+        numThreadGroups * DefaultThreadGroupSize,
+        static_cast<uint32>(m_pDevice->GetRtIpLevel()),
     };
 
     uint32 entryOffset = 0;
@@ -3344,9 +3360,7 @@ void BvhBuilder::UpdateQBVH()
 
     RGP_PUSH_MARKER("Update QBVH");
 
-    const uint32 numWorkItems =
-        Util::Max(1u,
-        (m_buildConfig.numPrimitives / 2));
+    const uint32 numWorkItems = Util::Max(1u, (m_buildConfig.numPrimitives / 2));
     Dispatch(DispatchSize(numWorkItems));
 
     RGP_POP_MARKER();
@@ -3358,10 +3372,7 @@ void BvhBuilder::UpdateParallel()
 {
     BindPipeline(InternalRayTracingCsType::UpdateParallel);
 
-    const uint32 numWorkItems =
-        Util::Max(1u,
-            (m_buildConfig.numPrimitives / 2));
-
+    const uint32 numWorkItems     = Util::Max(1u, (m_buildConfig.numPrimitives / 2));
     const uint32 threadGroupSize  = DefaultThreadGroupSize;
     const uint32 wavesPerSimd     = 8;
     const uint32 numThreadGroups  = GetNumPersistentThreadGroups(numWorkItems, threadGroupSize, wavesPerSimd);
@@ -3637,7 +3648,7 @@ void BvhBuilder::EncodeUpdate()
 // Executes the build QBVH shader
 void BvhBuilder::BuildQBVH()
 {
-    const uint32 nodeCount       = CalcNumQBVHInternalNodes(m_buildConfig.numLeafNodes);
+    const uint32 nodeCount       = CalcNumInternalNodes(m_buildConfig.numLeafNodes);
     const uint32 numThreadGroups = GetNumPersistentThreadGroups(nodeCount);
 
     const BuildQBVH::Constants shaderConstants =
@@ -3713,7 +3724,7 @@ void BvhBuilder::BuildQBVH()
 // Executes the build top QBVH shader
 void BvhBuilder::BuildQBVHTop()
 {
-    const uint32 nodeCount       = CalcNumQBVHInternalNodes(m_buildConfig.numLeafNodes);
+    const uint32 nodeCount       = CalcNumInternalNodes(m_buildConfig.numLeafNodes);
     const uint32 numThreadGroups = GetNumPersistentThreadGroups(nodeCount);
 
     const BuildQBVH::Constants shaderConstants =
@@ -3730,7 +3741,7 @@ void BvhBuilder::BuildQBVHTop()
         0,
         m_buildSettings.emitCompactSize,
         (m_buildArgs.inputs.inputElemLayout == InputElementLayout::ArrayOfPointers),
-        m_buildConfig.topDownBuild,
+        (m_buildConfig.rebraidType != RebraidType::Off),
         m_buildSettings.enableFusedInstanceNode,
         m_buildConfig.enableFastLBVH,
         m_scratchOffsets.fastLBVHRootNodeIndex,

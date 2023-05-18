@@ -110,12 +110,28 @@ static bool RayQueryProceedCommon(
 
             if (rayQuery.committed.currNodePtr != INVALID_NODE)
             {
+                const GpuVirtualAddress nodeAddr64 =
+                    GetRayQueryTopBvhAddress(rayQuery) + ExtractNodePointerOffset(rayQuery.lastInstanceNode);
+                uint instNodeIndex = FetchInstanceIdx(nodeAddr64);
+
                 WriteRayHistoryTokenEnd(
-                    rayId, uint2(rayQuery.committed.primitiveIndex, rayQuery.committed.geometryIndex));
+                    rayId,
+                    uint2(rayQuery.committed.primitiveIndex, rayQuery.committed.geometryIndex),
+                    instNodeIndex,
+                    rayQuery.numIterations,
+                    rayQuery.instanceIntersections,
+                    rayQuery.committed.frontFace ? HIT_KIND_TRIANGLE_FRONT_FACE : HIT_KIND_TRIANGLE_BACK_FACE,
+                    rayQuery.committed.rayTCurrent);
             }
             else
             {
-                WriteRayHistoryTokenEnd(rayId, uint2(~0, ~0));
+                WriteRayHistoryTokenEnd(rayId,
+                                        uint2(~0, ~0),
+                                        uint(~0),
+                                        rayQuery.numIterations,
+                                        rayQuery.instanceIntersections,
+                                        uint(~0),
+                                        (rayQuery.rayDesc.TMax - rayQuery.rayDesc.TMin));
             }
         }
     }

@@ -529,7 +529,7 @@ void InitBuildQbvh(
     qbvhArgs.fp16BoxNodesInBlasMode      = Settings.fp16BoxNodesMode;
     qbvhArgs.flags                       = BuildModeFlags();
     qbvhArgs.encodeArrayOfPointers       = ShaderConstants.encodeArrayOfPointers;
-    qbvhArgs.topDownBuild                = 0;
+    qbvhArgs.rebraidEnabled              = (Settings.rebraidType != RebraidType::Off);
     qbvhArgs.enableFusedInstanceNode     = Settings.enableFusedInstanceNode;
     qbvhArgs.enableFastLBVH              = Settings.enableFastLBVH;
     qbvhArgs.fastLBVHRootNodeIndex       = Settings.enableFastLBVH ?
@@ -571,7 +571,7 @@ void BuildQbvh(
     qbvhArgs.fp16BoxNodesInBlasMode      = Settings.fp16BoxNodesMode;
     qbvhArgs.flags                       = BuildModeFlags();
     qbvhArgs.encodeArrayOfPointers       = ShaderConstants.encodeArrayOfPointers;
-    qbvhArgs.topDownBuild                = Settings.rebraidType != RebraidType::Off;
+    qbvhArgs.rebraidEnabled              = (Settings.rebraidType != RebraidType::Off);
     qbvhArgs.enableFusedInstanceNode     = Settings.enableFusedInstanceNode;
     qbvhArgs.enableEarlyPairCompression  = Settings.enableEarlyPairCompression;
     qbvhArgs.enableFastLBVH              = Settings.enableFastLBVH;

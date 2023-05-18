@@ -377,7 +377,7 @@ export uint GetInstanceID(
 export uint GetInstanceIndex(
     in uint64_t instanceNodePtr) // 64-bit instance node address
 {
-    return LoadDwordAtAddr(instanceNodePtr + INSTANCE_DESC_SIZE + RTIP1_1_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET);
+    return LoadDwordAtAddr(instanceNodePtr + sizeof(InstanceDesc) + RTIP1_1_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET);
 }
 
 //=====================================================================================================================
@@ -389,7 +389,7 @@ export float GetObjectToWorldTransform(
 {
     const uint32_t elementOffset = (row * sizeof(float4)) + (col * sizeof(float));
     return asfloat(LoadDwordAtAddr(instanceNodePtr +
-                                   INSTANCE_DESC_SIZE +
+                                   sizeof(InstanceDesc) +
                                    RTIP1_1_INSTANCE_SIDEBAND_OBJECT2WORLD_OFFSET +
                                    elementOffset));
 }
@@ -403,6 +403,15 @@ export float GetWorldToObjectTransform(
 {
     const uint32_t elementOffset = (row * sizeof(float4)) + (col * sizeof(float));
     return asfloat(LoadDwordAtAddr(instanceNodePtr + INSTANCE_DESC_WORLD_TO_OBJECT_XFORM_OFFSET + elementOffset));
+}
+
+//=====================================================================================================================
+// GPURT function for fetching 64-bit instance node address used in RayQuery
+export uint64_t GetRayQuery64BitInstanceNodePtr(
+    in uint64_t tlasBaseAddr,     // 64-bit TLAS base address
+    in uint32_t instanceNodePtr)  // Instance node pointer
+{
+    return CalculateNodeAddr64(tlasBaseAddr, instanceNodePtr);
 }
 
 #endif

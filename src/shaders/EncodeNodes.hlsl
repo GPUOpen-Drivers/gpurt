@@ -150,13 +150,28 @@ BoundingBox FetchBoundingBoxData(RWBuffer<float3> buffer, uint index, uint boxSt
     return bbox;
 }
 
+//======================================================================================================================
+uint CalcProceduralBoxNodeFlags(
+    in uint geometryFlags)
+{
+    // Determine opacity from geometry flags
+    uint nodeFlags =
+        (geometryFlags & D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE) ? 1u << BOX_NODE_FLAGS_ONLY_OPAQUE_SHIFT :
+                                                                  1u << BOX_NODE_FLAGS_ONLY_NON_OPAQUE_SHIFT;
+
+    // Note, a bottom-level acceleration structure can only contain a single geometry type.
+    nodeFlags |= 1u << BOX_NODE_FLAGS_ONLY_PROCEDURAL_SHIFT;
+
+    return nodeFlags;
+}
+
 //=====================================================================================================================
-void WriteScratchBoundingBoxNode(
+void WriteScratchProceduralNode(
     RWByteAddressBuffer buffer,
     uint                primitiveOffset,
     uint                primitiveIndex,
     uint                geometryIndex,
-    uint                flags,
+    uint                geometryFlags,
     in BoundingBox      bbox)
 {
     uint offset = (primitiveIndex * ByteStrideScratchNode) +
@@ -181,7 +196,10 @@ void WriteScratchBoundingBoxNode(
 
     const float cost = SAH_COST_AABBB_INTERSECTION * ComputeBoxSurfaceArea(bbox);
 
-    data = uint4(typeAndId, flags, INVALID_IDX, asuint(cost));
+    // Instance mask is assumed 0 in bottom level acceleration structures
+    const uint boxNodeFlags = CalcProceduralBoxNodeFlags(geometryFlags);
+
+    data = uint4(typeAndId, boxNodeFlags, INVALID_IDX, asuint(cost));
     buffer.Store4(offset + SCRATCH_NODE_TYPE_OFFSET, data);
 }
 
@@ -203,10 +221,12 @@ void WriteProceduralNodePrimitiveData(
     uint nodePointer,
     uint primitiveIndex)
 {
-    const uint nodeOffset            = metadataSize + ExtractNodePointerOffset(nodePointer);
-    const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(ShaderConstants.GeometryIndex,
-                                                                 ShaderConstants.GeometryFlags);
+    const uint nodeOffset = metadataSize + ExtractNodePointerOffset(nodePointer);
+
     {
+        const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(ShaderConstants.GeometryIndex,
+                                                                     ShaderConstants.GeometryFlags);
+
         DstMetadata.Store(nodeOffset + USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET, primitiveIndex);
         DstMetadata.Store(nodeOffset + USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
     }
@@ -275,21 +295,20 @@ void EncodeAABBNodes(
 
                     DstMetadata.Store(primNodePointerOffset, nodePointer);
                 }
-                {
-	                PushNodeForUpdate(ShaderConstants,
-	                                  GeometryBuffer,
-	                                  IndexBuffer,
-	                                  TransformBuffer,
-	                                  metadataSize,
-	                                  ShaderConstants.BaseUpdateStackScratchOffset,
-	                                  ShaderConstants.TriangleCompressionMode,
-	                                  ShaderConstants.isUpdateInPlace,
-	                                  nodePointer,
-	                                  0,
-	                                  0,
-	                                  boundingBox,
-	                                  true);
-                }
+
+                PushNodeForUpdate(ShaderConstants,
+                                  GeometryBuffer,
+                                  IndexBuffer,
+                                  TransformBuffer,
+                                  metadataSize,
+                                  ShaderConstants.BaseUpdateStackScratchOffset,
+                                  ShaderConstants.TriangleCompressionMode,
+                                  ShaderConstants.isUpdateInPlace,
+                                  nodePointer,
+                                  0,
+                                  0,
+                                  boundingBox,
+                                  true);
             }
             else if (ShaderConstants.isUpdateInPlace == false)
             {
@@ -312,12 +331,12 @@ void EncodeAABBNodes(
                 UpdateCentroidSceneBoundsWithSize(ShaderConstants.SceneBoundsByteOffset, boundingBox);
             }
 
-            WriteScratchBoundingBoxNode(ScratchBuffer,
-                                        primitiveOffset,
-                                        primitiveIndex,
-                                        ShaderConstants.GeometryIndex,
-                                        ShaderConstants.GeometryFlags,
-                                        boundingBox);
+            WriteScratchProceduralNode(ScratchBuffer,
+                                       primitiveOffset,
+                                       primitiveIndex,
+                                       ShaderConstants.GeometryIndex,
+                                       ShaderConstants.GeometryFlags,
+                                       boundingBox);
 
             // Store invalid prim node pointer for now during first time builds.
             // If the Procedural node is active, BuildQBVH will update it.

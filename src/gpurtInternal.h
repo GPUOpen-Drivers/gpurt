@@ -26,6 +26,7 @@
 #include "gpurt/gpurt.h"
 #include "gpurt/gpurtAccelStruct.h"
 #include "gpurt/gpurtBuildSettings.h"
+#include "gpurt/gpurtCounter.h"
 #include "palInlineFuncs.h"
 
 namespace GpuRt
@@ -180,6 +181,52 @@ struct RayTracingScratchDataOffsets
     uint32 debugCounters;
 };
 
+struct DispatchDimensions
+{
+    uint32 dimX;
+    uint32 dimY;
+    uint32 dimZ;
+};
+
+struct RayHistoryMetadata
+{
+    RayHistoryMetadataInfo   counterInfo;
+    CounterInfo              counter;
+    RayHistoryMetadataInfo   dispatchDimsInfo;
+    DispatchDimensions       dispatchDims;
+    RayHistoryMetadataInfo   traversalFlagsInfo;
+    RayHistoryTraversalFlags traversalFlags;
+};
+
+struct RayHistoryTraceListInfo
+{
+    RayHistoryRdfChunkHeader    rayHistoryRdfChunkHeader;
+    void*                       pRayHistoryTraceBuffer;
+
+    uint32                      shaderTableRayGenOffset;
+    ShaderTableInfo             shaderTableRayGenInfo;
+
+    uint32                      shaderTableMissOffset;
+    ShaderTableInfo             shaderTableMissInfo;
+
+    uint32                      shaderTableHitGroupOffset;
+    ShaderTableInfo             shaderTableHitGroupInfo;
+
+    uint32                      shaderTableCallableOffset;
+    ShaderTableInfo             shaderTableCallableInfo;
+
+    ClientGpuMemHandle          traceBufferGpuMem;
+
+    CounterInfo                 counterInfo;
+    DispatchDimensions          dispatchDims;
+    RayHistoryTraversalFlags    traversalFlags;
+
+    IndirectCounterMetadata*    pIndirectCounterMetadata;
+    bool                        isIndirect;
+};
+
+typedef Util::Vector<RayHistoryTraceListInfo, 8, Internal::Device> RayHistoryBufferList;
+
 // Starting logical ID value for all logical IDs used by internal pipelines.
 const uint32 ReservedLogicalIdCount = 1;
 
@@ -187,8 +234,8 @@ const uint32 ReservedLogicalIdCount = 1;
 extern const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsType::Count)];
 
 // =====================================================================================================================
-// Calculate acceleration structure internal node count for QBVH
-inline uint32 CalcNumQBVHInternalNodes(
+// Calculate acceleration structure internal node count for resulting BVH
+inline uint32 CalcNumInternalNodes(
     uint32 primitiveCount)    // Primitive node count (instances or triangle/aabb geometry)
 {
     return Util::Max(1U, (2 * primitiveCount) / 3);
@@ -342,6 +389,15 @@ public:
         const AccelStructBuildInfo&   buildInfo
     ) override;
 
+    // Writes commands into a command buffer to build multiple acceleration structures
+    //
+    // @param pCmdBuffer           [in] Command buffer where commands will be written
+    // @param buildInfo            [in] Acceleration structure build info
+    virtual void BuildAccelStructs(
+        Pal::ICmdBuffer*                       pCmdBuffer,
+        Util::Span<const AccelStructBuildInfo> buildInfo
+    ) override;
+
     // Writes commands into a command buffer to emit post-build information about an acceleration structure
     //
     // @param pCmdBuffer           [in] Command buffer where commands will be written
@@ -427,6 +483,79 @@ public:
 
     void NotifyTlasBuild(Pal::gpusize address);
 
+    // Returns true if the ray history trace source is currently available for use.
+    virtual bool RayHistoryTraceAvailable() const
+    {
+        return m_rayHistoryTraceSource.Available();
+    }
+
+    // Returns true if a trace is active. If true, the client should call TraceRtDispatch() for each direct dispatch
+    // and TraceIndirectRtDispatch() for each potential indirect dispatch.
+    virtual bool RayHistoryTraceActive() const
+    {
+        return m_rayHistoryTraceSource.Active();
+    }
+
+    // Notifies GPURT about an RT dispatch, triggers a trace buffer allocation, and outputs a buffer view for the trace
+    // buffer.
+    virtual void TraceRtDispatch(
+        Pal::ICmdBuffer*                pCmdBuffer,
+        RtPipelineType                  pipelineType,
+        RtDispatchInfo                  dispatchInfo,
+        DispatchRaysConstants*          pConstants);
+
+    // Notifies GPURT about an indirect RT dispatch similar to TraceRtDispatch(). Multiple disaptches may occur in
+    // one invocation, and the max count must be provided. At most MaxSupportedIndirectCounters will be traced.
+    //
+    // @param pCounterMetadataVa [out] GPUVA pointing to an array of maxDispatchCount IndirectCounterMetadata structs.
+    //                                 This GPUVA must be used to initialize InitExecuteIndirectUserData.outputCounterMetaVa.
+    //
+    // @param pIndirectConstants [out] InitExecuteIndirectConstants for RT pipelines and DispatchRaysConstants otherwise.
+    virtual void TraceIndirectRtDispatch(
+        RtPipelineType                type,
+        RtDispatchInfo                dispatchInfo,
+        uint32                        maxDispatchCount,
+        Pal::gpusize*                 pCounterMetadataVa,
+        void*                         pIndirectConstants);
+
+    void AddMetadataToList(
+        RtDispatchInfo              dispatchInfo,
+        RtPipelineType              pipelineType,
+        RayHistoryTraceListInfo*    pTraceListInfo);
+
+    // Fill shader table info and copy the application's shader table data
+    //
+    // @param pCmdBuffer          [in]  Command buffer where commands will be written
+    // @param runningOffsetGpuVa  [in]  Offset GpuVa for shader table copy to
+    // @param destGpuVa           [in]  Base GpuVa for shader table
+    // @param runningOffset       [in]  Offset for read back shader table info
+    // @param pMappedData         [in]  Data of trace and shader table memory allocation
+    // @param shaderTableType     [in]  RayGen=0, Miss=1, HitGroup=2, Callable=3
+    // @param shaderTable         [in]  Shader table from dispatch arguments
+    // @param pOutShaderTableInfo [out] Output Shader table with user data filled in
+    void WriteShaderTableData(
+        Pal::ICmdBuffer*       pCmdBuffer,
+        uint64                 runningOffsetGpuVa,
+        Pal::gpusize           destGpuVa,
+        uint64                 runningOffset,
+        void*                  pMappedData,
+        ShaderTableType        shaderTableType,
+        ShaderTable            shaderTable,
+        ShaderTableInfo*       pOutShaderTableInfo);
+
+    void WriteRayHistoryChunks(
+        GpuUtil::ITraceSource* pTraceSource);
+
+    void WriteRayHistoryMetaDataChunks(
+        const RayHistoryTraceListInfo& traceListInfo,
+        GpuUtil::ITraceSource*         pTraceSource);
+
+    void WriteShaderTableChunks(
+        const RayHistoryTraceListInfo& traceListInfo,
+        GpuUtil::ITraceSource*         pTraceSource);
+
+    uint64 GetRayHistoryBufferSizeInBytes() { return m_rayHistoryTraceSource.GetBufferSizeInBytes(); }
+
     Pal::IPipeline* GetInternalPipeline(
         InternalRayTracingCsType        type,
         const CompileTimeBuildSettings& buildSettings,
@@ -457,6 +586,19 @@ public:
         Pal::gpusize     dstBufferVa,
         Pal::gpusize     srcBufferVa,
         uint32           numDwords);
+
+    // Uploads CPU memory to a GPU buffer
+    //
+    // @param pCmdBuffer     [in] Command buffer where commands will be written
+    // @param dstBufferVa         Destination buffer GPU VA
+    // @param pSrcData            Pointer to the CPU memory to upload
+    // @param sizeInBytes         Size of the CPU memory to upload, in bytes. Must be less than or equal to
+    //                            the size reported by pCmdBuffer->GetEmbeddedDataLimit();
+    void UploadCpuMemory(
+        Pal::ICmdBuffer* pCmdBuffer,
+        Pal::gpusize     dstBufferVa,
+        const void*      pSrcData,
+        uint32           sizeInBytes);
 
     // Writes the provided entries into the compute shader user data slots
     //
@@ -534,6 +676,10 @@ protected:
     ClientCallbacks                          m_clientCb;
     Pal::RayTracingIpLevel                   m_rtIpLevel;           // the actual RTIP level GPURT is using,
                                                                     // is based on emulatedRtIpLevel and the actual device.
+
+    GpuRt::RayHistoryTraceSource             m_rayHistoryTraceSource;
+    RayHistoryBufferList                     m_rayHistoryTraceList;
+    Util::Mutex                              m_traceRayHistoryLock;
 };
 }  // namespace Internal
 } // namespace GpuRt

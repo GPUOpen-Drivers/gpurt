@@ -207,13 +207,28 @@ TriangleData FetchTriangleData(
 }
 
 //======================================================================================================================
+uint CalcTriangleBoxNodeFlags(
+    in uint geometryFlags)
+{
+    // Determine opacity from geometry flags
+    uint nodeFlags =
+        (geometryFlags & D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE) ? 1u << BOX_NODE_FLAGS_ONLY_OPAQUE_SHIFT :
+                                                                  1u << BOX_NODE_FLAGS_ONLY_NON_OPAQUE_SHIFT;
+
+    // Note, a bottom-level acceleration structure can only contain a single geometry type.
+    nodeFlags |= 1u << BOX_NODE_FLAGS_ONLY_TRIANGLES_SHIFT;
+
+    return nodeFlags;
+}
+
+//======================================================================================================================
 void WriteScratchTriangleNode(
     GeometryArgs        geometryArgs,
     RWByteAddressBuffer buffer,
     uint                primitiveOffset,
     uint                primitiveIndex,
     uint                geometryIndex,
-    uint                flags,
+    uint                geometryFlags,
     in TriangleData     tri)
 {
     uint offset = (primitiveIndex  * ByteStrideScratchNode) +
@@ -238,8 +253,18 @@ void WriteScratchTriangleNode(
     const float cost = SAH_COST_TRIANGLE_INTERSECTION * ComputeBoxSurfaceArea(box);
 
     // type, flags, splitBox, numPrimitivesAndDoCollapse
-    const uint triangleId        = CalcUncompressedTriangleId(flags);
+    const uint triangleId        = CalcUncompressedTriangleId(geometryFlags);
     const uint triangleTypeAndId = (triangleId << 3) | NODE_TYPE_TRIANGLE_0;
+
+    // Instance mask is assumed 0 in bottom level acceleration structures
+    uint flags = CalcTriangleBoxNodeFlags(geometryFlags);
+
+    // Disable triangle splitting if geometry descriptor allows duplicate anyHit invocation
+    if ((geometryFlags & D3D12_RAYTRACING_GEOMETRY_FLAG_NO_DUPLICATE_ANYHIT_INVOCATION) != 0)
+    {
+        flags |= SCRATCH_NODE_FLAGS_DISABLE_TRIANGLE_SPLIT_MASK;
+    }
+
     data = uint4(triangleTypeAndId, flags, INVALID_IDX, asuint(cost));
     buffer.Store4(offset + SCRATCH_NODE_TYPE_OFFSET, data);
 }
@@ -455,7 +480,8 @@ void PushNodeForUpdate(
             // comparison when finding the child index in the parent below.
             childNodePointer |= NODE_TYPE_TRIANGLE_1;
 
-            const uint otherPrimIndex = SrcBuffer.Load(triNodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET);
+            uint otherPrimIndexOffset = TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET;
+            const uint otherPrimIndex = SrcBuffer.Load(triNodeOffset + otherPrimIndexOffset);
 
             // Fetch face indices from index buffer.
             const uint3 faceIndices = FetchFaceIndices(IndexBuffer,
@@ -499,11 +525,13 @@ void PushNodeForUpdate(
                            parentNodePointer);
     }
 
-    const uint nodeOffset = metadataSize + ExtractNodePointerOffset(parentNodePointer);
-
     // Compute box node count and child index in parent node
     uint boxNodeCount = 0;
-    const uint childIdx = ComputeChildIndexAndValidBoxCount(Settings, SrcBuffer, nodeOffset, childNodePointer, boxNodeCount);
+    const uint childIdx = ComputeChildIndexAndValidBoxCount(SrcBuffer,
+                                                            metadataSize,
+                                                            parentNodePointer,
+                                                            childNodePointer,
+                                                            boxNodeCount);
 
     // If even a single child node is a box node, this is a node higher up the tree. Skip queueing parent node as another
     // leaf at the bottom of the tree will queue its parent which will handle our parent node.
@@ -520,33 +548,36 @@ void PushNodeForUpdate(
     bool performUpdate = (isUpdateInPlace == false);
 
     uint boxOffset;
+
+    const uint parentNodeOffset = metadataSize + ExtractNodePointerOffset(parentNodePointer);
+
     {
         if (IsBoxNode32(parentNodePointer))
         {
             BoundingBox originalBox;
 
             boxOffset = childIdx * FLOAT32_BBOX_STRIDE;
-            originalBox.min = DstMetadata.Load<float3>(nodeOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET + boxOffset);
-            originalBox.max = DstMetadata.Load<float3>(nodeOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET + boxOffset);
+            originalBox.min = DstMetadata.Load<float3>(parentNodeOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET + boxOffset);
+            originalBox.max = DstMetadata.Load<float3>(parentNodeOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET + boxOffset);
 
             if (any(originalBox.min != boundingBox.min) ||
                 any(originalBox.max != boundingBox.max))
             {
-                DstMetadata.Store<float3>(nodeOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET + boxOffset, boundingBox.min);
-                DstMetadata.Store<float3>(nodeOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET + boxOffset, boundingBox.max);
+                DstMetadata.Store<float3>(parentNodeOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET + boxOffset, boundingBox.min);
+                DstMetadata.Store<float3>(parentNodeOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET + boxOffset, boundingBox.max);
                 performUpdate = true;
             }
         }
         else
         {
             boxOffset = childIdx * FLOAT16_BBOX_STRIDE;
-            const uint3 originalBox16 = DstMetadata.Load<uint3>(nodeOffset + FLOAT16_BOX_NODE_BB0_OFFSET + boxOffset);
+            const uint3 originalBox16 = DstMetadata.Load<uint3>(parentNodeOffset + FLOAT16_BOX_NODE_BB0_OFFSET + boxOffset);
 
             const uint3 boundingBox16 = CompressBBoxToUint3(boundingBox);
 
             if (any(originalBox16 != boundingBox16))
             {
-                DstMetadata.Store<float3>(nodeOffset + FLOAT16_BOX_NODE_BB0_OFFSET + boxOffset, boundingBox16);
+                DstMetadata.Store<float3>(parentNodeOffset + FLOAT16_BOX_NODE_BB0_OFFSET + boxOffset, boundingBox16);
                 performUpdate = true;
             }
         }
@@ -577,21 +608,19 @@ void ClearFlagsForRefitAndUpdate(
     const uint      flattenedPrimitiveIndex,
     const bool      isAABB)
 {
+    if (isAABB)
     {
-        if (isAABB)
+        const uint flagOffset = geometryArgs.PropagationFlagsScratchOffset + (flattenedPrimitiveIndex * sizeof(uint));
+        ScratchBuffer.Store(flagOffset, 0);
+    }
+    else // Triangle
+    {
+        const uint stride = geometryArgs.LeafNodeExpansionFactor * sizeof(uint);
+        const uint flagOffset = geometryArgs.PropagationFlagsScratchOffset + (flattenedPrimitiveIndex * stride);
+        const uint initValue = geometryArgs.enableFastLBVH ? 0xffffffffu : 0;
+        for (uint i = 0; i < geometryArgs.LeafNodeExpansionFactor; ++i)
         {
-            const uint flagOffset = geometryArgs.PropagationFlagsScratchOffset + (flattenedPrimitiveIndex * sizeof(uint));
-            ScratchBuffer.Store(flagOffset, 0);
-        }
-        else // Triangle
-        {
-            const uint stride = geometryArgs.LeafNodeExpansionFactor * sizeof(uint);
-            const uint flagOffset = geometryArgs.PropagationFlagsScratchOffset + (flattenedPrimitiveIndex * stride);
-            const uint initValue = geometryArgs.enableFastLBVH ? 0xffffffffu : 0;
-            for (uint i = 0; i < geometryArgs.LeafNodeExpansionFactor; ++i)
-            {
-                ScratchBuffer.Store(flagOffset + (i * sizeof(uint)), initValue);
-            }
+            ScratchBuffer.Store(flagOffset + (i * sizeof(uint)), initValue);
         }
     }
 }
@@ -677,7 +706,7 @@ void EncodeTriangleNode(
                 if (geometryArgs.isUpdateInPlace == false)
                 {
                     const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(geometryArgs.GeometryIndex,
-                                                                                    geometryArgs.GeometryFlags);
+                                                                                 geometryArgs.GeometryFlags);
                     {
                         DstMetadata.Store(
                             nodeOffset + TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
@@ -705,21 +734,19 @@ void EncodeTriangleNode(
 
             if ((nodePointer != INVALID_IDX) && (skipPairUpdatePush == false))
             {
-                {
-                    PushNodeForUpdate(geometryArgs,
-                                      GeometryBuffer,
-                                      IndexBuffer,
-                                      TransformBuffer,
-                                      metadataSize,
-                                      geometryArgs.BaseUpdateStackScratchOffset,
-                                      geometryArgs.TriangleCompressionMode,
-                                      geometryArgs.isUpdateInPlace,
-                                      nodePointer,
-                                      triangleId,
-                                      vertexOffset,
-                                      boundingBox,
-                                      writeNodesToUpdateStack);
-                }
+                PushNodeForUpdate(geometryArgs,
+                                  GeometryBuffer,
+                                  IndexBuffer,
+                                  TransformBuffer,
+                                  metadataSize,
+                                  geometryArgs.BaseUpdateStackScratchOffset,
+                                  geometryArgs.TriangleCompressionMode,
+                                  geometryArgs.isUpdateInPlace,
+                                  nodePointer,
+                                  triangleId,
+                                  vertexOffset,
+                                  boundingBox,
+                                  writeNodesToUpdateStack);
             }
         }
         else

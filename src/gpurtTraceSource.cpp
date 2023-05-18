@@ -29,7 +29,6 @@
 
 namespace GpuRt
 {
-#if PAL_CLIENT_INTERFACE_MAJOR_VERSION >= 712
 // =====================================================================================================================
 // Process updated trace config
 void AccelStructTraceSource::OnConfigUpdated(
@@ -42,16 +41,6 @@ void AccelStructTraceSource::OnConfigUpdated(
         (void)enabled.GetBool(&m_enabled);
     }
 }
-#else
-// =====================================================================================================================
-// Process updated trace config
-void AccelStructTraceSource::OnConfigUpdated(
-    const char* pJsonConfig)
-{
-    // Assume a config update means the trace is enabled on the old interface.
-    m_enabled = true;
-}
-#endif
 
 // =====================================================================================================================
 // Begin accumulating a list of all TLAS built
@@ -88,4 +77,55 @@ void AccelStructTraceSource::OnTraceFinished()
 {
     m_pDevice->WriteCapturedBvh(this);
 }
+
+// =====================================================================================================================
+// Process updated trace config
+void RayHistoryTraceSource::OnConfigUpdated(
+    DevDriver::StructuredValue* pConfig)
+{
+    DevDriver::StructuredValue enabled;
+
+    if (pConfig->GetValueByKey("enabled", &enabled))
+    {
+        (void)enabled.GetBool(&m_available);
+    }
+
+    if (pConfig->GetValueByKey("rayHistoryBufferSizeBytes", &enabled))
+    {
+        (void)enabled.GetUint64(&m_bufferSizeInBytes);
+    }
+}
+
+// =====================================================================================================================
+void RayHistoryTraceSource::OnTraceBegin(
+    Pal::uint32      gpuIndex,
+    Pal::ICmdBuffer* pCmdBuf)
+{
+    // Make sure trace isn't active already
+    PAL_ASSERT(m_active == false);
+
+    if (m_available == true)
+    {
+        m_active = true;
+        m_dispatchID = 0;
+    }
+}
+
+// =====================================================================================================================
+void RayHistoryTraceSource::OnTraceEnd(
+    Pal::uint32      gpuIndex,
+    Pal::ICmdBuffer* pCmdBuf)
+{
+    if (m_active == true)
+    {
+        m_active = false;
+    }
+}
+
+// =====================================================================================================================
+void RayHistoryTraceSource::OnTraceFinished()
+{
+    m_pDevice->WriteRayHistoryChunks(this);
+}
+
 }
