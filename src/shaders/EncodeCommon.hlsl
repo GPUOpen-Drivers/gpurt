@@ -229,6 +229,8 @@ void WriteScratchTriangleNode(
     uint                primitiveIndex,
     uint                geometryIndex,
     uint                geometryFlags,
+    uint                instanceMask,
+    in BoundingBox      bbox,
     in TriangleData     tri)
 {
     uint offset = (primitiveIndex  * ByteStrideScratchNode) +
@@ -249,14 +251,12 @@ void WriteScratchTriangleNode(
     data = uint4(asuint(tri.v2), 0);
     buffer.Store4(offset + SCRATCH_NODE_V2_OFFSET, data);
 
-    const BoundingBox box = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
-    const float cost = SAH_COST_TRIANGLE_INTERSECTION * ComputeBoxSurfaceArea(box);
+    const float cost = SAH_COST_TRIANGLE_INTERSECTION * ComputeBoxSurfaceArea(bbox);
 
     // type, flags, splitBox, numPrimitivesAndDoCollapse
     const uint triangleId        = CalcUncompressedTriangleId(geometryFlags);
     const uint triangleTypeAndId = (triangleId << 3) | NODE_TYPE_TRIANGLE_0;
 
-    // Instance mask is assumed 0 in bottom level acceleration structures
     uint flags = CalcTriangleBoxNodeFlags(geometryFlags);
 
     // Disable triangle splitting if geometry descriptor allows duplicate anyHit invocation
@@ -265,7 +265,9 @@ void WriteScratchTriangleNode(
         flags |= SCRATCH_NODE_FLAGS_DISABLE_TRIANGLE_SPLIT_MASK;
     }
 
-    data = uint4(triangleTypeAndId, flags, INVALID_IDX, asuint(cost));
+    const uint packedFlags = PackInstanceMaskAndNodeFlags(instanceMask, flags);
+
+    data = uint4(triangleTypeAndId, packedFlags, INVALID_IDX, asuint(cost));
     buffer.Store4(offset + SCRATCH_NODE_TYPE_OFFSET, data);
 }
 
@@ -464,6 +466,7 @@ void PushNodeForUpdate(
     uint                       nodePointer,
     uint                       triangleId,
     uint                       vertexOffset,
+    uint                       instanceMask,
     in BoundingBox             boundingBox,
     bool                       writeNodesToUpdateStack)
 {
@@ -676,6 +679,9 @@ void EncodeTriangleNode(
         // Generate triangle bounds and update scene bounding box
         const BoundingBox boundingBox = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
 
+        // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
+        const uint instanceMask = (boundingBox.min.x > boundingBox.max.x) ? 0 : 0xff;
+
         if (IsUpdate(geometryArgs.BuildFlags))
         {
             nodePointer = SrcBuffer.Load(primNodePointerOffset);
@@ -685,41 +691,42 @@ void EncodeTriangleNode(
             {
                 const uint nodeOffset = metadataSize + ExtractNodePointerOffset(nodePointer);
                 const uint nodeType   = GetNodeType(nodePointer);
-
-                uint3 vertexOffsets;
-
-                if (geometryArgs.TriangleCompressionMode != NO_TRIANGLE_COMPRESSION)
                 {
-                    triangleId    = SrcBuffer.Load(nodeOffset + TRIANGLE_NODE_ID_OFFSET);
-                    vertexOffsets = CalcTriangleCompressionVertexOffsets(nodeType, triangleId);
-                }
-                else
-                {
-                    triangleId    = CalcUncompressedTriangleId(geometryArgs.GeometryFlags);
-                    vertexOffsets = CalcTriangleVertexOffsets(nodeType);
-                }
+                    uint3 vertexOffsets;
 
-                DstMetadata.Store3(nodeOffset + vertexOffsets.x, asuint(tri.v0));
-                DstMetadata.Store3(nodeOffset + vertexOffsets.y, asuint(tri.v1));
-                DstMetadata.Store3(nodeOffset + vertexOffsets.z, asuint(tri.v2));
-
-                if (geometryArgs.isUpdateInPlace == false)
-                {
-                    const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(geometryArgs.GeometryIndex,
-                                                                                 geometryArgs.GeometryFlags);
+                    if (geometryArgs.TriangleCompressionMode != NO_TRIANGLE_COMPRESSION)
                     {
-                        DstMetadata.Store(
-                            nodeOffset + TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
+                        triangleId = SrcBuffer.Load(nodeOffset + TRIANGLE_NODE_ID_OFFSET);
+                        vertexOffsets = CalcTriangleCompressionVertexOffsets(nodeType, triangleId);
+                    }
+                    else
+                    {
+                        triangleId = CalcUncompressedTriangleId(geometryArgs.GeometryFlags);
+                        vertexOffsets = CalcTriangleVertexOffsets(nodeType);
                     }
 
-                    const uint primIndexOffset = CalcPrimitiveIndexOffset(nodePointer);
+                    DstMetadata.Store3(nodeOffset + vertexOffsets.x, asuint(tri.v0));
+                    DstMetadata.Store3(nodeOffset + vertexOffsets.y, asuint(tri.v1));
+                    DstMetadata.Store3(nodeOffset + vertexOffsets.z, asuint(tri.v2));
 
+                    if (geometryArgs.isUpdateInPlace == false)
                     {
-                        DstMetadata.Store(
-                            nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + primIndexOffset, primitiveIndex);
-                    }
+                        const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(geometryArgs.GeometryIndex,
+                            geometryArgs.GeometryFlags);
+                        {
+                            DstMetadata.Store(
+                                nodeOffset + TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
+                        }
 
-                    DstMetadata.Store(nodeOffset + TRIANGLE_NODE_ID_OFFSET, triangleId);
+                        const uint primIndexOffset = CalcPrimitiveIndexOffset(nodePointer);
+
+                        {
+                            DstMetadata.Store(
+                                nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + primIndexOffset, primitiveIndex);
+                        }
+
+                        DstMetadata.Store(nodeOffset + TRIANGLE_NODE_ID_OFFSET, triangleId);
+                    }
                 }
             }
 
@@ -745,6 +752,7 @@ void EncodeTriangleNode(
                                   nodePointer,
                                   triangleId,
                                   vertexOffset,
+                                  instanceMask,
                                   boundingBox,
                                   writeNodesToUpdateStack);
             }
@@ -784,6 +792,8 @@ void EncodeTriangleNode(
                                      primitiveIndex,
                                      geometryArgs.GeometryIndex,
                                      geometryArgs.GeometryFlags,
+                                     instanceMask,
+                                     boundingBox,
                                      tri);
 
             // Store invalid prim node pointer for now during first time builds.

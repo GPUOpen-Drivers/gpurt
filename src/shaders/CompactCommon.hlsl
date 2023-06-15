@@ -25,8 +25,6 @@
 #ifndef _COMPACTCOMMON_HLSL
 #define _COMPACTCOMMON_HLSL
 
-#include "Common.hlsl"
-
 //=====================================================================================================================
 uint CalcCompactedSize(
     in  AccelStructHeader  srcHeader,
@@ -41,7 +39,7 @@ uint CalcCompactedSize(
     offsets.internalNodes = runningOffset;
 
     uint internalNodeSize = 0;
-    uint leafNodeSize     = 0;
+    uint leafNodeSize     = GetBvhNodeSizeLeaf(srcHeader.geometryType, 0);
     uint boxNodeSize      = sizeof(Float32BoxNode);
 
     if (accelStructType == BOTTOM_LEVEL)
@@ -51,7 +49,7 @@ uint CalcCompactedSize(
         runningOffset += internalNodeSize;
 
         offsets.leafNodes = runningOffset;
-        leafNodeSize = srcHeader.numLeafNodes * GetBvhNodeSizeLeaf(srcHeader.geometryType, 0);
+        leafNodeSize = srcHeader.numLeafNodes * leafNodeSize;
         runningOffset += leafNodeSize;
 
         offsets.geometryInfo = runningOffset;
@@ -62,9 +60,7 @@ uint CalcCompactedSize(
     }
     else
     {
-        const uint enableFusedInstanceNode =
-            (srcHeader.info >> ACCEL_STRUCT_HEADER_INFO_FUSED_INSTANCE_NODE_FLAGS_SHIFT) &
-                ACCEL_STRUCT_HEADER_INFO_FUSED_INSTANCE_NODE_FLAGS_MASK;
+        const uint enableFusedInstanceNode = srcHeader.UsesFusedInstanceNode();
 
         // TLAS always uses 32-bit internal nodes
         internalNodeSize = srcHeader.numInternalNodesFp32 * boxNodeSize;
@@ -112,7 +108,8 @@ void WriteCompactedSize(
                                                  accelStructType,
                                                  offsets,
                                                  metadataSizeInBytes);
-    DstBuffer.Store(ACCEL_STRUCT_HEADER_COMPACTED_BYTE_SIZE_OFFSET, compactedSize);
+
+    WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_COMPACTED_BYTE_SIZE_OFFSET, compactedSize);
 
     if (emitCompactSize != 0)
     {

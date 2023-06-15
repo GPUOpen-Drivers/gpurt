@@ -204,14 +204,8 @@ void RefitBoundsImpl(
             // Decide on what type of interior box node the parent should be
             // and write the type into scratch
             WriteScratchNodeType(baseScratchNodesOffset,
-                                 fp16BoxNodeMode,
-                                 fp16BoxModeMixedSaThreshold,
                                  parentNodeIndex,
-                                 0,
-                                 leftNode.type,
-                                 rightNode.type,
-                                 mergedBox.min,
-                                 mergedBox.max);
+                                 GetInternalNodeType());
 
             WriteScratchNodeFlagsFromNodes(baseScratchNodesOffset,
                                            parentNodeIndex,

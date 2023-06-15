@@ -32,7 +32,7 @@
 [[vk::constant_id(BUILD_SETTINGS_DATA_DO_TRIANGLE_SPLITTING_ID)]]                  uint doTriangleSplitting           = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_DO_COLLAPSE_ID)]]                            uint doCollapse                    = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_FP16_BOX_NODES_MODE_ID)]]                    uint fp16BoxNodesMode              = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_FP16_BOX_MODE_MIXED_SA_THRESHHOLD_ID)]]      float fp16BoxModeMixedSaThreshhold = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_FP16_BOX_MODE_MIXED_SA_THRESHOLD_ID)]]       float fp16BoxModeMixedSaThreshold  = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_RADIX_SORT_SCAN_LEVEL_ID)]]                  uint radixSortScanLevel            = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_EMIT_COMPACT_SIZE_ID)]]                      uint emitCompactSize               = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_BVH_BUILD_DEBUG_COUNTERS_ID)]]        uint enableBVHBuildDebugCounters   = 0;
@@ -60,7 +60,7 @@ static const BuildSettingsData Settings = {
     doTriangleSplitting,
     doCollapse,
     fp16BoxNodesMode,
-    fp16BoxModeMixedSaThreshhold,
+    fp16BoxModeMixedSaThreshold,
     radixSortScanLevel,
     emitCompactSize,
     enableBVHBuildDebugCounters,

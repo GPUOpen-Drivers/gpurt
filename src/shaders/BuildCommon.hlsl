@@ -53,7 +53,6 @@
 #define _BUILDCOMMON_HLSL
 
 #include "IntersectCommon.hlsl"
-#include "CompactCommon.hlsl"
 
 //=====================================================================================================================
 #define LEAFIDX(i) ((numActivePrims-1) + (i))
@@ -403,22 +402,12 @@ uint4 UnpackUint64ToUint32x4(uint64_t v, uint4 numBits)
 }
 
 //=====================================================================================================================
-uint CalcQbvhInternalNodeOffset(uint index, bool useFp16BoxNodesInBlas)
-{
-    const uint nodeOffset = useFp16BoxNodesInBlas ? (index << BVH4_NODE_16_STRIDE_SHIFT)
-                                                  : (index << BVH4_NODE_32_STRIDE_SHIFT);
-
-    // Node offset includes header size
-    return ACCEL_STRUCT_HEADER_SIZE + nodeOffset;
-}
-
-//=====================================================================================================================
 uint CalcQbvhInternalNodeIndex(
     uint offset,
     bool useFp16BoxNodesInBlas)
 {
     // Node offset includes header size
-    offset -= ACCEL_STRUCT_HEADER_SIZE;
+    offset -= sizeof(AccelStructHeader);
 
     {
         return useFp16BoxNodesInBlas ? (offset >> BVH4_NODE_16_STRIDE_SHIFT)
@@ -553,20 +542,6 @@ BoundingBox TransformBoundingBox(BoundingBox box, float4 inputTransform[3])
 }
 
 //=====================================================================================================================
-BoundingBox FetchHeaderRootBoundingBox(
-    in uint64_t accelStructBaseAddr)
-{
-    const uint4 d0 = LoadDwordAtAddrx4(accelStructBaseAddr + ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET);
-    const uint2 d1 = LoadDwordAtAddrx2(accelStructBaseAddr + ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET + 0x10);
-
-    BoundingBox bbox = (BoundingBox)0;
-    bbox.min = asfloat(d0.xyz);
-    bbox.max = asfloat(uint3(d0.w, d1.xy));
-
-    return bbox;
-}
-
-//=====================================================================================================================
 BoundingBox GenerateInstanceBoundingBox(
     float4         instanceTransform[3],
     in BoundingBox blasRootBounds)
@@ -575,8 +550,7 @@ BoundingBox GenerateInstanceBoundingBox(
 
     if (any(isinf(instanceBbox.min)) || any(isinf(instanceBbox.max)))
     {
-        instanceBbox.min = float3(0, 0, 0);
-        instanceBbox.max = float3(0, 0, 0);
+        instanceBbox = InvalidBoundingBox;
     }
 
     return instanceBbox;
@@ -820,20 +794,20 @@ uint GetInternalNodeType()
 
 //=====================================================================================================================
 void WriteBoxNode(
-    RWByteAddressBuffer DstBuffer,
+    RWByteAddressBuffer DstMetadata,
     in uint             offset,
     in Float32BoxNode   f32BoxNode)
 {
-    DstBuffer.Store<Float32BoxNode>(offset, f32BoxNode);
+    DstMetadata.Store<Float32BoxNode>(offset, f32BoxNode);
 }
 
 //=====================================================================================================================
 void WriteFp16BoxNode(
-    RWByteAddressBuffer DstBuffer,
+    RWByteAddressBuffer DstMetadata,
     in uint             offset,
     in Float16BoxNode   f16BoxNode)
 {
-    DstBuffer.Store<Float16BoxNode>(offset, f16BoxNode);
+    DstMetadata.Store<Float16BoxNode>(offset, f16BoxNode);
 }
 
 //=====================================================================================================================
@@ -876,8 +850,8 @@ static Float32BoxNode FetchFloat32BoxNode(
 
 //=====================================================================================================================
 void WriteInstanceDescriptor(
-    RWByteAddressBuffer   dstBuffer,
-    in uint               bufferOffset,   // Additional buffer offset, 0 when dstBuffer points to header.
+    RWByteAddressBuffer   DstMetadata,
+    in uint               bufferOffset,   // Additional buffer offset
     in InstanceDesc       desc,
     in uint               index,
     in uint               instNodePtr,
@@ -914,7 +888,7 @@ void WriteInstanceDescriptor(
         node.desc.Transform[1] = inverse[1];
         node.desc.Transform[2] = inverse[2];
 
-        dstBuffer.Store<InstanceNode>(dstNodeOffset, node);
+        DstMetadata.Store<InstanceNode>(dstNodeOffset, node);
 
         // Write bottom-level root box node into fused instance node
         if (isFusedInstanceNode)
@@ -1026,23 +1000,23 @@ void WriteInstanceDescriptor(
             // The DXC compiler fails validation due to undefined writes to UAV if we use the templated Store
             // instruction. Unrolling the stores works around this issue.
 #if 0
-            dstBuffer.Store<Float32BoxNode>(fusedBoxNodeOffset, blasRootNode);
+            DstMetadata.Store<Float32BoxNode>(fusedBoxNodeOffset, blasRootNode);
 #else
-            dstBuffer.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD0_OFFSET, blasRootNode.child0);
-            dstBuffer.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD1_OFFSET, blasRootNode.child1);
-            dstBuffer.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD2_OFFSET, blasRootNode.child2);
-            dstBuffer.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD3_OFFSET, blasRootNode.child3);
+            DstMetadata.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD0_OFFSET, blasRootNode.child0);
+            DstMetadata.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD1_OFFSET, blasRootNode.child1);
+            DstMetadata.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD2_OFFSET, blasRootNode.child2);
+            DstMetadata.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD3_OFFSET, blasRootNode.child3);
 
-            dstBuffer.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET, blasRootNode.bbox0_min);
-            dstBuffer.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET, blasRootNode.bbox0_max);
-            dstBuffer.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB1_MIN_OFFSET, blasRootNode.bbox1_min);
-            dstBuffer.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB1_MAX_OFFSET, blasRootNode.bbox1_max);
-            dstBuffer.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB2_MIN_OFFSET, blasRootNode.bbox2_min);
-            dstBuffer.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB2_MAX_OFFSET, blasRootNode.bbox2_max);
-            dstBuffer.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB3_MIN_OFFSET, blasRootNode.bbox3_min);
-            dstBuffer.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB3_MAX_OFFSET, blasRootNode.bbox3_max);
+            DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET, blasRootNode.bbox0_min);
+            DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET, blasRootNode.bbox0_max);
+            DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB1_MIN_OFFSET, blasRootNode.bbox1_min);
+            DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB1_MAX_OFFSET, blasRootNode.bbox1_max);
+            DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB2_MIN_OFFSET, blasRootNode.bbox2_min);
+            DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB2_MAX_OFFSET, blasRootNode.bbox2_max);
+            DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB3_MIN_OFFSET, blasRootNode.bbox3_min);
+            DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB3_MAX_OFFSET, blasRootNode.bbox3_max);
 
-            dstBuffer.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, blasRootNode.flags);
+            DstMetadata.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, blasRootNode.flags);
 #endif
         }
     }
@@ -1318,6 +1292,56 @@ uint64_t CalculateVariableBitsMortonCode64(float3 sceneExtent,
     }
 
     return mortonCode;
+}
+
+//=====================================================================================================================
+uint PackInstanceMaskAndNodeFlags(
+    uint instanceInclusionMask,
+    uint nodeFlags)
+{
+    // Note, we store the instance exclusion mask (instead of inclusion) so that we can combine the
+    // masks together using a AND operation similar to box node flags.
+    const uint exclusionMask = (~instanceInclusionMask & 0xff);
+    const uint packedFlags = ((exclusionMask << 8) | nodeFlags);
+
+    return packedFlags;
+}
+
+//=====================================================================================================================
+static void WriteAccelStructHeaderRootBoundingBox(
+    in BoundingBox bbox)
+{
+    DstBuffer.Store<BoundingBox>(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET, bbox);
+}
+
+//=====================================================================================================================
+static void WriteAccelStructHeaderCostOrNumChildPrims(
+    in uint4 costOrNumChildPrims)
+{
+    DstBuffer.Store<uint4>(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET, costOrNumChildPrims);
+}
+
+//=====================================================================================================================
+static void IncrementAccelStructHeaderField(
+    in uint offset,
+    in uint value)
+{
+    DstBuffer.InterlockedAdd(offset, value);
+}
+
+//=====================================================================================================================
+static void WriteAccelStructHeaderField(
+    in uint offset,
+    in uint data)
+{
+    DstBuffer.Store(offset, data);
+}
+
+//=====================================================================================================================
+static uint ReadAccelStructHeaderField(
+    in uint offset)
+{
+    return DstBuffer.Load(offset);
 }
 
 //=====================================================================================================================

@@ -110,8 +110,8 @@ public:
     RayHistoryTraceSource(GpuRt::Internal::Device* pDevice)
         :
         m_pDevice(pDevice),
-        m_active(false),
         m_available(false),
+        m_active(false),
         m_bufferSizeInBytes(67108864),
         m_dispatchID(0)
     {

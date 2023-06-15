@@ -69,6 +69,17 @@ uint CalcScratchNodeOffset(
     return baseScratchNodesOffset + (nodeIndex * SCRATCH_NODE_SIZE);
 }
 
+//======================================================================================================================
+uint CalculateScratchBvhNodesOffset(
+    in uint numActivePrims,
+    in uint numLeafNodes,
+    in uint bvhNodesOffset,
+    in bool noCopySortedNodes)
+{
+    const uint offset = noCopySortedNodes ? (numLeafNodes - numActivePrims) * SCRATCH_NODE_SIZE : 0;
+    return bvhNodesOffset + offset;
+}
+
 //=====================================================================================================================
 ScratchNode FetchScratchNode(
     uint baseScratchNodesOffset,
@@ -316,71 +327,11 @@ void WriteScratchNodeNumMortonCells(
 
 //=====================================================================================================================
 void WriteScratchNodeType(
-    uint   baseScratchNodesOffset,
-    uint   fp16BoxNodesInBlasMode,
-    float  fp16BoxModeMixedSaThresh,
-    uint   nodeIndex,
-    uint   rootIndex,
-    uint   leftNodeType,
-    uint   rightNodeType,
-    float3 nodeBboxMin,
-    float3 nodeBboxMax)
+    uint baseScratchNodesOffset,
+    uint nodeIndex,
+    uint nodeType)
 {
-    uint nodeType = GetInternalNodeType();
-
-    if (nodeType == NODE_TYPE_BOX_FLOAT32)
-    {
-        // Parents of leaves are marked to avoid propagating FP16 throughout the entire tree
-        const uint nodeTypeLeafParentFp16 = (NODE_TYPE_BOX_FLOAT16 | NODE_POINTER_MASK_MSB);
-
-        // Should this node be fp16 or fp32 box node?
-        bool isParentOfLeaf  = false;
-        bool writeNodeAsFp16 = false;
-        if (fp16BoxNodesInBlasMode == ALL_INTERIOR_NODES_IN_BLAS_AS_FP16)
-        {
-            writeNodeAsFp16 = true;
-        }
-        else if (fp16BoxNodesInBlasMode == LEAF_NODES_IN_BLAS_AS_FP16)
-        {
-            // Mark node as fp16 IFF:
-            // 1. directly attached to leaf
-            // 2. child is directly attached to leaf
-            const bool isParentOfFp16 = ( leftNodeType == nodeTypeLeafParentFp16) ||
-                                        (rightNodeType == nodeTypeLeafParentFp16);
-            isParentOfLeaf =  IsTriangleNode(leftNodeType)  ||
-                              IsTriangleNode(rightNodeType) ||
-                              IsUserNodeProcedural( leftNodeType) ||
-                              IsUserNodeProcedural(rightNodeType);
-            writeNodeAsFp16 = (isParentOfLeaf || isParentOfFp16);
-        }
-        else if (fp16BoxNodesInBlasMode == MIXED_NODES_IN_BLAS_AS_FP16)
-        {
-            // NOTE: it may help to skip nodes that would never be written out (maybe besed on depth from root?)
-
-            // Mark node as fp16 if its bounds compress well:
-            // increase in surface area should be < threshold
-            const BoundingBox parentBboxFp32 = { nodeBboxMin, nodeBboxMax };
-            const uint3       parentBboxFp16 = CompressBBoxToUint3(parentBboxFp32);
-
-            const float saAsFp32 = ComputeBoxSurfaceArea(parentBboxFp32);
-            const float saAsFp16 = ComputeBoxSurfaceArea(parentBboxFp16);
-
-            const float saAsFp32Scaled = saAsFp32 * fp16BoxModeMixedSaThresh;
-            writeNodeAsFp16 = (saAsFp16 < saAsFp32Scaled);
-        }
-
-        // Root node is always fp32, regardless of mode for fp16 box nodes
-        if (nodeIndex == rootIndex)
-        {
-            isParentOfLeaf  = false;
-            writeNodeAsFp16 = false;
-        }
-
-        const uint nodeTypeAsFp16 = (isParentOfLeaf  ? nodeTypeLeafParentFp16 : NODE_TYPE_BOX_FLOAT16);
-        nodeType = (writeNodeAsFp16 ? nodeTypeAsFp16 : NODE_TYPE_BOX_FLOAT32);
-    }
-
-    const uint nodeOffset     = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
+    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
     ScratchBuffer.Store<uint>(nodeOffset + SCRATCH_NODE_TYPE_OFFSET, nodeType);
 }
 
@@ -827,14 +778,8 @@ void RefitNode(
     // Decide on what type of interior box node the parent should be
     // and write the type into scratch
     WriteScratchNodeType(args.baseScratchNodesOffset,
-                         args.fp16BoxNodesMode,
-                         args.fp16BoxModeMixedSaThreshold,
                          nodeIndex,
-                         rootIndex,
-                         leftNode.type,
-                         rightNode.type,
-                         mergedBox.min,
-                         mergedBox.max);
+                         GetInternalNodeType());
 
     WriteScratchNodeFlagsFromNodes(args.baseScratchNodesOffset,
                                    nodeIndex,

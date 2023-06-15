@@ -23,17 +23,18 @@
  *
  **********************************************************************************************************************/
 #if NO_SHADER_ENTRYPOINT == 0
-#define RootSig "RootConstants(num32BitConstants=6, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=5, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u2, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
 // 32 bit constants
 struct InputArgs
 {
     uint BitShiftSize; // Number of bits to shift
-    uint NumElements;  // Number of elements in the input array
     uint NumGroups;    // Number of work groups dispatched
     uint InputArrayScratchOffset;
     uint OutputArrayScratchOffset;
@@ -45,6 +46,10 @@ struct InputArgs
 [[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer DstMetadata   : register(u1);
 [[vk::binding(2, 0)]] RWByteAddressBuffer ScratchBuffer : register(u2);
+
+// unused buffer
+[[vk::binding(3, 0)]] RWByteAddressBuffer SrcBuffer     : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer EmitBuffer    : register(u4);
 
 #include "..\BuildCommon.hlsl"
 #include "ScanCommon.hlsli"
@@ -141,11 +146,13 @@ void BitHistogram(
     uint localThreadId : SV_GroupThreadID,
     uint groupId       : SV_groupId)
 {
+    const uint numPrimitives = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
+
     BitHistogramImpl(
         localThreadId,
         groupId,
         ShaderConstants.NumGroups,
-        ShaderConstants.NumElements,
+        numPrimitives,
         ShaderConstants.BitShiftSize,
         ShaderConstants.InputArrayScratchOffset,
         ShaderConstants.OutputArrayScratchOffset,

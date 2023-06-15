@@ -18,8 +18,9 @@
         <Shader path="BuildBVHTDTR.hlsl" entryPoint="BuildBVHTD" />
         <Shader path="BuildBVHTDTR.hlsl" entryPoint="BuildBVHTD" outputName="BuildBVHTDTR" defines="USE_BVH_REBRAID=1" />
         <Shader path="GenerateMortonCodes.hlsl" entryPoint="GenerateMortonCodes" />
+        <Shader path="Rebraid.hlsl" entryPoint="Rebraid" />
         <Shader path="BuildBVH.hlsl" entryPoint="BuildBVH" outputName="BuildBVHSortLeaves" />
-        <Shader path="BuildBVH.hlsl" entryPoint="BuildBVH" />
+        <Shader path="BuildBVH.hlsl" entryPoint="BuildBVH" defines="USE_BUILD_LBVH=1" />
         <Shader path="BuildBVHPLOC.hlsl" entryPoint="BuildBVHPLOC" />
         <Shader path="UpdateQBVH.hlsl" entryPoint="UpdateQBVH" />
         <Shader path="RefitBounds.hlsl" entryPoint="RefitBounds" />
@@ -27,7 +28,6 @@
         <Shader path="CopyBufferRaw.hlsl" entryPoint="CopyBufferRaw" />
         <Shader path="BuildQBVH.hlsl" entryPoint="InitBuildQBVH" />
         <Shader path="BuildQBVH.hlsl" entryPoint="BuildQBVH" />
-        <Shader path="BuildQBVH.hlsl" entryPoint="BuildQBVHCollapse" />
         <Shader path="RadixSort/BitHistogram.hlsl" entryPoint="BitHistogram" />
         <Shader path="RadixSort/ScatterKeysAndValues.hlsl" entryPoint="ScatterKeysAndValues" />
         <Shader path="RadixSort/ScanExclusiveInt4.hlsl" entryPoint="ScanExclusiveInt4" />
@@ -42,7 +42,6 @@
         <Shader path="CopyAS.hlsl" entryPoint="CopyAS" />
         <Shader path="CompactAS.hlsl" entryPoint="CompactAS" />
         <Shader path="DecodeAS.hlsl" entryPoint="DecodeAS" />
-        <Shader path="DecodeAS.hlsl" entryPoint="DecodeAS" outputName="DecodeCollapse" defines="USE_BVH_COLLAPSE=1" />
         <Shader path="SerializeAS.hlsl" entryPoint="SerializeAS" />
         <Shader path="DeserializeAS.hlsl" entryPoint="DeserializeAS" />
         <Shader path="InitExecuteIndirect.hlsl" entryPoint="InitExecuteIndirect" outputName="InitExecuteIndirect" />

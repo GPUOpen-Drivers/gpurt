@@ -28,6 +28,7 @@
                 "UAV(u2),"\
                 "UAV(u3),"\
                 "UAV(u4),"\
+                "UAV(u5),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 2)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 3)),"\
@@ -129,10 +130,14 @@ struct Constants
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstBuffer          : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata        : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer      : register(u2);
-[[vk::binding(3, 0)]]                  RWByteAddressBuffer InstanceDescBuffer : register(u3);
-[[vk::binding(4, 0)]]                  RWByteAddressBuffer EmitBuffer         : register(u4);
+[[vk::binding(3, 0)]] RWByteAddressBuffer                  InstanceDescBuffer : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer                  EmitBuffer         : register(u4);
+
+// unused buffer
+[[vk::binding(5, 0)]] RWByteAddressBuffer                  SrcBuffer          : register(u5);
 
 #include "BuildCommonScratch.hlsl"
+#include "CompactCommon.hlsl"
 
 #define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
 groupshared uint SharedMem[MAX_LDS_ELEMENTS];
@@ -178,7 +183,6 @@ void WaitForTasksToFinish(
 #include "RadixSort/RadixSortParallel.hlsl"
 #include "BuildBVHPLOC.hlsl"
 #include "BuildQBVH.hlsl"
-#include "BuildQBVHCollapseImpl.hlsl"
 #include "BuildBVHTDTR.hlsl"
 #include "BuildBVH.hlsl"
 #include "RefitBoundsImpl.hlsl"
@@ -188,11 +192,13 @@ void WaitForTasksToFinish(
 #include "MergeSort.hlsl"
 
 //======================================================================================================================
-uint CalculateBvhNodesOffset(uint numActivePrims)
+static uint CalculateBvhNodesOffset(uint numActivePrims)
 {
-    return (Settings.enableTopDownBuild == false) && Settings.noCopySortedNodes ?
-        ShaderConstants.offsets.bvhNodes + (ShaderConstants.numLeafNodes - numActivePrims) * SCRATCH_NODE_SIZE :
-        ShaderConstants.offsets.bvhNodes;
+    return CalculateScratchBvhNodesOffset(
+               numActivePrims,
+               ShaderConstants.numLeafNodes,
+               ShaderConstants.offsets.bvhNodes,
+               Settings.noCopySortedNodes);
 }
 
 //======================================================================================================================
@@ -317,7 +323,7 @@ void RefitBounds(
             ShaderConstants.offsets.numBatches,
             ShaderConstants.offsets.batchIndices,
             Settings.fp16BoxNodesMode,
-            Settings.fp16BoxModeMixedSaThreshhold,
+            Settings.fp16BoxModeMixedSaThreshold,
             0,
             false,
             false,
@@ -346,7 +352,7 @@ void FastAgglomerativeLbvh(
     args.numBatchesOffset            = ShaderConstants.offsets.numBatches;
     args.baseBatchIndicesOffset      = ShaderConstants.offsets.batchIndices;
     args.fp16BoxNodesMode            = Settings.fp16BoxNodesMode;
-    args.fp16BoxModeMixedSaThreshold = Settings.fp16BoxModeMixedSaThreshhold;
+    args.fp16BoxModeMixedSaThreshold = Settings.fp16BoxModeMixedSaThreshold;
     args.noCopySortedNodes           = Settings.noCopySortedNodes;
     args.sortedPrimIndicesOffset     = ShaderConstants.offsets.primIndicesSorted;
     args.enableEarlyPairCompression  = Settings.enableEarlyPairCompression;
@@ -427,15 +433,12 @@ void BuildBvhPloc(
     plocArgs.numBatchesScratchOffset        = ShaderConstants.offsets.numBatches;
     plocArgs.baseBatchIndicesScratchOffset  = ShaderConstants.offsets.batchIndices;
     plocArgs.fp16BoxNodesInBlasMode         = Settings.fp16BoxNodesMode;
-    plocArgs.fp16BoxModeMixedSaThresh       = Settings.fp16BoxModeMixedSaThreshhold;
-    plocArgs.fp16BoxModeMixedSaThresh       = Settings.fp16BoxModeMixedSaThreshhold;
+    plocArgs.fp16BoxModeMixedSaThresh       = Settings.fp16BoxModeMixedSaThreshold;
     plocArgs.plocRadius                     = Settings.plocRadius;
     plocArgs.flags                          = BuildModeFlags();
     plocArgs.splitBoxesByteOffset           = ShaderConstants.offsets.splitBoxes;
     plocArgs.primIndicesSortedScratchOffset = ShaderConstants.offsets.primIndicesSorted;
     plocArgs.numLeafNodes                   = ShaderConstants.numLeafNodes;
-    plocArgs.noCopySortedNodes              = Settings.noCopySortedNodes;
-    plocArgs.enableEarlyPairCompression     = Settings.enableEarlyPairCompression;
     plocArgs.unsortedBvhLeafNodesOffset     = ShaderConstants.offsets.unsortedBvhLeafNodes;
 
     BuildBvhPlocImpl(globalId, localId, groupId, numActivePrims, plocArgs);
@@ -471,7 +474,6 @@ void BuildBvhTD(
     TDArgs args;
 
     args.NumPrimitives                = numPrimitives;
-    args.AllowUpdate                  = false;  //not used
     args.NumThreads                   = GetNumThreads();
     args.MaxRefCountSize              = numPrimitives * ShaderConstants.rebraidFactor;
     args.LengthPercentage             = 0.1;
@@ -483,7 +485,6 @@ void BuildBvhTD(
     args.TDBinsScratchOffset          = ShaderConstants.offsets.tdBins;
     args.CurrentStateScratchOffset    = ShaderConstants.offsets.tdState;
     args.TdTaskCounterScratchOffset   = ShaderConstants.offsets.tdTaskCounters;
-    args.OffsetsScratchOffset         = 0; //not used
     args.EncodeArrayOfPointers        = ShaderConstants.encodeArrayOfPointers;
 
     BuildBVHTDImpl(globalId, localId, groupId, args);
@@ -495,7 +496,7 @@ void PairCompression(
     uint localId,
     uint numActivePrims)
 {
-    const uint buildInfo  = DstBuffer.Load(ACCEL_STRUCT_HEADER_INFO_OFFSET);
+    const uint buildInfo  = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_INFO_OFFSET);
     const uint buildFlags = (buildInfo >> ACCEL_STRUCT_HEADER_INFO_FLAGS_SHIFT) & ACCEL_STRUCT_HEADER_INFO_FLAGS_MASK;
 
     PairCompressionArgs args;
@@ -590,11 +591,6 @@ void BuildQbvh(
 
     qbvhArgs.enableSAHCost = Settings.enableSAHCost;
 
-    if ((Settings.topLevelBuild == 0) && Settings.doCollapse)
-    {
-        BuildQbvhCollapseImpl(globalId, numActivePrims, qbvhArgs);
-    }
-    else
     {
         BuildQbvhImpl(globalId, localId, numActivePrims, qbvhArgs, (Settings.topLevelBuild != 0));
     }
@@ -793,13 +789,13 @@ void BuildBvh(
     {
         TriangleSplitting(globalId, localId, groupId);
 
-        numPrimitives = DstBuffer.Load(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
+        numPrimitives = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
     }
     else if (Settings.rebraidType == RebraidType::V2)
     {
         Rebraid(globalId, localId, groupId);
 
-        numPrimitives = DstBuffer.Load(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
+        numPrimitives = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
     }
 
     uint numActivePrims;
@@ -808,7 +804,7 @@ void BuildBvh(
     {
         BuildBvhTD(globalId, localId, groupId, numPrimitives);
 
-        numActivePrims = DstBuffer.Load(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+        numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
     }
     else
     {
@@ -825,7 +821,7 @@ void BuildBvh(
 
             END_TASK(1);
             needRefit = true;
-            numActivePrims = DstBuffer.Load(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+            numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
         }
         else
         {
@@ -835,7 +831,7 @@ void BuildBvh(
 
             END_TASK(ShaderConstants.numThreadGroups);
             writeDebugCounter(COUNTER_MORTONGEN_OFFSET);
-            numActivePrims = DstBuffer.Load(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+            numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
 
             if (numActivePrims > 0)
             {
@@ -909,7 +905,7 @@ void BuildBvh(
                 writeDebugCounter(COUNTER_REFIT_OFFSET);
             }
 
-            const uint geometryType = DstBuffer.Load(ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET);
+            const uint geometryType = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET);
 
             if (EnableLatePairCompression() && (geometryType == GEOMETRY_TYPE_TRIANGLES))
             {
@@ -947,7 +943,7 @@ void BuildBvh(
         // Fetch leaf node count when triangle compression is enabled.
         if (EnableLatePairCompression())
         {
-            numLeafNodes = DstBuffer.Load(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
+            numLeafNodes = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
         }
 
         BEGIN_TASK(ShaderConstants.numThreadGroups);

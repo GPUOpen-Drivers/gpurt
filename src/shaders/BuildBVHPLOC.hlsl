@@ -66,8 +66,6 @@ struct BuildPlocArgs
     uint  plocRadius;
     uint  primIndicesSortedScratchOffset;
     uint  numLeafNodes;
-    uint  noCopySortedNodes;
-    uint  enableEarlyPairCompression;
     uint  unsortedBvhLeafNodesOffset;
 };
 
@@ -87,10 +85,12 @@ struct BuildPlocArgs
 #if NO_SHADER_ENTRYPOINT == 0
 #include "Common.hlsl"
 
-#define RootSig "RootConstants(num32BitConstants=21, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=19, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
                 "CBV(b1)"/*Build Settings binding*/
 
@@ -100,6 +100,10 @@ struct BuildPlocArgs
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata   : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer : register(u2);
 
+// unused buffer
+[[vk::binding(3, 0)]] RWByteAddressBuffer                  SrcBuffer     : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer                  EmitBuffer    : register(u4);
+
 groupshared int SharedMem[(2 * PLOC_RADIUS_MAX + BUILD_THREADGROUP_SIZE) * LDS_AABB_STRIDE];
 
 #include "BuildCommonScratch.hlsl"
@@ -108,6 +112,18 @@ groupshared int SharedMem[(2 * PLOC_RADIUS_MAX + BUILD_THREADGROUP_SIZE) * LDS_A
 // https://dcgi.fel.cvut.cz/home/meistdan/dissertation/publications/ploc/paper.pdf
 // https://github.com/meistdan/ploc/blob/master/gpu-ray-traversal/src/rt/ploc/PLOCBuilderKernels.cu
 #endif
+
+//=====================================================================================================================
+static uint CalculateBvhNodesOffset(
+    in uint          numActivePrims,
+    in BuildPlocArgs args)
+{
+    return CalculateScratchBvhNodesOffset(
+               numActivePrims,
+               args.numLeafNodes,
+               args.scratchNodesScratchOffset,
+               Settings.noCopySortedNodes);
+}
 
 //=====================================================================================================================
 uint ReadClusterList(
@@ -377,7 +393,7 @@ void InitPLOC(
 
     for (i = globalId; i < numActivePrims; i += args.numThreads)
     {
-        const uint primIndex = args.noCopySortedNodes ?
+        const uint primIndex = Settings.noCopySortedNodes ?
             FetchSortedPrimIndex(args.primIndicesSortedScratchOffset, i) : i;
         WriteClusterList(args, 0, i, numInternalNodes + primIndex);
     }
@@ -433,7 +449,7 @@ void FindNearestNeighbour(
                                                            IsLeafNode(nodeIndex, numActivePrims),
                                                            (args.flags & BUILD_FLAGS_TRIANGLE_SPLITTING),
                                                            args.splitBoxesByteOffset,
-                                                           args.enableEarlyPairCompression,
+                                                           Settings.enableEarlyPairCompression,
                                                            args.unsortedBvhLeafNodesOffset);
 
             StoreLdsBoundingBox(t + plocRadius, aabb);
@@ -636,27 +652,18 @@ void FindNearestNeighbour(
             const ScratchNode leftNode  = ScratchBuffer.Load<ScratchNode>(leftNodeOffset);
             const ScratchNode rightNode = ScratchBuffer.Load<ScratchNode>(rightNodeOffset);
 
-            WriteScratchNodeType(
-                args.scratchNodesScratchOffset,
-                args.fp16BoxNodesInBlasMode,
-                args.fp16BoxModeMixedSaThresh,
-                mergedNodeIndex,
-                0,
-                leftNode.type,
-                rightNode.type,
-                mergedBox.min,
-                mergedBox.max);
+            WriteScratchNodeType(args.scratchNodesScratchOffset,
+                                 mergedNodeIndex,
+                                 GetInternalNodeType());
 
-            WriteScratchNodeFlagsFromNodes(
-                args.scratchNodesScratchOffset,
-                mergedNodeIndex,
-                leftNode,
-                rightNode);
+            WriteScratchNodeFlagsFromNodes(args.scratchNodesScratchOffset,
+                                           mergedNodeIndex,
+                                           leftNode,
+                                           rightNode);
 
-            WriteScratchNodeSurfaceArea(
-                args.scratchNodesScratchOffset,
-                mergedNodeIndex,
-                mergedBoxSurfaceArea);
+            WriteScratchNodeSurfaceArea(args.scratchNodesScratchOffset,
+                                        mergedNodeIndex,
+                                        mergedBoxSurfaceArea);
 
             ScratchBuffer.Store(mergedNodeOffset + SCRATCH_NODE_BBOX_MIN_OFFSET, mergedBox.min);
             ScratchBuffer.Store(mergedNodeOffset + SCRATCH_NODE_BBOX_MAX_OFFSET, mergedBox.max);
@@ -1038,11 +1045,13 @@ void BuildBVHPLOC(
     uint localId = localIdIn;
     uint groupId = groupIdIn;
 
-    const uint numActivePrims = DstBuffer.Load(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+    const uint numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+    BuildPlocArgs args = (BuildPlocArgs)ShaderConstants;
+    args.scratchNodesScratchOffset = CalculateBvhNodesOffset(numActivePrims, args);
 
     if (numActivePrims > 0)
     {
-        BuildBvhPlocImpl(globalId, localId, groupId, numActivePrims, (BuildPlocArgs)ShaderConstants);
+        BuildBvhPlocImpl(globalId, localId, groupId, numActivePrims, args);
     }
 }
 #endif

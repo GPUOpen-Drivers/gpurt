@@ -89,15 +89,14 @@ static uint CreateRootNodePointerBasedOnStaticPipelineFlags()
 }
 
 //=====================================================================================================================
-static GpuVirtualAddress FetchAccelStructBaseAddr(in GpuVirtualAddress bvhAddress)
+static GpuVirtualAddress FetchAccelStructBaseAddr(GpuVirtualAddress bvhAddress)
 {
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION  >= 34
     if (bvhAddress)
     {
-        uint metaDataSize = LoadDwordAtAddr(bvhAddress + ACCEL_STRUCT_METADATA_SIZE_OFFSET);
-
-        // Fetch acceleration structure base pointer after metadata size
-        bvhAddress += metaDataSize;
+        // Fetch acceleration structure base address. Note that an empty BVH will have 0 as the address in the metadata.
+        bvhAddress = MakeGpuVirtualAddress(LoadDwordAtAddr(bvhAddress + ACCEL_STRUCT_METADATA_VA_LO_OFFSET),
+                                           LoadDwordAtAddr(bvhAddress + ACCEL_STRUCT_METADATA_VA_HI_OFFSET));
     }
 #endif
     return bvhAddress;
@@ -684,6 +683,7 @@ static void PerformTriangleCulling(
 
     if (triangleCulled || opaqueCulled)
     {
+        // Set tNum and tDenom when primitive is culled
         result = uint4(asuint(INFINITY), asuint(1.0f), 0, 0);
     }
 }
@@ -828,7 +828,10 @@ static uint4 image_bvh64_intersect_ray_base(
         bool procedural = false;
         uint hwTriFlags = 0;
 
-        const uint triangleId = FetchTriangleId(bvhAddress, nodePointer);
+        uint triangleId;
+        {
+            triangleId = FetchTriangleId(bvhAddress, nodePointer);
+        }
 
 #if GPURT_BUILD_RTIP2
         if (intersectRayVersion >= INTERSECT_RAY_VERSION_2)
@@ -839,8 +842,10 @@ static uint4 image_bvh64_intersect_ray_base(
 #endif
 
         {
-            // The triangle leaf node stores face vertices
-            const TriangleData tri = FetchTriangleFromNode(bvhAddress, nodePointer);
+            TriangleData tri;
+            {
+                tri = FetchTriangleFromNode(bvhAddress, nodePointer);
+            }
 
             result = fast_intersect_triangle(rayOrigin,
                                              rayDirection,
@@ -849,6 +854,7 @@ static uint4 image_bvh64_intersect_ray_base(
                                              tri.v2);
 
             SwizzleBarycentrics(result, nodePointer, triangleId);
+
         }
 
 #if GPURT_BUILD_RTIP2
@@ -861,11 +867,12 @@ static uint4 image_bvh64_intersect_ray_base(
                                    opaque,
                                    result);
         }
+
 #endif
     }
     else
     {
-        // User defined instance node or procedural node. HW returns -1
+        // User defined node. HW returns -1
         return uint4(-1, -1, -1, -1);
     }
 #endif

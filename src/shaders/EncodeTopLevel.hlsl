@@ -27,6 +27,8 @@
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
                 "CBV(b1)"/*Build Settings binding*/
 
@@ -48,12 +50,16 @@ struct Constants
     uint enableFastLBVH;
 };
 
-//=====================================================================================================================
-[[vk::push_constant]] ConstantBuffer<Constants>           ShaderConstants    : register(b0);
+[[vk::push_constant]] ConstantBuffer<Constants> ShaderConstants : register(b0);
+
 [[vk::binding(0, 0)]] RWByteAddressBuffer                 DstMetadata        : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer                 ScratchBuffer      : register(u1);
 [[vk::binding(2, 0)]] RWByteAddressBuffer                 SrcBuffer          : register(u2);
 [[vk::binding(3, 0)]] RWByteAddressBuffer                 InstanceDescBuffer : register(u3);
+
+// unused buffer
+[[vk::binding(4, 0)]] RWByteAddressBuffer                 DstBuffer          : register(u4);
+[[vk::binding(5, 0)]] RWByteAddressBuffer                 EmitBuffer         : register(u5);
 
 #include "IntersectCommon.hlsl"
 #include "BuildCommonScratch.hlsl"
@@ -109,10 +115,7 @@ void WriteScratchInstanceNode(
     // enabled in traversal but not during this build, we need to set the pointer to the true root of the bottom level.
     const uint rootNodePointer = IsRebraidEnabled() ? 0 : CreateRootNodePointer();
 
-    // Note, we store the instance exclusion mask (instead of inclusion) so that we can combine the
-    // masks together using a AND operation similar to boxNodeFlags.
-    const uint exclusionMask = (~instanceMask & 0xff);
-    const uint packedFlags = ((exclusionMask << 8) | boxNodeFlags);
+    const uint packedFlags = PackInstanceMaskAndNodeFlags(instanceMask, boxNodeFlags);
 
     // type, flags, nodePointer, numPrimitivesAndDoCollapse
     data = uint4(NODE_TYPE_USER_NODE_INSTANCE, packedFlags, rootNodePointer, asuint(cost));
@@ -207,11 +210,12 @@ void EncodeInstances(
             }
         }
 
-        const bool deactivateNonUpdatable = (instanceMask == 0) || (numActivePrims == 0);
+        const bool isTransformZero = !any(desc.Transform[0].xyz) && !any(desc.Transform[1].xyz) && !any(desc.Transform[2].xyz);
+        const bool deactivateNonUpdatable = (instanceMask == 0) || (numActivePrims == 0) || isTransformZero;
 
         // If the BLAS address is NULL, the instance is inactive. Inactive instances cannot be activated during updates
         // so we always exclude them from the build. Additionally, we deactivate instances in a non-updatable TLAS when
-        // the instance mask is 0 or there are no active primitives in the BLAS.
+        // the instance mask is 0 or there are no active primitives in the BLAS or if the Transform is 0.
         if ((baseAddr != 0) && ((deactivateNonUpdatable == false) || (allowUpdate == true)))
         {
             const uint geometryType =
@@ -261,12 +265,17 @@ void EncodeInstances(
                 boundingBox = InvalidBoundingBox;
             }
 
-            const uint blasNodeFlags = FetchHeaderField(baseAddrAccelStructHeader, ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET);
+            const uint packedFlags = FetchHeaderField(baseAddrAccelStructHeader, ACCEL_STRUCT_HEADER_PACKED_FLAGS_OFFSET);
             const uint boxNodeFlags = CalcTopLevelBoxNodeFlags(geometryType,
                                                                desc.InstanceContributionToHitGroupIndex_and_Flags >> 24,
-                                                               blasNodeFlags);
+                                                               ExtractScratchNodeFlags(packedFlags));
 
-            const uint instanceMask = desc.InstanceID_and_Mask >> 24;
+            // Propagate the instance mask from the BLAS by fetching it from the header.
+            // Note, the header contains the exlusion mask so we take its bitwise complement to get the inclusion mask.
+            // Set the instance inclusion mask to 0 for degenerate instances so that they are culled out.
+            const uint instanceMask = (boundingBox.min.x > boundingBox.max.x) ?
+                                      0 :
+                                      ((desc.InstanceID_and_Mask >> 24) & ExtractScratchNodeInstanceMask(packedFlags));
 
             if (isUpdate == false)
             {

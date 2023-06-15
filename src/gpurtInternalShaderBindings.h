@@ -79,9 +79,7 @@ namespace BuildBVH
         uint32 bvhLeafNodeDataScratchOffset;
         uint32 mortonCodesSortedScratchOffset;
         uint32 primIndicesSortedScratchOffset;
-        uint32 useMortonCode30;
-        uint32 noCopySortedNodes;
-        uint32 enableFastLBVH;
+        uint32 numLeafNodes;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
@@ -109,8 +107,6 @@ namespace BuildBVHPLOC
         uint32 plocRadius;
         uint32 primIndicesSortedScratchOffset;
         uint32 numLeafNodes;
-        uint32 noCopySortedNodes;
-        uint32 enableEarlyPairCompression;
         uint32 unsortedBvhLeafNodesOffset;
     };
 
@@ -207,7 +203,6 @@ namespace BuildBVHTD
     struct Constants
     {
         uint32 numPrimitives;
-        uint32 isUpdateAllowed;
         uint32 numThreads;
         uint32 numRefsAlloced;
         float  lengthPercentage;
@@ -219,7 +214,6 @@ namespace BuildBVHTD
         uint32 tdBinsOffset;
         uint32 tdStateOffset;
         uint32 tdTaskQueueCounter;
-        uint32 refOffsetsOffset;
         uint32 encodeArrayOfPointers;
     };
 
@@ -266,6 +260,7 @@ namespace RefitBounds
         uint32 noCopySortedNodes;
         uint32 sortedPrimIndicesOffset;
         uint32 enableEarlyPairCompression;
+        uint32 numLeafNodes;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
@@ -399,11 +394,29 @@ namespace BuildParallel
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
 };
 
+namespace Rebraid
+{
+    struct Constants
+    {
+        uint32 numPrimitives;
+        uint32 numThreadGroups;
+        uint32 maxNumPrims;
+        uint32 bvhLeafNodeDataScratchOffset;
+        uint32 sceneBoundsOffset;
+        uint32 stateScratchOffset;
+        uint32 atomicFlagsScratchOffset;
+        uint32 encodeArrayOfPointers;
+        uint32 enableCentroidSceneBoundsWithSize;
+        uint32 enableSAHCost;
+    };
+
+    constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
+}
+
 namespace GenerateMortonCodes
 {
     struct Constants
     {
-        uint32 numPrimitives;            // Number of bounding boxes
         uint32 leafNodeDataByteOffset;   // Leaf node data byte offset
         uint32 sceneBoundsByteOffset;    // Scene bounds byte offset
         uint32 mortonCodeDataByteOffset; // Morton codes byte offset
@@ -420,7 +433,6 @@ namespace MergeSort
 {
     struct Constants
     {
-        uint32 numPrimitives;
         uint32 inputKeysScratchOffset;
         uint32 outputKeysScratchOffset;
         uint32 outputValuesScratchOffset;
@@ -436,7 +448,6 @@ namespace RadixSort
     struct Constants
     {
         uint32 bitShiftSize; // Number of bits to shift
-        uint32 numElements;  // Number of elements
         uint32 numGroups;    // Number of groups
         uint32 inputKeysScratchOffset;
         uint32 inputValuesScratchOffset;
@@ -454,7 +465,6 @@ namespace BitHistogram
     struct Constants
     {
         uint32 bitShiftSize; // Number of bits to shift
-        uint32 numElements;  // Number of elements
         uint32 numGroups;    // Number of groups
         uint32 inputArrayScratchOffset;
         uint32 outputArrayScratchOffset;
@@ -577,6 +587,7 @@ namespace DecodeAS
         uint32 addressHi;               // Copy destination address after skipping header- high bits
         uint32 numThreads;              // Number of persistent threads
         uint32 rtIpLevel;               // Raytracing IP level
+        uint32 isDriverDecode;          // Internal driver decode
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
@@ -641,6 +652,15 @@ constexpr NodeMapping BuildParallelMapping[] =
     { NodeType::UavTable, 1 },
     { NodeType::UavTable, 1 },
     { NodeType::UavTable, 1 },
+};
+
+constexpr NodeMapping RebraidMapping[] =
+{
+    { NodeType::Constant, Rebraid::NumEntries },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
 };
 
 constexpr NodeMapping GenerateMortonCodesMapping[] =
@@ -775,16 +795,6 @@ constexpr NodeMapping BuildQBVHMapping[] =
     { NodeType::Uav, 2 }
 };
 
-constexpr NodeMapping BuildQBVHCollapseMapping[] =
-{
-    { NodeType::Constant, BuildQBVH::NumEntries },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
-};
-
 constexpr NodeMapping MergeSortMapping[] =
 {
     { NodeType::Constant, MergeSort::NumEntries },
@@ -892,13 +902,6 @@ constexpr NodeMapping CompactASMapping[] =
 };
 
 constexpr NodeMapping DecodeASMapping[] =
-{
-    { NodeType::Constant, DecodeAS::NumEntries },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-};
-
-constexpr NodeMapping DecodeCollapseMapping[] =
 {
     { NodeType::Constant, DecodeAS::NumEntries },
     { NodeType::Uav, 2 },

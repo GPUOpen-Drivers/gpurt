@@ -102,8 +102,8 @@ enum PrimitiveType : uint
 // BVH node types shared between HW and SW nodes
 #define NODE_TYPE_TRIANGLE_0           0
 #define NODE_TYPE_TRIANGLE_1           1
-#define NODE_TYPE_UNUSED_0             2 // Hardware NODE_TYPE_TRIANGLE_2
-#define NODE_TYPE_UNUSED_1             3 // Hardware NODE_TYPE_TRIANGLE_3
+#define NODE_TYPE_TRIANGLE_2           2
+#define NODE_TYPE_TRIANGLE_3           3
 #define NODE_TYPE_BOX_FLOAT16          4
 #define NODE_TYPE_BOX_FLOAT32          5
 #define NODE_TYPE_USER_NODE_INSTANCE   6
@@ -111,7 +111,6 @@ enum PrimitiveType : uint
 // From the HW IP 2.0 spec: '7: User Node 1 (processed as a Procedural Node for culling)'
 #endif
 #define NODE_TYPE_USER_NODE_PROCEDURAL 7
-
 //=====================================================================================================================
 // Triangle Compression Modes
 #define NO_TRIANGLE_COMPRESSION        0
@@ -268,24 +267,24 @@ typedef AccelStructDataOffsets AccelStructOffsets;
 
 //=====================================================================================================================
 // Hardware 32-bit box node format and offsets
-#define FLOAT32_BBOX_STRIDE                 24
-#define FLOAT32_BOX_NODE_CHILD0_OFFSET      0
-#define FLOAT32_BOX_NODE_CHILD1_OFFSET      4
-#define FLOAT32_BOX_NODE_CHILD2_OFFSET      8
-#define FLOAT32_BOX_NODE_CHILD3_OFFSET      12
-#define FLOAT32_BOX_NODE_BB0_MIN_OFFSET     16
-#define FLOAT32_BOX_NODE_BB0_MAX_OFFSET     28
-#define FLOAT32_BOX_NODE_BB1_MIN_OFFSET     40
-#define FLOAT32_BOX_NODE_BB1_MAX_OFFSET     52
-#define FLOAT32_BOX_NODE_BB2_MIN_OFFSET     64
-#define FLOAT32_BOX_NODE_BB2_MAX_OFFSET     76
-#define FLOAT32_BOX_NODE_BB3_MIN_OFFSET     88
-#define FLOAT32_BOX_NODE_BB3_MAX_OFFSET     100
-#define FLOAT32_BOX_NODE_FLAGS_OFFSET       112
-#define FLOAT32_BOX_NODE_NUM_PRIM_OFFSET    116
-#define FLOAT32_BOX_NODE_UNUSED2_OFFSET     120
-#define FLOAT32_BOX_NODE_UNUSED3_OFFSET     124
-#define FLOAT32_BOX_NODE_SIZE               128
+#define FLOAT32_BBOX_STRIDE                    24
+#define FLOAT32_BOX_NODE_CHILD0_OFFSET         0
+#define FLOAT32_BOX_NODE_CHILD1_OFFSET         4
+#define FLOAT32_BOX_NODE_CHILD2_OFFSET         8
+#define FLOAT32_BOX_NODE_CHILD3_OFFSET         12
+#define FLOAT32_BOX_NODE_BB0_MIN_OFFSET        16
+#define FLOAT32_BOX_NODE_BB0_MAX_OFFSET        28
+#define FLOAT32_BOX_NODE_BB1_MIN_OFFSET        40
+#define FLOAT32_BOX_NODE_BB1_MAX_OFFSET        52
+#define FLOAT32_BOX_NODE_BB2_MIN_OFFSET        64
+#define FLOAT32_BOX_NODE_BB2_MAX_OFFSET        76
+#define FLOAT32_BOX_NODE_BB3_MIN_OFFSET        88
+#define FLOAT32_BOX_NODE_BB3_MAX_OFFSET        100
+#define FLOAT32_BOX_NODE_FLAGS_OFFSET          112
+#define FLOAT32_BOX_NODE_NUM_PRIM_OFFSET       116
+#define FLOAT32_BOX_NODE_UNUSED2_OFFSET        120
+#define FLOAT32_BOX_NODE_UNUSED3_OFFSET        124
+#define FLOAT32_BOX_NODE_SIZE                  128
 
 //=====================================================================================================================
 // Float32 box node flags contains 4 1-byte fields, 1 per child node:
@@ -1203,15 +1202,9 @@ static uint CalcBvhNodeSizeInternal(
 //=====================================================================================================================
 static uint CalcParentPtrOffset(uint nodePtr)
 {
-    // Mask out node type from node pointer
-    const uint alignedNodePtrOffset     = ClearNodeType(nodePtr);
-
-    // Box nodes and user nodes are not compressed. Set prim offset to 0
-    const uint nodePtrOffsetShift   = 3;
-
     // Subtract 1 from the index to account for negative offset calculations. I.e. index 0 is actually at -4 byte
     // offset from the end of the parent pointer memory
-    const uint linkIndex = (alignedNodePtrOffset >> nodePtrOffsetShift) - 1;
+    const uint linkIndex = (nodePtr >> 3) - 1;
     return linkIndex * NODE_PTR_SIZE;
 }
 
@@ -1625,7 +1618,6 @@ typedef uint CANDIDATE_STATUS;
 #define CANDIDATE_NON_OPAQUE_TRIANGLE 0
 #define CANDIDATE_PROCEDURAL_PRIMITIVE 1
 #define CANDIDATE_NON_OPAQUE_PROCEDURAL_PRIMITIVE 2
-#define CANDIDATE_NO_DUPLICATE_ANYHIT_PROCEDURAL_PRIMITIVE 3
 #define CANDIDATE_EARLY_RAY_TERMINATE 4
 
 #define INIT_LDS_STATE 0xFFFFFFFF

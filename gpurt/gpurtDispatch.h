@@ -127,11 +127,17 @@ struct DispatchRaysConstantData
     uint32 counterMode;                 // Counter capture mode. see TraceRayCounterMode
     uint32 counterRayIdRangeBegin;      // Counter capture ray ID range begin
     uint32 counterRayIdRangeEnd;        // Counter capture ray ID range end
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 36
     uint32 cpsStackOffsetInBytes;       // The scratch memory used as stacks are divided into two parts:
                                         //  (a) Used by a compiler backend, start at offset 0.
-                                        //  (b) Used by IR (Intermediate Representation), for a continuation passing shader.
+#else
+    uint32 cpsBackendStackSize;         // The scratch memory used as stacks are divided into two parts:
+                                        //  (a) Used by a compiler backend, start at offset 0.
+#endif
+    uint32 cpsFrontendStackSize;        //  (b) Used by IR (Intermediate Representation), for a continuation passing shader.
     uint32 cpsGlobalMemoryAddressLo;    // Separate CPS stack memory base address low 32-bits
     uint32 cpsGlobalMemoryAddressHi;    // Separate CPS stack memory base address high 32-bits
+    uint32 counterMask;                 // Mask for filtering ray history token
 };
 #pragma pack(pop)
 
@@ -187,7 +193,7 @@ struct InitExecuteIndirectConstants
     uint32 rtThreadGroupSizeX;      // Internal RT threadgroup size X
     uint32 rtThreadGroupSizeY;      // Internal RT threadgroup size Y
     uint32 rtThreadGroupSizeZ;      // Internal RT threadgroup size Z
-    uint32 unused;                  // unused
+    uint32 counterMask;             // Mask for filtering ray history token
     uint32 pipelineCount;           // Number of pipelines to launch (1 for indirect launch, raygen count for unified)
     uint32 maxIterations;           // Max traversal interations for profiling
     uint32 profileRayFlags;         // Profiling flags

@@ -24,7 +24,10 @@
  **********************************************************************************************************************/
 #define RootSig "RootConstants(num32BitConstants=3, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u1, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
 // 32 bit constants
@@ -38,11 +41,17 @@ struct InputArgs
 [[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
 
 //=====================================================================================================================
-[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer    DstMetadata : register(u0);
-[[vk::binding(1, 0)]] RWByteAddressBuffer                     SrcBuffer   : register(u1);
+[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer    DstMetadata   : register(u0);
+[[vk::binding(1, 0)]] RWByteAddressBuffer                     SrcBuffer     : register(u1);
+
+// unused buffer
+[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer    DstBuffer     : register(u2);
+[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer    ScratchBuffer : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer                     EmitBuffer    : register(u4);
 
 #include "Common.hlsl"
 #include "BuildCommon.hlsl"
+#include "CompactCommon.hlsl"
 
 //=====================================================================================================================
 uint UpdateParentPointer(

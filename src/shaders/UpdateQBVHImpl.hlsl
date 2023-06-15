@@ -140,8 +140,9 @@ void UpdateRootNode(
 {
     BoundingBox bbox         = (BoundingBox)0;
     uint        boxNodeFlags = 0;
+    uint        instanceMask = 0;
 
-    const uint boxNodeOffset = metadataSize + ACCEL_STRUCT_HEADER_SIZE;
+    const uint boxNodeOffset = metadataSize + sizeof(AccelStructHeader);
 
     {
         UpdateFloat32BoxNode(DstMetadata, boxNodeOffset, bbox, boxNodeFlags);
@@ -149,10 +150,8 @@ void UpdateRootNode(
 
     DstMetadata.Store<BoundingBox>(metadataSize + ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET, bbox);
 
-    if (ShaderConstants.isUpdateInPlace == false)
-    {
-        DstMetadata.Store(metadataSize + ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET, boxNodeFlags);
-    }
+    const uint packedFlags = PackInstanceMaskAndNodeFlags(instanceMask, boxNodeFlags);
+    DstMetadata.Store(metadataSize + ACCEL_STRUCT_HEADER_PACKED_FLAGS_OFFSET, packedFlags);
 }
 
 //=====================================================================================================================

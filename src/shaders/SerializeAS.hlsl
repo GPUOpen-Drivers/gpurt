@@ -22,14 +22,13 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "Common.hlsl"
-#include "SerializeCommon.hlsl"
-#include "DecodeCommon.hlsl"
-
 #define RootSig "RootConstants(num32BitConstants=1, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u2, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
 // 32 bit constants
@@ -40,10 +39,18 @@ struct InputArgs
 
 [[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
 
-//=====================================================================================================================
-[[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer   : register(u0);
-[[vk::binding(1, 0)]] RWByteAddressBuffer SrcBuffer   : register(u1);
-[[vk::binding(2, 0)]] RWByteAddressBuffer SrcMetadata : register(u2);
+[[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer     : register(u0);
+[[vk::binding(1, 0)]] RWByteAddressBuffer SrcBuffer     : register(u1);
+[[vk::binding(2, 0)]] RWByteAddressBuffer SrcMetadata   : register(u2);
+
+// unused buffer
+[[vk::binding(3, 0)]] RWByteAddressBuffer DstMetadata   : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer ScratchBuffer : register(u4);
+[[vk::binding(5, 0)]] RWByteAddressBuffer EmitBuffer    : register(u5);
+
+#include "Common.hlsl"
+#include "SerializeCommon.hlsl"
+#include "DecodeCommon.hlsl"
 
 //=====================================================================================================================
 // SerializeAS

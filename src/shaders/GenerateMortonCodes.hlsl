@@ -25,17 +25,18 @@
 #if NO_SHADER_ENTRYPOINT == 0
 //=====================================================================================================================
 // Root signature
-#define RootSig "RootConstants(num32BitConstants=8, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=7, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "CBV(b1)"/*Build Settings binding*/
 
 //=====================================================================================================================
 // 32 bit constants
 struct Constants
 {
-    uint NumPrimitives;            // Number of bounding boxes
     uint LeafNodeDataByteOffset;   // Leaf node data byte offset
     uint SceneBoundsByteOffset;    // Scene bounds byte offset
     uint MortonCodeDataByteOffset; // Morton code data byte offset
@@ -47,10 +48,13 @@ struct Constants
 
 [[vk::push_constant]] ConstantBuffer<Constants> ShaderConstants : register(b0);
 
-//=====================================================================================================================
 [[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer DstMetadata   : register(u1);
 [[vk::binding(2, 0)]] RWByteAddressBuffer ScratchBuffer : register(u2);
+
+// unused buffer
+[[vk::binding(3, 0)]] RWByteAddressBuffer SrcBuffer     : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer EmitBuffer    : register(u4);
 #endif
 
 #include "BuildCommonScratch.hlsl"
@@ -424,7 +428,7 @@ void GenerateMortonCodesImpl(
             WriteMortonCode64(mortonCodesOffset, primitiveIndex, mortonCode);
         }
 
-        DstBuffer.InterlockedAdd(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, 1);
+        IncrementAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, 1);
     }
     else if (IsNodeLinkedOnly(node))
     {
@@ -460,8 +464,9 @@ void GenerateMortonCodes(
     uint globalThreadId : SV_DispatchThreadID)
 {
     const uint primitiveIndex = globalThreadId;
+    const uint numPrimitives = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
 
-    if (primitiveIndex < ShaderConstants.NumPrimitives)
+    if (primitiveIndex < numPrimitives)
     {
         const BoundingBox sceneBounds = FetchSceneBounds(ShaderConstants.SceneBoundsByteOffset);
 

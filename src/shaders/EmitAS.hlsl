@@ -22,14 +22,10 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "Common.hlsl"
-#include "CompactCommon.hlsl"
-#include "DecodeCommon.hlsl"
-#include "SerializeCommon.hlsl"
-
 #define RootSig "RootConstants(num32BitConstants=2, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u1, visibility=SHADER_VISIBILITY_ALL) "\
+                "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u2, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
 // 32 bit constants
@@ -44,6 +40,19 @@ struct InputArgs
 //=====================================================================================================================
 [[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer   : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer SrcBuffer   : register(u1);
+
+// unused buffer
+[[vk::binding(2, 0)]] RWByteAddressBuffer EmitBuffer  : register(u2);
+
+// The emit path uses DstBuffer as the true acceleration structure base (same as DstMetdata).
+#define DstMetadata DstBuffer
+#include "BuildCommon.hlsl"
+#undef DstMetadata
+
+#include "Common.hlsl"
+#include "CompactCommon.hlsl"
+#include "DecodeCommon.hlsl"
+#include "SerializeCommon.hlsl"
 
 //=====================================================================================================================
 AccelStructHeader FetchAccelStructHeader(RWByteAddressBuffer SrcBuffer)
@@ -121,27 +130,32 @@ void EmitToolVisDesc(in uint3 globalThreadId : SV_DispatchThreadID)
     const AccelStructHeader header = FetchAccelStructHeader(SrcBuffer);
 
     const uint type = (header.info & ACCEL_STRUCT_HEADER_INFO_TYPE_MASK);
+
+    uint decodedSizeInBytes = 0;
+
     if (type == TOP_LEVEL)
     {
         // Visualization Header + D3D12_RAYTRACING_INSTANCE_DESC * numDescs
-        const uint decodedSizeInBytes = VISUALIZATION_HEADER_SIZE + (INSTANCE_DESC_SIZE * header.numDescs);
+        decodedSizeInBytes = VISUALIZATION_HEADER_SIZE + (INSTANCE_DESC_SIZE * header.numDescs);
 
-        // DecodedSizeInBytes
-        DstBuffer.Store2(ShaderConstants.offset, uint2(decodedSizeInBytes, 0));
     }
     else
     {
         // Visualization Header + (D3D12_RAYTRACING_GEOMETRY_DESC * numDescs) + vertices/AABBs
-        const uint decodedSizeInBytes = VISUALIZATION_HEADER_SIZE              +
-                                        (GEOMETRY_DESC_SIZE * header.numDescs) +
-                                        (header.numPrimitives * 36);
+        decodedSizeInBytes = VISUALIZATION_HEADER_SIZE              +
+                             (GEOMETRY_DESC_SIZE * header.numDescs) +
+                             (header.numPrimitives * 36);
 
         ///@todo The per-primitive size reported above is an overestimate i.e. maxsize(triangle, AABB).
         ///      However, according to the DXR spec, a bottom level acceleration structure can only contain
         ///      one type of geometry (triangle or AABB). Check the geometryType and use the appropriate
         ///      primitive stride
-
-        // DecodedSizeInBytes
-        DstBuffer.Store2(ShaderConstants.offset, uint2(decodedSizeInBytes, 0));
     }
+
+    // Additional logging for driver decode operations. Note, in order to avoid adding a additional Emit flag, we're
+    // simply padding the decoded size since it is a driver defined size.
+    decodedSizeInBytes += GetDriverDecodeHeaderSize();
+
+    // DecodedSizeInBytes
+    DstBuffer.Store2(ShaderConstants.offset, uint2(decodedSizeInBytes, 0));
 }

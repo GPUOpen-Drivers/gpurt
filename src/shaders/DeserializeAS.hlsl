@@ -25,7 +25,10 @@
 #define RootSig "RootConstants(num32BitConstants=3, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
-                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894))"\
+                "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
+                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894))"
 
 //=====================================================================================================================
 // 32 bit constants
@@ -38,9 +41,13 @@ struct InputArgs
 
 [[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
 
-//=====================================================================================================================
-[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstMetadata : register(u0);
-[[vk::binding(1, 0)]]                  RWByteAddressBuffer SrcBuffer   : register(u1);
+[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstMetadata   : register(u0);
+[[vk::binding(1, 0)]] RWByteAddressBuffer                  SrcBuffer     : register(u1);
+
+// unused buffer
+[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer DstBuffer     : register(u2);
+[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer                  EmitBuffer    : register(u4);
 
 #include "SerializeCommon.hlsl"
 #include "BuildCommon.hlsl"
@@ -101,9 +108,7 @@ void DeserializeAS(
 
         // Loop over active primitives since there may be more or less valid instances than the original API
         // instance count when rebraid is enabled.
-        const uint rebraid =
-            (header.info >> ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_SHIFT) &
-                ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_MASK;
+        const uint rebraid = header.RebraidEnabled();
 
         const uint numInstances = (rebraid != 0) ? header.numActivePrims : header.numDescs;
 

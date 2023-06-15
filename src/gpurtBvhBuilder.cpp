@@ -279,7 +279,9 @@ uint32 BvhBuilder::GetLeafNodeSize(
     }
     else
     {
-        size = RayTracingQBVHLeafSize;
+        {
+            size = RayTracingQBVHLeafSize;
+        }
     }
 
     return size;
@@ -939,8 +941,6 @@ uint32 BvhBuilder::CalculateScratchBufferInfo(
     uint32 qbvhGlobalStack = 0;
     uint32 qbvhGlobalStackPtrs = 0;
 
-    uint32 collapseBVHStack = 0;
-    uint32 collapseBVHStackPtrs = 0;
     uint32 bvh2Prims = 0;
 
     // ..and QBVH global stack
@@ -948,24 +948,17 @@ uint32 BvhBuilder::CalculateScratchBufferInfo(
 
     const uint32 maxStackEntry = CalcNumInternalNodes(m_buildConfig.numLeafNodes);
 
-    if ((m_buildConfig.topLevelBuild == false) && m_buildConfig.collapse)
-    {
-        runningOffset += maxStackEntry * RayTracingQBVHCollapseTaskSize;
-    }
-    else
-    {
-        // Stack pointers require 2 entries per node when fp16 and fp32 box nodes intermix in BLAS
-        const Fp16BoxNodesInBlasMode intNodeTypes = m_buildConfig.fp16BoxNodesInBlasMode;
-        const bool intNodeTypesMix = (intNodeTypes != Fp16BoxNodesInBlasMode::NoNodes) &&
-            (intNodeTypes != Fp16BoxNodesInBlasMode::AllNodes);
-        const bool intNodeTypesMixInBlas = intNodeTypesMix &&
-            (m_buildArgs.inputs.type == AccelStructType::BottomLevel);
+    // Stack pointers require 2 entries per node when fp16 and fp32 box nodes intermix in BLAS
+    const Fp16BoxNodesInBlasMode intNodeTypes = m_buildConfig.fp16BoxNodesInBlasMode;
+    const bool intNodeTypesMix = (intNodeTypes != Fp16BoxNodesInBlasMode::NoNodes) &&
+        (intNodeTypes != Fp16BoxNodesInBlasMode::AllNodes);
+    const bool intNodeTypesMixInBlas = intNodeTypesMix &&
+        (m_buildArgs.inputs.type == AccelStructType::BottomLevel);
 
-        bool stackHasTwoEntries = intNodeTypesMixInBlas;
+    bool stackHasTwoEntries = intNodeTypesMixInBlas;
 
-        const uint32 stackEntrySize = stackHasTwoEntries ? 2u : 1u;
-        runningOffset += maxStackEntry * stackEntrySize * sizeof(uint32);
-    }
+    const uint32 stackEntrySize = stackHasTwoEntries ? 2u : 1u;
+    runningOffset += maxStackEntry * stackEntrySize * sizeof(uint32);
 
     qbvhGlobalStackPtrs = runningOffset;
 
@@ -1165,11 +1158,6 @@ void BvhBuilder::InitBuildConfig(
     }
 
     m_buildConfig.triangleSplitting = m_deviceSettings.enableTriangleSplitting &&
-        (buildArgs.inputs.type == AccelStructType::BottomLevel) &&
-        (Util::TestAnyFlagSet(buildArgs.inputs.flags, AccelStructBuildFlagAllowUpdate) == false) &&
-        Util::TestAnyFlagSet(buildArgs.inputs.flags, AccelStructBuildFlagPreferFastTrace);
-
-    m_buildConfig.collapse = m_deviceSettings.bvhCollapse &&
         (buildArgs.inputs.type == AccelStructType::BottomLevel) &&
         (Util::TestAnyFlagSet(buildArgs.inputs.flags, AccelStructBuildFlagAllowUpdate) == false) &&
         Util::TestAnyFlagSet(buildArgs.inputs.flags, AccelStructBuildFlagPreferFastTrace);
@@ -2101,7 +2089,7 @@ void BvhBuilder::InitBuildSettings()
     m_buildSettings.fp16BoxNodesMode             = (m_buildSettings.topLevelBuild) ?
                                                    static_cast<uint32>(Fp16BoxNodesInBlasMode::NoNodes) :
                                                    static_cast<uint32>(m_buildConfig.fp16BoxNodesInBlasMode);
-    m_buildSettings.fp16BoxModeMixedSaThreshhold = m_deviceSettings.fp16BoxModeMixedSaThresh;
+    m_buildSettings.fp16BoxModeMixedSaThreshold  = m_deviceSettings.fp16BoxModeMixedSaThresh;
     m_buildSettings.enableBVHBuildDebugCounters  = m_deviceSettings.enableBVHBuildDebugCounters;
     m_buildSettings.plocRadius                   = m_deviceSettings.plocRadius;
     m_buildSettings.enablePairCostCheck          = m_deviceSettings.enablePairCompressionCostCheck;
@@ -2784,6 +2772,7 @@ void BvhBuilder::CopyAccelerationStructure(
         break;
 
     case AccelStructCopyMode::VisualizationDecodeForTools:
+    case AccelStructCopyMode::DriverDecode:
         CopyASToolsVisualizationMode(copyArgs);
         break;
 
@@ -2926,14 +2915,7 @@ void BvhBuilder::CopyASDeserializeMode(
 void BvhBuilder::CopyASToolsVisualizationMode(
     const AccelStructCopyInfo& copyArgs) // Copy arguments
 {
-    if (m_deviceSettings.bvhCollapse)
-    {
-        BindPipeline(InternalRayTracingCsType::DecodeCollapse);
-    }
-    else
-    {
-        BindPipeline(InternalRayTracingCsType::DecodeAS);
-    }
+    BindPipeline(InternalRayTracingCsType::DecodeAS);
 
     const uint32 numThreadGroups = GetNumThreadGroupsCopy();
 
@@ -2944,6 +2926,7 @@ void BvhBuilder::CopyASToolsVisualizationMode(
         static_cast<uint32>(copyArgs.dstAccelStructAddr.gpu >> 32),
         numThreadGroups * DefaultThreadGroupSize,
         static_cast<uint32>(m_pDevice->GetRtIpLevel()),
+        ((copyArgs.mode == AccelStructCopyMode::DriverDecode) ? 1u : 0u),
     };
 
     uint32 entryOffset = 0;
@@ -2971,11 +2954,30 @@ void BvhBuilder::BuildAccelerationStructure()
     {
         BuildParallel();
     }
-    else if (m_buildConfig.topDownBuild)
+    else
     {
-        // Wait for the encoding operation to complete.
-        Barrier();
+        BuildMultiDispatch();
+    }
+}
 
+// =====================================================================================================================
+// BVH build implementation with multiple separate compute dispatches.
+void BvhBuilder::BuildMultiDispatch()
+{
+    // Wait for the encoding operation to complete.
+    Barrier();
+
+    if (m_buildConfig.topLevelBuild && (m_buildConfig.rebraidType == GpuRt::RebraidType::V2) &&
+        (m_buildConfig.numPrimitives > 0))
+    {
+        // Rebraid the TLAS leaves
+        Rebraid();
+
+        // Wait until Rebraid has finished
+        Barrier();
+    }
+    if (m_buildConfig.topDownBuild)
+    {
         BuildBVHTD();
 
         Barrier();
@@ -2984,10 +2986,6 @@ void BvhBuilder::BuildAccelerationStructure()
     }
     else
     {
-
-        // Wait for the encoding operation to complete.
-        Barrier();
-
         // Generate morton codes from leaf nodes
         GenerateMortonCodes();
 
@@ -3020,16 +3018,7 @@ void BvhBuilder::BuildAccelerationStructure()
             Barrier();
         }
 
-        if (m_buildConfig.topLevelBuild == false)
-        {
-            if (m_buildConfig.buildMode == BvhBuildMode::Linear)
-            {
-                RefitBounds();
-
-                Barrier();
-            }
-        }
-        else if (m_buildConfig.buildMode == BvhBuildMode::Linear)
+        if (m_buildConfig.buildMode == BvhBuildMode::Linear)
         {
             RefitBounds();
 
@@ -3122,12 +3111,11 @@ void BvhBuilder::MergeSort()
 
     const MergeSort::Constants shaderConstants =
     {
-        m_buildConfig.numLeafNodes,
         m_scratchOffsets.mortonCodes,
         m_scratchOffsets.mortonCodesSorted,
         m_scratchOffsets.primIndicesSorted,
         m_scratchOffsets.primIndicesSortedSwap,
-        m_deviceSettings.enableMortonCode30
+        m_deviceSettings.enableMortonCode30,
     };
 
     ResetTaskCounter(HeaderBufferBaseVa());
@@ -3148,19 +3136,62 @@ void BvhBuilder::MergeSort()
 }
 
 // =====================================================================================================================
+// Executes the Rebraid shader
+// Preconditions: Rebraid can only be called on TLAS builds.
+void BvhBuilder::Rebraid()
+{
+    // TODO: Determine numThreadGroups without relying on BuildParallel's logic
+    const uint32 numThreadGroups = GetParallelBuildNumThreadGroups();
+    const uint32 encodeArrayOfPointers = (m_buildArgs.inputs.inputElemLayout == InputElementLayout::ArrayOfPointers);
+
+    const Rebraid::Constants shaderConstants =
+    {
+        m_buildConfig.numPrimitives,
+        numThreadGroups,
+        m_deviceSettings.rebraidFactor * m_buildConfig.numPrimitives,
+        m_scratchOffsets.bvhLeafNodeData,
+
+        m_scratchOffsets.sceneBounds,
+        m_scratchOffsets.rebraidState,
+        m_scratchOffsets.atomicFlagsTS,
+        encodeArrayOfPointers,
+
+        0,
+        m_deviceSettings.enableSAHCost,
+    };
+
+    ResetTaskQueueCounters(m_scratchOffsets.rebraidState);
+
+    BindPipeline(InternalRayTracingCsType::Rebraid);
+
+    uint32 entryOffset = 0;
+
+    // Set shader constants
+    entryOffset = WriteUserDataEntries(&shaderConstants, Rebraid::NumEntries, entryOffset);
+    // Set DstBuffer, DstMetadata and ScratchBuffer
+    entryOffset = WriteDestBuffers(entryOffset);
+    // Set instance description buffer
+    entryOffset = WriteBufferVa(m_buildArgs.inputs.instances.gpu, entryOffset);
+
+    RGP_PUSH_MARKER("Rebraid");
+    Dispatch(numThreadGroups);
+
+    RGP_POP_MARKER();
+}
+
+// =====================================================================================================================
 // Executes the generates morton codes shader
 void BvhBuilder::GenerateMortonCodes()
 {
     const GenerateMortonCodes::Constants shaderConstants =
     {
-        m_buildConfig.numLeafNodes,
         m_scratchOffsets.bvhLeafNodeData,
         m_scratchOffsets.sceneBounds,
         m_scratchOffsets.mortonCodes,
         m_buildConfig.triangleSplitting,
         m_scratchOffsets.triangleSplitBoxes,
         m_deviceSettings.enableVariableBitsMortonCodes,
-        m_deviceSettings.enableMortonCode30
+        m_deviceSettings.enableMortonCode30,
     };
 
     BindPipeline(InternalRayTracingCsType::GenerateMortonCodes);
@@ -3192,9 +3223,7 @@ void BvhBuilder::BuildBVH()
         m_scratchOffsets.bvhLeafNodeData,
         m_scratchOffsets.mortonCodesSorted,
         m_scratchOffsets.primIndicesSorted,
-        m_deviceSettings.enableMortonCode30,
-        m_buildConfig.noCopySortedNodes,
-        m_buildConfig.enableFastLBVH,
+        m_buildConfig.numLeafNodes
     };
 
     // Set shader constants
@@ -3228,7 +3257,6 @@ void BvhBuilder::BuildBVHTD()
     const BuildBVHTD::Constants shaderConstants =
     {
         m_buildConfig.numPrimitives,
-        UpdateAllowed(),
         numThreadGroups * threadGroupSize,
         m_buildConfig.numLeafNodes,
         m_deviceSettings.rebraidLengthPercentage,
@@ -3240,7 +3268,6 @@ void BvhBuilder::BuildBVHTD()
         m_scratchOffsets.tdBins,
         m_scratchOffsets.tdState,
         m_scratchOffsets.tdTaskQueueCounter,
-        m_scratchOffsets.refOffsets,
         (m_buildArgs.inputs.inputElemLayout == InputElementLayout::ArrayOfPointers)
     };
 
@@ -3302,8 +3329,6 @@ void BvhBuilder::BuildBVHPLOC()
         m_deviceSettings.plocRadius,
         m_scratchOffsets.primIndicesSorted,
         m_buildConfig.numLeafNodes,
-        m_buildConfig.noCopySortedNodes,
-        m_buildConfig.enableEarlyPairCompression,
         m_scratchOffsets.bvhLeafNodeData,
     };
 
@@ -3645,6 +3670,41 @@ void BvhBuilder::EncodeUpdate()
 }
 
 // =====================================================================================================================
+// Calculates the number of thread groups to dispatch based on the configured waves per SIMD for parallel builds
+uint32 BvhBuilder::GetParallelBuildNumThreadGroups()
+{
+    uint32 wavesPerSimd = m_deviceSettings.parallelBuildWavesPerSimd;
+
+    if (wavesPerSimd == 0)
+    {
+        switch (m_buildConfig.buildMode)
+        {
+        case BvhBuildMode::Linear:
+            if (m_buildConfig.triangleSplitting)
+            {
+                wavesPerSimd = 5;
+            }
+            else
+            {
+                wavesPerSimd = 8;
+            }
+            break;
+        case BvhBuildMode::PLOC:
+            wavesPerSimd = 2;
+            break;
+        default:
+            wavesPerSimd = 1;
+            break;
+        }
+    }
+
+    const uint32 threadGroupSize = DefaultThreadGroupSize;
+    const uint32 numThreadGroups = GetNumPersistentThreadGroups(m_buildConfig.numPrimitives, threadGroupSize, wavesPerSimd);
+
+    return numThreadGroups;
+}
+
+// =====================================================================================================================
 // Executes the build QBVH shader
 void BvhBuilder::BuildQBVH()
 {
@@ -3698,25 +3758,14 @@ void BvhBuilder::BuildQBVH()
 
     RGP_PUSH_MARKER("Init Build QBVH");
     Dispatch(DispatchSize(nodeCount));
-
     RGP_POP_MARKER();
 
     Barrier();
 
-    if (m_buildConfig.collapse)
-    {
-        BindPipeline(InternalRayTracingCsType::BuildQBVHCollapse);
+    BindPipeline(InternalRayTracingCsType::BuildQBVH);
 
-        RGP_PUSH_MARKER("Build QBVH Collapse");
-    }
-    else
-    {
-        BindPipeline(InternalRayTracingCsType::BuildQBVH);
-
-        RGP_PUSH_MARKER("Build QBVH");
-    }
+    RGP_PUSH_MARKER("Build QBVH");
     Dispatch(numThreadGroups);
-
     RGP_POP_MARKER();
 }
 
@@ -3748,7 +3797,7 @@ void BvhBuilder::BuildQBVHTop()
         0,
         0,
         false,
-        0                                           // unsortedBvhLeafNodeOffset
+        0,                                           // unsortedBvhLeafNodeOffset
     };
 
     ResetTaskCounter(HeaderBufferBaseVa());
@@ -3809,7 +3858,8 @@ void BvhBuilder::RefitBounds()
         m_scratchOffsets.batchIndices,
         m_buildConfig.noCopySortedNodes,
         m_scratchOffsets.primIndicesSorted,
-        m_buildConfig.enableEarlyPairCompression
+        m_buildConfig.enableEarlyPairCompression,
+        m_buildConfig.numLeafNodes
     };
 
     uint32 entryOffset = 0;
@@ -3931,7 +3981,6 @@ void BvhBuilder::BitHistogram(
     const BitHistogram::Constants shaderConstants =
     {
         bitShiftSize,
-        numElems,
         numGroups,
         inputArrayOffset,
         outputArrayOffset,
@@ -3970,7 +4019,6 @@ void BvhBuilder::ScatterKeysAndValues(
     const RadixSort::Constants shaderConstants =
     {
         bitShiftSize,
-        numElems,
         numGroups,
         inputKeysOffset,
         inputValuesOffset,
@@ -4068,34 +4116,7 @@ void BvhBuilder::BuildParallel()
                                                   m_radixSortConfig.numScanElemsPerWorkGroup *
                                                   m_radixSortConfig.numScanElemsPerWorkGroup));
     }
-
-    uint32 wavesPerSimd = m_deviceSettings.parallelBuildWavesPerSimd;
-
-    if (wavesPerSimd == 0)
-    {
-        switch (m_buildConfig.buildMode)
-        {
-        case BvhBuildMode::Linear:
-            if (m_buildConfig.triangleSplitting)
-            {
-                wavesPerSimd = 5;
-            }
-            else
-            {
-                wavesPerSimd = 8;
-            }
-            break;
-        case BvhBuildMode::PLOC:
-            wavesPerSimd = 2;
-            break;
-        default:
-            wavesPerSimd = 1;
-            break;
-        }
-    }
-
-    const uint32 threadGroupSize = DefaultThreadGroupSize;
-    const uint32 numThreadGroups = GetNumPersistentThreadGroups(m_buildConfig.numPrimitives, threadGroupSize, wavesPerSimd);
+    const uint32 numThreadGroups = GetParallelBuildNumThreadGroups();
 
     BuildParallel::Constants shaderConstants = {};
 

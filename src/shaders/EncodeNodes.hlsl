@@ -30,19 +30,25 @@
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u6, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u7, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
                 "CBV(b1)"/*Build Settings binding*/
 
-[[vk::binding(0, 2)]] RWBuffer<float3>            GeometryBuffer  : register(u0, space1);
+[[vk::binding(0, 2)]] RWBuffer<float3>                     GeometryBuffer    : register(u0, space1);
 
 // Triangle nodes only
-[[vk::binding(0, 0)]] RWByteAddressBuffer         IndexBuffer     : register(u0);
-[[vk::binding(1, 0)]] RWStructuredBuffer<float4>  TransformBuffer : register(u1);
+[[vk::binding(0, 0)]] RWByteAddressBuffer                  IndexBuffer       : register(u0);
+[[vk::binding(1, 0)]] RWStructuredBuffer<float4>           TransformBuffer   : register(u1);
 
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer DstMetadata       : register(u2);
 [[vk::binding(3, 0)]] RWByteAddressBuffer                  ScratchBuffer     : register(u3);
 [[vk::binding(4, 0)]] RWByteAddressBuffer                  SrcBuffer         : register(u4);
 [[vk::binding(5, 0)]] RWByteAddressBuffer                  IndirectArgBuffer : register(u5);
+
+// unused buffer
+[[vk::binding(6, 0)]] globallycoherent RWByteAddressBuffer DstBuffer         : register(u6);
+[[vk::binding(7, 0)]] RWByteAddressBuffer                  EmitBuffer        : register(u7);
 
 #include "Common.hlsl"
 #include "BuildCommon.hlsl"
@@ -139,12 +145,7 @@ BoundingBox FetchBoundingBoxData(RWBuffer<float3> buffer, uint index, uint boxSt
     // Generate degenerate bounding box for zero area bounds
     if (ComputeBoxSurfaceArea(bbox) == 0)
     {
-        bbox.min.x = +FLT_MAX;
-        bbox.min.y = +FLT_MAX;
-        bbox.min.z = +FLT_MAX;
-        bbox.max.x = -FLT_MAX;
-        bbox.max.y = -FLT_MAX;
-        bbox.max.z = -FLT_MAX;
+        bbox = InvalidBoundingBox;
     }
 
     return bbox;
@@ -172,6 +173,7 @@ void WriteScratchProceduralNode(
     uint                primitiveIndex,
     uint                geometryIndex,
     uint                geometryFlags,
+    uint                instanceMask,
     in BoundingBox      bbox)
 {
     uint offset = (primitiveIndex * ByteStrideScratchNode) +
@@ -197,9 +199,11 @@ void WriteScratchProceduralNode(
     const float cost = SAH_COST_AABBB_INTERSECTION * ComputeBoxSurfaceArea(bbox);
 
     // Instance mask is assumed 0 in bottom level acceleration structures
-    const uint boxNodeFlags = CalcProceduralBoxNodeFlags(geometryFlags);
+    const uint flags = CalcProceduralBoxNodeFlags(geometryFlags);
 
-    data = uint4(typeAndId, boxNodeFlags, INVALID_IDX, asuint(cost));
+    const uint packedFlags = PackInstanceMaskAndNodeFlags(instanceMask, flags);
+
+    data = uint4(typeAndId, packedFlags, INVALID_IDX, asuint(cost));
     buffer.Store4(offset + SCRATCH_NODE_TYPE_OFFSET, data);
 }
 
@@ -275,6 +279,9 @@ void EncodeAABBNodes(
                                                              primitiveIndex,
                                                              ShaderConstants.GeometryStride);
 
+        // Set the instance inclusion mask to 0 for degenerate procedural nodes so that they are culled out.
+        const uint instanceMask = (boundingBox.min.x > boundingBox.max.x) ? 0 : 0xff;
+
         const uint primNodePointerOffset =
             metadataSize + basePrimNodePtr + ((primitiveOffset + primitiveIndex) * sizeof(uint));
 
@@ -307,6 +314,7 @@ void EncodeAABBNodes(
                                   nodePointer,
                                   0,
                                   0,
+                                  instanceMask,
                                   boundingBox,
                                   true);
             }
@@ -336,6 +344,7 @@ void EncodeAABBNodes(
                                        primitiveIndex,
                                        ShaderConstants.GeometryIndex,
                                        ShaderConstants.GeometryFlags,
+                                       instanceMask,
                                        boundingBox);
 
             // Store invalid prim node pointer for now during first time builds.

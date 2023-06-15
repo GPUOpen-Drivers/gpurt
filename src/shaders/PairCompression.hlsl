@@ -37,6 +37,8 @@ struct PairCompressionArgs
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
                 "CBV(b1)"/*Build Settings binding*/
 
@@ -46,6 +48,10 @@ struct PairCompressionArgs
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer  DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer  DstMetadata   : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer  ScratchBuffer : register(u2);
+
+// unused buffer
+[[vk::binding(3, 0)]] RWByteAddressBuffer                   SrcBuffer     : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer                   EmitBuffer    : register(u4);
 
 #include "Common.hlsl"
 #include "BuildCommonScratch.hlsl"
@@ -467,7 +473,7 @@ void PairCompressionImpl(
     }
 
     const uint batchRootIndex = ScratchBuffer.Load(args.batchIndicesScratchOffset + (globalId * sizeof(uint)));
-    const uint numActivePrims = DstBuffer.Load(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+    const uint numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
 
     uint batchSize = 0;
     uint stackPtr = 1;

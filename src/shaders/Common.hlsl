@@ -150,15 +150,14 @@ static const BoundingBox InvalidBoundingBox =
 #define RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES      0x200
 
 #define PIPELINE_FLAG_BVH_COLLAPSE                   0x80000000
-#define PIPELINE_FLAG_USE_RAYQUERY                   0x40000000
-#define PIPELINE_FLAG_USE_REBRAID                    0x20000000
-#define PIPELINE_FLAG_ENABLE_AS_TRACKING             0x10000000
-#define PIPELINE_FLAG_ENABLE_TRAVERSAL_CTR           0x08000000
-#define PIPELINE_FLAG_RESERVED                       0x04000000
-#define PIPELINE_FLAG_ENABLE_FUSED_INSTANCE          0x02000000
-#define PIPELINE_FLAG_RESERVED2                      0x01000000
-#define PIPELINE_FLAG_RESERVED3                      0x00800000
-#define PIPELINE_FLAG_RESERVED4                      0x00400000
+#define PIPELINE_FLAG_USE_REBRAID                    0x40000000
+#define PIPELINE_FLAG_ENABLE_AS_TRACKING             0x20000000
+#define PIPELINE_FLAG_ENABLE_TRAVERSAL_CTR           0x10000000
+#define PIPELINE_FLAG_RESERVED                       0x08000000
+#define PIPELINE_FLAG_ENABLE_FUSED_INSTANCE          0x04000000
+#define PIPELINE_FLAG_RESERVED2                      0x02000000
+#define PIPELINE_FLAG_RESERVED3                      0x01000000
+#define PIPELINE_FLAG_RESERVED4                      0x00800000
 
 #define HIT_KIND_TRIANGLE_FRONT_FACE 0xFE
 #define HIT_KIND_TRIANGLE_BACK_FACE  0xFF
@@ -198,10 +197,6 @@ static uint IsBvhCollapse()
 static uint IsBvhRebraid()
 {
     return (AmdTraceRayGetStaticFlags() & PIPELINE_FLAG_USE_REBRAID);
-}
-static uint IsUseRayQueryForTraceRays()
-{
-    return (AmdTraceRayGetStaticFlags() & PIPELINE_FLAG_USE_RAYQUERY);
 }
 static uint EnableAccelStructTracking()
 {
@@ -348,7 +343,7 @@ static bool IsBoxNode(
 static uint CreateRootNodePointer(
 )
 {
-    return PackNodePointer(NODE_TYPE_BOX_FLOAT32, ACCEL_STRUCT_HEADER_SIZE);
+    return PackNodePointer(NODE_TYPE_BOX_FLOAT32, sizeof(AccelStructHeader));
 }
 
 //=====================================================================================================================
@@ -497,12 +492,7 @@ static BoundingBox GenerateTriangleBoundingBox(float3 v0, float3 v1, float3 v2)
     if (all(v0 == v1) || all(v0 == v2) || all(v1 == v2))
 #endif
     {
-        bbox.min.x = +FLT_MAX;
-        bbox.min.y = +FLT_MAX;
-        bbox.min.z = +FLT_MAX;
-        bbox.max.x = -FLT_MAX;
-        bbox.max.y = -FLT_MAX;
-        bbox.max.z = -FLT_MAX;
+        bbox = InvalidBoundingBox;
     }
 
     return bbox;
@@ -767,16 +757,58 @@ static uint CalcPrimitiveIndexOffset(
 }
 
 //=====================================================================================================================
-static uint FetchHeaderField(in GpuVirtualAddress bvhAddress, const uint offset)
+// Return base address pointing to acceleration structure header
+static uint64_t GetAccelStructHeaderAddr(
+    in uint64_t baseAddrAccelStruct)
 {
     // The BVH data memory begins with AccelStructHeader
-    return LoadDwordAtAddr(bvhAddress + offset);
+    return baseAddrAccelStruct;
 }
 
 //=====================================================================================================================
-static uint FetchHeaderOffsetField(in GpuVirtualAddress base, const uint offset)
+static uint FetchHeaderField(
+    in uint64_t baseAddrAccelStruct,
+    const uint  offset)
 {
-    return FetchHeaderField(base, ACCEL_STRUCT_HEADER_OFFSETS_OFFSET + offset);
+    const uint64_t baseAddrAccelStructHeader = GetAccelStructHeaderAddr(baseAddrAccelStruct);
+    return LoadDwordAtAddr(baseAddrAccelStructHeader + offset);
+}
+
+//=====================================================================================================================
+static uint FetchHeaderOffsetField(
+    in uint64_t baseAddrAccelStruct,
+    const uint  offset)
+{
+    const uint64_t baseAddrAccelStructHeader = GetAccelStructHeaderAddr(baseAddrAccelStruct);
+    return FetchHeaderField(baseAddrAccelStructHeader, ACCEL_STRUCT_HEADER_OFFSETS_OFFSET + offset);
+}
+
+//=====================================================================================================================
+static BoundingBox FetchHeaderRootBoundingBox(
+    in uint64_t baseAddrAccelStruct)
+{
+    const uint64_t baseAddrAccelStructHeader = GetAccelStructHeaderAddr(baseAddrAccelStruct);
+    const uint4 d0 = LoadDwordAtAddrx4(baseAddrAccelStructHeader + ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET);
+    const uint2 d1 = LoadDwordAtAddrx2(baseAddrAccelStructHeader + ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET + 0x10);
+
+    BoundingBox bbox;
+    bbox.min = asfloat(d0.xyz);
+    bbox.max = asfloat(uint3(d0.w, d1.xy));
+
+    return bbox;
+}
+
+//=====================================================================================================================
+static uint4 FetchHeaderCostOrNumChildPrims(
+    in uint64_t baseAddrAccelStruct)
+{
+    uint4 data = uint4(0, 0, 0, 0);
+    data.x = FetchHeaderField(baseAddrAccelStruct, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET);
+    data.y = FetchHeaderField(baseAddrAccelStruct, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 4);
+    data.z = FetchHeaderField(baseAddrAccelStruct, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 8);
+    data.w = FetchHeaderField(baseAddrAccelStruct, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 12);
+
+    return data;
 }
 
 //=====================================================================================================================

@@ -128,4 +128,22 @@ static InstanceDesc DecodeApiInstanceDesc(
 
     return apiInstanceDesc;
 }
+
+//=====================================================================================================================
+// Additional driver decode header data
+static uint GetDriverDecodeHeaderSize()
+{
+    return sizeof(DriverDecodeHeader);
+}
+
+//=====================================================================================================================
+static void WriteDriverDecodeHeader(
+    RWByteAddressBuffer  buffer,
+    in AccelStructHeader header,
+    in uint              offset)
+{
+    buffer.Store<AccelStructHeaderInfo>(offset, header.info);
+    buffer.Store<AccelStructHeaderInfo2>(offset + sizeof(AccelStructHeaderInfo), header.info2);
+}
+
 #endif

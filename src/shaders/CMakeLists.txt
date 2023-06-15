@@ -44,7 +44,6 @@ set(gpurtHlsl
     BuildSettings.hlsli
     BuildParallel.hlsl
     BuildQBVH.hlsl
-    BuildQBVHCollapseImpl.hlsl
 #if GPURT_BUILD_RTIP2
     bvh_stack_dxr_prototype.hlsl
 #endif

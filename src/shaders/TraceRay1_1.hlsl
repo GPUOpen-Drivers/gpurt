@@ -345,25 +345,6 @@ static IntersectionResult TraceRayImpl1_1(
                                                                    instanceContribution);
 
                             const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(topLevelBvh, instNodePtr);
-
-                            // Set intersection attributes
-                            AmdTraceRaySetHitAttributes(candidateT,
-                                                        hitKind,
-                                                        HIT_STATUS_ACCEPT,
-                                                        LowPart(instNodePtr64),
-                                                        HighPart(instNodePtr64),
-                                                        primitiveIndex,
-                                                        ANYHIT_CALLTYPE_NO_DUPLICATE,
-                                                        geometryIndex);
-
-                            // get barycentrics
-                            float2 barycentrics;
-                            barycentrics.x = asfloat(intersectionResult.z) / asfloat(intersectionResult.y);
-                            barycentrics.y = asfloat(intersectionResult.w) / asfloat(intersectionResult.y);
-
-                            // Call triangle anyhit shader.
-                            BuiltInTriangleIntersectionAttributes attr = { barycentrics };
-                            AmdTraceRayCallTriangleAnyHitShader(hitInfo.anyHitId, hitInfo.tableIndex, attr);
 #if DEVELOPER
                             if (EnableTraversalCounter())
                             {
@@ -374,6 +355,26 @@ static IntersectionResult TraceRayImpl1_1(
                                 intersection.numAnyHitInvocation++;
                             }
 #endif
+                            // Set intersection attributes
+                            AmdTraceRaySetHitAttributes(candidateT,
+                                                        hitKind,
+                                                        HIT_STATUS_ACCEPT,
+                                                        LowPart(instNodePtr64),
+                                                        HighPart(instNodePtr64),
+                                                        primitiveIndex,
+                                                        ANYHIT_CALLTYPE_NO_DUPLICATE,
+                                                        geometryIndex);
+
+                            // Set hit triangle information
+                            AmdTraceRaySetHitTriangleNodePointer(currentBvh, nodePointer);
+                            // get barycentrics
+                            float2 barycentrics;
+                            barycentrics.x = asfloat(intersectionResult.z) / asfloat(intersectionResult.y);
+                            barycentrics.y = asfloat(intersectionResult.w) / asfloat(intersectionResult.y);
+
+                            // Call triangle anyhit shader.
+                            BuiltInTriangleIntersectionAttributes attr = { barycentrics };
+                            AmdTraceRayCallTriangleAnyHitShader(hitInfo.anyHitId, hitInfo.tableIndex, attr);
 
                             // Returns hit attributes post intersection/anyhit shader call. "candidateT" and "hitKind" are only
                             // updated if the hit was accepted and "status" reflects that decision
@@ -464,7 +465,15 @@ static IntersectionResult TraceRayImpl1_1(
             if (isCulled == false)
             {
                 const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(topLevelBvh, instNodePtr);
-
+#if DEVELOPER
+                if (EnableTraversalCounter())
+                {
+                    WriteRayHistoryTokenFunctionCall(rayId,
+                                                     hitInfo.intersectionId,
+                                                     hitInfo.tableIndex,
+                                                     RAY_HISTORY_FUNC_CALL_TYPE_INTERSECTION);
+                }
+#endif
                 // Set intersection attributes
                 AmdTraceRaySetHitAttributes(intersection.t,
                                             0,
@@ -477,15 +486,6 @@ static IntersectionResult TraceRayImpl1_1(
 
                 // Call intersection shader
                 AmdTraceRayCallIntersectionShader(hitInfo.intersectionId, hitInfo.anyHitId, hitInfo.tableIndex);
-#if DEVELOPER
-                if (EnableTraversalCounter())
-                {
-                    WriteRayHistoryTokenFunctionCall(rayId,
-                                                     hitInfo.intersectionId,
-                                                     hitInfo.tableIndex,
-                                                     RAY_HISTORY_FUNC_CALL_TYPE_INTERSECTION);
-                }
-#endif
 
                 // Returns hit attributes post intersection/anyhit shader call. "intersection.t" and "hitKind" are only
                 // updated if the hit was accepted and "status" reflects that decision

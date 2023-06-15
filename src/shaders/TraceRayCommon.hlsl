@@ -231,11 +231,38 @@ static uint WriteRayHistoryControlToken(
 }
 
 //=====================================================================================================================
-static bool LogCounters(in uint id, in uint mode)
+static bool LogCounters(
+    in uint id,
+    in uint mode)
 {
     return ((DispatchRaysConstBuf.counterMode == mode) &&
             (id >= DispatchRaysConstBuf.counterRayIdRangeBegin) &&
             (id < DispatchRaysConstBuf.counterRayIdRangeEnd));
+}
+
+//=====================================================================================================================
+static bool LogCountersRayHistory(
+    in uint id,
+    in uint tokenType)
+{
+    uint mask = DispatchRaysConstBuf.counterMask;
+
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 35
+    if (DispatchRaysConstBuf.counterMode == TRACERAY_COUNTER_MODE_RAYHISTORY_FULL)
+    {
+        mask = 0xffffffff;
+    }
+    if (DispatchRaysConstBuf.counterMode == TRACERAY_COUNTER_MODE_RAYHISTORY_LIGHT)
+    {
+        mask = (1 << RAY_HISTORY_TOKEN_TYPE_BEGIN_V2) |
+               (1 << RAY_HISTORY_TOKEN_TYPE_ANYHIT_STATUS) |
+               (1 << RAY_HISTORY_TOKEN_TYPE_CANDIDATE_INTERSECTION_RESULT) |
+               (1 << RAY_HISTORY_TOKEN_TYPE_INTERSECTION_RESULT_V2);
+    }
+#endif
+    return (((mask & (1U << tokenType)) != 0) &&
+        (id >= DispatchRaysConstBuf.counterRayIdRangeBegin) &&
+        (id < DispatchRaysConstBuf.counterRayIdRangeEnd));
 }
 
 //=====================================================================================================================
@@ -260,7 +287,7 @@ static void WriteRayHistoryTokenTopLevel(
     in uint     id,
     in uint64_t baseAddr)
 {
-    if (LogCounters(id, TRACERAY_COUNTER_MODE_RAYHISTORY_FULL))
+    if (LogCountersRayHistory(id, RAY_HISTORY_TOKEN_TYPE_TOP_LEVEL))
     {
         uint offset = WriteRayHistoryControlToken(id,
                                                   RAY_HISTORY_TOKEN_TYPE_TOP_LEVEL,
@@ -278,7 +305,7 @@ static void WriteRayHistoryTokenBottomLevel(
     in uint     id,
     in uint64_t baseAddr)
 {
-    if (LogCounters(id, TRACERAY_COUNTER_MODE_RAYHISTORY_FULL))
+    if (LogCountersRayHistory(id, RAY_HISTORY_TOKEN_TYPE_BOTTOM_LEVEL))
     {
         uint offset = WriteRayHistoryControlToken(id,
                                                   RAY_HISTORY_TOKEN_TYPE_BOTTOM_LEVEL,
@@ -312,8 +339,7 @@ static void WriteRayHistoryTokenBegin(
     in uint     dynamicId,
     in uint     parentId)
 {
-    if (LogCounters(id, TRACERAY_COUNTER_MODE_RAYHISTORY_FULL) ||
-        LogCounters(id, TRACERAY_COUNTER_MODE_RAYHISTORY_LIGHT))
+    if (LogCountersRayHistory(id, RAY_HISTORY_TOKEN_TYPE_BEGIN_V2))
     {
         // Write ray history begin tokens
         uint offset = WriteRayHistoryControlToken(id,
@@ -352,7 +378,7 @@ static void WriteRayHistoryTokenEnd(
     in uint  hitKind,
     in float hitT)
 {
-    if (LogCounters(id, TRACERAY_COUNTER_MODE_RAYHISTORY_FULL))
+    if (LogCountersRayHistory(id, RAY_HISTORY_TOKEN_TYPE_INTERSECTION_RESULT_V2))
     {
         uint offset = WriteRayHistoryControlToken(id,
                                                   RAY_HISTORY_TOKEN_TYPE_INTERSECTION_RESULT_V2,
@@ -381,7 +407,7 @@ static void WriteRayHistoryTokenFunctionCall(
     in uint  shaderTableIdx,
     in uint  shaderType)
 {
-    if (LogCounters(id, TRACERAY_COUNTER_MODE_RAYHISTORY_FULL))
+    if (LogCountersRayHistory(id, RAY_HISTORY_TOKEN_TYPE_FUNC_CALL_V2))
     {
         uint offset = WriteRayHistoryControlToken(id,
                                                   RAY_HISTORY_TOKEN_TYPE_FUNC_CALL_V2,
@@ -403,7 +429,7 @@ static void WriteRayHistoryTokenAnyHitStatus(
     in uint id,
     in uint status)
 {
-    if (LogCounters(id, TRACERAY_COUNTER_MODE_RAYHISTORY_LIGHT))
+    if (LogCountersRayHistory(id, RAY_HISTORY_TOKEN_TYPE_ANYHIT_STATUS))
     {
         uint offset = WriteRayHistoryControlToken(id,
                                                   RAY_HISTORY_TOKEN_TYPE_ANYHIT_STATUS,
@@ -426,7 +452,7 @@ static void WriteRayHistoryTokenProceduralIntersectionStatus(
     in float hitT,
     in uint  hitKind)
 {
-    if (LogCounters(id, TRACERAY_COUNTER_MODE_RAYHISTORY_LIGHT))
+    if (LogCountersRayHistory(id, RAY_HISTORY_TOKEN_TYPE_CANDIDATE_INTERSECTION_RESULT))
     {
         uint offset = WriteRayHistoryControlToken(id,
                                                   RAY_HISTORY_TOKEN_TYPE_CANDIDATE_INTERSECTION_RESULT,
@@ -445,7 +471,7 @@ static void WriteRayHistoryTokenTimeStamp(
     in uint     id,
     in uint64_t timeStamp)
 {
-    if (LogCounters(id, TRACERAY_COUNTER_MODE_RAYHISTORY_FULL))
+    if (LogCountersRayHistory(id, RAY_HISTORY_TOKEN_TYPE_GPU_TIME))
     {
         uint offset = WriteRayHistoryControlToken(id,
                                                   RAY_HISTORY_TOKEN_TYPE_GPU_TIME,

@@ -23,10 +23,12 @@
  *
  **********************************************************************************************************************/
 #if NO_SHADER_ENTRYPOINT == 0
-#define RootSig "RootConstants(num32BitConstants=8, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=6, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "CBV(b1)"/*Build Settings binding*/
 
 //=====================================================================================================================
@@ -38,9 +40,7 @@ struct InputArgs
     uint BvhLeafNodeDataScratchOffset;
     uint MortonCodesSortedScratchOffset;
     uint PrimIndicesSortedScratchOffset;
-    uint UseMortonCode30;
-    uint NoCopySortedNodes;
-    uint EnableFastLBVH;
+    uint NumLeafNodes;
 };
 
 [[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
@@ -48,6 +48,10 @@ struct InputArgs
 [[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer DstMetadata   : register(u1);
 [[vk::binding(2, 0)]] RWByteAddressBuffer ScratchBuffer : register(u2);
+
+// unused buffer
+[[vk::binding(3, 0)]] RWByteAddressBuffer SrcBuffer     : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer EmitBuffer    : register(u4);
 
 #include "Common.hlsl"
 #include "BuildCommonScratch.hlsl"
@@ -483,7 +487,7 @@ void FastBuildBVH(
 
         if (globalId == 0)
         {
-            DstBuffer.Store(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, numActivePrims);
+            WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, numActivePrims);
         }
     }
 }
@@ -497,12 +501,12 @@ void FastBuildBVH(
 void BuildBVH(
     uint globalId : SV_DispatchThreadID)
 {
-    const int numActivePrims = DstBuffer.Load(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+    const int numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
 
     if (numActivePrims > 0)
     {
         // Initialise leaf nodes with sorted node data. Copy from LeafAABB to InternalAABB leaf section.
-        if (globalId < numActivePrims && (ShaderConstants.NoCopySortedNodes == false))
+        if (globalId < numActivePrims && (Settings.noCopySortedNodes == false))
         {
             CopyUnsortedScratchLeafNode(
                 globalId,
@@ -517,18 +521,23 @@ void BuildBVH(
                 0);
         }
 
+#if USE_BUILD_LBVH == 1
+        const uint bvhNodes = CalculateScratchBvhNodesOffset(
+                                  numActivePrims,
+                                  ShaderConstants.NumLeafNodes,
+                                  ShaderConstants.BvhNodeDataScratchOffset,
+                                  Settings.noCopySortedNodes);
         // Set internal nodes
-#if !USE_BVH_AC && !USE_BVH_PLOC
         if (globalId < (numActivePrims - 1))
         {
             SplitInternalNodeLbvh(
                 globalId,
                 numActivePrims,
-                ShaderConstants.BvhNodeDataScratchOffset,
+                bvhNodes,
                 ShaderConstants.PrimIndicesSortedScratchOffset,
                 ShaderConstants.MortonCodesSortedScratchOffset,
-                ShaderConstants.UseMortonCode30,
-                ShaderConstants.NoCopySortedNodes);
+                Settings.useMortonCode30,
+                Settings.noCopySortedNodes);
         }
 #endif
     }

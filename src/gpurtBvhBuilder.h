@@ -295,6 +295,13 @@ private:
 
     void EncodeUpdate();
 
+    uint32 GetParallelBuildNumThreadGroups();
+
+    void BuildParallel();
+    void BuildMultiDispatch();
+
+    void Rebraid();
+
     void GenerateMortonCodes();
 
     void BuildBVH();
@@ -342,7 +349,6 @@ private:
 
     void MergeSort();
     void SortRadixInt32();
-    void BuildParallel();
 
     void ScanExclusiveAdd(
         uint32 inOutArrayOffset,

@@ -540,14 +540,6 @@ static bool RayQueryProceedImpl1_1(
                                          CANDIDATE_NON_OPAQUE_PROCEDURAL_PRIMITIVE :
                                          CANDIDATE_PROCEDURAL_PRIMITIVE;
 
-                // Only process no duplicate anyhit logic if UsingRayQueryForTraceRays is enabled
-                if (IsUseRayQueryForTraceRays() &&
-                    (rayQuery.candidateType == CANDIDATE_NON_OPAQUE_PROCEDURAL_PRIMITIVE) &&
-                    (geometryFlags & D3D12_RAYTRACING_GEOMETRY_FLAG_NO_DUPLICATE_ANYHIT_INVOCATION))
-                {
-                    rayQuery.candidateType = CANDIDATE_NO_DUPLICATE_ANYHIT_PROCEDURAL_PRIMITIVE;
-                }
-
                 // Leave traversal loop and notify app a candidate is ready
                 continueTraversal                  = 1;
 

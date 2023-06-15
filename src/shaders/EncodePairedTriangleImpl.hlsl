@@ -76,8 +76,12 @@ void WriteScratchCompressedTriangleNode(
         pairedId = pairedTriPrimIdx + primitiveOffset;
     }
 
+    // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
+    const uint instanceMask = (box.min.x > box.max.x) ? 0 : 0xff;
+    const uint packedFlags = PackInstanceMaskAndNodeFlags(instanceMask, flags);
+
     const uint triangleTypeAndId = (triangleId << 3) | nodeType;
-    data = uint4(triangleTypeAndId, flags, pairedId, asuint(cost));
+    data = uint4(triangleTypeAndId, packedFlags, pairedId, asuint(cost));
     ScratchBuffer.Store4(offset + SCRATCH_NODE_TYPE_OFFSET, data);
 }
 

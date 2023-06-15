@@ -17,6 +17,8 @@ TraceRayUsingRayQuery2_0
 TraceRayUsingHitToken2_0
 #endif
 RayQueryInternal
+FetchTrianglePositionFromNodePointer
+FetchTrianglePositionFromRayQuery
 AmdExtD3DShaderIntrinsics
 AmdExtD3DShaderIntrinsics_LoadDwordAtAddr
 AmdExtD3DShaderIntrinsics_LoadDwordAtAddrx2

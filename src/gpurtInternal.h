@@ -36,12 +36,10 @@ namespace GpuRt
 // Constants needed for raytracing
 
 // Sizes of the node structures used by the BVH building shaders
+
 static constexpr size_t RayTracingQBVHLeafSize          = 64;
 static constexpr size_t RayTracingScratchNodeSize       = 64;
 static constexpr size_t RayTracingQBVHStackPtrsSize     = 12;
-static constexpr size_t RayTracingCollapseTaskSize      = 16;
-static constexpr size_t RayTracingCollapseTaskPtrSize   = 8;
-static constexpr size_t RayTracingQBVHCollapseTaskSize  = 24;
 static constexpr size_t RayTracingStatePLOCSize         = 16;   // PLOCState size without ploc task counters
                                                                 // taskCounter size is tracked by
                                                                 // RayTracingTaskQueueCounterSize
@@ -361,8 +359,6 @@ public:
     //
     // @param skipTriangles             (in) Force skip all triangle intersections
     // @param skipProceduralPrims       (in) Force skip all procedural AABB intersections
-    // @param useRayQueryForTraceRays   (in) Use rayquery internally for regular traversal
-    // @param usePointerFlags           (in) Node pointer contains embedded flags
     // @param enableAccelStructTracking (in) Enable AccelStruct tracking
     // @param enableTraversalCounter    (in) Enable Traversal Counter
     //
@@ -373,9 +369,11 @@ public:
     virtual uint32 GetStaticPipelineFlags(
         bool  skipTriangles,
         bool  skipProceduralPrims,
-        bool  useRayQueryForTraceRays,
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 37
+        bool  unused0,
+#endif
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 27
-        bool  unused,
+        bool  unused1,
 #endif
         bool  enableAccelStructTracking,
         bool  enableTraversalCounter) override;
@@ -555,6 +553,8 @@ public:
         GpuUtil::ITraceSource*         pTraceSource);
 
     uint64 GetRayHistoryBufferSizeInBytes() { return m_rayHistoryTraceSource.GetBufferSizeInBytes(); }
+
+    uint32 GetRayHistoryLightCounterMask() const;
 
     Pal::IPipeline* GetInternalPipeline(
         InternalRayTracingCsType        type,

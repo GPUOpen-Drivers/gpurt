@@ -26,6 +26,8 @@
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 2)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 3)),"\
@@ -54,6 +56,10 @@ struct InputArgs
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstMetadata    : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer  : register(u1);
 [[vk::binding(2, 0)]]                  RWByteAddressBuffer SrcBuffer      : register(u2);
+
+// unused buffer
+[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer DstBuffer     : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer                  EmitBuffer    : register(u4);
 
 #include "EncodeCommon.hlsl"
 

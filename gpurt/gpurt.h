@@ -31,7 +31,7 @@
 #include "palMutex.h"
 #include "palHashMap.h"
 #include "palVector.h"
-#include "../gpurt/src/gpurtTraceSource.h"
+#include "src/gpurtTraceSource.h"
 #include "gpurtDispatch.h"
 
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 28
@@ -78,15 +78,14 @@ enum class StaticPipelineFlag : uint32
     SkipTriangles                  = 0x100,        // Always skip triangle node intersections
     SkipProceduralPrims            = 0x200,        // Always skip procedural node intersections
     BvhCollapse                    = (1u << 31),   // Enable BVH collapse
-    UseRayQuery                    = (1u << 30),   // Use RayQuery for TraceRays
-    UseTreeRebraid                 = (1u << 29),   // Use Tree Rebraid for TraceRays
-    EnableAccelStructTracking      = (1u << 28),   // Enable logging of TLAS addresses using AccelStructTracker
-    EnableTraversalCounter         = (1u << 27),   // Enable Traversal counters
-    Reserved                       = (1u << 26),
-    EnableFusedInstanceNodes       = (1u << 25),   // Enable fused instance nodes
-    Reserved2                      = (1u << 24),
-    Reserved3                      = (1u << 23),
-    Reserved4                      = (1u << 22),
+    UseTreeRebraid                 = (1u << 30),   // Use Tree Rebraid for TraceRays
+    EnableAccelStructTracking      = (1u << 29),   // Enable logging of TLAS addresses using AccelStructTracker
+    EnableTraversalCounter         = (1u << 28),   // Enable Traversal counters
+    Reserved                       = (1u << 27),
+    EnableFusedInstanceNodes       = (1u << 26),   // Enable fused instance nodes
+    Reserved2                      = (1u << 23),
+    Reserved3                      = (1u << 22),
+    Reserved4                      = (1u << 21),
 };
 // TODO #gpurt: Abstract these?  Some of these probably should come from PAL device properties
 
@@ -265,6 +264,7 @@ enum class InternalRayTracingCsType : uint32
     EncodeTriangleNodesIndirect,
     EncodeAABBNodes,
     EncodeInstances,
+    Rebraid,
     GenerateMortonCodes,
     BuildBVH,
     BuildBVHSortLeaves,
@@ -825,7 +825,8 @@ enum class AccelStructCopyMode : uint32
     Compact                     = 0x1, // Create a compacted version of an acceleration structure
     VisualizationDecodeForTools = 0x2, // Decode a PIX-visualizable version of the acceleration structure
     Serialize                   = 0x3, // Serialize the acceleration structure
-    Deserialize                 = 0x4  // Deserialize the acceleration structure
+    Deserialize                 = 0x4, // Deserialize the acceleration structure
+    DriverDecode                = 0x5, // Same as VisualizationDecodeForTools with extended header
 };
 
 // Info structure for acceleration structure copy operations
@@ -895,7 +896,9 @@ struct EntryFunctionTable
     {
         const char* pTraceRay;
         const char* pTraceRayUsingHitToken;
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 37
         const char* pTraceRayUsingRayQuery;
+#endif
     } traceRay;
 
     struct
@@ -904,6 +907,8 @@ struct EntryFunctionTable
         const char* pGetInstanceIndex;
         const char* pGetObjectToWorldTransform;
         const char* pGetWorldToObjectTransform;
+        const char* pFetchTrianglePositionFromNodePointer;
+        const char* pFetchTrianglePositionFromRayQuery;
     } intrinsic;
 };
 
@@ -1426,7 +1431,6 @@ public:
     //
     // @param skipTriangles             (in) Force skip all triangle intersections
     // @param skipProceduralPrims       (in) Force skip all procedural AABB intersections
-    // @param useRayQueryForTraceRays   (in) Use rayquery internally for regular traversal
     // @param usePointerFlags           (in) Node pointer contains embedded flags
     // @param enableAccelStructTracking (in) Enable AccelStruct tracking
     // @param enableTraversalCounter    (in) Enable Traversal Counter
@@ -1438,9 +1442,11 @@ public:
     virtual uint32 GetStaticPipelineFlags(
         bool  skipTriangles,
         bool  skipProceduralPrims,
-        bool  useRayQueryForTraceRays,
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 37
+        bool  unused0,
+#endif
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 27
-        bool  unused,
+        bool  unused1,
 #endif
         bool  enableAccelStructTracking,
         bool  enableTraversalCounter) = 0;

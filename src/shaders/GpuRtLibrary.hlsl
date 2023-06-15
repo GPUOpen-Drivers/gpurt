@@ -30,7 +30,6 @@
 #include "TraceRayCommon.hlsl"
 #include "AccelStructTracker.hlsl"
 
-// Following order matters since TraceRayUsingRayQuery relies on RayQuery, it must be included first.
 #include "RayQuery.hlsl"
 #include "TraceRay.hlsl"
 
@@ -73,43 +72,6 @@ export void TraceRay1_1(
         0,
         true,
         GPURT_RTIP1_1
-    );
-}
-
-//=====================================================================================================================
-// TraceRay() entry point for ray tracing IP 1.1 (Implemented on top of RayQuery primitives)
-export void TraceRayUsingRayQuery1_1(uint  accelStructLo,
-                                     uint  accelStructHi,
-                                     uint  rayFlags,
-                                     uint  instanceInclusionMask,
-                                     uint  rayContributionToHitGroupIndex,
-                                     uint  multiplierForGeometryContributionToShaderIndex,
-                                     uint  missShaderIndex,
-                                     float originX,
-                                     float originY,
-                                     float originZ,
-                                     float tMin,
-                                     float dirX,
-                                     float dirY,
-                                     float dirZ,
-                                     float tMax)
-{
-    TraceRayUsingRayQueryCommon(accelStructLo,
-                                accelStructHi,
-                                rayFlags,
-                                instanceInclusionMask,
-                                rayContributionToHitGroupIndex,
-                                multiplierForGeometryContributionToShaderIndex,
-                                missShaderIndex,
-                                originX,
-                                originY,
-                                originZ,
-                                tMin,
-                                dirX,
-                                dirY,
-                                dirZ,
-                                tMax,
-                                GPURT_RTIP1_1
     );
 }
 
@@ -198,44 +160,6 @@ export void TraceRay2_0(
         true,
         GPURT_RTIP2_0
     );
-}
-
-//=====================================================================================================================
-// TraceRay() entry point for ray tracing IP 2.0 (Implemented on top of RayQuery primitives)
-export void TraceRayUsingRayQuery2_0(
-    uint  accelStructLo,
-    uint  accelStructHi,
-    uint  rayFlags,
-    uint  instanceInclusionMask,
-    uint  rayContributionToHitGroupIndex,
-    uint  multiplierForGeometryContributionToShaderIndex,
-    uint  missShaderIndex,
-    float originX,
-    float originY,
-    float originZ,
-    float tMin,
-    float dirX,
-    float dirY,
-    float dirZ,
-    float tMax)
-{
-    TraceRayUsingRayQueryCommon(accelStructLo,
-                                accelStructHi,
-                                rayFlags,
-                                instanceInclusionMask,
-                                rayContributionToHitGroupIndex,
-                                multiplierForGeometryContributionToShaderIndex,
-                                missShaderIndex,
-                                originX,
-                                originY,
-                                originZ,
-                                tMin,
-                                dirX,
-                                dirY,
-                                dirZ,
-                                tMax,
-                                GPURT_RTIP2_0
-);
 }
 
 //=====================================================================================================================
@@ -412,6 +336,28 @@ export uint64_t GetRayQuery64BitInstanceNodePtr(
     in uint32_t instanceNodePtr)  // Instance node pointer
 {
     return CalculateNodeAddr64(tlasBaseAddr, instanceNodePtr);
+}
+
+//=====================================================================================================================
+// GPURT intrinsic for fetching triangle position from given BVH address and node pointer
+export TriangleData FetchTrianglePositionFromNodePointer(
+    in GpuVirtualAddress bvhAddress,  // BVH address
+    in uint              nodePointer) // Node pointer
+{
+    return FetchTriangleFromNode(bvhAddress, nodePointer);
+}
+
+//=====================================================================================================================
+// GPURT intrinsic for fetching triangle position from given ray query object
+export TriangleData FetchTrianglePositionFromRayQuery(
+    inout_param(RayQueryInternal) rayQuery,  // BVH address
+    in bool                       committed) // Node pointer
+{
+    GpuVirtualAddress bvhAddress =
+        MakeGpuVirtualAddress(rayQuery.bvhLo, (rayQuery.bvhHi & POINTER_FLAGS_EXCLUDED_MASK));
+    uint nodePointer = committed ? rayQuery.committed.currNodePtr : rayQuery.candidate.currNodePtr;
+
+    return FetchTriangleFromNode(bvhAddress, nodePointer);
 }
 
 #endif

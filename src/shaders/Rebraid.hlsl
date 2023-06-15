@@ -26,6 +26,15 @@
 // New rebraid algorithm supports up to a rebraidFactor < 4.  It's optimized for this case.
 // It prioritizes the largest sized Instances for a single opening.
 
+#if NO_SHADER_ENTRYPOINT == 0
+#define RootSig "RootConstants(num32BitConstants=10, b0),"\
+                "UAV(u0),"\
+                "UAV(u1),"\
+                "UAV(u2),"\
+                "UAV(u3),"\
+                "CBV(b1)" /* Build Settings binding */
+#endif
+
 struct RebraidArgs
 {
     uint numPrimitives;
@@ -39,6 +48,22 @@ struct RebraidArgs
     uint enableCentroidSceneBoundsWithSize;
     uint enableSAHCost;
 };
+
+#if NO_SHADER_ENTRYPOINT == 0
+[[vk::push_constant]] ConstantBuffer<RebraidArgs> ShaderConstants : register(b0);
+
+[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstBuffer          : register(u0);
+[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata        : register(u1);
+[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer      : register(u2);
+[[vk::binding(3, 0)]]                  RWByteAddressBuffer InstanceDescBuffer : register(u3);
+
+#include "BuildCommonScratch.hlsl"
+
+#define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
+groupshared uint SharedMem[MAX_LDS_ELEMENTS];
+
+#include "RadixSort/ScanExclusiveInt4DLBCommon.hlsl"
+#endif
 
 #define REBRAID_KEYS_PER_THREAD         4
 #define REBRAID_KEYS_PER_GROUP          (BUILD_THREADGROUP_SIZE * REBRAID_KEYS_PER_THREAD)
@@ -292,8 +317,7 @@ void RebraidImpl(
                 if (args.enableCentroidSceneBoundsWithSize)
                 {
                     const uint rebraidSceneOffset = sizeof(BoundingBox) + 2 * sizeof(float);
-                    initialSceneBounds = FetchSceneBounds(ShaderConstants.offsets.sceneBounds
-                                                          + rebraidSceneOffset);
+                    initialSceneBounds = FetchSceneBounds(args.sceneBoundsOffset + rebraidSceneOffset);
 
                     initSceneExtent = initialSceneBounds.max - initialSceneBounds.min;
                 }
@@ -328,7 +352,6 @@ void RebraidImpl(
 #if ENABLE_HIGHER_QUALITY
                         const float surfaceArea = CalculatePriorityUsingSAHComparison(args, leaf);
 #else
-
                         const float surfaceArea = ComputeBoxSurfaceArea(aabb);
 #endif
                         const float waveSum = WaveActiveSum(log(surfaceArea + 1));
@@ -385,8 +408,7 @@ void RebraidImpl(
                 if (args.enableCentroidSceneBoundsWithSize)
                 {
                     const uint rebraidSceneOffset = sizeof(BoundingBox) + 2 * sizeof(float);
-                    initialSceneBounds = FetchSceneBounds(ShaderConstants.offsets.sceneBounds
-                                                          + rebraidSceneOffset);
+                    initialSceneBounds = FetchSceneBounds(args.sceneBoundsOffset + rebraidSceneOffset);
 
                     initSceneExtent = initialSceneBounds.max - initialSceneBounds.min;
                 }
@@ -559,30 +581,17 @@ void RebraidImpl(
                             desc = InstanceDescBuffer.Load<InstanceDesc>(leaf.left_or_primIndex_or_instIndex * INSTANCE_DESC_SIZE);
                         }
 
-                        float4 cost;
+                        const uint4 costOrNumChildPrims = FetchHeaderCostOrNumChildPrims(address);
 
+                        float4 cost = float4(0,0,0,0);
                         if (args.enableSAHCost)
                         {
                             const float transformFactor = FetchScratchLeafNodeCost(leaf);
-
-                            cost[0] = transformFactor * asfloat(FetchHeaderField(address, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET));
-                            cost[1] = transformFactor * asfloat(FetchHeaderField(address, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 4));
-                            cost[2] = transformFactor * asfloat(FetchHeaderField(address, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 8));
-                            cost[3] = transformFactor * asfloat(FetchHeaderField(address, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 12));
+                            cost = transformFactor * asfloat(costOrNumChildPrims);
                         }
 
                         if (open[keyIndex])
                         {
-                            uint4 numPrims;
-
-                            if (args.enableSAHCost == false)
-                            {
-                                numPrims[0] = FetchHeaderField(address, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET);
-                                numPrims[1] = FetchHeaderField(address, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 4);
-                                numPrims[2] = FetchHeaderField(address, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 8);
-                                numPrims[3] = FetchHeaderField(address, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 12);
-                            }
-
                             const Float32BoxNode node = FetchFloat32BoxNode(address,
                                                                             rootNodePointer);
 
@@ -598,7 +607,8 @@ void RebraidImpl(
 
                             if (args.enableSAHCost == false)
                             {
-                                ScratchBuffer.Store<uint>(scratchNodeOffset + SCRATCH_NODE_INSTANCE_NUM_PRIMS_OFFSET, numPrims[0]);
+                                ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_INSTANCE_NUM_PRIMS_OFFSET,
+                                                    costOrNumChildPrims[0]);
                             }
                             else
                             {
@@ -628,7 +638,7 @@ void RebraidImpl(
 
                                 if (args.enableSAHCost == false)
                                 {
-                                    leaf.sah_or_v2_or_instBasePtr.z = asfloat(numPrims[1]);
+                                    leaf.sah_or_v2_or_instBasePtr.z = asfloat(costOrNumChildPrims[1]);
                                 }
                                 else
                                 {
@@ -661,7 +671,7 @@ void RebraidImpl(
 
                                 if (args.enableSAHCost == false)
                                 {
-                                    leaf.sah_or_v2_or_instBasePtr.z = asfloat(numPrims[2]);
+                                    leaf.sah_or_v2_or_instBasePtr.z = asfloat(costOrNumChildPrims[2]);
                                 }
                                 else
                                 {
@@ -694,7 +704,7 @@ void RebraidImpl(
 
                                 if (args.enableSAHCost == false)
                                 {
-                                    leaf.sah_or_v2_or_instBasePtr.z = asfloat(numPrims[3]);
+                                    leaf.sah_or_v2_or_instBasePtr.z = asfloat(costOrNumChildPrims[3]);
                                 }
                                 else
                                 {
@@ -742,8 +752,8 @@ void RebraidImpl(
 
                     if (i == (args.numPrimitives - 1))
                     {
-                        DstBuffer.Store(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET,
-                                        args.numPrimitives + prevSum + threadSumScanned + threadSum);
+                        WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET,
+                                                    args.numPrimitives + prevSum + threadSumScanned + threadSum);
                     }
                 }
 
@@ -760,3 +770,18 @@ void RebraidImpl(
         }
     }
 }
+
+#if NO_SHADER_ENTRYPOINT == 0
+//=====================================================================================================================
+// Entry point when this shader is called in its own Dispatch() call
+//=====================================================================================================================
+[RootSignature(RootSig)]
+[numthreads(BUILD_THREADGROUP_SIZE, 1, 1)]
+void Rebraid(
+    uint globalId : SV_DispatchThreadID,
+    uint localId  : SV_GroupThreadID,
+    uint groupId  : SV_GroupID)
+{
+    RebraidImpl(globalId, localId, groupId, ShaderConstants);
+}
+#endif

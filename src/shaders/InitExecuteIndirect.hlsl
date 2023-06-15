@@ -261,6 +261,7 @@ void InitExecuteIndirect(
             info.counterMode                 = Constants.counterMode;
             info.counterRayIdRangeBegin      = Constants.counterRayIdRangeBegin;
             info.counterRayIdRangeEnd        = Constants.counterRayIdRangeEnd;
+            info.counterMask                 = Constants.counterMask;
 
             OutputConstants[dispatchIdx] = info;
 

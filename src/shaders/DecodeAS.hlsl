@@ -22,13 +22,9 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "Common.hlsl"
-#include "DecodeCommon.hlsl"
-
-#define RootSig "RootConstants(num32BitConstants=4, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=5, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894))"
 
 //=====================================================================================================================
@@ -39,13 +35,16 @@ struct InputArgs
     uint AddressHi;
     uint NumThreads;
     uint rtIpLevel;
+    uint isDriverDecode;
 };
 
 [[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
 
-//=====================================================================================================================
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer      DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer                       SrcBuffer     : register(u1);
+
+#include "Common.hlsl"
+#include "DecodeCommon.hlsl"
 
 //=====================================================================================================================
 // DecodeAS
@@ -72,10 +71,29 @@ void DecodeAS(in uint3 globalThreadId : SV_DispatchThreadID)
 
     const AccelStructOffsets baseOffsets = header.offsets;
 
-    const uint numGeometryDescs           = header.numDescs;
     const uint geometryType               = header.geometryType;
     const uint baseGeometryInfoOffset     = metadataSizeInBytes + baseOffsets.geometryInfo;
     const uint basePrimNodePointersOffset = metadataSizeInBytes + baseOffsets.primNodePtrs;
+
+    if (globalID == 0)
+    {
+        uint apiHeaderOffset = 0;
+        if (ShaderConstants.isDriverDecode)
+        {
+            WriteDriverDecodeHeader(DstBuffer, header, 0);
+            apiHeaderOffset += GetDriverDecodeHeaderSize();
+        }
+
+        // D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_TOOLS_VISUALIZATION_HEADER
+        DstBuffer.Store(apiHeaderOffset + VISUALIZATION_HEADER_TYPE_OFFSET, type);
+        DstBuffer.Store(apiHeaderOffset + VISUALIZATION_HEADER_NUM_DESCS_OFFSET, header.numDescs);
+    }
+
+    uint headerSize = VISUALIZATION_HEADER_SIZE;
+    if (ShaderConstants.isDriverDecode)
+    {
+        headerSize += GetDriverDecodeHeaderSize();
+    }
 
     if (type == TOP_LEVEL)
     {
@@ -83,16 +101,9 @@ void DecodeAS(in uint3 globalThreadId : SV_DispatchThreadID)
         //       API input instances, so we can just use numDescs since we do not want rebraided instances here.
         const uint numInstanceDescs = header.numDescs;
 
-        if (globalID == 0)
-        {
-            // D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_TOOLS_VISUALIZATION_HEADER
-            DstBuffer.Store(VISUALIZATION_HEADER_TYPE_OFFSET, TOP_LEVEL);          // Type
-            DstBuffer.Store(VISUALIZATION_HEADER_NUM_DESCS_OFFSET, numInstanceDescs); // NumDescs
-        }
-
         for (uint i = globalID; i < numInstanceDescs; i += ShaderConstants.NumThreads)
         {
-            const uint dstInstanceDescOffset = VISUALIZATION_HEADER_SIZE + (i * INSTANCE_DESC_SIZE);
+            const uint dstInstanceDescOffset = headerSize + (i * INSTANCE_DESC_SIZE);
             const uint nodePointer           = SrcBuffer.Load(basePrimNodePointersOffset + (i * NODE_PTR_SIZE));
 
             if (nodePointer != INVALID_IDX)
@@ -109,14 +120,9 @@ void DecodeAS(in uint3 globalThreadId : SV_DispatchThreadID)
     }
     else
     {
-        if (globalID == 0)
-        {
-            // D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_TOOLS_VISUALIZATION_HEADER
-            DstBuffer.Store(VISUALIZATION_HEADER_TYPE_OFFSET, BOTTOM_LEVEL);          // Type
-            DstBuffer.Store(VISUALIZATION_HEADER_NUM_DESCS_OFFSET, numGeometryDescs); // NumDescs
-        }
+        const uint numGeometryDescs = header.numDescs;
 
-        const uint baseVertexAndAabbOffset = VISUALIZATION_HEADER_SIZE + (numGeometryDescs * GEOMETRY_DESC_SIZE);
+        const uint baseVertexAndAabbOffset = headerSize + (numGeometryDescs * GEOMETRY_DESC_SIZE);
 
         // Init geometry descs
         for (uint geomIdx = globalID; geomIdx < numGeometryDescs; geomIdx += ShaderConstants.NumThreads)
@@ -137,7 +143,7 @@ void DecodeAS(in uint3 globalThreadId : SV_DispatchThreadID)
                 addressHi++;
             }
 
-            const uint dstGeometryDescOffset = VISUALIZATION_HEADER_SIZE + (geomIdx * GEOMETRY_DESC_SIZE);
+            const uint dstGeometryDescOffset = headerSize + (geomIdx * GEOMETRY_DESC_SIZE);
 
             DstBuffer.Store(dstGeometryDescOffset, geometryType);
             DstBuffer.Store(dstGeometryDescOffset + GEOMETRY_DESC_FLAGS_OFFSET, geometryFlags);
@@ -207,22 +213,23 @@ void DecodeAS(in uint3 globalThreadId : SV_DispatchThreadID)
                     uint3 v0;
                     uint3 v1;
                     uint3 v2;
-
-                    if (triangleCompressionMode != NO_TRIANGLE_COMPRESSION)
                     {
-                        const uint  triangleId    = SrcBuffer.Load(srcLeafNodeOffset + TRIANGLE_NODE_ID_OFFSET);
-                        const uint  nodeType      = GetNodeType(nodePointer);
-                        const uint3 vertexOffsets = CalcTriangleCompressionVertexOffsets(nodeType, triangleId);
+                        if (triangleCompressionMode != NO_TRIANGLE_COMPRESSION)
+                        {
+                            const uint  triangleId = SrcBuffer.Load(srcLeafNodeOffset + TRIANGLE_NODE_ID_OFFSET);
+                            const uint  nodeType = GetNodeType(nodePointer);
+                            const uint3 vertexOffsets = CalcTriangleCompressionVertexOffsets(nodeType, triangleId);
 
-                        v0 = SrcBuffer.Load3(srcLeafNodeOffset + vertexOffsets.x);
-                        v1 = SrcBuffer.Load3(srcLeafNodeOffset + vertexOffsets.y);
-                        v2 = SrcBuffer.Load3(srcLeafNodeOffset + vertexOffsets.z);
-                    }
-                    else
-                    {
-                        v0 = SrcBuffer.Load3(srcLeafNodeOffset + TRIANGLE_NODE_V0_OFFSET);
-                        v1 = SrcBuffer.Load3(srcLeafNodeOffset + TRIANGLE_NODE_V1_OFFSET);
-                        v2 = SrcBuffer.Load3(srcLeafNodeOffset + TRIANGLE_NODE_V2_OFFSET);
+                            v0 = SrcBuffer.Load3(srcLeafNodeOffset + vertexOffsets.x);
+                            v1 = SrcBuffer.Load3(srcLeafNodeOffset + vertexOffsets.y);
+                            v2 = SrcBuffer.Load3(srcLeafNodeOffset + vertexOffsets.z);
+                        }
+                        else
+                        {
+                            v0 = SrcBuffer.Load3(srcLeafNodeOffset + TRIANGLE_NODE_V0_OFFSET);
+                            v1 = SrcBuffer.Load3(srcLeafNodeOffset + TRIANGLE_NODE_V1_OFFSET);
+                            v2 = SrcBuffer.Load3(srcLeafNodeOffset + TRIANGLE_NODE_V2_OFFSET);
+                        }
                     }
 
                     const uint byteOffset = baseGeometryOffset + (primitiveIndex * DECODE_PRIMITIVE_STRIDE_TRIANGLE);
@@ -232,9 +239,13 @@ void DecodeAS(in uint3 globalThreadId : SV_DispatchThreadID)
                 }
                 else
                 {
-                    const uint3 min = SrcBuffer.Load3(srcLeafNodeOffset + USER_NODE_PROCEDURAL_MIN_OFFSET);
-                    const uint3 max = SrcBuffer.Load3(srcLeafNodeOffset + USER_NODE_PROCEDURAL_MAX_OFFSET);
+                    uint3 min;
+                    uint3 max;
 
+                    {
+                        min = SrcBuffer.Load3(srcLeafNodeOffset + USER_NODE_PROCEDURAL_MIN_OFFSET);
+                        max = SrcBuffer.Load3(srcLeafNodeOffset + USER_NODE_PROCEDURAL_MAX_OFFSET);
+                    }
                     const uint byteOffset = baseGeometryOffset + (primitiveIndex * DECODE_PRIMITIVE_STRIDE_AABB);
                     DstBuffer.Store3(byteOffset, min);
                     DstBuffer.Store3(byteOffset + 12, max);

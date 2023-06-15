@@ -28,7 +28,6 @@
 struct TDArgs
 {
     uint NumPrimitives;
-    uint AllowUpdate;
     uint NumThreads;
     uint MaxRefCountSize;
     float LengthPercentage;
@@ -41,7 +40,6 @@ struct TDArgs
     uint TDBinsScratchOffset;
     uint CurrentStateScratchOffset;
     uint TdTaskCounterScratchOffset;
-    uint OffsetsScratchOffset;
     uint EncodeArrayOfPointers;
 };
 
@@ -52,11 +50,13 @@ struct TDArgs
 #if NO_SHADER_ENTRYPOINT == 0
 #define USE_LDS     1
 
-#define RootSig "RootConstants(num32BitConstants=15, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=13, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
                 "CBV(b1)"/*Build Settings binding*/
 
@@ -66,6 +66,10 @@ struct TDArgs
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata        : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer      : register(u2);
 [[vk::binding(3, 0)]]                  RWByteAddressBuffer InstanceDescBuffer : register(u3);
+
+// unused buffer
+[[vk::binding(4, 0)]] RWByteAddressBuffer                  SrcBuffer          : register(u4);
+[[vk::binding(5, 0)]] RWByteAddressBuffer                  EmitBuffer         : register(u5);
 
 #include "IntersectCommon.hlsl"
 #include "BuildCommon.hlsl"
@@ -1054,7 +1058,7 @@ void BuildBVHTDImpl(
 #endif
                         ScratchBuffer.Store<ScratchNode>(args.BvhNodeDataScratchOffset, leafNode);
 
-                        DstBuffer.Store(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, 1);
+                        WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, 1);
                         AllocTasksTD(numGroups, TD_PHASE_DONE, args);
                     }
                 }
@@ -1066,7 +1070,7 @@ void BuildBVHTDImpl(
                         // command buffer. Overwrite the GPU VA to 0 to properly designate the TLAS as empty.
                         DstMetadata.Store<GpuVirtualAddress>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, 0);
 
-                        DstBuffer.Store(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, 0);
+                        WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, 0);
 
                         AllocTasksTD(numGroups, TD_PHASE_DONE, args);
                     }
@@ -1866,7 +1870,7 @@ void BuildBVHTDImpl(
                 {
                     if (ScratchBuffer.Load(numLeavesOffset) == numRefs)
                     {
-                        DstBuffer.Store(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, numRefs);
+                        WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, numRefs);
 
                         AllocTasksTD(numGroups, TD_PHASE_DONE, args);
                     }
@@ -1921,8 +1925,9 @@ void BuildBVHTDImpl(
 #if USE_BVH_REBRAID
                 // initialize the extra prim node pointers to invalid
                 const uint maxNumPrimitives       = args.MaxRefCountSize;
-                const uint basePrimNodePtrsOffset = DstBuffer.Load(ACCEL_STRUCT_HEADER_OFFSETS_OFFSET +
-                                                                   ACCEL_STRUCT_OFFSETS_PRIM_NODE_PTRS_OFFSET);
+                const uint basePrimNodePtrsOffset =
+                    ReadAccelStructHeaderField(
+                        ACCEL_STRUCT_HEADER_OFFSETS_OFFSET + ACCEL_STRUCT_OFFSETS_PRIM_NODE_PTRS_OFFSET);
 
                 for (uint i = globalId + args.NumPrimitives; i < maxNumPrimitives; i += args.NumThreads)
                 {
@@ -1945,6 +1950,8 @@ void BuildBVHTD(
     uint groupId  : SV_GroupID,
     uint localId  : SV_GroupThreadID)
 {
-    BuildBVHTDImpl(globalId, localId, groupId, args);
+    TDArgs newArgs = args;
+    newArgs.NumPrimitives = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
+    BuildBVHTDImpl(globalId, localId, groupId, newArgs);
 }
 #endif

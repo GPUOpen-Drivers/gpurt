@@ -40,6 +40,8 @@
 #define GPURT_COUNTER_MINOR_VERSION 0
 #define GPURT_COUNTER_VERSION       ((GPURT_COUNTER_MAJOR_VERSION << 16) | GPURT_COUNTER_MINOR_VERSION)
 
+#include "gpurtAccelStruct.h"
+
 #ifdef __cplusplus
 #include "pal.h"
 namespace GpuRt
@@ -230,8 +232,9 @@ struct RayTracingBinaryHeader
 // Header for decoded acceleration structure binary files
 struct RayTracingBinaryHeaderDecoded : RayTracingBinaryHeader
 {
-    uint32 accelStructType; // GpuRt::AccelStructType
-    uint32 buildFlags;      // API build flags
+    uint32             accelStructType; // GpuRt::AccelStructType
+    uint32             buildFlags;      // API build flags
+    DriverDecodeHeader decodeHeader;    // Driver decoded header
 };
 
 // ====================================================================================================================

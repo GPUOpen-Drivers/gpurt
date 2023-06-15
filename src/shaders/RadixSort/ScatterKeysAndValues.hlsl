@@ -23,17 +23,18 @@
  *
  **********************************************************************************************************************/
 #if NO_SHADER_ENTRYPOINT == 0
-#define RootSig "RootConstants(num32BitConstants=9, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=8, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u2, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
 // 32 bit constants
 struct InputArgs
 {
     uint BitShiftSize;                 // Number of bits to shift
-    uint NumElements;                  // Number of elements in the input array
     uint NumGroups;                    // Number of work groups dispatched
     uint InputKeysScratchOffset;       // Scratch buffer offset to int4/uint64_t4 input keys
     uint InputValuesScratchOffset;     // Scratch buffer offset to int4 input values
@@ -45,12 +46,16 @@ struct InputArgs
 
 [[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
 
-//=====================================================================================================================
 [[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer DstMetadata   : register(u1);
 [[vk::binding(2, 0)]] RWByteAddressBuffer ScratchBuffer : register(u2);
 
+// unused buffer
+[[vk::binding(3, 0)]] RWByteAddressBuffer SrcBuffer     : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer EmitBuffer    : register(u4);
+
 #include "ScanCommon.hlsli"
+#include "../BuildCommon.hlsl"
 
 //=====================================================================================================================
 // Local memory for offsets counting
@@ -524,11 +529,13 @@ void ScatterKeysAndValues(
     uint localId : SV_GroupThreadID,
     uint groupId : SV_GroupId)
 {
+    const uint numPrimitives = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
+
     ScatterKeysAndValuesImpl(
         groupId,
         localId,
         ShaderConstants.BitShiftSize,
-        ShaderConstants.NumElements,
+        numPrimitives,
         ShaderConstants.NumGroups,
         ShaderConstants.InputKeysScratchOffset,
         ShaderConstants.InputValuesScratchOffset,

@@ -22,10 +22,12 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#define RootSig "RootConstants(num32BitConstants=15, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=16, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
                 "CBV(b1)"/*Build Settings binding*/
 
@@ -47,13 +49,18 @@ struct Constants
     uint  NoCopySortedNodes;
     uint  sortedPrimIndicesOffset;
     uint  enableEarlyPairCompression;
+    uint  NumLeafNodes;
 };
 
-//=====================================================================================================================
-[[vk::push_constant]] ConstantBuffer<Constants>             ShaderConstants : register(b0);
-[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer  DstBuffer       : register(u0);
-[[vk::binding(1, 0)]] RWByteAddressBuffer                   DstMetadata     : register(u1);
-[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer  ScratchBuffer   : register(u2);
+[[vk::push_constant]] ConstantBuffer<Constants> ShaderConstants : register(b0);
+
+[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer  DstBuffer     : register(u0);
+[[vk::binding(1, 0)]] RWByteAddressBuffer                   DstMetadata   : register(u1);
+[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer  ScratchBuffer : register(u2);
+
+// unused buffer
+[[vk::binding(3, 0)]] RWByteAddressBuffer                   SrcBuffer     : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer                   EmitBuffer    : register(u4);
 
 #include "IntersectCommon.hlsl"
 #include "RefitBoundsImpl.hlsl"
@@ -66,14 +73,18 @@ struct Constants
 void RefitBounds(
     in uint globalId : SV_DispatchThreadID)
 {
-    const uint numActivePrims = DstBuffer.Load(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
-
+    const uint numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+    const uint bvhNodes = CalculateScratchBvhNodesOffset(
+                              numActivePrims,
+                              ShaderConstants.NumLeafNodes,
+                              ShaderConstants.ScratchNodesScratchOffset,
+                              ShaderConstants.NoCopySortedNodes);
     if (globalId < numActivePrims)
     {
         RefitBoundsImpl(globalId,
                         numActivePrims,
                         ShaderConstants.FlagsScratchOffset,
-                        ShaderConstants.ScratchNodesScratchOffset,
+                        bvhNodes,
                         ShaderConstants.UnsortedNodesBaseOffset,
                         ShaderConstants.sortedPrimIndicesOffset,
                         ShaderConstants.DoCollapse,

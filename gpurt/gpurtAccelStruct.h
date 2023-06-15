@@ -187,24 +187,24 @@ typedef uint32 AccelStructHeaderInfo2;
 // Primary acceleration structure header.
 struct AccelStructHeader
 {
-    AccelStructHeaderInfo  info;                     // Miscellaneous information about the accel struct
-    uint32                 metadataSizeInBytes;      // Total size of the metadata in bytes (including metadata header)
-    uint32                 sizeInBytes;              // Total size of the accel struct beginning with this header
-    uint32                 numPrimitives;            // Number of primitives encoded in the structure
-    uint32                 numActivePrims;           // Number of active primitives
-    uint32                 taskIdCounter;            // Counter for allocting IDs to tasks in a persistent thread group
-    uint32                 numDescs;                 // Number of instance/geometry descs in the structure
-    uint32                 geometryType;             // Type of geometry contained in a bottom level structure
-    AccelStructDataOffsets offsets;                  // Offsets within accel struct (not including the header)
-    uint32                 numInternalNodesFp32;     // Number of FP32 internal nodes in the acceleration structure
-    uint32                 numInternalNodesFp16;     // Number of FP16 internal nodes in the acceleration structure
-    uint32                 numLeafNodes;             // Number of leaf nodes used by the acceleration structure
-    uint32                 accelStructVersion;       // GPURT_ACCEL_STRUCT_VERSION
-    uint32                 uuidLo;                   // Client-specific UUID (low part)
-    uint32                 uuidHi;                   // Client-specific UUID (high part)
-    uint32                 reserved;                 // Unused bits
+    AccelStructHeaderInfo  info;                    // Miscellaneous information about the accel struct
+    uint32                 metadataSizeInBytes;     // Total size of the metadata in bytes (including metadata header)
+    uint32                 sizeInBytes;             // Total size of the accel struct beginning with this header
+    uint32                 numPrimitives;           // Number of primitives encoded in the structure
+    uint32                 numActivePrims;          // Number of active primitives
+    uint32                 taskIdCounter;           // Counter for allocting IDs to tasks in a persistent thread group
+    uint32                 numDescs;                // Number of instance/geometry descs in the structure
+    uint32                 geometryType;            // Type of geometry contained in a bottom level structure
+    AccelStructDataOffsets offsets;                 // Offsets within accel struct (not including the header)
+    uint32                 numInternalNodesFp32;    // Number of FP32 internal nodes in the acceleration structure
+    uint32                 numInternalNodesFp16;    // Number of FP16 internal nodes in the acceleration structure
+    uint32                 numLeafNodes;            // Number of leaf nodes used by the acceleration structure
+    uint32                 accelStructVersion;      // GPURT_ACCEL_STRUCT_VERSION
+    uint32                 uuidLo;                  // Client-specific UUID (low part)
+    uint32                 uuidHi;                  // Client-specific UUID (high part)
+    uint32                 reserved;                // Unused bits
 #if __cplusplus
-    uint32                 fp32RootBoundingBox[6];   // Root bounding box for bottom level acceleration structures
+    uint32                 fp32RootBoundingBox[6];  // Root bounding box for bottom level acceleration structures
 #else
     uint32                 fp32RootBoundingBox0;
     uint32                 fp32RootBoundingBox1;
@@ -214,8 +214,9 @@ struct AccelStructHeader
     uint32                 fp32RootBoundingBox5;
 #endif
     AccelStructHeaderInfo2 info2;
-    uint32                 nodeFlags;                // Bottom level acceleration structure node flags.
-    uint32                 compactedSizeInBytes;     // Total compacted size of the accel struct
+    uint32                 packedFlags;             // Bottom level acceleration structure node flags and instance mask
+                                                    // Flags [0:7], Instance Exclusion Mask [8:15]
+    uint32                 compactedSizeInBytes;    // Total compacted size of the accel struct
 
     // if enableSAHCost is enabled,
     // this can be also used to store the actual SAH cost rather than the number of primitives
@@ -246,6 +247,18 @@ struct AccelStructHeader
 #endif
     }
 
+    bool UsesFusedInstanceNode()
+    {
+        return ((GetInfo() >> ACCEL_STRUCT_HEADER_INFO_FUSED_INSTANCE_NODE_FLAGS_SHIFT) &
+            ACCEL_STRUCT_HEADER_INFO_FUSED_INSTANCE_NODE_FLAGS_MASK);
+    }
+
+    bool RebraidEnabled()
+    {
+        return ((GetInfo() >> ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_SHIFT) &
+            ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_MASK);
+    }
+
 };
 
 #define ACCEL_STRUCT_HEADER_SIZE                               128
@@ -267,7 +280,7 @@ struct AccelStructHeader
 #define ACCEL_STRUCT_HEADER_RESERVED_OFFSET                     72
 #define ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET                76
 #define ACCEL_STRUCT_HEADER_INFO_2_OFFSET                       100
-#define ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET                   104
+#define ACCEL_STRUCT_HEADER_PACKED_FLAGS_OFFSET                 104
 #define ACCEL_STRUCT_HEADER_COMPACTED_BYTE_SIZE_OFFSET          108
 #define ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET              112
 
@@ -294,7 +307,7 @@ GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_UUID_HI_OFFSET                 == offset
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_RESERVED_OFFSET                == offsetof(AccelStructHeader, reserved),             "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET           == offsetof(AccelStructHeader, fp32RootBoundingBox),  "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_INFO_2_OFFSET                  == offsetof(AccelStructHeader, info2),                "");
-GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_NODE_FLAGS_OFFSET              == offsetof(AccelStructHeader, nodeFlags),            "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_PACKED_FLAGS_OFFSET            == offsetof(AccelStructHeader, packedFlags),          "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_COMPACTED_BYTE_SIZE_OFFSET     == offsetof(AccelStructHeader, compactedSizeInBytes), "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET         == offsetof(AccelStructHeader, numChildPrims0),       "");
 
@@ -334,6 +347,14 @@ struct RawAccelStructRdfChunkHeader
     uint32 headerSize;                  // Size of the driver header
 
     RdfAccelStructHeaderFlags flags;    // Miscellaneous flags
+};
+
+//=====================================================================================================================
+// Additional header data for driver internal decode
+struct DriverDecodeHeader
+{
+    AccelStructHeaderInfo  info;
+    AccelStructHeaderInfo2 info2;
 };
 
 #ifdef __cplusplus

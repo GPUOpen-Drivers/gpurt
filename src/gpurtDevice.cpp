@@ -71,11 +71,15 @@ enum class RtIntrinsicFunction : uint32
     TraceRayInline,
     TraceRay,
     TraceRayUsingHitToken,
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 37
     TraceRayUsingRayQuery,
+#endif
     GetInstanceID,
     GetInstanceIndex,
     GetObjectToWorldTransform,
     GetWorldToObjectTransform,
+    FetchTrianglePositionFromNodePointer,
+    FetchTrianglePositionFromRayQuery,
     GetRayQuery64BitInstanceNodePtr,
     _Count
 };
@@ -88,11 +92,15 @@ constexpr const char* FunctionTableRTIP1_1[] =
     "\01?TraceRayInline1_1@@YAXURayQueryInternal@@IIIIIURayDesc@@V?$vector@I$02@@@Z",
     "\01?TraceRay1_1@@YAXIIIIIIIMMMMMMMM@Z",
     "\01?TraceRayUsingHitToken1_1@@YAXIIIIIIIMMMMMMMMII@Z",
-    "\01?TraceRayUsingRayQuery1_1@@YAXIIIIIIIMMMMMMMM@Z",
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 37
+    "\01?TraceRay1_1@@YAXIIIIIIIMMMMMMMM@Z",
+#endif
     "\01?GetInstanceID@@YAI_K@Z",
     "\01?GetInstanceIndex@@YAI_K@Z",
     "\01?GetObjectToWorldTransform@@YAM_KII@Z",
     "\01?GetWorldToObjectTransform@@YAM_KII@Z",
+    "\01?FetchTrianglePositionFromNodePointer@@YA?AUTriangleData@@_KI@Z",
+    "\01?FetchTrianglePositionFromRayQuery@@YA?AUTriangleData@@URayQueryInternal@@_N@Z",
     "\01?GetRayQuery64BitInstanceNodePtr@@YA_K_KI@Z",
 };
 
@@ -105,11 +113,15 @@ constexpr const char* FunctionTableRTIP2_0[] =
     "\01?TraceRayInline2_0@@YAXURayQueryInternal@@IIIIIURayDesc@@V?$vector@I$02@@@Z",
     "\01?TraceRay2_0@@YAXIIIIIIIMMMMMMMM@Z",
     "\01?TraceRayUsingHitToken2_0@@YAXIIIIIIIMMMMMMMMII@Z",
-    "\01?TraceRayUsingRayQuery2_0@@YAXIIIIIIIMMMMMMMM@Z",
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 37
+    "\01?TraceRay2_0@@YAXIIIIIIIMMMMMMMM@Z",
+#endif
     "\01?GetInstanceID@@YAI_K@Z",
     "\01?GetInstanceIndex@@YAI_K@Z",
     "\01?GetObjectToWorldTransform@@YAM_KII@Z",
     "\01?GetWorldToObjectTransform@@YAM_KII@Z",
+    "\01?FetchTrianglePositionFromNodePointer@@YA?AUTriangleData@@_KI@Z",
+    "\01?FetchTrianglePositionFromRayQuery@@YA?AUTriangleData@@URayQueryInternal@@_N@Z",
     "\01?GetRayQuery64BitInstanceNodePtr@@YA_K_KI@Z",
 };
 #endif
@@ -147,8 +159,10 @@ static Pal::Result QueryRayTracingEntryFunctionTableInternal(
             ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::TraceRay)];
         pEntryFunctionTable->traceRay.pTraceRayUsingHitToken =
             ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::TraceRayUsingHitToken)];
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 37
         pEntryFunctionTable->traceRay.pTraceRayUsingRayQuery =
             ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::TraceRayUsingRayQuery)];
+#endif
 
         pEntryFunctionTable->rayQuery.pTraceRayInline =
             ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::TraceRayInline)];
@@ -166,6 +180,10 @@ static Pal::Result QueryRayTracingEntryFunctionTableInternal(
         pEntryFunctionTable->intrinsic.pGetWorldToObjectTransform =
             ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::GetWorldToObjectTransform)];
 
+        pEntryFunctionTable->intrinsic.pFetchTrianglePositionFromNodePointer =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::FetchTrianglePositionFromNodePointer)];
+        pEntryFunctionTable->intrinsic.pFetchTrianglePositionFromRayQuery =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::FetchTrianglePositionFromRayQuery)];
     }
 
     return result;
@@ -273,9 +291,11 @@ namespace Internal {
 uint32 Device::GetStaticPipelineFlags(
     bool  skipTriangles,
     bool  skipProceduralPrims,
-    bool  useRayQueryForTraceRays,
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 37
+    bool  unused0,
+#endif
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 27
-    bool  unused,
+    bool  unused1,
 #endif
     bool  enableAccelStructTracking,
     bool  enableTraversalCounter)
@@ -295,11 +315,6 @@ uint32 Device::GetStaticPipelineFlags(
     if (m_info.deviceSettings.bvhCollapse)
     {
         pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::BvhCollapse);
-    }
-
-    if (useRayQueryForTraceRays)
-    {
-        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::UseRayQuery);
     }
 
     if (m_info.deviceSettings.rebraidType != RebraidType::Off)
@@ -926,6 +941,15 @@ void Device::NotifyTlasBuild(
 }
 
 // =====================================================================================================================
+uint32 Device::GetRayHistoryLightCounterMask() const
+{
+    return (1 << RayHistoryTokenBegin_v2) |
+           (1 << RayHistoryTokenAnyHitStatus) |
+           (1 << RayHistoryTokenCandidateIntersectionResult) |
+           (1 << RayHistoryTokenIntersectionResult_v2);
+}
+
+// =====================================================================================================================
 void Device::TraceRtDispatch(
     Pal::ICmdBuffer*                pCmdBuffer,
     RtPipelineType                  pipelineType,
@@ -938,6 +962,8 @@ void Device::TraceRtDispatch(
     pConstants->constData.counterMode            = 1;
     pConstants->constData.counterRayIdRangeBegin = 0;
     pConstants->constData.counterRayIdRangeEnd   = 0xFFFFFFFF;
+
+    pConstants->constData.counterMask = GetRayHistoryLightCounterMask();
 
     RayHistoryTraceListInfo traceListInfo = {};
 
@@ -1194,6 +1220,8 @@ void Device::TraceIndirectRtDispatch(
                 pConstants->constData.counterMode            = 1;
                 pConstants->constData.counterRayIdRangeBegin = 0;
                 pConstants->constData.counterRayIdRangeEnd   = 0xFFFFFFFF;
+
+                pConstants->constData.counterMask = GetRayHistoryLightCounterMask();
             }
             else
             {
@@ -1204,6 +1232,7 @@ void Device::TraceIndirectRtDispatch(
                 pConstants->counterMode            = 1;
                 pConstants->counterRayIdRangeBegin = 0;
                 pConstants->counterRayIdRangeEnd   = 0xFFFFFFFF;
+                pConstants->counterMask = GetRayHistoryLightCounterMask();
             }
 
             traceListInfo.pRayHistoryTraceBuffer             = Util::VoidPtrInc(pMappedData, runningOffset);

@@ -178,10 +178,20 @@ __decl void AmdTraceRaySetTriangleIntersectionAttributes(
 ) DUMMY_VOID_FUNC
 
 // Driver notification of hit triangle node pointer
+
+#ifdef AMD_VULKAN
 __decl void AmdTraceRaySetHitTriangleNodePointer(
+#else
+static void AmdTraceRaySetHitTriangleNodePointer(
+#endif
     in GpuVirtualAddress bvhAddress, // The BVH address
     in uint              nodePointer // Node pointer of hit triangle
-) DUMMY_VOID_FUNC
+)
+{
+    // For DXR,    it is really an empty function.
+    // For Vulkan, it means the implementation is done somewhere. Glslang has an issue where the compiler can't deal
+    //             with calls to functions that don't have bodies, so WA by using {} as the function body.
+}
 
 __decl uint AmdTraceRayLdsRead(uint offset) DUMMY_UINT_FUNC
 __decl uint AmdTraceRayLdsWrite(uint offset, uint data) DUMMY_UINT_FUNC

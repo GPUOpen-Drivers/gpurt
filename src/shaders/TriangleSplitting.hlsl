@@ -691,8 +691,9 @@ void TriangleSplittingImpl(
 
                 const uint3 numAxisBits = CalculateVariableAxisBitCount64(sceneExtents, args.numSizeBits);
 
-                const uint basePrimNodePtrsOffset = DstBuffer.Load(ACCEL_STRUCT_HEADER_OFFSETS_OFFSET +
-                                                                   ACCEL_STRUCT_OFFSETS_PRIM_NODE_PTRS_OFFSET);
+                const uint basePrimNodePtrsOffset =
+                    ReadAccelStructHeaderField(
+                        ACCEL_STRUCT_HEADER_OFFSETS_OFFSET + ACCEL_STRUCT_OFFSETS_PRIM_NODE_PTRS_OFFSET);
 
                 for (i = globalId; i < numRefs; i += numThreads)
                 {
@@ -1068,7 +1069,7 @@ void TriangleSplittingImpl(
                     }
                     else
                     {
-                        DstBuffer.InterlockedAdd(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET, numRefsAlloc/2);
+                        IncrementAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET, numRefsAlloc/2);
 
                         ScratchBuffer.Store(numRefsAllocOffset, 0);
 

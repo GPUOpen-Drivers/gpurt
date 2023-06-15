@@ -67,7 +67,7 @@ static bool SearchAccelStructTrackerBufList(
 static void LogOneAccelStruct(
     uint64_t accelStructVa)
 {
-    const uint metadataSize = LoadDwordAtAddr(accelStructVa + ACCEL_STRUCT_HEADER_METADATA_SIZE_OFFSET);
+    const uint metadataSize = FetchHeaderField(accelStructVa, ACCEL_STRUCT_HEADER_METADATA_SIZE_OFFSET);
     const uint64_t baseVa = accelStructVa - metadataSize;
 
     bool done = false;
