@@ -222,8 +222,6 @@ void InitExecuteIndirect(
 void InitExecuteIndirect(
     uint3 threadId : SV_DispatchThreadId)
 {
-    uint i;
-
     const uint dispatchIdx = threadId.x; // Dispatch index: 0 to the app's MaxCount
     const uint pipelineIdx = threadId.y; // Pipeline index: 0 to the number of compiled pipelines to dispatch
 
@@ -301,7 +299,7 @@ void InitExecuteIndirect(
         uint outputOffset = (pipelineIdx * Constants.maxDispatchCount + dispatchIdx) * Constants.outputBytesPerDispatch;
 
         // Directly copy all indirect binding args from the app buffer to our temp internal buffer
-        for (i = 0; i < Constants.bindingArgsSize; i += sizeof(uint))
+        for (uint i = 0; i < Constants.bindingArgsSize; i += sizeof(uint))
         {
             const uint data = InputArgBuffer.Load(inputOffset);
             OutputArgBuffer.Store(outputOffset, data);

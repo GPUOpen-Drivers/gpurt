@@ -177,21 +177,9 @@ namespace BuildQBVH
         uint32 bvhNodeDataScratchOffset;
         uint32 qbvhGlobalStackScratchOffset;
         uint32 qbvhGlobalStackPtrsScratchOffset;
-        uint32 triangleCompressionMode;          // Triangle node compression mode
-        uint32 fp16BoxNodesInBlasMode;           // Mode for which internal nodes in BLAS are fp16
-        uint32 flags;
         uint32 splitBoxesByteOffset;
-        uint32 emitCompactSize;
         uint32 encodeArrayOfPointers;
-        uint32 rebraidEnabled;
-
-        uint32 enableFusedInstanceNode;
-
-        uint32 enableFastLBVH;
         uint32 fastLBVHRootNodeIndex;
-        uint32 captureChildNumPrimsForRebraid;
-        uint32 enableSAHCost;
-        uint32 enableEarlyPairCompression;
         uint32 unsortedBvhLeafNodesOffset;
     };
 
@@ -248,18 +236,10 @@ namespace RefitBounds
         uint32 propagationFlagsScratchOffset;
         uint32 scratchNodesScratchOffset;
         uint32 bvhLeafNodeDataScratchOffset;
-        uint32 fp16BoxNodesInBlasMode;      // Mode for which internal nodes in BLAS are fp16
-        float  fp16BoxModeMixedSaThresh;    // For fp16 mode "mixed", surface area threshold.
-        uint32 doCollapse;
-        uint32 doTriangleSplitting;
-        uint32 enablePairCompression;
-        uint32 enablePairCostCheck;
         uint32 splitBoxesByteOffset;
         uint32 numBatchesScratchOffset;
         uint32 batchIndicesScratchOffset;
-        uint32 noCopySortedNodes;
         uint32 sortedPrimIndicesOffset;
-        uint32 enableEarlyPairCompression;
         uint32 numLeafNodes;
     };
 
@@ -276,6 +256,7 @@ namespace PairCompression
         uint32 indexBufferInfoScratchOffset;
         uint32 propagationFlagsScratchOffset;
         uint32 buildFlags;
+        uint32 numLeafNodes;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
@@ -365,7 +346,7 @@ namespace BuildParallel
         uint32 reservedUint7;
         uint32 reservedUint8;
         uint32 reservedUint9;
-
+        uint32 reservedUint10;
         // debug
         uint32 debugCounters;
     };
@@ -420,10 +401,8 @@ namespace GenerateMortonCodes
         uint32 leafNodeDataByteOffset;   // Leaf node data byte offset
         uint32 sceneBoundsByteOffset;    // Scene bounds byte offset
         uint32 mortonCodeDataByteOffset; // Morton codes byte offset
-        uint32 doTriangleSplitting;
         uint32 splitBoxesByteOffset;
-        uint32 enableVariableBitsMortonCode;
-        uint32 useMortonCode30;
+        uint32 numLeafNodes;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
@@ -438,6 +417,7 @@ namespace MergeSort
         uint32 outputValuesScratchOffset;
         uint32 outputValuesSwapScratchOffset;
         uint32 useMortonCode30;
+        uint32 numLeafNodes;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
@@ -455,6 +435,7 @@ namespace RadixSort
         uint32 outputKeysScratchOffset;
         uint32 outputValuesScratchOffset;
         uint32 useMortonCode30;
+        uint32 numLeafNodes;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
@@ -469,6 +450,7 @@ namespace BitHistogram
         uint32 inputArrayScratchOffset;
         uint32 outputArrayScratchOffset;
         uint32 useMortonCode30;
+        uint32 numLeafNodes;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));

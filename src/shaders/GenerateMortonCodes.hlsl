@@ -25,13 +25,13 @@
 #if NO_SHADER_ENTRYPOINT == 0
 //=====================================================================================================================
 // Root signature
-#define RootSig "RootConstants(num32BitConstants=7, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=5, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
+                "CBV(b1),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
-                "CBV(b1)"/*Build Settings binding*/
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
 // 32 bit constants
@@ -40,10 +40,8 @@ struct Constants
     uint LeafNodeDataByteOffset;   // Leaf node data byte offset
     uint SceneBoundsByteOffset;    // Scene bounds byte offset
     uint MortonCodeDataByteOffset; // Morton code data byte offset
-    uint DoTriangleSplitting;
     uint SplitBoxesByteOffset;
-    uint EnableVariableBits;
-    uint UseMortonCode30;
+    uint numLeafNodes;
 };
 
 [[vk::push_constant]] ConstantBuffer<Constants> ShaderConstants : register(b0);
@@ -277,7 +275,7 @@ uint CalculateVariableBitsMortonCode(float3 sceneExtent, float3 normalizedPos)
     else // 3D case, just use if swap == 0 xyz xyz xyz..., if swap == 1 yxz yxz yxz...
     {
         [unroll]
-        for (i = 0; i < 3; i++)
+        for (int i = 0; i < 3; i++)
         {
             axisCode[i] = (axisCode[i] > 0) ? ExpandBits(axisCode[i]) : 0;
         }
@@ -464,7 +462,10 @@ void GenerateMortonCodes(
     uint globalThreadId : SV_DispatchThreadID)
 {
     const uint primitiveIndex = globalThreadId;
-    const uint numPrimitives = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
+    const uint numPrimitives =
+        (Settings.topLevelBuild && Settings.rebraidType == RebraidType::V2) || Settings.doTriangleSplitting ?
+            ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET) :
+            ShaderConstants.numLeafNodes;
 
     if (primitiveIndex < numPrimitives)
     {
@@ -479,10 +480,10 @@ void GenerateMortonCodes(
             primitiveIndex,
             ShaderConstants.LeafNodeDataByteOffset,
             ShaderConstants.MortonCodeDataByteOffset,
-            ShaderConstants.DoTriangleSplitting,
+            Settings.doTriangleSplitting,
             ShaderConstants.SplitBoxesByteOffset,
-            ShaderConstants.EnableVariableBits,
-            ShaderConstants.UseMortonCode30,
+            Settings.enableVariableBitsMortonCode,
+            Settings.useMortonCode30,
             0,
             float2(0,0),
             false,

@@ -23,12 +23,13 @@
  *
  **********************************************************************************************************************/
 #if NO_SHADER_ENTRYPOINT == 0
-#define RootSig "RootConstants(num32BitConstants=5, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=6, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
+                "CBV(b1)"/*Build Settings binding*/
 
 //=====================================================================================================================
 // 32 bit constants
@@ -39,6 +40,7 @@ struct InputArgs
     uint InputArrayScratchOffset;
     uint OutputArrayScratchOffset;
     uint UseMortonCode30;
+    uint numLeafNodes;
 };
 
 [[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
@@ -146,7 +148,10 @@ void BitHistogram(
     uint localThreadId : SV_GroupThreadID,
     uint groupId       : SV_groupId)
 {
-    const uint numPrimitives = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
+    const uint numPrimitives =
+        (Settings.topLevelBuild && Settings.rebraidType == RebraidType::V2) || Settings.doTriangleSplitting ?
+            ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET) :
+            ShaderConstants.numLeafNodes;
 
     BitHistogramImpl(
         localThreadId,

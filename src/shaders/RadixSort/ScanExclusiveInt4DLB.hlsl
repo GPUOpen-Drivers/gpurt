@@ -181,8 +181,7 @@ void ScanExclusiveInt4DLBImpl(
     // Perform coalesced load into LDS
     uint rangeBegin = blockId * GROUP_SIZE * DLB_KEYS_PER_THREAD;
 
-    uint i;
-    for (i = 0; i < DLB_KEYS_PER_THREAD; i += 4)
+    for (uint i = 0; i < DLB_KEYS_PER_THREAD; i += 4)
     {
         uint loadIndex = rangeBegin + (localId * DLB_KEYS_PER_THREAD) + i;
 
@@ -201,7 +200,7 @@ void ScanExclusiveInt4DLBImpl(
     int threadSum = 0;
 
     // Calculate scan on this thread's elements
-    for (i = 0; i < DLB_KEYS_PER_THREAD; ++i)
+    for (uint i = 0; i < DLB_KEYS_PER_THREAD; ++i)
     {
         int tmp = localKeys[i];
         localKeys[i] = threadSum;
@@ -212,7 +211,7 @@ void ScanExclusiveInt4DLBImpl(
     int threadSumScanned = BlockScanExclusiveAdd(threadSum, localId);
 
     // Add partial sums back
-    for (i = 0; i < DLB_KEYS_PER_THREAD; ++i)
+    for (uint i = 0; i < DLB_KEYS_PER_THREAD; ++i)
     {
         localKeys[i] += threadSumScanned;
     }
@@ -276,7 +275,7 @@ void ScanExclusiveInt4DLBImpl(
     GroupMemoryBarrierWithGroupSync();
 
     // Perform coalesced writes back to global memory
-    for (i = 0; i < DLB_KEYS_PER_THREAD; i += 4)
+    for (uint i = 0; i < DLB_KEYS_PER_THREAD; i += 4)
     {
         uint storeIndex = rangeBegin + localId * DLB_KEYS_PER_THREAD + i;
 

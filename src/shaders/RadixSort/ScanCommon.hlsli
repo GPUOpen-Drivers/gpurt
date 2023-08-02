@@ -65,7 +65,6 @@ int4 safe_load_int4(
 //=====================================================================================================================
 void safe_store_int4(
     int4                val,
-    RWByteAddressBuffer dest,
     uint                baseOffset,
     uint                idx,
     uint                sizeInTypeUnits)
@@ -74,21 +73,21 @@ void safe_store_int4(
 
     if ((idx + 1) * 4 <= sizeInTypeUnits)
     {
-        dest.Store<int4>(offset, val);
+        ScratchBuffer.Store<int4>(offset, val);
     }
     else
     {
         if (idx * 4 < sizeInTypeUnits)
         {
-            dest.Store(offset, val.x);
+            ScratchBuffer.Store(offset, val.x);
         }
         if (idx * 4 + 1 < sizeInTypeUnits)
         {
-            dest.Store(offset + sizeof(int), val.y);
+            ScratchBuffer.Store(offset + sizeof(int), val.y);
         }
         if (idx * 4 + 2 < sizeInTypeUnits)
         {
-            dest.Store(offset + (2 * sizeof(int)), val.z);
+            ScratchBuffer.Store(offset + (2 * sizeof(int)), val.z);
         }
     }
 }

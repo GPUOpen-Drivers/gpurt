@@ -293,29 +293,6 @@ enum class SceneBoundsCalculation : uint32
     BasedOnCentroidWithSize
 };
 
-#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 28
-// =====================================================================================================================
-// Backward compatibility function. Remove this once we've completely removed the client facing Device wrapper class.
-static void InitInternalClientCallbacks(
-    ClientCallbacks* const pClientCb)
-{
-#if GPURT_DEVELOPER
-    pClientCb->pfnInsertRGPMarker                            = &ClientInsertRGPMarker;
-#endif
-    pClientCb->pfnConvertAccelStructBuildGeometry            = &ClientConvertAccelStructBuildGeometry;
-    pClientCb->pfnConvertAccelStructBuildInstanceBottomLevel = &ClientConvertAccelStructBuildInstanceBottomLevel;
-    pClientCb->pfnConvertAccelStructPostBuildInfo            = &ClientConvertAccelStructPostBuildInfo;
-    pClientCb->pfnAccelStructBuildDumpEvent                  = &ClientAccelStructBuildDumpEvent;
-    pClientCb->pfnAccelStatsBuildDumpEvent                   = &ClientAccelStatsBuildDumpEvent;
-    pClientCb->pfnCreateInternalComputePipeline              = &ClientCreateInternalComputePipeline;
-    pClientCb->pfnDestroyInternalComputePipeline             = &ClientDestroyInternalComputePipeline;
-    pClientCb->pfnAcquireCmdContext                          = &ClientAcquireCmdContext;
-    pClientCb->pfnFlushCmdContext                            = &ClientFlushCmdContext;
-    pClientCb->pfnAllocateGpuMemory                          = &ClientAllocateGpuMemory;
-    pClientCb->pfnFreeGpuMem                                 = &ClientFreeGpuMem;
-}
-#endif
-
 namespace Internal {
 // =====================================================================================================================
 class Device : public IDevice
@@ -371,9 +348,6 @@ public:
         bool  skipProceduralPrims,
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 37
         bool  unused0,
-#endif
-#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 27
-        bool  unused1,
 #endif
         bool  enableAccelStructTracking,
         bool  enableTraversalCounter) override;
@@ -461,7 +435,7 @@ public:
     }
 
     // Returns the GPUVA of the AccelStructTracker
-    Pal::gpusize AccelStructTrackerGpuAddr() const { return m_info.accelStructTrackerGpuAddr; }
+    gpusize AccelStructTrackerGpuAddr() const { return m_info.accelStructTrackerGpuAddr; }
 
     static uint32 NumPrimitivesAfterSplit(uint32 primitiveCount, float splitFactor);
 
@@ -474,12 +448,12 @@ public:
 
     void WriteAccelStructChunk(
         GpuUtil::ITraceSource* pTraceSource,
-        Pal::gpusize           gpuVa,
+        gpusize                gpuVa,
         uint32                 isBlas,
         const void*            pData,
         size_t                 dataSize);
 
-    void NotifyTlasBuild(Pal::gpusize address);
+    void NotifyTlasBuild(gpusize address);
 
     // Returns true if the ray history trace source is currently available for use.
     virtual bool RayHistoryTraceAvailable() const
@@ -513,7 +487,7 @@ public:
         RtPipelineType                type,
         RtDispatchInfo                dispatchInfo,
         uint32                        maxDispatchCount,
-        Pal::gpusize*                 pCounterMetadataVa,
+        gpusize*                      pCounterMetadataVa,
         void*                         pIndirectConstants);
 
     void AddMetadataToList(
@@ -534,7 +508,7 @@ public:
     void WriteShaderTableData(
         Pal::ICmdBuffer*       pCmdBuffer,
         uint64                 runningOffsetGpuVa,
-        Pal::gpusize           destGpuVa,
+        gpusize                destGpuVa,
         uint64                 runningOffset,
         void*                  pMappedData,
         ShaderTableType        shaderTableType,
@@ -571,7 +545,7 @@ public:
     // @return Post build size success status
     Pal::Result GetAccelStructPostBuildSize(
         AccelStructPostBuildInfoType type,
-        const Pal::gpusize*          pGpuVas,
+        const gpusize*               pGpuVas,
         uint32                       count,
         uint64*                      pSizeInBytes);
 
@@ -583,8 +557,8 @@ public:
     // @param numDwords           Number of Dwords to copy
     void CopyBufferRaw(
         Pal::ICmdBuffer* pCmdBuffer,
-        Pal::gpusize     dstBufferVa,
-        Pal::gpusize     srcBufferVa,
+        gpusize          dstBufferVa,
+        gpusize          srcBufferVa,
         uint32           numDwords);
 
     // Uploads CPU memory to a GPU buffer
@@ -596,7 +570,7 @@ public:
     //                            the size reported by pCmdBuffer->GetEmbeddedDataLimit();
     void UploadCpuMemory(
         Pal::ICmdBuffer* pCmdBuffer,
-        Pal::gpusize     dstBufferVa,
+        gpusize          dstBufferVa,
         const void*      pSrcData,
         uint32           sizeInBytes);
 
@@ -623,7 +597,7 @@ public:
     // @return Data entry
     static uint32 WriteBufferVa(
         Pal::ICmdBuffer* pCmdBuffer,
-        Pal::gpusize     virtualAddress,
+        gpusize          virtualAddress,
         uint32           entryOffset);
 
     // Creates one or more typed buffer view shader resource descriptors
@@ -668,7 +642,7 @@ protected:
     Util::GenericAllocatorTracked            m_allocator;
     Util::RWLock                             m_internalPipelineLock;
     InternalPipelineMap                      m_pipelineMap;
-    Util::Vector<Pal::gpusize, 8, Device>    m_tlasCaptureList;
+    Util::Vector<gpusize, 8, Device>         m_tlasCaptureList;
     Util::Mutex                              m_traceBvhLock;
     bool                                     m_isTraceActive;
     GpuRt::AccelStructTraceSource            m_accelStructTraceSource;

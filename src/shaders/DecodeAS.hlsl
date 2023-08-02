@@ -25,7 +25,8 @@
 #define RootSig "RootConstants(num32BitConstants=5, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
-                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894))"
+                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
+                "UAV(u2, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
 // 32 bit constants
@@ -42,6 +43,9 @@ struct InputArgs
 
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer      DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer                       SrcBuffer     : register(u1);
+
+// unused buffer
+[[vk::binding(2, 0)]] RWByteAddressBuffer                       DstMetadata   : register(u2);
 
 #include "Common.hlsl"
 #include "DecodeCommon.hlsl"
@@ -80,7 +84,7 @@ void DecodeAS(in uint3 globalThreadId : SV_DispatchThreadID)
         uint apiHeaderOffset = 0;
         if (ShaderConstants.isDriverDecode)
         {
-            WriteDriverDecodeHeader(DstBuffer, header, 0);
+            WriteDriverDecodeHeader(header, 0);
             apiHeaderOffset += GetDriverDecodeHeaderSize();
         }
 
@@ -108,7 +112,7 @@ void DecodeAS(in uint3 globalThreadId : SV_DispatchThreadID)
 
             if (nodePointer != INVALID_IDX)
             {
-                InstanceDesc apiInstanceDesc = DecodeApiInstanceDesc(SrcBuffer, header, nodePointer);
+                InstanceDesc apiInstanceDesc = DecodeApiInstanceDesc(header, nodePointer);
                 DstBuffer.Store<InstanceDesc>(dstInstanceDescOffset, apiInstanceDesc);
             }
             else
@@ -169,8 +173,7 @@ void DecodeAS(in uint3 globalThreadId : SV_DispatchThreadID)
             }
         }
 
-        uint i;
-        for (i = globalID; i < numPrimitives; i += ShaderConstants.NumThreads)
+        for (uint i = globalID; i < numPrimitives; i += ShaderConstants.NumThreads)
         {
             // Initialize all vertex/AABB buffer primitives to inactive.
             if (geometryType == GEOMETRY_TYPE_TRIANGLES)
@@ -188,7 +191,7 @@ void DecodeAS(in uint3 globalThreadId : SV_DispatchThreadID)
         }
 
         // Copy vertices and aabbs
-        for (i = globalID; i < numPrimitives; i += ShaderConstants.NumThreads)
+        for (uint i = globalID; i < numPrimitives; i += ShaderConstants.NumThreads)
         {
             const uint nodePointer = SrcBuffer.Load(basePrimNodePointersOffset + (i * NODE_PTR_SIZE));
             if (nodePointer != INVALID_IDX)
@@ -199,7 +202,12 @@ void DecodeAS(in uint3 globalThreadId : SV_DispatchThreadID)
 
                 const uint64_t srcBvhAddress = SrcBuffer.Load<uint64_t>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET);
 
-                const PrimitiveData primitiveData = FetchPrimitiveData(srcBvhAddress, nodePointer);
+                PrimitiveData primitiveData;
+
+                {
+                    const GpuVirtualAddress nodeAddress = srcBvhAddress + ExtractNodePointerOffset(nodePointer);
+                    primitiveData = FetchPrimitiveDataAddr(nodePointer, nodeAddress);
+                }
 
                 const uint geometryIndex  = primitiveData.geometryIndex;
                 const uint primitiveIndex = primitiveData.primitiveIndex;

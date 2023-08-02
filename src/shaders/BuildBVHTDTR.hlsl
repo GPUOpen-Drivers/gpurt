@@ -55,10 +55,10 @@ struct TDArgs
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b1)"/*Build Settings binding*/
+                "CBV(b1),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
 
 [[vk::push_constant]] ConstantBuffer<TDArgs> args : register(b0);
 
@@ -394,7 +394,7 @@ void UpdateTDBinsFirstRefIndex(uint index, uint2 refIndex, TDArgs args)
                             TD_BINS_FIRST_REF_INDEX_OFFSET;
 
 #if USE_BVH_REBRAID
-    AmdExtD3DShaderIntrinsics_AtomicMinU64(ScratchBuffer, byteOffset, refIndex);
+    AmdExtD3DShaderIntrinsics_AtomicMinU64_gc(ScratchBuffer, byteOffset, refIndex);
 #else
     ScratchBuffer.InterlockedMin(byteOffset, refIndex.x);
 #endif
@@ -1464,8 +1464,7 @@ void BuildBVHTDImpl(
 #endif
 
                         // left->right
-                        uint l;
-                        for (l = 0; l < NUM_SPLIT_BINS - 1; l++)
+                        for (uint l = 0; l < NUM_SPLIT_BINS - 1; l++)
                         {
                             tempCount += bins.binPrimCount[axis][l];
 
@@ -1501,7 +1500,7 @@ void BuildBVHTDImpl(
 #endif
 
                         // right->left
-                        for (l = NUM_SPLIT_BINS - 1; l > 0; l--)
+                        for (uint l = NUM_SPLIT_BINS - 1; l > 0; l--)
                         {
                             tempCount += bins.binPrimCount[axis][l];
 

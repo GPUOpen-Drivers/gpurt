@@ -54,54 +54,6 @@ struct DispatchRaysTopLevelData
 // and until that is resolved we need to use uint32's explicitly.
 //
 #pragma pack(push, 4)
-#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 31
-struct DispatchRaysInfoData
-{
-    uint64        rayGenerationTable; // Shader record table for raygeneration shaders
-
-    uint32        rayDispatchWidth;   // Width of the ray dispatch
-    uint32        rayDispatchHeight;  // Height of the ray dispatch
-    uint32        rayDispatchDepth;   // Depth of the ray dispatch
-
-    struct
-    {
-        uint64 baseAddress;
-        uint32 strideInBytes;
-    } missTable;                     // Miss shader record table
-
-    uint32 maxRecursionDepth;        // Maximum recursion depth
-
-    struct
-    {
-        uint64 baseAddress;
-        uint32 strideInBytes;
-    } hitGroupTable;                // Hit group shader record table
-
-    uint32 maxAttributeSize;        // Maximum attribute size
-
-    struct
-    {
-        uint64 baseAddress;
-        uint32 strideInBytes;
-    } callableTable;                // Callable shader table record
-
-    struct
-    {
-        uint32 rayFlags;            // Ray flags applied when profiling is enabled
-        uint32 maxIterations;       // Maximum trace ray loop iteration limit
-    } profile;
-
-    uint64 traceRayGpuVa;           // Internal TraceRays indirect function GPU VA
-
-    uint32 counterMode;             // Counter capture mode. see TraceRayCounterMode
-    uint32 counterRayIdRangeBegin;  // Counter capture ray ID range begin
-    uint32 counterRayIdRangeEnd;    // Counter capture ray ID range end
-
-    uint32 cpsStackOffsetInBytes;   // The scratch memory used as stacks are divided into two parts:
-                                    //  (a) Used by a compiler backend, start at offset 0.
-                                    //  (b) Used by IR (Intermediate Representation), for a continuation passing shader.
-};
-#endif
 struct DispatchRaysConstantData
 {
     uint32 rayGenerationTableAddressLo; // Ray generation table base address low 32-bits
@@ -145,11 +97,7 @@ struct DispatchRaysConstantData
 struct DispatchRaysConstants
 {
     DispatchRaysTopLevelData descriptorTable;  // Top-level internal dispatch bindings (includes pointer to infoData)
-#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 31
-    DispatchRaysInfoData     infoData;         // Dispatch rays args constant buffer contents
-#else
     DispatchRaysConstantData constData;        // Dispatch rays constant buffer data
-#endif
 };
 
 #if __cplusplus

@@ -60,8 +60,7 @@ uint UpdateParentPointer(
     uint dstMetadataSizeInBytes,
     uint dstNodePointer)
 {
-    uint parentNodePointer = ReadParentPointer(SrcBuffer,
-                                               srcMetadataSizeInBytes,
+    uint parentNodePointer = ReadParentPointer(srcMetadataSizeInBytes,
                                                srcNodePointer);
     WriteParentPointer(dstMetadataSizeInBytes,
                        dstNodePointer,
@@ -217,8 +216,7 @@ void CopyInteriorNodesTraversingUpwards(
     uint dstMetadataSizeInBytes)
 {
     // Load parent triangle/procedural node's parent
-    uint parentNodePointer = ReadParentPointer(SrcBuffer,
-                                               srcMetadataSizeInBytes,
+    uint parentNodePointer = ReadParentPointer(srcMetadataSizeInBytes,
                                                srcNodePointer);
 
     // Traverse up the tree.
@@ -268,8 +266,7 @@ void CopyInteriorNodesTraversingUpwards(
 
             // Load the next parent pointer
             nodePointer       = ClearNodeType(parentNodePointer);
-            parentNodePointer = ReadParentPointer(SrcBuffer,
-                                                  srcMetadataSizeInBytes,
+            parentNodePointer = ReadParentPointer(srcMetadataSizeInBytes,
                                                   parentNodePointer);
         }
         else

@@ -23,12 +23,13 @@
  *
  **********************************************************************************************************************/
 #if NO_SHADER_ENTRYPOINT == 0
-#define RootSig "RootConstants(num32BitConstants=8, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=9, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
+                "CBV(b1)"/*Build Settings binding*/
 
 //=====================================================================================================================
 // 32 bit constants
@@ -42,6 +43,7 @@ struct InputArgs
     uint OutputKeysScratchOffset;      // Scratch buffer offset to int/uint64_t output keys
     uint OutputValuesScratchOffset;    // Scratch buffer offset to int output values
     uint UseMortonCode30;
+    uint numLeafNodes;
 };
 
 [[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
@@ -529,7 +531,10 @@ void ScatterKeysAndValues(
     uint localId : SV_GroupThreadID,
     uint groupId : SV_GroupId)
 {
-    const uint numPrimitives = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
+    const uint numPrimitives =
+        (Settings.topLevelBuild && Settings.rebraidType == RebraidType::V2) || Settings.doTriangleSplitting ?
+            ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET) :
+            ShaderConstants.numLeafNodes;
 
     ScatterKeysAndValuesImpl(
         groupId,

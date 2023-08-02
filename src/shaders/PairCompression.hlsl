@@ -30,17 +30,18 @@ struct PairCompressionArgs
     uint indexBufferInfoScratchOffset;
     uint flagsScratchOffset;
     uint buildFlags;
+    uint numLeafNodes;
 };
 
 #if NO_SHADER_ENTRYPOINT == 0
-#define RootSig "RootConstants(num32BitConstants=6, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=7, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b1)"/*Build Settings binding*/
+                "CBV(b1),"\
+                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
 [[vk::push_constant]] ConstantBuffer<PairCompressionArgs> ShaderConstants : register(b0);
@@ -78,6 +79,18 @@ struct Quad
 //=====================================================================================================================
 // This array is declared as a static global in order to avoid it being duplicated multiple times in scratch memory.
 static Quad quadArray[PAIR_BATCH_SIZE];
+
+//=====================================================================================================================
+static uint CalculateBvhNodesOffset(
+    in uint                numActivePrims,
+    in PairCompressionArgs args)
+{
+    return CalculateScratchBvhNodesOffset(
+               numActivePrims,
+               args.numLeafNodes,
+               args.scratchNodesScratchOffset,
+               Settings.noCopySortedNodes);
+}
 
 //=====================================================================================================================
 void WriteBatchIndex(uint localId, uint index, uint data)
@@ -659,6 +672,18 @@ void PairCompression(
     uint globalThreadId : SV_DispatchThreadID,
     uint localThreadId : SV_GroupThreadID)
 {
-    PairCompressionImpl(globalThreadId, localThreadId, (PairCompressionArgs)ShaderConstants);
+    const uint geometryType = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET);
+    if (geometryType == GEOMETRY_TYPE_TRIANGLES)
+    {
+        const uint numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+        PairCompressionArgs args = (PairCompressionArgs)ShaderConstants;
+        args.scratchNodesScratchOffset = CalculateBvhNodesOffset(numActivePrims, args);
+
+        const uint buildInfo = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_INFO_OFFSET);
+        const uint buildFlags = (buildInfo >> ACCEL_STRUCT_HEADER_INFO_FLAGS_SHIFT) & ACCEL_STRUCT_HEADER_INFO_FLAGS_MASK;
+        args.buildFlags = buildFlags;
+
+        PairCompressionImpl(globalThreadId, localThreadId, args);
+    }
 }
 #endif

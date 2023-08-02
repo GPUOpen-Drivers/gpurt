@@ -32,7 +32,8 @@
                 "UAV(u1),"\
                 "UAV(u2),"\
                 "UAV(u3),"\
-                "CBV(b1)" /* Build Settings binding */
+                "CBV(b1),"\
+                "UAV(u4)"
 #endif
 
 struct RebraidArgs
@@ -56,6 +57,9 @@ struct RebraidArgs
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata        : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer      : register(u2);
 [[vk::binding(3, 0)]]                  RWByteAddressBuffer InstanceDescBuffer : register(u3);
+
+// unused buffer
+[[vk::binding(4, 0)]] RWByteAddressBuffer                  SrcBuffer          : register(u4);
 
 #include "BuildCommonScratch.hlsl"
 
@@ -398,8 +402,6 @@ void RebraidImpl(
                 uint localKeys[REBRAID_KEYS_PER_THREAD];
                 bool open[REBRAID_KEYS_PER_THREAD];
 
-                uint i;
-
                 uint keyIndex = 0;
 
                 BoundingBox initialSceneBounds;
@@ -413,7 +415,7 @@ void RebraidImpl(
                     initSceneExtent = initialSceneBounds.max - initialSceneBounds.min;
                 }
 
-                for (i = start; i < end; i++)
+                for (uint i = start; i < end; i++)
                 {
                     const ScratchNode leaf = ScratchBuffer.Load<ScratchNode>(args.bvhLeafNodeDataScratchOffset +
                                                                              i * sizeof(ScratchNode));
@@ -499,7 +501,7 @@ void RebraidImpl(
                 uint threadSum = 0;
 
                 // Calculate scan on this thread's elements
-                for (i = 0; i < keyIndex; ++i)
+                for (uint i = 0; i < keyIndex; ++i)
                 {
                     const uint tmp = localKeys[i];
 
@@ -510,7 +512,7 @@ void RebraidImpl(
                 const uint threadSumScanned = BlockScanExclusiveAdd(threadSum, localId);
 
                 // Add partial sums back
-                for (i = 0; i < keyIndex; ++i)
+                for (uint i = 0; i < keyIndex; ++i)
                 {
                     localKeys[i] += threadSumScanned;
                 }
@@ -558,7 +560,7 @@ void RebraidImpl(
 
                 keyIndex = 0;
 
-                for (i = start; i < end; i++)
+                for (uint i = start; i < end; i++)
                 {
                     const uint scratchNodeOffset = args.bvhLeafNodeDataScratchOffset + i * sizeof(ScratchNode);
 

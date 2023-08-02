@@ -130,7 +130,7 @@ void DeserializeAS(
                 uint apiInstanceIndex = 0;
 
                 {
-                    apiInstanceIndex = FetchInstanceIndex(SrcBuffer, serializedHeaderSize, header, currentInstNodePtr);
+                    apiInstanceIndex = FetchInstanceIndex(serializedHeaderSize, header, currentInstNodePtr);
                 }
 
                 // During serialisation we store the BLAS base addresses in API instance order. See SerializeAS

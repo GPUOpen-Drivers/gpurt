@@ -587,6 +587,7 @@ uint32 BvhBuilder::CalculateScratchBufferInfo(
     //  BVH2Prims         (BVHNode bvh2prims[NumPrimitives])                                    -Bottom Level Only
     //  Collapse Stack    (CTask CollapseStack[node_count])                                     -Bottom Level Only
     //  Collapse Stack Ptrs (StackPtrs StackPtrs)                                               -Bottom Level Only
+    //  OBB K-DOPs        (OBBKdop obbKdops[aabbCount])
     //-----------------------------------------------------------------------------------------------------------//
 
     const bool willDumpScratchOffsets = m_deviceSettings.enableBuildAccelStructScratchDumping;
@@ -1013,6 +1014,7 @@ uint32 BvhBuilder::CalculateScratchBufferInfo(
         pOffsets->batchIndices = batchIndices;
         pOffsets->indexBufferInfo = indexBufferInfo;
         pOffsets->fastLBVHRootNodeIndex = fastLBVHRootNodeIndex;
+
     }
 
     // Return maxSize which now contains the total scratch size.
@@ -2081,6 +2083,7 @@ void BvhBuilder::InitBuildSettings()
 
     const BvhBuildMode buildMode = m_buildConfig.buildMode;
 
+    m_buildSettings.geometryType                 = static_cast<uint32>(m_buildConfig.geometryType);
     m_buildSettings.topLevelBuild                = (m_buildArgs.inputs.type == AccelStructType::TopLevel);
     m_buildSettings.buildMode                    = static_cast<uint32>(buildMode);
     m_buildSettings.triangleCompressionMode      = static_cast<uint32>(m_buildConfig.triangleCompressionMode);
@@ -2465,7 +2468,7 @@ void BvhBuilder::BuildRaytracingAccelerationStructure(
 
         Barrier();
 
-        Pal::gpusize dumpGpuVirtAddr = 0;
+        gpusize dumpGpuVirtAddr = 0;
         Pal::Result result =
             m_clientCb.pfnAccelStructBuildDumpEvent(
                 m_pPalCmdBuffer, info, m_buildArgs, &dumpGpuVirtAddr);
@@ -3116,6 +3119,7 @@ void BvhBuilder::MergeSort()
         m_scratchOffsets.primIndicesSorted,
         m_scratchOffsets.primIndicesSortedSwap,
         m_deviceSettings.enableMortonCode30,
+        m_buildConfig.numLeafNodes,
     };
 
     ResetTaskCounter(HeaderBufferBaseVa());
@@ -3188,10 +3192,8 @@ void BvhBuilder::GenerateMortonCodes()
         m_scratchOffsets.bvhLeafNodeData,
         m_scratchOffsets.sceneBounds,
         m_scratchOffsets.mortonCodes,
-        m_buildConfig.triangleSplitting,
         m_scratchOffsets.triangleSplitBoxes,
-        m_deviceSettings.enableVariableBitsMortonCodes,
-        m_deviceSettings.enableMortonCode30,
+        m_buildConfig.numLeafNodes,
     };
 
     BindPipeline(InternalRayTracingCsType::GenerateMortonCodes);
@@ -3719,19 +3721,9 @@ void BvhBuilder::BuildQBVH()
         m_scratchOffsets.bvhNodeData,
         m_scratchOffsets.qbvhGlobalStack,
         m_scratchOffsets.qbvhGlobalStackPtrs,
-        static_cast<uint32>(m_buildConfig.triangleCompressionMode),
-        m_buildSettings.fp16BoxNodesMode,
-        BuildModeFlags(),
         m_scratchOffsets.triangleSplitBoxes,
-        m_buildSettings.emitCompactSize,
-        0,
-        (m_buildConfig.rebraidType != GpuRt::RebraidType::Off),
-        m_buildSettings.enableFusedInstanceNode,
-        m_buildConfig.enableFastLBVH,
+        (m_buildArgs.inputs.inputElemLayout == InputElementLayout::ArrayOfPointers),
         m_scratchOffsets.fastLBVHRootNodeIndex,
-        (m_buildConfig.topLevelBuild == false),
-        m_buildSettings.enableSAHCost,
-        m_buildConfig.enableEarlyPairCompression,
         m_scratchOffsets.bvhLeafNodeData,
     };
 
@@ -3784,20 +3776,10 @@ void BvhBuilder::BuildQBVHTop()
         m_scratchOffsets.bvhNodeData,
         m_scratchOffsets.qbvhGlobalStack,
         m_scratchOffsets.qbvhGlobalStackPtrs,
-        static_cast<uint32>(TriangleCompressionMode::None),
-        static_cast<uint32>(Fp16BoxNodesInBlasMode::NoNodes),
-        false,
-        0,
-        m_buildSettings.emitCompactSize,
+        m_scratchOffsets.triangleSplitBoxes,
         (m_buildArgs.inputs.inputElemLayout == InputElementLayout::ArrayOfPointers),
-        (m_buildConfig.rebraidType != RebraidType::Off),
-        m_buildSettings.enableFusedInstanceNode,
-        m_buildConfig.enableFastLBVH,
         m_scratchOffsets.fastLBVHRootNodeIndex,
-        0,
-        0,
-        false,
-        0,                                           // unsortedBvhLeafNodeOffset
+        m_scratchOffsets.bvhLeafNodeData,
     };
 
     ResetTaskCounter(HeaderBufferBaseVa());
@@ -3847,18 +3829,10 @@ void BvhBuilder::RefitBounds()
         m_scratchOffsets.propagationFlags,
         m_scratchOffsets.bvhNodeData,
         m_scratchOffsets.bvhLeafNodeData,
-        m_buildSettings.fp16BoxNodesMode,
-        m_deviceSettings.fp16BoxModeMixedSaThresh,
-        m_buildConfig.collapse,
-        m_buildConfig.triangleSplitting,
-        (m_buildConfig.triangleCompressionMode == TriangleCompressionMode::Pair),
-        m_deviceSettings.enablePairCompressionCostCheck,
         m_scratchOffsets.triangleSplitBoxes,
         m_scratchOffsets.numBatches,
         m_scratchOffsets.batchIndices,
-        m_buildConfig.noCopySortedNodes,
         m_scratchOffsets.primIndicesSorted,
-        m_buildConfig.enableEarlyPairCompression,
         m_buildConfig.numLeafNodes
     };
 
@@ -3889,7 +3863,8 @@ void BvhBuilder::PairCompression()
         m_scratchOffsets.batchIndices,
         m_scratchOffsets.indexBufferInfo,
         m_scratchOffsets.propagationFlags,
-        m_buildArgs.inputs.flags
+        m_buildArgs.inputs.flags,
+        m_buildConfig.numLeafNodes,
     };
 
     uint32 entryOffset = 0;
@@ -3984,7 +3959,8 @@ void BvhBuilder::BitHistogram(
         numGroups,
         inputArrayOffset,
         outputArrayOffset,
-        m_deviceSettings.enableMortonCode30
+        m_deviceSettings.enableMortonCode30,
+        m_buildConfig.numLeafNodes,
     };
 
     // Set shader constants
@@ -4025,7 +4001,8 @@ void BvhBuilder::ScatterKeysAndValues(
         histogramsOffset,
         outputKeysOffset,
         outputValuesOffset,
-        m_deviceSettings.enableMortonCode30
+        m_deviceSettings.enableMortonCode30,
+        m_buildConfig.numLeafNodes,
     };
 
     // Set shader constants

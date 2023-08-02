@@ -121,8 +121,8 @@ void ScanExclusiveInt4Impl(
     t = v1.z; v1.z = v1.w; v1.w += t;
     t = v2.z; v2.z = v2.w; v2.w += t;
 
-    safe_store_int4(v2, ScratchBuffer, inOutDataOffset, 2 * globalId + 1, numElements);
-    safe_store_int4(v1, ScratchBuffer, inOutDataOffset, 2 * globalId, numElements);
+    safe_store_int4(v2, inOutDataOffset, 2 * globalId + 1, numElements);
+    safe_store_int4(v1, inOutDataOffset, 2 * globalId, numElements);
 }
 
 #if NO_SHADER_ENTRYPOINT == 0

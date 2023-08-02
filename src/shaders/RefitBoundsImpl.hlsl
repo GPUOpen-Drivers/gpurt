@@ -47,7 +47,10 @@ void RefitBoundsImpl(
     uint                reservedUint2,
     uint                reservedUint3,
     int4                reservedUint4,
-    uint                enableInstancePrimCount)
+    uint                enableInstancePrimCount,
+    uint                reservedUint5,
+    uint                reservedUint6
+)
 {
     const bool doLatePairCompression = enablePairCompression && (!enableEarlyPairCompression);
     if (doLatePairCompression && (primIndex == 0) && (numActivePrims == 1))
@@ -124,6 +127,7 @@ void RefitBoundsImpl(
 
                 rightCost = isLeafNode ? FetchScratchLeafNodeCost(rightNode) : FetchScratchInternalNodeCost(rightNode);
                 numMortonCells += isLeafNode ? 1 : rightNode.splitBox_or_nodePointer;
+
             }
 
             // Left child
@@ -139,6 +143,7 @@ void RefitBoundsImpl(
 
                 leftCost = isLeafNode ? FetchScratchLeafNodeCost(leftNode) : FetchScratchInternalNodeCost(leftNode);
                 numMortonCells += isLeafNode ? 1 : leftNode.splitBox_or_nodePointer;
+
             }
 
             // Merge bounding boxes up to parent

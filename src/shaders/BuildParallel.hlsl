@@ -28,13 +28,13 @@
                 "UAV(u2),"\
                 "UAV(u3),"\
                 "UAV(u4),"\
-                "UAV(u5),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 2)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 3)),"\
                 "DescriptorTable(CBV(b0, numDescriptors = 4294967295, space = 1)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b1)"/*Build Settings binding*/
+                "CBV(b1),"\
+                "UAV(u5)"
 
 #include "RayTracingDefs.h"
 
@@ -99,7 +99,7 @@ struct ScratchOffsets
     uint reservedUint7;
     uint reservedUint8;
     uint reservedUint9;
-
+    uint reservedUint10;
     // debug
     uint debugCounters;
 };
@@ -194,11 +194,24 @@ void WaitForTasksToFinish(
 //======================================================================================================================
 static uint CalculateBvhNodesOffset(uint numActivePrims)
 {
-    return CalculateScratchBvhNodesOffset(
-               numActivePrims,
-               ShaderConstants.numLeafNodes,
-               ShaderConstants.offsets.bvhNodes,
-               Settings.noCopySortedNodes);
+    if ((Settings.noCopySortedNodes == true) && (Settings.enableFastLBVH == false) && (numActivePrims == 1))
+    {
+        // If there is one active primitive among a number of inactive primitives and
+        // NoCopySortedNodes is enabled, then we need to move the root to match the
+        // offset of the single active primitive.
+        // The FastLBVH does not need to do this, because it provides the root's index
+        // in ShaderConstants.offsets.fastLBVHRootNodeIndex.
+        const uint nodeIndex = FetchSortedPrimIndex(ShaderConstants.offsets.primIndicesSorted, 0);
+        return ShaderConstants.offsets.unsortedBvhLeafNodes + nodeIndex * SCRATCH_NODE_SIZE;
+    }
+    else
+    {
+        return CalculateScratchBvhNodesOffset(
+                   numActivePrims,
+                   ShaderConstants.numLeafNodes,
+                   ShaderConstants.offsets.bvhNodes,
+                   Settings.noCopySortedNodes);
+    }
 }
 
 //======================================================================================================================
@@ -328,7 +341,10 @@ void RefitBounds(
             false,
             false,
             0,
-            false);
+            false,
+            false,
+            0
+        );
     }
 }
 
@@ -512,8 +528,7 @@ void PairCompression(
 }
 
 //======================================================================================================================
-void InitBuildQbvh(
-    uint globalId,
+BuildQbvhArgs GetBuildQbvhArgs(
     uint numLeafNodes,
     uint numActivePrims)
 {
@@ -528,7 +543,6 @@ void InitBuildQbvh(
     qbvhArgs.splitBoxesByteOffset        = ShaderConstants.offsets.splitBoxes;
     qbvhArgs.triangleCompressionMode     = Settings.triangleCompressionMode;
     qbvhArgs.fp16BoxNodesInBlasMode      = Settings.fp16BoxNodesMode;
-    qbvhArgs.flags                       = BuildModeFlags();
     qbvhArgs.encodeArrayOfPointers       = ShaderConstants.encodeArrayOfPointers;
     qbvhArgs.rebraidEnabled              = (Settings.rebraidType != RebraidType::Off);
     qbvhArgs.enableFusedInstanceNode     = Settings.enableFusedInstanceNode;
@@ -549,6 +563,17 @@ void InitBuildQbvh(
 
     qbvhArgs.enableSAHCost = Settings.enableSAHCost;
 
+    return qbvhArgs;
+
+}
+
+//======================================================================================================================
+void InitBuildQbvh(
+    uint globalId,
+    uint numLeafNodes,
+    uint numActivePrims)
+{
+    const BuildQbvhArgs qbvhArgs = GetBuildQbvhArgs(numLeafNodes, numActivePrims);
     InitBuildQbvhImpl(globalId, qbvhArgs);
 }
 
@@ -559,37 +584,7 @@ void BuildQbvh(
     uint numLeafNodes,
     uint numActivePrims)
 {
-    BuildQbvhArgs qbvhArgs;
-
-    qbvhArgs.numPrimitives               = numLeafNodes;
-    qbvhArgs.metadataSizeInBytes         = DstMetadata.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
-    qbvhArgs.numThreads                  = GetNumThreads();
-    qbvhArgs.scratchNodesScratchOffset   = CalculateBvhNodesOffset(numActivePrims);
-    qbvhArgs.qbvhStackScratchOffset      = ShaderConstants.offsets.qbvhStack;
-    qbvhArgs.stackPtrsScratchOffset      = ShaderConstants.offsets.stackPtrs;
-    qbvhArgs.splitBoxesByteOffset        = ShaderConstants.offsets.splitBoxes;
-    qbvhArgs.triangleCompressionMode     = Settings.triangleCompressionMode;
-    qbvhArgs.fp16BoxNodesInBlasMode      = Settings.fp16BoxNodesMode;
-    qbvhArgs.flags                       = BuildModeFlags();
-    qbvhArgs.encodeArrayOfPointers       = ShaderConstants.encodeArrayOfPointers;
-    qbvhArgs.rebraidEnabled              = (Settings.rebraidType != RebraidType::Off);
-    qbvhArgs.enableFusedInstanceNode     = Settings.enableFusedInstanceNode;
-    qbvhArgs.enableEarlyPairCompression  = Settings.enableEarlyPairCompression;
-    qbvhArgs.enableFastLBVH              = Settings.enableFastLBVH;
-    qbvhArgs.fastLBVHRootNodeIndex       = Settings.enableFastLBVH ?
-        ScratchBuffer.Load(ShaderConstants.offsets.fastLBVHRootNodeIndex) : 0;
-    qbvhArgs.unsortedBvhLeafNodesOffset  = ShaderConstants.offsets.unsortedBvhLeafNodes;
-
-    if (!Settings.topLevelBuild)
-    {
-        qbvhArgs.captureChildNumPrimsForRebraid = true;
-    }
-    else
-    {
-        qbvhArgs.captureChildNumPrimsForRebraid = false;
-    }
-
-    qbvhArgs.enableSAHCost = Settings.enableSAHCost;
+    const BuildQbvhArgs qbvhArgs = GetBuildQbvhArgs(numLeafNodes, numActivePrims);
 
     {
         BuildQbvhImpl(globalId, localId, numActivePrims, qbvhArgs, (Settings.topLevelBuild != 0));
@@ -965,9 +960,7 @@ void BuildBvh(
 
     if (localId == 0)
     {
-        WriteCompactedSize(DstBuffer,
-                           EmitBuffer,
-                           Settings.emitCompactSize,
+        WriteCompactedSize(Settings.emitCompactSize,
                            Settings.topLevelBuild ? TOP_LEVEL : BOTTOM_LEVEL);
     }
 

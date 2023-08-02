@@ -32,7 +32,6 @@ struct BuildQbvhArgs
     uint stackPtrsScratchOffset;
     uint triangleCompressionMode;
     uint fp16BoxNodesInBlasMode;        // Mode used for which BLAS interior nodes are FP16
-    uint flags;
     uint splitBoxesByteOffset;
     uint emitCompactSize;
     uint encodeArrayOfPointers;
@@ -44,21 +43,38 @@ struct BuildQbvhArgs
     uint enableSAHCost;
     uint enableEarlyPairCompression;
     uint unsortedBvhLeafNodesOffset;
+    uint reservedUint0;
+    uint reservedUint1;
 };
 
 #if NO_SHADER_ENTRYPOINT == 0
-#define RootSig "RootConstants(num32BitConstants=20, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=10, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b1)"/*Build Settings binding*/
+                "CBV(b1),"\
+                "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
-[[vk::push_constant]] ConstantBuffer<BuildQbvhArgs> ShaderConstants : register(b0);
+// 32 bit constants
+struct InputArgs
+{
+    uint numPrimitives;
+    uint metadataSizeInBytes;
+    uint numThreads;
+    uint scratchNodesScratchOffset;
+    uint qbvhStackScratchOffset;
+    uint stackPtrsScratchOffset;
+    uint splitBoxesByteOffset;
+    uint encodeArrayOfPointers;
+    uint fastLBVHRootNodeIndex;
+    uint unsortedBvhLeafNodesOffset;
+};
+
+[[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
 
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer  DstBuffer          : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer  DstMetadata        : register(u1);
@@ -76,7 +92,14 @@ struct BuildQbvhArgs
 
 #define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
 groupshared uint SharedMem[MAX_LDS_ELEMENTS];
-#endif
+
+//======================================================================================================================
+bool EnableLatePairCompression()
+{
+    return (Settings.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
+           (Settings.topLevelBuild == false) &&
+           (Settings.enableEarlyPairCompression == false);
+}
 
 //=====================================================================================================================
 static uint CalculateBvhNodesOffset(
@@ -91,20 +114,215 @@ static uint CalculateBvhNodesOffset(
 }
 
 //=====================================================================================================================
-bool DoTriSplitting(BuildQbvhArgs args)
+BuildQbvhArgs GetBuildQbvhArgs()
 {
-    return (args.flags & BUILD_FLAGS_TRIANGLE_SPLITTING);
+    const AccelStructHeader header = DstBuffer.Load<AccelStructHeader>(0);
+
+    BuildQbvhArgs args;
+
+    args.numPrimitives = ShaderConstants.numPrimitives;
+    args.metadataSizeInBytes = ShaderConstants.metadataSizeInBytes;
+    args.numThreads = ShaderConstants.numThreads;
+    args.scratchNodesScratchOffset = ShaderConstants.scratchNodesScratchOffset;
+    args.qbvhStackScratchOffset = ShaderConstants.qbvhStackScratchOffset;
+    args.stackPtrsScratchOffset = ShaderConstants.stackPtrsScratchOffset;
+    args.splitBoxesByteOffset = ShaderConstants.splitBoxesByteOffset;
+    args.encodeArrayOfPointers = ShaderConstants.encodeArrayOfPointers;
+    args.fastLBVHRootNodeIndex = ShaderConstants.fastLBVHRootNodeIndex;
+    args.unsortedBvhLeafNodesOffset = ShaderConstants.unsortedBvhLeafNodesOffset;
+
+    args.triangleCompressionMode = Settings.triangleCompressionMode;
+    args.fp16BoxNodesInBlasMode = Settings.fp16BoxNodesMode;
+    args.rebraidEnabled = (Settings.rebraidType != RebraidType::Off);
+    args.enableFusedInstanceNode = Settings.enableFusedInstanceNode;
+    args.enableFastLBVH = Settings.enableFastLBVH;
+    args.enableEarlyPairCompression = Settings.enableEarlyPairCompression;
+    args.captureChildNumPrimsForRebraid = !Settings.topLevelBuild;
+    args.enableSAHCost = Settings.enableSAHCost;
+
+    args.scratchNodesScratchOffset = CalculateBvhNodesOffset(header.numActivePrims, args);
+
+    // Read active primitive count from header
+    args.numPrimitives = header.numActivePrims;
+
+    // With pair compresssion enabled, the leaf node count in header represents actual valid
+    // primitives
+    if (EnableLatePairCompression())
+    {
+        args.numPrimitives = header.numLeafNodes;
+    }
+
+    return args;
+}
+#endif
+
+//=====================================================================================================================
+uint WriteInstanceNode(
+    in BuildQbvhArgs      args,
+    in ScratchNode        scratchNode,
+    in uint               scratchNodeIndex,
+    in uint               nodeOffset,
+    in AccelStructOffsets offsets)
+{
+    const uint nodeType      = GetNodeType(scratchNode.type);
+    const uint instanceIndex = scratchNode.left_or_primIndex_or_instIndex;
+
+    InstanceDesc instanceDesc;
+    if (args.encodeArrayOfPointers != 0)
+    {
+        GpuVirtualAddress addr = InstanceDescBuffer.Load<GpuVirtualAddress>(instanceIndex * GPU_VIRTUAL_ADDRESS_SIZE);
+        instanceDesc = FetchInstanceDescAddr(addr);
+    }
+    else
+    {
+        instanceDesc = InstanceDescBuffer.Load<InstanceDesc>(instanceIndex * INSTANCE_DESC_SIZE);
+    }
+
+    const GpuVirtualAddress baseAddr = MakeGpuVirtualAddress(instanceDesc.accelStructureAddressLo,
+                                                             instanceDesc.accelStructureAddressHiAndFlags);
+
+    uint64_t blasHeaderAddr =
+        ExtractInstanceAddr(PackUint64(asuint(scratchNode.sah_or_v2_or_instBasePtr.x),
+                                       asuint(scratchNode.sah_or_v2_or_instBasePtr.y)));
+
+    const uint blasMetadataSize = uint(blasHeaderAddr - baseAddr);
+
+    // When rebraiding is disabled the destination index is just the instance index.
+    const uint destIndex = (args.rebraidEnabled != 0) ? (scratchNodeIndex - args.numPrimitives + 1) : instanceIndex;
+
+    {
+        ScratchBuffer.InterlockedAdd(args.stackPtrsScratchOffset + STACK_PTRS_NUM_LEAFS_DONE_OFFSET, 1);
+
+        {
+            nodeOffset =
+                offsets.leafNodes + (destIndex * GetBvhNodeSizeInstance(args.enableFusedInstanceNode));
+        }
+    }
+
+    instanceDesc.accelStructureAddressLo = asuint(scratchNode.sah_or_v2_or_instBasePtr.x);
+    instanceDesc.accelStructureAddressHiAndFlags = asuint(scratchNode.sah_or_v2_or_instBasePtr.y);
+
+    const uint nodePointer = PackNodePointer(nodeType, nodeOffset);
+
+    WriteInstanceDescriptor(args.metadataSizeInBytes,
+                            instanceDesc,
+                            instanceIndex,
+                            nodePointer,
+                            blasMetadataSize,
+                            scratchNode.splitBox_or_nodePointer,
+                            ExtractScratchNodeFlags(scratchNode.flags_and_instanceMask),
+                            args.enableFusedInstanceNode);
+
+    DstBuffer.Store(offsets.primNodePtrs + (destIndex * sizeof(uint)), nodePointer);
+
+    return nodePointer;
 }
 
-//======================================================================================================================
-bool EnableLatePairCompression(
-    in uint triangleCompressionMode,
-    in bool topLevelBuild,
-    in bool enableEarlyPairCompression)
+//=====================================================================================================================
+BoundingBox GetScratchNodeBoundingBoxTS(
+    in BuildQbvhArgs args,
+    in bool          topLevelBuild,  ///< Compile time flag indicating whether this is top or bottom level build
+    in ScratchNode   node)           ///< Node whose bbox to write out
 {
-    return (triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
-           (topLevelBuild == false) &&
-           (enableEarlyPairCompression == false);
+    BoundingBox bbox;
+
+    // For triangle geometry we need to generate bounding box from triangle vertices
+    if ((topLevelBuild == false) && IsTriangleNode(node.type))
+    {
+        if (Settings.doTriangleSplitting)
+        {
+            bbox = ScratchBuffer.Load<BoundingBox>(args.splitBoxesByteOffset +
+                                                   sizeof(BoundingBox) * node.splitBox_or_nodePointer);
+        }
+        else
+        {
+            bbox = GenerateTriangleBoundingBox(node.bbox_min_or_v0,
+                                               node.bbox_max_or_v1,
+                                               node.sah_or_v2_or_instBasePtr);
+
+            if ((args.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
+                (node.splitBox_or_nodePointer != INVALID_IDX))
+            {
+                ScratchNode otherNode;
+                if (args.enableEarlyPairCompression)
+                {
+                    otherNode = FetchScratchNode(args.unsortedBvhLeafNodesOffset,
+                                                 node.splitBox_or_nodePointer);
+                }
+                else
+                {
+                    otherNode = FetchScratchNode(args.scratchNodesScratchOffset,
+                                                 node.splitBox_or_nodePointer);
+                }
+
+                const BoundingBox otherBbox = GenerateTriangleBoundingBox(otherNode.bbox_min_or_v0,
+                                                                          otherNode.bbox_max_or_v1,
+                                                                          otherNode.sah_or_v2_or_instBasePtr);
+
+                bbox.min = min(bbox.min, otherBbox.min);
+                bbox.max = max(bbox.max, otherBbox.max);
+            }
+        }
+    }
+    else
+    {
+        // Internal nodes and AABB geometry encodes bounding box in scratch node
+        bbox.min = node.bbox_min_or_v0;
+        bbox.max = node.bbox_max_or_v1;
+    }
+
+    return bbox;
+}
+
+//=====================================================================================================================
+bool IsDestIndexInStack(in BuildQbvhArgs args)
+{
+    const bool destIndexInStack = (args.fp16BoxNodesInBlasMode == LEAF_NODES_IN_BLAS_AS_FP16) ||
+                                  (args.fp16BoxNodesInBlasMode == MIXED_NODES_IN_BLAS_AS_FP16);
+    return destIndexInStack;
+}
+
+//=====================================================================================================================
+bool StackHasTwoEntries(in BuildQbvhArgs args)
+{
+    bool stackHasTwoEntries = IsDestIndexInStack(args);
+    return stackHasTwoEntries;
+}
+
+//=====================================================================================================================
+// Returns source BVH node index given node.
+uint StackPopNodeIdx(
+    BuildQbvhArgs args,
+    uint          stackIndex)
+{
+    if (StackHasTwoEntries(args))
+    {
+        stackIndex *= 2;
+    }
+
+    return ScratchBuffer.Load(args.qbvhStackScratchOffset + (stackIndex * sizeof(uint)));
+}
+
+//=====================================================================================================================
+// Calculate internal node offset from 64-byte chunk index
+uint Calc64BChunkOffset(uint chunkIdx64B)
+{
+    // Node offset includes header size
+    return sizeof(AccelStructHeader) + (chunkIdx64B * 64);
+}
+
+//=====================================================================================================================
+static uint CreateBoxNodePointer(
+    in uint nodeOffsetInBytes,
+    in bool writeAsFp16BoxNode)
+{
+    uint nodeType = GetInternalNodeType();
+    if ((nodeType == NODE_TYPE_BOX_FLOAT32) && writeAsFp16BoxNode)
+    {
+        nodeType = NODE_TYPE_BOX_FLOAT16;
+    }
+
+    return PackNodePointer(nodeType, nodeOffsetInBytes);
 }
 
 //=====================================================================================================================
@@ -125,39 +343,6 @@ struct Task
 #define TASK_PARENT_OF_COLLAPSE_NODE_INDEX_OFFSET 16
 #define TASK_NODE_DEST_INDEX                      20
 #define TASK_SIZE                                 24
-
-//=====================================================================================================================
-bool IsDestIndexInStack(in BuildQbvhArgs args)
-{
-    const bool destIndexInStack = (args.fp16BoxNodesInBlasMode == LEAF_NODES_IN_BLAS_AS_FP16) ||
-                                  (args.fp16BoxNodesInBlasMode == MIXED_NODES_IN_BLAS_AS_FP16);
-    return destIndexInStack;
-}
-
-//=====================================================================================================================
-bool StackHasTwoEntries(in BuildQbvhArgs args)
-{
-    bool stackHasTwoEntries = IsDestIndexInStack(args);
-
-    return stackHasTwoEntries;
-}
-
-//=====================================================================================================================
-// Calculate internal node offset from 64-byte chunk index
-uint Calc64BChunkOffset(uint chunkIdx64B)
-{
-    // Node offset includes header size
-    return sizeof(AccelStructHeader) + (chunkIdx64B * 64);
-}
-
-//=====================================================================================================================
-uint CalcInstanceNodeOffset(
-    uint enableFusedInstanceNode,
-    uint baseInstanceNodesOffset,
-    uint index)
-{
-    return baseInstanceNodesOffset + (index * GetBvhNodeSizeInstance(enableFusedInstanceNode));
-}
 
 //=====================================================================================================================
 static uint GetNum64BChunks(
@@ -236,94 +421,10 @@ static void InitBuildQbvhImpl(
 void InitBuildQBVH(
     uint globalId : SV_DispatchThreadID)
 {
-    const AccelStructHeader header        = DstBuffer.Load<AccelStructHeader>(0);
-    const uint              type          = (header.info & ACCEL_STRUCT_HEADER_INFO_TYPE_MASK);
-    const bool              topLevelBuild = (type == TOP_LEVEL);
-
-    BuildQbvhArgs args = (BuildQbvhArgs)ShaderConstants;
-
-    args.scratchNodesScratchOffset = CalculateBvhNodesOffset(header.numActivePrims, args);
-
-    args.numPrimitives = header.numActivePrims;
-
-    // With pair compression enabled, numLeafNodes represents the actual primitive count
-    if (EnableLatePairCompression(ShaderConstants.triangleCompressionMode,
-                                  topLevelBuild,
-                                  ShaderConstants.enableEarlyPairCompression))
-    {
-        args.numPrimitives = header.numLeafNodes;
-    }
-
+    const BuildQbvhArgs args = GetBuildQbvhArgs();
     InitBuildQbvhImpl(globalId, args);
 }
 #endif
-
-//=====================================================================================================================
-uint WriteInstanceNode(
-    in BuildQbvhArgs      args,
-    in ScratchNode        scratchNode,
-    in uint               scratchNodeIndex,
-    in uint               nodeOffset,
-    in AccelStructOffsets offsets)
-{
-    const uint nodeType      = GetNodeType(scratchNode.type);
-    const uint instanceIndex = scratchNode.left_or_primIndex_or_instIndex;
-
-    InstanceDesc instanceDesc;
-    if (args.encodeArrayOfPointers != 0)
-    {
-        GpuVirtualAddress addr = InstanceDescBuffer.Load<GpuVirtualAddress>(instanceIndex * GPU_VIRTUAL_ADDRESS_SIZE);
-        instanceDesc = FetchInstanceDescAddr(addr);
-    }
-    else
-    {
-        instanceDesc = InstanceDescBuffer.Load<InstanceDesc>(instanceIndex * INSTANCE_DESC_SIZE);
-    }
-
-    const GpuVirtualAddress baseAddr = MakeGpuVirtualAddress(instanceDesc.accelStructureAddressLo,
-                                                             instanceDesc.accelStructureAddressHiAndFlags);
-
-    uint64_t blasHeaderAddr =
-        ExtractInstanceAddr(PackUint64(asuint(scratchNode.sah_or_v2_or_instBasePtr.x),
-                                       asuint(scratchNode.sah_or_v2_or_instBasePtr.y)));
-
-    const uint blasMetadataSize = uint(blasHeaderAddr - baseAddr);
-
-    // When rebraiding is disabled the destination index is just the instance index.
-    const uint destIndex = (args.rebraidEnabled != 0) ? (scratchNodeIndex - args.numPrimitives + 1) : instanceIndex;
-
-    {
-        ScratchBuffer.InterlockedAdd(args.stackPtrsScratchOffset + STACK_PTRS_NUM_LEAFS_DONE_OFFSET, 1);
-
-        {
-            nodeOffset = CalcInstanceNodeOffset(args.enableFusedInstanceNode, offsets.leafNodes, destIndex);
-        }
-    }
-
-    instanceDesc.accelStructureAddressLo = asuint(scratchNode.sah_or_v2_or_instBasePtr.x);
-    instanceDesc.accelStructureAddressHiAndFlags = asuint(scratchNode.sah_or_v2_or_instBasePtr.y);
-
-    const uint nodePointer = PackNodePointer(nodeType, nodeOffset);
-
-    BoundingBox instanceBounds;
-    instanceBounds.min = scratchNode.bbox_min_or_v0;
-    instanceBounds.max = scratchNode.bbox_max_or_v1;
-
-    WriteInstanceDescriptor(DstMetadata,
-                            args.metadataSizeInBytes,
-                            instanceDesc,
-                            instanceIndex,
-                            nodePointer,
-                            blasMetadataSize,
-                            scratchNode.splitBox_or_nodePointer,
-                            instanceBounds,
-                            ExtractScratchNodeFlags(scratchNode.flags_and_instanceMask),
-                            args.enableFusedInstanceNode);
-
-    DstBuffer.Store(offsets.primNodePtrs + (destIndex * sizeof(uint)), nodePointer);
-
-    return nodePointer;
-}
 
 //=====================================================================================================================
 uint WritePrimitiveNode(
@@ -343,28 +444,26 @@ uint WritePrimitiveNode(
     const uint geometryPrimNodePtrsOffset = offsets.primNodePtrs + geometryInfo.primNodePtrsOffset;
     const uint flattenedPrimIndex = (geometryInfo.primNodePtrsOffset / sizeof(uint)) + scratchNode.left_or_primIndex_or_instIndex;
 
+    uint numLeafsDone;
+    ScratchBuffer.InterlockedAdd(args.stackPtrsScratchOffset + STACK_PTRS_NUM_LEAFS_DONE_OFFSET, 1, numLeafsDone);
+
     {
-        uint numLeafsDone;
-        ScratchBuffer.InterlockedAdd(args.stackPtrsScratchOffset + STACK_PTRS_NUM_LEAFS_DONE_OFFSET, 1, numLeafsDone);
-
+        uint destIndex;
+        if (IsTriangleNode(nodeType) &&
+            ((args.triangleCompressionMode != NO_TRIANGLE_COMPRESSION) || Settings.doTriangleSplitting))
         {
-            uint destIndex;
-            if (IsTriangleNode(nodeType) &&
-                ((args.triangleCompressionMode != NO_TRIANGLE_COMPRESSION) || DoTriSplitting(args)))
-            {
-                destIndex = numLeafsDone;
-            }
-            else
-            {
-                destIndex = flattenedPrimIndex;
-            }
-
-            const uint primitiveNodeSize = (nodeType == NODE_TYPE_USER_NODE_PROCEDURAL) ?
-                                           USER_NODE_PROCEDURAL_SIZE :
-                                           TRIANGLE_NODE_SIZE;
-
-            nodeOffset = offsets.leafNodes + (destIndex * primitiveNodeSize);
+            destIndex = numLeafsDone;
         }
+        else
+        {
+            destIndex = flattenedPrimIndex;
+        }
+
+        const uint primitiveNodeSize = (nodeType == NODE_TYPE_USER_NODE_PROCEDURAL) ?
+                                       USER_NODE_PROCEDURAL_SIZE :
+                                       TRIANGLE_NODE_SIZE;
+
+        nodeOffset = offsets.leafNodes + (destIndex * primitiveNodeSize);
     }
 
     const uint triangleId = scratchNode.type >> 3;
@@ -451,76 +550,6 @@ uint WritePrimitiveNode(
 }
 
 //=====================================================================================================================
-BoundingBox GetScratchNodeBoundingBoxTS(
-    in BuildQbvhArgs args,
-    in bool          topLevelBuild,  ///< Compile time flag indicating whether this is top or bottom level build
-    in ScratchNode   node)           ///< Node whose bbox to write out
-{
-    BoundingBox bbox;
-
-    // For triangle geometry we need to generate bounding box from triangle vertices
-    if ((topLevelBuild == false) && IsTriangleNode(node.type))
-    {
-        if (DoTriSplitting(args))
-        {
-            bbox = ScratchBuffer.Load<BoundingBox>(args.splitBoxesByteOffset +
-                                                   sizeof(BoundingBox) * node.splitBox_or_nodePointer);
-        }
-        else
-        {
-            bbox = GenerateTriangleBoundingBox(node.bbox_min_or_v0,
-                                               node.bbox_max_or_v1,
-                                               node.sah_or_v2_or_instBasePtr);
-
-            if ((args.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
-                (node.splitBox_or_nodePointer != INVALID_IDX))
-            {
-                ScratchNode otherNode;
-                if (args.enableEarlyPairCompression)
-                {
-                    otherNode = FetchScratchNode(args.unsortedBvhLeafNodesOffset,
-                                                 node.splitBox_or_nodePointer);
-                }
-                else
-                {
-                    otherNode = FetchScratchNode(args.scratchNodesScratchOffset,
-                                                 node.splitBox_or_nodePointer);
-                }
-
-                const BoundingBox otherBbox = GenerateTriangleBoundingBox(otherNode.bbox_min_or_v0,
-                                                                          otherNode.bbox_max_or_v1,
-                                                                          otherNode.sah_or_v2_or_instBasePtr);
-
-                bbox.min = min(bbox.min, otherBbox.min);
-                bbox.max = max(bbox.max, otherBbox.max);
-            }
-        }
-    }
-    else
-    {
-        // Internal nodes and AABB geometry encodes bounding box in scratch node
-        bbox.min = node.bbox_min_or_v0;
-        bbox.max = node.bbox_max_or_v1;
-    }
-
-    return bbox;
-}
-
-//=====================================================================================================================
-// Returns source BVH node index given node.
-uint StackPopNodeIdx(
-    BuildQbvhArgs args,
-    uint          stackIndex)
-{
-    if (StackHasTwoEntries(args))
-    {
-        stackIndex *= 2;
-    }
-
-    return ScratchBuffer.Load(args.qbvhStackScratchOffset + (stackIndex * sizeof(uint)));
-}
-
-//=====================================================================================================================
 // Returns the second dword on the stack for a given stack index.
 uint StackPopSecondEntry(
     BuildQbvhArgs args,
@@ -593,19 +622,17 @@ uint AllocQBVHStackNumItems(
         // Destination offset index for each child node
         intChildDstOffset += origDest;
 
+        // Store node index for every box child node
+        for (uint i = 0; i < 4; i++)
         {
-            // Store node index for every box child node
-            for (uint i = 0; i < 4; i++)
+            if (compChildInfo & bit(i))
             {
-                if (compChildInfo & bit(i))
-                {
-                    ScratchBuffer.Store(args.qbvhStackScratchOffset + intChildStackIdx[i] * sizeof(uint),
-                                        intChildNodeIdx[i]);
-                }
+                ScratchBuffer.Store(args.qbvhStackScratchOffset + intChildStackIdx[i] * sizeof(uint),
+                                    intChildNodeIdx[i]);
             }
-
-            DeviceMemoryBarrier();
         }
+
+        DeviceMemoryBarrier();
     }
     // Mixed nodes - atomically advance destination memory address to avoid holes between nodes
     else
@@ -633,21 +660,6 @@ uint AllocQBVHStackNumItems(
 }
 
 //=====================================================================================================================
-static uint CreateBoxNodePointer(
-    in BuildQbvhArgs args,
-    in uint nodeOffsetInBytes,
-    in bool writeAsFp16BoxNode)
-{
-    uint nodeType = GetInternalNodeType();
-    if ((nodeType == NODE_TYPE_BOX_FLOAT32) && writeAsFp16BoxNode)
-    {
-        nodeType = NODE_TYPE_BOX_FLOAT16;
-    }
-
-    return PackNodePointer(nodeType, nodeOffsetInBytes);
-}
-
-//=====================================================================================================================
 static uint ProcessNode(
     in BuildQbvhArgs      args,             // Build args
     in bool               topLevelBuild,    // Compile time flag indicating whether this is top or bottom level build
@@ -668,7 +680,7 @@ static uint ProcessNode(
         {
             writeAsFp16BoxNode = ((topLevelBuild == false) && (nodeType == NODE_TYPE_BOX_FLOAT16));
         }
-        nodePointer = CreateBoxNodePointer(args, nodeOffset, writeAsFp16BoxNode);
+        nodePointer = CreateBoxNodePointer(nodeOffset, writeAsFp16BoxNode);
     }
     else
     {
@@ -682,9 +694,7 @@ static uint ProcessNode(
         }
         else
         {
-            {
-                nodePointer = WritePrimitiveNode(args, scratchNode, nodeOffset, offsets);
-            }
+            nodePointer = WritePrimitiveNode(args, scratchNode, nodeOffset, offsets);
         }
     }
 
@@ -710,7 +720,6 @@ static void PullUpChildren(
     inout float4                  cost,
     in    uint                    numActivePrims)
 {
-
     [unroll]
     for (uint i = 0; i < 4; i++)
     {
@@ -895,7 +904,7 @@ static void ApplyHeuristic(
         nodeCounter++;
     }
 
-    for (i = 0; (i < nodeCounter) && (i < 4); i++)
+    for (uint i = 0; (i < nodeCounter) && (i < 4); i++)
     {
         const uint scratchNodeIdx = SharedMem[baseLdsOffset + i];
         nodeIdxFinal[i] = scratchNodeIdx;
@@ -970,8 +979,7 @@ void BuildQbvhImpl(
             const uint qbvhNodeAddr = Calc64BChunkOffset(0);
 
             {
-                WriteBoxNode(DstMetadata,
-                             args.metadataSizeInBytes + qbvhNodeAddr,
+                WriteBoxNode(args.metadataSizeInBytes + qbvhNodeAddr,
                              fp32BoxNode);
             }
 
@@ -1031,7 +1039,7 @@ void BuildQbvhImpl(
             }
             const uint bvhNodeDstIdx = GetDestIdx(args, topLevelBuild, stackIndex);
             const uint qbvhNodeAddr  = Calc64BChunkOffset(bvhNodeDstIdx);
-            const uint qbvhNodePtr   = CreateBoxNodePointer(args, qbvhNodeAddr, writeAsFp16BoxNode);
+            const uint qbvhNodePtr   = CreateBoxNodePointer(qbvhNodeAddr, writeAsFp16BoxNode);
 
             const uint nodeTypeToAccum =
                    (writeAsFp16BoxNode ? ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP16_NODES_OFFSET
@@ -1109,7 +1117,7 @@ void BuildQbvhImpl(
                 fp16BoxNode.bbox2  = CompressBBoxToUint3(bbox[2]);
                 fp16BoxNode.bbox3  = CompressBBoxToUint3(bbox[3]);
 
-                WriteFp16BoxNode(DstMetadata, args.metadataSizeInBytes + qbvhNodeAddr, fp16BoxNode);
+                WriteFp16BoxNode(args.metadataSizeInBytes + qbvhNodeAddr, fp16BoxNode);
             }
             else
             {
@@ -1130,8 +1138,7 @@ void BuildQbvhImpl(
                 fp32BoxNode.numPrimitives  = FetchScratchNodeNumPrimitives(node, false);
 
                 {
-                    WriteBoxNode(DstMetadata,
-                                 args.metadataSizeInBytes + qbvhNodeAddr,
+                    WriteBoxNode(args.metadataSizeInBytes + qbvhNodeAddr,
                                  fp32BoxNode);
                 }
             }
@@ -1173,24 +1180,10 @@ void BuildQBVH(
     uint groupId  = groupIdIn;
 
     const AccelStructHeader header        = DstBuffer.Load<AccelStructHeader>(0);
-    const uint              type          = (header.info & ACCEL_STRUCT_HEADER_INFO_TYPE_MASK);
-    const bool              topLevelBuild = (type == TOP_LEVEL);
+    const bool              topLevelBuild = Settings.topLevelBuild;
+    const uint              type          = Settings.topLevelBuild ? TOP_LEVEL : BOTTOM_LEVEL;
 
-    BuildQbvhArgs args = (BuildQbvhArgs)ShaderConstants;
-
-    args.scratchNodesScratchOffset = CalculateBvhNodesOffset(header.numActivePrims, args);
-
-    // Read active primitive count from header
-    args.numPrimitives = header.numActivePrims;
-
-    // With pair compresssion enabled, the leaf node count in header represents actual valid
-    // primitives
-    if (EnableLatePairCompression(ShaderConstants.triangleCompressionMode,
-                                  topLevelBuild,
-                                  ShaderConstants.enableEarlyPairCompression))
-    {
-        args.numPrimitives = header.numLeafNodes;
-    }
+    const BuildQbvhArgs args = GetBuildQbvhArgs();
 
     uint numTasksWait = 0;
     uint waveId       = 0;
@@ -1199,11 +1192,9 @@ void BuildQBVH(
 
     BEGIN_TASK(RoundUpQuotient(CalcNumQBVHInternalNodes(args.numPrimitives), BUILD_THREADGROUP_SIZE));
 
-    BuildQbvhImpl(globalId,
-                  localId,
-                  args.numPrimitives,
-                  args,
-                  topLevelBuild);
+    {
+        BuildQbvhImpl(globalId, localId, header.numActivePrims, args, topLevelBuild);
+    }
 
     END_TASK(RoundUpQuotient(CalcNumQBVHInternalNodes(args.numPrimitives), BUILD_THREADGROUP_SIZE));
 
@@ -1225,9 +1216,7 @@ void BuildQBVH(
 
     if (localId == 0)
     {
-        WriteCompactedSize(DstBuffer,
-                           EmitBuffer,
-                           ShaderConstants.emitCompactSize,
+        WriteCompactedSize(Settings.emitCompactSize,
                            type);
     }
 

@@ -193,6 +193,20 @@ static void SetRayQueryDynamicId(inout_param(RayQueryInternal) rayQuery, in uint
 }
 
 //=====================================================================================================================
+static uint ValidateTokenOffset(in uint offset,
+                                in uint type,
+                                in uint shift)
+{
+    uint counterBufferSize;
+    Counters.GetDimensions(counterBufferSize);
+
+    const bool tokensOutOfBounds = ((offset + (type << shift)) > counterBufferSize);
+    const bool offsetUnderflow   = ((offset + (type << shift)) < offset);
+
+    return (tokensOutOfBounds || offsetUnderflow) ? 0xffffffff : offset + (type << shift);
+}
+
+//=====================================================================================================================
 // Reserve token space in counter buffer for logging
 //
 static uint ReserveTokenSpace(
@@ -203,7 +217,7 @@ static uint ReserveTokenSpace(
     Counters.InterlockedAdd(RAY_TRACING_COUNTER_REQUEST_BYTE_OFFSET, numDwords << 2, offset);
 
     // Account for the reserved bytes
-    return offset + RAY_TRACING_COUNTER_RESERVED_BYTE_SIZE;
+    return ValidateTokenOffset(offset, RAY_TRACING_COUNTER_RESERVED_BYTE_SIZE, 0);
 }
 
 //=====================================================================================================================
@@ -225,9 +239,18 @@ static uint WriteRayHistoryControlToken(
     const uint cntrl = type | (dwordSize << 16) | (optionalData << 24);
 
     uint offset = ReserveTokenSpace(dwordSize + RAY_HISTORY_TOKEN_CONTROL_SIZE);
-    Counters.Store2(offset, uint2(rayId, cntrl));
 
-    return offset + (RAY_HISTORY_TOKEN_CONTROL_SIZE << 2);
+    if (offset != 0xFFFFFFFF)
+    {
+        uint postCounterOffset = ValidateTokenOffset(offset, RAY_HISTORY_TOKEN_CONTROL_SIZE, 2);
+        if (postCounterOffset != 0xFFFFFFFF)
+        {
+            Counters.Store2(offset, uint2(rayId, cntrl));
+        }
+
+        offset = postCounterOffset;
+    }
+    return offset;
 }
 
 //=====================================================================================================================
@@ -276,7 +299,10 @@ static void WriteRayHistoryTokenNodePtr(
     {
         // Reserve token space and write data
         uint offset = ReserveTokenSpace(2);
-        Counters.Store2(offset, uint2(id, nodePtr));
+        if (offset != 0xFFFFFFFF)
+        {
+            Counters.Store2(offset, uint2(id, nodePtr));
+        }
     }
 }
 
@@ -293,8 +319,10 @@ static void WriteRayHistoryTokenTopLevel(
                                                   RAY_HISTORY_TOKEN_TYPE_TOP_LEVEL,
                                                   RAY_HISTORY_TOKEN_TOP_LEVEL_SIZE,
                                                   0);
-
-        Counters.Store2(offset, uint2(LowPart(baseAddr), HighPart(baseAddr)));
+        if (offset != 0xFFFFFFFF)
+        {
+            Counters.Store2(offset, uint2(LowPart(baseAddr), HighPart(baseAddr)));
+        }
     }
 }
 
@@ -311,8 +339,10 @@ static void WriteRayHistoryTokenBottomLevel(
                                                   RAY_HISTORY_TOKEN_TYPE_BOTTOM_LEVEL,
                                                   RAY_HISTORY_TOKEN_BOTTOM_LEVEL_SIZE,
                                                   0);
-
-        Counters.Store2(offset, uint2(LowPart(baseAddr), HighPart(baseAddr)));
+        if (offset != 0xFFFFFFFF)
+        {
+            Counters.Store2(offset, uint2(LowPart(baseAddr), HighPart(baseAddr)));
+        }
     }
 }
 
@@ -346,20 +376,22 @@ static void WriteRayHistoryTokenBegin(
                                                   RAY_HISTORY_TOKEN_TYPE_BEGIN_V2,
                                                   RAY_HISTORY_TOKEN_BEGIN_V2_SIZE,
                                                   0);
+        if (offset != 0xFFFFFFFF)
+        {
+            Counters.Store4(offset,
+                uint4(AmdTraceRayGetHwWaveId(), dispatchRaysIndex));
 
-        Counters.Store4(offset,
-            uint4(AmdTraceRayGetHwWaveId(), dispatchRaysIndex));
+            Counters.Store4(offset + 0x10,
+                uint4(LowPart(topLevelBvh), HighPart(topLevelBvh), rayFlags, traceRayParams));
 
-        Counters.Store4(offset + 0x10,
-            uint4(LowPart(topLevelBvh), HighPart(topLevelBvh), rayFlags, traceRayParams));
+            Counters.Store4(offset + 0x20,
+                uint4(asuint(ray.Origin.x), asuint(ray.Origin.y), asuint(ray.Origin.z), asuint(ray.TMin)));
 
-        Counters.Store4(offset + 0x20,
-            uint4(asuint(ray.Origin.x), asuint(ray.Origin.y), asuint(ray.Origin.z), asuint(ray.TMin)));
+            Counters.Store4(offset + 0x30,
+                uint4(asuint(ray.Direction.x), asuint(ray.Direction.y), asuint(ray.Direction.z), asuint(ray.TMax)));
 
-        Counters.Store4(offset + 0x30,
-            uint4(asuint(ray.Direction.x), asuint(ray.Direction.y), asuint(ray.Direction.z), asuint(ray.TMax)));
-
-        Counters.Store3(offset + 0x40, uint3(staticId, dynamicId, parentId));
+            Counters.Store3(offset + 0x40, uint3(staticId, dynamicId, parentId));
+        }
     }
 }
 
@@ -384,12 +416,14 @@ static void WriteRayHistoryTokenEnd(
                                                   RAY_HISTORY_TOKEN_TYPE_INTERSECTION_RESULT_V2,
                                                   RAY_HISTORY_TOKEN_INTERSECTION_RESULT_V2_SIZE,
                                                   0);
-
-        Counters.Store2(offset, data);
-        Counters.Store4(offset + 8, uint4(instanceIndex | (hitKind << 24),
-                                          numIterations,
-                                          numInstanceIntersections,
-                                          asuint(hitT)));
+        if (offset != 0xFFFFFFFF)
+        {
+            Counters.Store2(offset, data);
+            Counters.Store4(offset + 8, uint4(instanceIndex | (hitKind << 24),
+                                              numIterations,
+                                              numInstanceIntersections,
+                                              asuint(hitT)));
+        }
     }
 }
 
@@ -414,8 +448,11 @@ static void WriteRayHistoryTokenFunctionCall(
                                                   RAY_HISTORY_TOKEN_FUNC_CALL_V2_SIZE,
                                                   (shaderType & RAY_HISTORY_CONTROL_TOKEN_DATA_MASK));
 
-        Counters.Store2(offset, shaderId);
-        Counters.Store(offset + 8, shaderTableIdx);
+        if (offset != 0xFFFFFFFF)
+        {
+            Counters.Store2(offset, shaderId);
+            Counters.Store(offset + 8, shaderTableIdx);
+        }
     }
 }
 
@@ -458,7 +495,10 @@ static void WriteRayHistoryTokenProceduralIntersectionStatus(
                                                   RAY_HISTORY_TOKEN_TYPE_CANDIDATE_INTERSECTION_RESULT,
                                                   RAY_HISTORY_TOKEN_CANDIDATE_INTERSECTION_RESULT_SIZE,
                                                   status);
-        Counters.Store2(offset, uint2(asuint(hitT), hitKind));
+        if (offset != 0xFFFFFFFF)
+        {
+            Counters.Store2(offset, uint2(asuint(hitT), hitKind));
+        }
     }
 }
 
@@ -477,8 +517,10 @@ static void WriteRayHistoryTokenTimeStamp(
                                                   RAY_HISTORY_TOKEN_TYPE_GPU_TIME,
                                                   RAY_HISTORY_TOKEN_GPU_TIME_SIZE,
                                                   0);
-
-        Counters.Store2(offset, uint2(LowPart(timeStamp), HighPart(timeStamp)));
+        if (offset != 0xFFFFFFFF)
+        {
+            Counters.Store2(offset, uint2(LowPart(timeStamp), HighPart(timeStamp)));
+        }
     }
 }
 
@@ -492,15 +534,18 @@ static void WriteTraversalCounter(
         // Reserve token space and write data. (+1 for rayID)
         uint offset = ReserveTokenSpace(TCID_COUNT + 1);
 
-        // Write rayID
-        Counters.Store(offset, rayId);
-        offset += TCID_STRIDE;
-
-        // Followed by counter data
-        for (uint i = 0; i < TCID_COUNT; ++i)
+        if (offset != 0xFFFFFFFF)
         {
-            Counters.Store(offset, counter.data[i]);
+            // Write rayID
+            Counters.Store(offset, rayId);
             offset += TCID_STRIDE;
+
+            // Followed by counter data
+            for (uint i = 0; i < TCID_COUNT; ++i)
+            {
+                Counters.Store(offset, counter.data[i]);
+                offset += TCID_STRIDE;
+            }
         }
     }
 }

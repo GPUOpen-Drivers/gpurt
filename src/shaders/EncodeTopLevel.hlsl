@@ -27,10 +27,10 @@
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b1)"/*Build Settings binding*/
+                "CBV(b1),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
 // 32 bit constants
@@ -84,7 +84,6 @@ bool IsFusedInstanceNode()
 
 //=====================================================================================================================
 void WriteScratchInstanceNode(
-    RWByteAddressBuffer buffer,
     uint                offset,
     uint                instanceIndex,
     in BoundingBox      bbox,
@@ -99,15 +98,15 @@ void WriteScratchInstanceNode(
 
     // LeafNode.bbox_min_or_v0, instanceIndex
     data = uint4(asuint(bbox.min), instanceIndex);
-    buffer.Store4(offset + SCRATCH_NODE_V0_OFFSET, data);
+    ScratchBuffer.Store4(offset + SCRATCH_NODE_V0_OFFSET, data);
 
     // LeafNode.bbox_max_or_v1, padding
     data = uint4(asuint(bbox.max), 0);
-    buffer.Store4(offset + SCRATCH_NODE_V1_OFFSET, data);
+    ScratchBuffer.Store4(offset + SCRATCH_NODE_V1_OFFSET, data);
 
     // LeafNode.instanceNodeBasePointerLo, instanceNodeBasePointerHi, numActivePrims, parent
     data = uint4(instanceBasePointerLo, instanceBasePointerHi, numActivePrims, 0xffffffff);
-    buffer.Store4(offset + SCRATCH_NODE_INSTANCE_BASE_PTR_OFFSET, data);
+    ScratchBuffer.Store4(offset + SCRATCH_NODE_INSTANCE_BASE_PTR_OFFSET, data);
 
     // When rebraid might occur, the traversal shader will read the root node pointer of the bottom level from the
     // instance extra data. If we actually perform rebraid during the build, the node pointer must be set to 0 to
@@ -119,7 +118,7 @@ void WriteScratchInstanceNode(
 
     // type, flags, nodePointer, numPrimitivesAndDoCollapse
     data = uint4(NODE_TYPE_USER_NODE_INSTANCE, packedFlags, rootNodePointer, asuint(cost));
-    buffer.Store4(offset + SCRATCH_NODE_TYPE_OFFSET, data);
+    ScratchBuffer.Store4(offset + SCRATCH_NODE_TYPE_OFFSET, data);
 }
 
 //=====================================================================================================================
@@ -280,8 +279,7 @@ void EncodeInstances(
             if (isUpdate == false)
             {
                 // Write scratch node
-                WriteScratchInstanceNode(ScratchBuffer,
-                                         destScratchNodeOffset,
+                WriteScratchInstanceNode(destScratchNodeOffset,
                                          index,
                                          boundingBox,
                                          boxNodeFlags,
@@ -332,8 +330,7 @@ void EncodeInstances(
                 const uint nodeOffset  = tlasMetadataSize + ExtractNodePointerOffset(nodePointer);
 
                 // Fetch parent node pointer
-                const uint parentNodePointer = ReadParentPointer(SrcBuffer,
-                                                                 tlasMetadataSize,
+                const uint parentNodePointer = ReadParentPointer(tlasMetadataSize,
                                                                  nodePointer);
 
                 // Update prim node pointer and parent pointer in out of place destination buffer
@@ -348,8 +345,7 @@ void EncodeInstances(
 
                 // Compute box node count and child index in parent node
                 uint boxNodeCount = 0;
-                uint childIdx = ComputeChildIndexAndValidBoxCount(SrcBuffer,
-                                                                  tlasMetadataSize,
+                uint childIdx = ComputeChildIndexAndValidBoxCount(tlasMetadataSize,
                                                                   parentNodePointer,
                                                                   nodePointer,
                                                                   boxNodeCount);
@@ -371,7 +367,7 @@ void EncodeInstances(
                 {
                     // Copy child pointers and flags to destination buffer. Note, the new instance flags
                     // get updated atomically below
-                    CopyChildPointersAndFlags(SrcBuffer, DstMetadata, parentNodePointer, tlasMetadataSize);
+                    CopyChildPointersAndFlags(parentNodePointer, tlasMetadataSize);
                 }
 
                 uint baseBoxNodeOffset = tlasMetadataSize + ExtractNodePointerOffset(parentNodePointer);
@@ -393,17 +389,15 @@ void EncodeInstances(
                 // stack in scratch memory
                 if (pushNodeToUpdateStack)
                 {
-                    PushNodeToUpdateStack(ScratchBuffer, ShaderConstants.baseUpdateStackScratchOffset, parentNodePointer);
+                    PushNodeToUpdateStack(ShaderConstants.baseUpdateStackScratchOffset, parentNodePointer);
                 }
 
-                WriteInstanceDescriptor(DstMetadata,
-                                        tlasMetadataSize,
+                WriteInstanceDescriptor(tlasMetadataSize,
                                         desc,
                                         index,
                                         nodePointer,
                                         blasMetadataSize,
                                         CreateRootNodePointer(),
-                                        boundingBox,
                                         boxNodeFlags,
                                         IsFusedInstanceNode());
             }

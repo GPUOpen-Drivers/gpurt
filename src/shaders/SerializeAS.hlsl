@@ -131,7 +131,7 @@ void SerializeAS(in uint3 globalThreadId : SV_DispatchThreadID)
 
             if (currentInstNodePtr != INVALID_IDX)
             {
-                InstanceDesc apiInstanceDesc = DecodeApiInstanceDesc(SrcBuffer, header, currentInstNodePtr);
+                InstanceDesc apiInstanceDesc = DecodeApiInstanceDesc(header, currentInstNodePtr);
 
                 gpuVa = PackUint64(apiInstanceDesc.accelStructureAddressLo, apiInstanceDesc.accelStructureAddressHiAndFlags);
 
@@ -142,7 +142,7 @@ void SerializeAS(in uint3 globalThreadId : SV_DispatchThreadID)
                 // pointing to same instance but Serialize performance is not of great concern.
 
                 {
-                    apiInstanceIndex = FetchInstanceIndex(SrcBuffer, 0, header, currentInstNodePtr);
+                    apiInstanceIndex = FetchInstanceIndex(0, header, currentInstNodePtr);
                 }
             }
 

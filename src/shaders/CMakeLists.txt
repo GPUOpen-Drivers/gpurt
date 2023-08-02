@@ -68,6 +68,7 @@ set(gpurtHlsl
     InitExecuteIndirect.hlsl
     IntersectCommon.hlsl
     MergeSort.hlsl
+    Math.hlsl
     PairCompression.hlsl
     RayQuery.hlsl
     RayQuery1_1.hlsl
@@ -77,6 +78,7 @@ set(gpurtHlsl
     Rebraid.hlsl
     RefitBounds.hlsl
     RefitBoundsImpl.hlsl
+    ScratchNode.hlsl
     SerializeAS.hlsl
     SerializeCommon.hlsl
     TraceRay.hlsl

@@ -27,9 +27,9 @@
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
+                "CBV(b1),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
-                "CBV(b1)"/*Build Settings binding*/
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
 // 32 bit constants

@@ -43,16 +43,14 @@
 #include "gpurtAccelStruct.h"
 
 #ifdef __cplusplus
-#include "pal.h"
 namespace GpuRt
 {
-using Pal::uint8;
-using Pal::uint16;
-using Pal::uint32;
-using Pal::uint64;
-#else
-#define uint32 uint
-#define uint64 uint64_t
+
+typedef uint8_t  uint8;
+typedef uint16_t uint16;
+typedef uint32_t uint32;
+typedef uint64_t uint64;
+
 #endif
 
 // ====================================================================================================================

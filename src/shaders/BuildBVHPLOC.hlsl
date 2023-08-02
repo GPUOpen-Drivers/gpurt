@@ -89,10 +89,10 @@ struct BuildPlocArgs
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b1)"/*Build Settings binding*/
+                "CBV(b1),"\
+                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
 
 [[vk::push_constant]] ConstantBuffer<BuildPlocArgs> ShaderConstants : register(b0);
 
@@ -226,15 +226,14 @@ void StoreLdsBoundingBox(
     uint        index,
     BoundingBox bbox)
 {
-    uint i;
     uint offset = index * LDS_AABB_STRIDE;
 
-    for (i = 0; i < 3; i++)
+    for (uint i = 0; i < 3; i++)
     {
         SharedMem[offset++] = asint(bbox.min[i]);
     }
 
-    for (i = 0; i < 3; i++)
+    for (uint i = 0; i < 3; i++)
     {
         SharedMem[offset++] = asint(bbox.max[i]);
     }
@@ -244,16 +243,15 @@ void StoreLdsBoundingBox(
 BoundingBox LoadLdsBoundingBox(
     uint index)
 {
-    uint i;
     uint offset = index * LDS_AABB_STRIDE;
     BoundingBox bbox;
 
-    for (i = 0; i < 3; i++)
+    for (uint i = 0; i < 3; i++)
     {
         bbox.min[i] = asfloat(SharedMem[offset++]);
     }
 
-    for (i = 0; i < 3; i++)
+    for (uint i = 0; i < 3; i++)
     {
         bbox.max[i] = asfloat(SharedMem[offset++]);
     }
@@ -379,8 +377,6 @@ void InitPLOC(
     const uint numClustersAllocOffset   = args.currentStateScratchOffset + STATE_PLOC_NUM_CLUSTERS_ALLOC_OFFSET;
     const uint numInternalNodes         = numActivePrims - 1;
 
-    uint i = 0;
-
     if (globalId == 0)
     {
         ScratchBuffer.Store(numClustersOffset, numActivePrims);
@@ -391,7 +387,7 @@ void InitPLOC(
         DeviceMemoryBarrier();
     }
 
-    for (i = globalId; i < numActivePrims; i += args.numThreads)
+    for (uint i = globalId; i < numActivePrims; i += args.numThreads)
     {
         const uint primIndex = Settings.noCopySortedNodes ?
             FetchSortedPrimIndex(args.primIndicesSortedScratchOffset, i) : i;
@@ -430,7 +426,6 @@ void FindNearestNeighbour(
     const int  stageOffset  = stageIndex * BUILD_THREADGROUP_SIZE;
     const uint numClusters  = ScratchBuffer.Load(numClustersOffset);
     uint clusterListIndex   = ScratchBuffer.Load(clusterListIndexOffset);
-    int  neighbourIndex     = 0;
     const bool isCluster    = clusterIndex < numClusters; // the padding threads are not real clusters
 
     // load LDS
@@ -478,7 +473,7 @@ void FindNearestNeighbour(
         nodeIndex = ReadClusterList(args, clusterListIndex, clusterIndex);
 
         // search left
-        for (neighbourIndex = clusterIndex2 - plocRadius; neighbourIndex < clusterIndex2; ++neighbourIndex)
+        for (int neighbourIndex = clusterIndex2 - plocRadius; neighbourIndex < clusterIndex2; ++neighbourIndex)
         {
             const BoundingBox neighbourAabb = LoadLdsBoundingBox(neighbourIndex);
 
@@ -504,7 +499,7 @@ void FindNearestNeighbour(
         }
 
         // search right
-        for (neighbourIndex = clusterIndex2 + 1; neighbourIndex < clusterIndex2 + plocRadius + 1; ++neighbourIndex)
+        for (int neighbourIndex = clusterIndex2 + 1; neighbourIndex < clusterIndex2 + plocRadius + 1; ++neighbourIndex)
         {
             const BoundingBox neighbourAabb = LoadLdsBoundingBox(neighbourIndex);
 
@@ -939,10 +934,6 @@ void BuildBvhPlocImpl(
 
     uint clusterListIndex = 0;
     uint numClusters      = numActivePrims;
-
-    uint i;
-    uint clusterIndex;
-    int neighbourIndex;
 
     const uint numGroups = args.numThreads / BUILD_THREADGROUP_SIZE;
 

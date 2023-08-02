@@ -74,7 +74,6 @@ typedef struct D3D12DDI_RAYTRACING_GEOMETRY_TRIANGLES_DESC_0054
 
 //=====================================================================================================================
 static uint32_t FetchInstanceIndex(
-    in RWByteAddressBuffer SrcBuffer,
     in uint32_t            bufferOffset,
     in AccelStructHeader   header,
     in uint32_t            nodePtr)
@@ -86,7 +85,6 @@ static uint32_t FetchInstanceIndex(
 
 //=====================================================================================================================
 static InstanceDesc DecodeApiInstanceDesc(
-    in RWByteAddressBuffer SrcBuffer,
     in AccelStructHeader header,
     in uint nodePtr)
 {
@@ -138,12 +136,11 @@ static uint GetDriverDecodeHeaderSize()
 
 //=====================================================================================================================
 static void WriteDriverDecodeHeader(
-    RWByteAddressBuffer  buffer,
     in AccelStructHeader header,
     in uint              offset)
 {
-    buffer.Store<AccelStructHeaderInfo>(offset, header.info);
-    buffer.Store<AccelStructHeaderInfo2>(offset + sizeof(AccelStructHeaderInfo), header.info2);
+    DstBuffer.Store<AccelStructHeaderInfo>(offset, header.info);
+    DstBuffer.Store<AccelStructHeaderInfo2>(offset + sizeof(AccelStructHeaderInfo), header.info2);
 }
 
 #endif

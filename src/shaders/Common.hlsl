@@ -35,6 +35,8 @@
 #define _COMMON_HLSL
 
 #include "RayTracingDefs.h"
+#include "ScratchNode.hlsl"
+
 #if !defined(__cplusplus)
 #include "BuildSettings.hlsli"
 #endif
@@ -53,6 +55,12 @@ struct BuiltInTriangleIntersectionAttributes
     float2 barycentrics;
 };
 
+#endif
+
+#if GPURT_ENABLE_GPU_ASSERTS
+#define GPU_ASSERT(cond) if (!(cond)) { AmdExtD3DShaderIntrinsics_Halt(); }
+#else
+#define GPU_ASSERT(cond)
 #endif
 
 //=====================================================================================================================
@@ -81,42 +89,7 @@ struct BuiltInTriangleIntersectionAttributes
 #define END_SEARCH        0xfffffff8
 
 #include "Extensions.hlsl"
-
-//=====================================================================================================================
-// Helper function for extracting a single bit from a 32-bit field
-inline uint bit(uint index)
-{
-    return 1u << index;
-}
-
-//=====================================================================================================================
-// Helper function for generating a 32-bit bit mask
-inline uint bits(uint bitcount)
-{
-    return (1u << bitcount) - 1;
-}
-
-//=====================================================================================================================
-// Helper function for inserting data into a src bitfield and returning the output
-static uint bitFieldInsert(
-    in uint src,
-    in uint bitOffset,
-    in uint numBits,
-    in uint data)
-{
-    src &= ~(bits(numBits) << bitOffset);
-    return (src | (data << bitOffset));
-}
-
-//=====================================================================================================================
-// Helper function for extracting data from a src bitfield
-static uint bitFieldExtract(
-    in uint src,
-    in uint bitOffset,
-    in uint numBits)
-{
-    return (src >> bitOffset) & bits(numBits);
-}
+#include "Math.hlsl"
 
 // Workaround for lack of 64 bit literals and casts in glslang
 static const uint64_t OneU64 = 1;
@@ -158,6 +131,7 @@ static const BoundingBox InvalidBoundingBox =
 #define PIPELINE_FLAG_RESERVED2                      0x02000000
 #define PIPELINE_FLAG_RESERVED3                      0x01000000
 #define PIPELINE_FLAG_RESERVED4                      0x00800000
+#define PIPELINE_FLAG_RESERVED5                      0x00400000
 
 #define HIT_KIND_TRIANGLE_FRONT_FACE 0xFE
 #define HIT_KIND_TRIANGLE_BACK_FACE  0xFF
@@ -213,16 +187,6 @@ static bool EnableTraversalCounter()
     return (AmdTraceRayGetStaticFlags() & PIPELINE_FLAG_ENABLE_TRAVERSAL_CTR);
 }
 #endif
-
-//=====================================================================================================================
-// Copy from: BVHTest/Common/ResourceHelpers.h
-// template specialized to uint
-static uint Pow2Align(
-    uint value,      ///< Value to align.
-    uint alignment)  ///< Desired alignment (must be a power of 2).
-{
-    return ((value + alignment - 1) & ~(alignment - 1));
-}
 
 //=====================================================================================================================
 static GpuVirtualAddress MakeGpuVirtualAddress(uint lowBits, uint highBits)
@@ -283,21 +247,21 @@ static uint64_t PackInstanceBasePointer(GpuVirtualAddress instanceVa, uint insta
     uint64_t instanceBasePointer = instanceVa >> 3;
 
     instanceBasePointer |= (instanceFlags & D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE)
-                           ? (1 << NODE_POINTER_DISABLE_TRIANGLE_CULL_SHIFT) : 0;
+                           ? (1ull << NODE_POINTER_DISABLE_TRIANGLE_CULL_SHIFT) : 0;
 
     instanceBasePointer |= (instanceFlags & D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_FRONT_COUNTERCLOCKWISE)
-                           ? (1 << NODE_POINTER_FLIP_FACEDNESS_SHIFT) : 0;
+                           ? (1ull << NODE_POINTER_FLIP_FACEDNESS_SHIFT) : 0;
 
     instanceBasePointer |= (instanceFlags & D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_OPAQUE)
-                           ? (1 << NODE_POINTER_FORCE_OPAQUE_SHIFT) : 0;
+                           ? (1ull << NODE_POINTER_FORCE_OPAQUE_SHIFT) : 0;
 
     instanceBasePointer |= (instanceFlags & D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_NON_OPAQUE)
-                           ? (1 << NODE_POINTER_FORCE_NON_OPAQUE_SHIFT) : 0;
+                           ? (1ull << NODE_POINTER_FORCE_NON_OPAQUE_SHIFT) : 0;
 
     // Set 'Skip Procedural' for triangles and 'Skip Triangles' for procedural geometry
     instanceBasePointer |= (geometryType == GEOMETRY_TYPE_TRIANGLES)
-                           ? (1 << NODE_POINTER_SKIP_PROCEDURAL_SHIFT)
-                           : (1 << NODE_POINTER_SKIP_TRIANGLES_SHIFT);
+                           ? (1ull << NODE_POINTER_SKIP_PROCEDURAL_SHIFT)
+                           : (1ull << NODE_POINTER_SKIP_TRIANGLES_SHIFT);
 
     return instanceBasePointer;
 }
@@ -349,7 +313,9 @@ static uint CreateRootNodePointer(
 //=====================================================================================================================
 static bool IsTriangleNode(uint nodePtr)
 {
-    return (GetNodeType(nodePtr) <= NODE_TYPE_TRIANGLE_1);
+    {
+        return (GetNodeType(nodePtr) <= NODE_TYPE_TRIANGLE_1);
+    }
 }
 
 //=====================================================================================================================
@@ -497,17 +463,6 @@ static BoundingBox GenerateTriangleBoundingBox(float3 v0, float3 v1, float3 v2)
 
     return bbox;
 };
-
-//=====================================================================================================================
-static BoundingBox CombineAABB(BoundingBox b0, BoundingBox b1)
-{
-    BoundingBox bbox;
-
-    bbox.min = min(b0.min, b1.min);
-    bbox.max = max(b0.max, b1.max);
-
-    return bbox;
-}
 
 //=====================================================================================================================
 static BoundingBox GetScratchNodeBoundingBox(in ScratchNode node)

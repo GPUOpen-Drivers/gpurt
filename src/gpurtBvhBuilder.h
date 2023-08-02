@@ -35,8 +35,6 @@ enum class ImmediateDataWidth : uint32;
 namespace GpuRt
 {
 
-using Pal::gpusize;
-
 namespace EncodeNodes
 {
 struct Constants;

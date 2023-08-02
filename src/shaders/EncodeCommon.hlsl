@@ -224,7 +224,6 @@ uint CalcTriangleBoxNodeFlags(
 //======================================================================================================================
 void WriteScratchTriangleNode(
     GeometryArgs        geometryArgs,
-    RWByteAddressBuffer buffer,
     uint                primitiveOffset,
     uint                primitiveIndex,
     uint                geometryIndex,
@@ -241,15 +240,15 @@ void WriteScratchTriangleNode(
 
     // LeafNode.bbox_min_or_v0, primitiveIndex
     data = uint4(asuint(tri.v0), primitiveIndex);
-    buffer.Store4(offset + SCRATCH_NODE_V0_OFFSET, data);
+    ScratchBuffer.Store4(offset + SCRATCH_NODE_V0_OFFSET, data);
 
     // LeafNode.bbox_max_or_v1, geometryIndex
     data = uint4(asuint(tri.v1), geometryIndex);
-    buffer.Store4(offset + SCRATCH_NODE_V1_OFFSET, data);
+    ScratchBuffer.Store4(offset + SCRATCH_NODE_V1_OFFSET, data);
 
     // LeafNode.v2, parent
     data = uint4(asuint(tri.v2), 0);
-    buffer.Store4(offset + SCRATCH_NODE_V2_OFFSET, data);
+    ScratchBuffer.Store4(offset + SCRATCH_NODE_V2_OFFSET, data);
 
     const float cost = SAH_COST_TRIANGLE_INTERSECTION * ComputeBoxSurfaceArea(bbox);
 
@@ -268,7 +267,7 @@ void WriteScratchTriangleNode(
     const uint packedFlags = PackInstanceMaskAndNodeFlags(instanceMask, flags);
 
     data = uint4(triangleTypeAndId, packedFlags, INVALID_IDX, asuint(cost));
-    buffer.Store4(offset + SCRATCH_NODE_TYPE_OFFSET, data);
+    ScratchBuffer.Store4(offset + SCRATCH_NODE_TYPE_OFFSET, data);
 }
 
 //=====================================================================================================================
@@ -516,8 +515,7 @@ void PushNodeForUpdate(
     }
 
     // Fetch parent node pointer
-    const uint parentNodePointer = ReadParentPointer(SrcBuffer,
-                                                     metadataSize,
+    const uint parentNodePointer = ReadParentPointer(metadataSize,
                                                      nodePointer);
 
     // Update out of place destination buffer
@@ -530,8 +528,7 @@ void PushNodeForUpdate(
 
     // Compute box node count and child index in parent node
     uint boxNodeCount = 0;
-    const uint childIdx = ComputeChildIndexAndValidBoxCount(SrcBuffer,
-                                                            metadataSize,
+    const uint childIdx = ComputeChildIndexAndValidBoxCount(metadataSize,
                                                             parentNodePointer,
                                                             childNodePointer,
                                                             boxNodeCount);
@@ -591,7 +588,7 @@ void PushNodeForUpdate(
     {
         if (isUpdateInPlace == false)
         {
-            CopyChildPointersAndFlags(SrcBuffer, DstMetadata, parentNodePointer, metadataSize);
+            CopyChildPointersAndFlags(parentNodePointer, metadataSize);
         }
     }
 
@@ -601,7 +598,7 @@ void PushNodeForUpdate(
     // or not. We could optimize this by queuing the parent node only if any of the leaf nodes' bounding boxes change.
     if (writeNodesToUpdateStack && canWriteNodeToUpdateStack)
     {
-        PushNodeToUpdateStack(ScratchBuffer, baseUpdateStackScratchOffset, parentNodePointer);
+        PushNodeToUpdateStack(baseUpdateStackScratchOffset, parentNodePointer);
     }
 }
 
@@ -759,7 +756,7 @@ void EncodeTriangleNode(
         }
         else
         {
-            if (geometryArgs.TriangleCompressionMode != PAIR_TRIANGLE_COMPRESSION)
+            if (Settings.triangleCompressionMode != PAIR_TRIANGLE_COMPRESSION)
             {
                 const uint numLeafNodesOffset = metadataSize + ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET;
                 DstMetadata.InterlockedAdd(numLeafNodesOffset, 1);
@@ -787,7 +784,6 @@ void EncodeTriangleNode(
             }
 
             WriteScratchTriangleNode(geometryArgs,
-                                     ScratchBuffer,
                                      geometryBasePrimOffset,
                                      primitiveIndex,
                                      geometryArgs.GeometryIndex,

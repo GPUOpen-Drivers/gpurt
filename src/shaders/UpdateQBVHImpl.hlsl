@@ -40,7 +40,6 @@ uint SignalParentNode(
 
 //=====================================================================================================================
 BoundingBox GenerateNodeBoundingBox(
-    RWByteAddressBuffer DstMetadata,
     uint                metadataSize,
     uint                nodePointer)
 {
@@ -79,12 +78,11 @@ uint ComputeMergedFloat32BoxNodeFlags(
 
 //=====================================================================================================================
 void UpdateFloat32BoxNode(
-    RWByteAddressBuffer      DstMetadata,
     uint                     boxNodeOffset,
     inout_param(BoundingBox) bbox,
     inout_param(uint)        boxNodeFlags)
 {
-    const Float32BoxNode boxNode = FetchFloat32BoxNode(DstMetadata,
+    const Float32BoxNode boxNode = FetchFloat32BoxNode(
                                                        boxNodeOffset);
 
     // Initialise bounds and node flags from fp32 node
@@ -98,7 +96,6 @@ void UpdateFloat32BoxNode(
 // up to date when this function is called.
 //
 void UpdateChildBoundingBox(
-    RWByteAddressBuffer DstMetadata,
     uint                type,
     uint                metadataSize,
     uint                parentNodePointer,
@@ -112,7 +109,7 @@ void UpdateChildBoundingBox(
     uint parentNodeOffset = metadataSize + ExtractNodePointerOffset(parentNodePointer);
 
     {
-        UpdateFloat32BoxNode(DstMetadata, childNodeOffset, bbox, boxNodeFlags);
+        UpdateFloat32BoxNode(childNodeOffset, bbox, boxNodeFlags);
 
         {
             if (IsBoxNode32(parentNodePointer))
@@ -134,7 +131,6 @@ void UpdateChildBoundingBox(
 //=====================================================================================================================
 // Handle root node update
 void UpdateRootNode(
-    RWByteAddressBuffer DstMetadata,
     uint                metadataSize,
     uint                rootNodePointer)
 {
@@ -145,7 +141,7 @@ void UpdateRootNode(
     const uint boxNodeOffset = metadataSize + sizeof(AccelStructHeader);
 
     {
-        UpdateFloat32BoxNode(DstMetadata, boxNodeOffset, bbox, boxNodeFlags);
+        UpdateFloat32BoxNode(boxNodeOffset, bbox, boxNodeFlags);
     }
 
     DstMetadata.Store<BoundingBox>(metadataSize + ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET, bbox);
@@ -190,9 +186,6 @@ void UpdateNodeFlagsTopLevel(
 //=====================================================================================================================
 void UpdateQBVHImpl(
     uint                globalID,
-    RWByteAddressBuffer DstMetadata,
-    RWByteAddressBuffer ScratchBuffer,
-    RWByteAddressBuffer SrcBuffer,
     uint                baseFlagsOffset,
     uint                numWorkItems,
     uint                numThreads)
@@ -262,7 +255,7 @@ void UpdateQBVHImpl(
     // The last child of the root node updates the root bounding box in the header
     if (nodePointer == rootNodePointer)
     {
-        UpdateRootNode(DstMetadata, metadataSize, rootNodePointer);
+        UpdateRootNode(metadataSize, rootNodePointer);
     }
 
     // Choice to decode parent pointer into node index using fp16. Mixing interior node types
@@ -293,16 +286,15 @@ void UpdateQBVHImpl(
             }
         }
 
-        const uint parentNodePointer = ReadParentPointer(SrcBuffer,
-                                                         metadataSize,
+        const uint parentNodePointer = ReadParentPointer(metadataSize,
                                                          ExtractNodePointerCollapse(nodePointer));
 
         uint numValidChildren = 0;
 
         const uint childIdx =
-            ComputeChildIndexAndValidBoxCount(SrcBuffer, metadataSize, parentNodePointer, nodePointer, numValidChildren);
+            ComputeChildIndexAndValidBoxCount(metadataSize, parentNodePointer, nodePointer, numValidChildren);
 
-        UpdateChildBoundingBox(DstMetadata, type, metadataSize, parentNodePointer, nodePointer, childIdx);
+        UpdateChildBoundingBox(type, metadataSize, parentNodePointer, nodePointer, childIdx);
 
         if (ShaderConstants.isUpdateInPlace == false)
         {
@@ -328,7 +320,7 @@ void UpdateQBVHImpl(
         {
             if (ShaderConstants.isUpdateInPlace == false)
             {
-                CopyChildPointersAndFlags(SrcBuffer, DstMetadata, parentNodePointer, metadataSize);
+                CopyChildPointersAndFlags(parentNodePointer, metadataSize);
             }
 
             if (type == TOP_LEVEL)
@@ -342,7 +334,7 @@ void UpdateQBVHImpl(
             // The last child of the root node updates the root bounding box in the header
             if (parentNodePointer == rootNodePointer)
             {
-                UpdateRootNode(DstMetadata, metadataSize, rootNodePointer);
+                UpdateRootNode(metadataSize, rootNodePointer);
             }
         }
 

@@ -30,10 +30,10 @@
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u6, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u7, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b1)"/*Build Settings binding*/
+                "CBV(b1),"\
+                "UAV(u6, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u7, visibility=SHADER_VISIBILITY_ALL)"
 
 [[vk::binding(0, 2)]] RWBuffer<float3>                     GeometryBuffer    : register(u0, space1);
 
@@ -168,7 +168,6 @@ uint CalcProceduralBoxNodeFlags(
 
 //=====================================================================================================================
 void WriteScratchProceduralNode(
-    RWByteAddressBuffer buffer,
     uint                primitiveOffset,
     uint                primitiveIndex,
     uint                geometryIndex,
@@ -183,15 +182,15 @@ void WriteScratchProceduralNode(
 
     // LeafNode.bbox_min_or_v0, primitiveIndex
     data = uint4(asuint(bbox.min), primitiveIndex);
-    buffer.Store4(offset + SCRATCH_NODE_BBOX_MIN_OFFSET, data);
+    ScratchBuffer.Store4(offset + SCRATCH_NODE_BBOX_MIN_OFFSET, data);
 
     // LeafNode.bbox_max_or_v1, geometryIndex
     data = uint4(asuint(bbox.max), geometryIndex);
-    buffer.Store4(offset + SCRATCH_NODE_BBOX_MAX_OFFSET, data);
+    ScratchBuffer.Store4(offset + SCRATCH_NODE_BBOX_MAX_OFFSET, data);
 
     // LeafNode.v2, parent
     data = uint4(0xffffffff, 0xffffffff, 0xffffffff, 0);
-    buffer.Store4(offset + SCRATCH_NODE_V2_OFFSET, data);
+    ScratchBuffer.Store4(offset + SCRATCH_NODE_V2_OFFSET, data);
 
     // type, flags, splitBox, numPrimitivesAndDoCollapse
     uint typeAndId = NODE_TYPE_USER_NODE_PROCEDURAL;
@@ -204,7 +203,7 @@ void WriteScratchProceduralNode(
     const uint packedFlags = PackInstanceMaskAndNodeFlags(instanceMask, flags);
 
     data = uint4(typeAndId, packedFlags, INVALID_IDX, asuint(cost));
-    buffer.Store4(offset + SCRATCH_NODE_TYPE_OFFSET, data);
+    ScratchBuffer.Store4(offset + SCRATCH_NODE_TYPE_OFFSET, data);
 }
 
 //=====================================================================================================================
@@ -339,8 +338,7 @@ void EncodeAABBNodes(
                 UpdateCentroidSceneBoundsWithSize(ShaderConstants.SceneBoundsByteOffset, boundingBox);
             }
 
-            WriteScratchProceduralNode(ScratchBuffer,
-                                       primitiveOffset,
+            WriteScratchProceduralNode(primitiveOffset,
                                        primitiveIndex,
                                        ShaderConstants.GeometryIndex,
                                        ShaderConstants.GeometryFlags,

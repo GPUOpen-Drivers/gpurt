@@ -24,6 +24,7 @@
  **********************************************************************************************************************/
 
 #pragma once
+#include <stdint.h>
 #include "palTraceSession.h"
 
 namespace Pal
@@ -33,6 +34,9 @@ class ICmdBuffer;
 
 namespace GpuRt
 {
+    using uint32 = uint32_t;
+    using uint64 = uint64_t;
+    using gpusize = uint64_t;
     namespace Internal
     {
         class Device;
@@ -61,7 +65,7 @@ public:
     virtual void OnConfigUpdated(DevDriver::StructuredValue* pConfig) override;
 
     // We only support one GPU currently.
-    virtual Pal::uint64 QueryGpuWorkMask() const override
+    virtual uint64 QueryGpuWorkMask() const override
     {
         return 1;
     }
@@ -72,10 +76,10 @@ public:
     }
 
     // Begin accumulating a list of all TLAS built
-    virtual void OnTraceBegin(Pal::uint32 gpuIndex, Pal::ICmdBuffer* pCmdBuf) override;
+    virtual void OnTraceBegin(uint32 gpuIndex, Pal::ICmdBuffer* pCmdBuf) override;
 
     // Stop tracking TLAS builds
-    virtual void OnTraceEnd(Pal::uint32 gpuIndex, Pal::ICmdBuffer* pCmdBuf) override;
+    virtual void OnTraceEnd(uint32 gpuIndex, Pal::ICmdBuffer* pCmdBuf) override;
 
     virtual void OnTraceFinished() override;
 
@@ -84,7 +88,7 @@ public:
         return "AccelStruct";
     }
 
-    virtual Pal::uint32 GetVersion() const override
+    virtual uint32 GetVersion() const override
     {
         return AccelStructTraceSourceVersion;
     }
@@ -96,7 +100,7 @@ public:
 
 private:
 
-    static const Pal::uint32 AccelStructTraceSourceVersion = 0;
+    static const uint32 AccelStructTraceSourceVersion = 0;
 
     GpuRt::Internal::Device* m_pDevice;
     bool m_enabled;
@@ -124,7 +128,7 @@ public:
     virtual void OnConfigUpdated(DevDriver::StructuredValue* pConfig) override;
 
     // We only support one GPU currently.
-    virtual Pal::uint64 QueryGpuWorkMask() const override
+    virtual uint64 QueryGpuWorkMask() const override
     {
         return 1;
     }
@@ -134,9 +138,9 @@ public:
     {
     }
 
-    virtual void OnTraceBegin(Pal::uint32 gpuIndex, Pal::ICmdBuffer* pCmdBuf) override;
+    virtual void OnTraceBegin(uint32 gpuIndex, Pal::ICmdBuffer* pCmdBuf) override;
 
-    virtual void OnTraceEnd(Pal::uint32 gpuIndex, Pal::ICmdBuffer* pCmdBuf) override;
+    virtual void OnTraceEnd(uint32 gpuIndex, Pal::ICmdBuffer* pCmdBuf) override;
 
     virtual void OnTraceFinished() override;
 
@@ -145,7 +149,7 @@ public:
         return "RayHistory";
     }
 
-    virtual Pal::uint32 GetVersion() const override
+    virtual uint32 GetVersion() const override
     {
         return RayHistoryTraceSourceVersion;
     }
@@ -160,24 +164,24 @@ public:
         return m_active;
     }
 
-    Pal::uint64 GetBufferSizeInBytes()
+    uint64 GetBufferSizeInBytes()
     {
         return m_bufferSizeInBytes;
     }
 
-    Pal::uint32 GetDispatchID()
+    uint32 GetDispatchID()
     {
         return m_dispatchID++;
     }
 
 private:
 
-    static const Pal::uint32 RayHistoryTraceSourceVersion = 0;
+    static const uint32 RayHistoryTraceSourceVersion = 0;
 
     GpuRt::Internal::Device* m_pDevice;
     bool m_available;
     bool m_active;
-    Pal::uint64 m_bufferSizeInBytes;
-    Pal::uint32 m_dispatchID;
+    uint64 m_bufferSizeInBytes;
+    uint32 m_dispatchID;
 };
 }

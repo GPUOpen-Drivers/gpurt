@@ -98,7 +98,7 @@ void RayHistoryTraceSource::OnConfigUpdated(
 
 // =====================================================================================================================
 void RayHistoryTraceSource::OnTraceBegin(
-    Pal::uint32      gpuIndex,
+    uint32           gpuIndex,
     Pal::ICmdBuffer* pCmdBuf)
 {
     // Make sure trace isn't active already
@@ -113,7 +113,7 @@ void RayHistoryTraceSource::OnTraceBegin(
 
 // =====================================================================================================================
 void RayHistoryTraceSource::OnTraceEnd(
-    Pal::uint32      gpuIndex,
+    uint32           gpuIndex,
     Pal::ICmdBuffer* pCmdBuf)
 {
     if (m_active == true)

@@ -47,6 +47,7 @@
 #ifndef _BUILDCOMMONSCRATCH_HLSL
 #define _BUILDCOMMONSCRATCH_HLSL
 
+#include "ScratchNode.hlsl"
 #include "BuildCommon.hlsl"
 
 //=====================================================================================================================
@@ -59,25 +60,6 @@ void WriteScratchBatchIndex(
     ScratchBuffer.InterlockedAdd(numBatchesOffset, 1, numBatches);
 
     ScratchBuffer.Store(baseBatchIndicesOffset + (numBatches * sizeof(uint)), index);
-}
-
-//=====================================================================================================================
-uint CalcScratchNodeOffset(
-    uint baseScratchNodesOffset,
-    uint nodeIndex)
-{
-    return baseScratchNodesOffset + (nodeIndex * SCRATCH_NODE_SIZE);
-}
-
-//======================================================================================================================
-uint CalculateScratchBvhNodesOffset(
-    in uint numActivePrims,
-    in uint numLeafNodes,
-    in uint bvhNodesOffset,
-    in bool noCopySortedNodes)
-{
-    const uint offset = noCopySortedNodes ? (numLeafNodes - numActivePrims) * SCRATCH_NODE_SIZE : 0;
-    return bvhNodesOffset + offset;
 }
 
 //=====================================================================================================================
@@ -145,24 +127,6 @@ static BoundingBox FetchScratchNodeBoundingBox(
 }
 
 //=====================================================================================================================
-// Extract node flags from scratch node
-uint ExtractScratchNodeFlags(
-    in uint flagsAndInstanceMask)
-{
-    return (flagsAndInstanceMask & 0xff);
-}
-
-//=====================================================================================================================
-// Extract instance mask from scratch node
-uint ExtractScratchNodeInstanceMask(
-    in uint flagsAndInstanceMask)
-{
-    // Note, we store the instance exclusion mask (instead of inclusion) so that we can combine the
-    // masks together using a AND operation similar to boxNodeFlags.
-    return (~flagsAndInstanceMask >> 8) & 0xff;
-}
-
-//=====================================================================================================================
 void WriteScratchNodeFlags(
     uint baseScratchNodesOffset,
     uint nodeIndex,
@@ -210,21 +174,6 @@ uint FetchScratchNodeNumPrimitives(
     else
     {
         return ScratchBuffer.Load(nodeOffset + SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET) >> 1;
-    }
-}
-
-//=====================================================================================================================
-uint FetchScratchNodeNumPrimitives(
-    ScratchNode node,
-    bool        isLeaf)
-{
-    if (isLeaf)
-    {
-        return 1;
-    }
-    else
-    {
-        return node.numPrimitivesAndDoCollapse >> 1;
     }
 }
 
@@ -333,32 +282,6 @@ void WriteScratchNodeType(
 {
     const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
     ScratchBuffer.Store<uint>(nodeOffset + SCRATCH_NODE_TYPE_OFFSET, nodeType);
-}
-
-//=====================================================================================================================
-float FetchScratchInternalNodeCost(ScratchNode node)
-{
-    return node.sah_or_v2_or_instBasePtr.x;
-}
-
-//=====================================================================================================================
-float FetchScratchLeafNodeCost(ScratchNode node)
-{
-    return asfloat(node.numPrimitivesAndDoCollapse);
-}
-
-//=====================================================================================================================
-bool IsNodeActive(ScratchNode node)
-{
-    // Inactive nodes force v0.x to NaN during encode
-    return !isnan(node.bbox_min_or_v0.x);
-}
-
-//=====================================================================================================================
-bool IsNodeLinkedOnly(ScratchNode node)
-{
-    // if this the "2nd" triangle of a set of paired triangle
-    return (node.splitBox_or_nodePointer == PAIRED_TRI_LINKONLY);
 }
 
 //=====================================================================================================================

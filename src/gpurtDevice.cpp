@@ -274,15 +274,9 @@ PipelineShaderCode GPURT_API_ENTRY GetShaderLibraryCode(
 // Maps Pal::RayTracingIpLevel to the appropriate function table.
 Pal::Result GPURT_API_ENTRY QueryRayTracingEntryFunctionTable(
     const Pal::RayTracingIpLevel   rayTracingIpLevel,
-#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 30
-#endif
     EntryFunctionTable* const      pEntryFunctionTable)
 {
-#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 30
     return QueryRayTracingEntryFunctionTableInternal(rayTracingIpLevel, pEntryFunctionTable);
-#else
-    return QueryRayTracingEntryFunctionTableInternal(rayTracingIpLevel, pEntryFunctionTable);
-#endif
 }
 
 namespace Internal {
@@ -293,9 +287,6 @@ uint32 Device::GetStaticPipelineFlags(
     bool  skipProceduralPrims,
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 37
     bool  unused0,
-#endif
-#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 27
-    bool  unused1,
 #endif
     bool  enableAccelStructTracking,
     bool  enableTraversalCounter)
@@ -343,11 +334,7 @@ uint32 Device::GetStaticPipelineFlags(
 // =====================================================================================================================
 void Device::SetUpClientCallbacks(ClientCallbacks* pClientCb)
 {
-#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 28
-    InitInternalClientCallbacks(pClientCb);
-#else
     *pClientCb = m_clientCb;
-#endif
 }
 
 // =====================================================================================================================
@@ -627,12 +614,19 @@ Pal::IPipeline* Device::GetInternalPipeline(
                     "_RebraidV2", // GpuRt::RebraidType::V2,
                 };
 
+                constexpr const char* GeometryTypeStr[] =
+                {
+                    "_Tri",  // GpuRt::GeometryType::Triangles,
+                    "_Aabb", // GpuRt::GeometryType::Aabbs,
+                };
+
                 char radixSortLevelStr[MaxStrLength];
                 Util::Snprintf(radixSortLevelStr, MaxStrLength, "_RadixSortLevel_%d", buildSettings.radixSortScanLevel);
 
-                Util::Snprintf(pipelineName, MaxStrLength, "%s%s_%s%s%s%s%s",
+                Util::Snprintf(pipelineName, MaxStrLength, "%s%s%s_%s%s%s%s%s",
                                 buildInfo.pPipelineName,
                                 buildSettings.topLevelBuild ? "_TLAS" : "_BLAS",
+                                buildSettings.topLevelBuild ? "" : GeometryTypeStr[buildSettings.geometryType],
                                 buildSettings.enableTopDownBuild ? "TopDown" : BuildModeStr[buildSettings.buildMode],
                                 buildSettings.doTriangleSplitting ? "_TriSplit" : "",
                                 buildSettings.triangleCompressionMode ? "_TriCompr" : "",
@@ -714,7 +708,7 @@ void Device::WriteCapturedBvh(
                                              tlasCount,
                                              &sizeInBytes);
 
-        Pal::gpusize destGpuVa = 0;
+        gpusize destGpuVa = 0;
         ClientGpuMemHandle gpuMem = nullptr;
         void* pMappedData = nullptr;
 
@@ -730,10 +724,10 @@ void Device::WriteCapturedBvh(
             copyInfo.dstAccelStructAddr.gpu = destGpuVa;
 
             // BLAS list for copying
-            Util::Vector<Pal::gpusize, 8, Internal::Device> blasList(this);
+            Util::Vector<gpusize, 8, Internal::Device> blasList(this);
 
             // Hash map for logging unique BLASs
-            Util::HashSet<Pal::gpusize, Internal::Device> blas(8, this);
+            Util::HashSet<gpusize, Internal::Device> blas(8, this);
             result = blas.Init();
             if (result == Pal::Result::Success)
             {
@@ -890,7 +884,7 @@ void Device::WriteCapturedBvh(
 // =====================================================================================================================
 void Device::WriteAccelStructChunk(
     GpuUtil::ITraceSource* pTraceSource,
-    Pal::gpusize           gpuVa,
+    gpusize                gpuVa,
     uint32                 isBlas,
     const void*            pData,
     size_t                 dataSize)
@@ -962,8 +956,10 @@ void Device::TraceRtDispatch(
     pConstants->constData.counterMode            = 1;
     pConstants->constData.counterRayIdRangeBegin = 0;
     pConstants->constData.counterRayIdRangeEnd   = 0xFFFFFFFF;
-
-    pConstants->constData.counterMask = GetRayHistoryLightCounterMask();
+    pConstants->constData.counterMask            = GetRayHistoryLightCounterMask();
+    pConstants->constData.rayDispatchWidth       = dispatchInfo.dimX;
+    pConstants->constData.rayDispatchHeight      = dispatchInfo.dimY;
+    pConstants->constData.rayDispatchDepth       = dispatchInfo.dimZ;
 
     RayHistoryTraceListInfo traceListInfo = {};
 
@@ -974,20 +970,16 @@ void Device::TraceRtDispatch(
     traceListInfo.rayHistoryRdfChunkHeader = header;
 
     uint64 traceSizeInBytes = GetRayHistoryBufferSizeInBytes();
-    uint32 shaderTableSizeInBytes =
-        dispatchInfo.raygenShaderTable.size +
-        dispatchInfo.missShaderTable.size +
-        dispatchInfo.hitGroupTable.size;
+    uint32 shaderTableSizeInBytes = dispatchInfo.raygenShaderTable.size +
+                                    dispatchInfo.missShaderTable.size +
+                                    dispatchInfo.hitGroupTable.size;
 
     // Ray history trace
     // Shader table info * 3
     // Total of Shader table data
-    uint64 totalSizeInBytes =
-        traceSizeInBytes +
-        sizeof(ShaderTableInfo) * 3 +
-        shaderTableSizeInBytes;
+    uint64 totalSizeInBytes = traceSizeInBytes + (sizeof(ShaderTableInfo) * 3) + shaderTableSizeInBytes;
 
-    Pal::gpusize destGpuVa = 0;
+    gpusize destGpuVa = 0;
     ClientGpuMemHandle gpuMem = nullptr;
     void* pMappedData = nullptr;
 
@@ -1016,60 +1008,56 @@ void Device::TraceRtDispatch(
         traceListInfo.shaderTableRayGenOffset = traceSizeInBytes;
         runningOffsetGpuVa = traceSizeInBytes + sizeof(ShaderTableInfo);
 
-        WriteShaderTableData(
-            pCmdBuffer,
-            runningOffsetGpuVa,
-            destGpuVa,
-            traceListInfo.shaderTableRayGenOffset,
-            pMappedData,
-            ShaderTableType::RayGen,
-            dispatchInfo.raygenShaderTable,
-            &traceListInfo.shaderTableRayGenInfo);
+        WriteShaderTableData(pCmdBuffer,
+                             runningOffsetGpuVa,
+                             destGpuVa,
+                             traceListInfo.shaderTableRayGenOffset,
+                             pMappedData,
+                             ShaderTableType::RayGen,
+                             dispatchInfo.raygenShaderTable,
+                             &traceListInfo.shaderTableRayGenInfo);
 
         traceListInfo.shaderTableMissOffset =
             traceListInfo.shaderTableRayGenOffset + dispatchInfo.raygenShaderTable.size;
 
         runningOffsetGpuVa += dispatchInfo.raygenShaderTable.size + sizeof(ShaderTableInfo);
 
-        WriteShaderTableData(
-            pCmdBuffer,
-            runningOffsetGpuVa,
-            destGpuVa,
-            traceListInfo.shaderTableMissOffset,
-            pMappedData,
-            ShaderTableType::Miss,
-            dispatchInfo.missShaderTable,
-            &traceListInfo.shaderTableMissInfo);
+        WriteShaderTableData(pCmdBuffer,
+                             runningOffsetGpuVa,
+                             destGpuVa,
+                             traceListInfo.shaderTableMissOffset,
+                             pMappedData,
+                             ShaderTableType::Miss,
+                             dispatchInfo.missShaderTable,
+                             &traceListInfo.shaderTableMissInfo);
 
         traceListInfo.shaderTableHitGroupOffset =
             traceListInfo.shaderTableMissOffset + dispatchInfo.missShaderTable.size;
 
         runningOffsetGpuVa += dispatchInfo.missShaderTable.size + sizeof(ShaderTableInfo);
 
-        WriteShaderTableData(
-            pCmdBuffer,
-            runningOffsetGpuVa,
-            destGpuVa,
-            traceListInfo.shaderTableHitGroupOffset,
-            pMappedData,
-            ShaderTableType::HitGroup,
-            dispatchInfo.hitGroupTable,
-            &traceListInfo.shaderTableHitGroupInfo);
+        WriteShaderTableData(pCmdBuffer,
+                             runningOffsetGpuVa,
+                             destGpuVa,
+                             traceListInfo.shaderTableHitGroupOffset,
+                             pMappedData,
+                             ShaderTableType::HitGroup,
+                             dispatchInfo.hitGroupTable,
+                             &traceListInfo.shaderTableHitGroupInfo);
 
         traceListInfo.shaderTableCallableOffset =
             traceListInfo.shaderTableHitGroupOffset + dispatchInfo.hitGroupTable.size;
 
         runningOffsetGpuVa += dispatchInfo.hitGroupTable.size + sizeof(ShaderTableInfo);
 
-        WriteShaderTableData(
-            pCmdBuffer,
-            runningOffsetGpuVa,
-            destGpuVa,
-            traceListInfo.shaderTableCallableOffset,
-            pMappedData,
-            ShaderTableType::Callable,
-            dispatchInfo.callableShaderTable,
-            &traceListInfo.shaderTableCallableInfo);
+        WriteShaderTableData(pCmdBuffer,
+                             runningOffsetGpuVa,
+                             destGpuVa,
+                             traceListInfo.shaderTableCallableOffset,
+                             pMappedData,
+                             ShaderTableType::Callable,
+                             dispatchInfo.callableShaderTable,
+                             &traceListInfo.shaderTableCallableInfo);
 
         m_rayHistoryTraceList.PushBack(traceListInfo);
     }
@@ -1127,7 +1115,7 @@ void Device::AddMetadataToList(
 void Device::WriteShaderTableData(
     Pal::ICmdBuffer*       pCmdBuffer,
     uint64                 runningOffsetGpuVa,
-    Pal::gpusize           destGpuVa,
+    gpusize                destGpuVa,
     uint64                 runningOffset,
     void*                  pMappedData,
     ShaderTableType        shaderTableType,
@@ -1162,7 +1150,7 @@ void Device::TraceIndirectRtDispatch(
     RtPipelineType                pipelineType,
     RtDispatchInfo                dispatchInfo,
     uint32                        maxDispatchCount,
-    Pal::gpusize*                 pCounterMetadataVa,
+    gpusize*                      pCounterMetadataVa,
     void*                         pIndirectConstants)
 {
     const uint32 maxSrdCount = (pipelineType != GpuRt::RtPipelineType::RayTracing) ?
@@ -1171,11 +1159,11 @@ void Device::TraceIndirectRtDispatch(
 
     const uint64 traceSizeInBytes = GetRayHistoryBufferSizeInBytes();
 
-    Pal::gpusize destGpuVa = 0;
+    gpusize destGpuVa = 0;
     ClientGpuMemHandle gpuMem = nullptr;
     void* pMappedData = nullptr;
 
-    const Pal::gpusize bufferSize = maxSrdCount * (sizeof(IndirectCounterMetadata) + traceSizeInBytes);
+    const gpusize bufferSize = maxSrdCount * (sizeof(IndirectCounterMetadata) + traceSizeInBytes);
 
     Pal::Result result = m_clientCb.pfnAllocateGpuMemory(m_info, bufferSize, &gpuMem, &destGpuVa, &pMappedData);
     if (result == Pal::Result::Success)
@@ -1556,7 +1544,7 @@ void Device::GetAccelStructInfo(
 // Computes size for decoded acceleration structure
 Pal::Result Device::GetAccelStructPostBuildSize(
     AccelStructPostBuildInfoType type,
-    const Pal::gpusize*          pGpuVas,
+    const gpusize*               pGpuVas,
     uint32                       count,
     uint64*                      pSizeInBytes)
 {
@@ -1585,7 +1573,7 @@ Pal::Result Device::GetAccelStructPostBuildSize(
     uint64 sizeInBytes = 0;
     uint64 allocationSizeInBytes = count * infoSize;
 
-    Pal::gpusize destGpuVa = 0;
+    gpusize destGpuVa = 0;
     ClientGpuMemHandle gpuMem = nullptr;
     AccelStructPostBuildInfoToolsVisualizationDesc* pInfo = nullptr;
 
@@ -1797,8 +1785,8 @@ void Device::InitExecuteIndirect(
 // Executes the copy buffer shader
 void Device::CopyBufferRaw(
     Pal::ICmdBuffer* pCmdBuffer,
-    Pal::gpusize     dstBufferVa,    // Destination buffer GPU VA
-    Pal::gpusize     srcBufferVa,    // Source buffer GPU VA
+    gpusize          dstBufferVa,    // Destination buffer GPU VA
+    gpusize          srcBufferVa,    // Source buffer GPU VA
     uint32           numDwords)      // Number of Dwords to copy
 {
 #if GPURT_DEVELOPER
@@ -1842,7 +1830,7 @@ void Device::CopyBufferRaw(
 // Uploads CPU memory to a GPU buffer
 void Device::UploadCpuMemory(
     Pal::ICmdBuffer* pCmdBuffer,
-    Pal::gpusize     dstBufferVa,
+    gpusize          dstBufferVa,
     const void*      pSrcData,
     uint32           sizeInBytes)
 {
@@ -1850,7 +1838,7 @@ void Device::UploadCpuMemory(
     const uint32 uploadSizeDwords = Util::Pow2Align(sizeInBytes, 4);
     PAL_ASSERT(uploadSizeDwords <= embeddedDataLimitDwords);
 
-    Pal::gpusize srcGpuVa = 0;
+    gpusize srcGpuVa = 0;
     uint32* pMappedData = pCmdBuffer->CmdAllocateEmbeddedData(uploadSizeDwords, 1, &srcGpuVa);
     std::memcpy(pMappedData, pSrcData, sizeInBytes);
 
@@ -1881,7 +1869,7 @@ uint32 Device::WriteUserDataEntries(
 // Writes a gpu virtual address for a buffer into the compute shader user data slots
 uint32 Device::WriteBufferVa(
     Pal::ICmdBuffer* pCmdBuffer,
-    Pal::gpusize     virtualAddress, // GPUVA of the buffer
+    gpusize          virtualAddress, // GPUVA of the buffer
     uint32           entryOffset)    // Offset of the first entry
 {
     const uint32 entries[] = { Util::LowPart(virtualAddress), Util::HighPart(virtualAddress) };
@@ -1939,51 +1927,3 @@ void Device::OutputPipelineName(
 #endif
 }   // namespace Internal
 } // namespace GpuRt
-
-#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 28
-// Backward compatibility function. Remove this once we've completely removed the client facing Device wrapper class.
-namespace GpuRt
-{
-
-// =====================================================================================================================
-Device::Device()
-    :
-    m_pDeviceImpl(nullptr)
-{
-}
-
-// =====================================================================================================================
-Device::~Device()
-{
-    if (m_pDeviceImpl)
-    {
-        m_pDeviceImpl->Destroy();
-        PAL_SAFE_FREE(m_pDeviceImpl, &m_allocator);
-    }
-}
-
-// =====================================================================================================================
-Pal::Result Device::Init(
-    const DeviceInitInfo& info)
-{
-    Pal::Result result = Pal::Result::ErrorOutOfMemory;
-
-    void* pMemory = PAL_MALLOC(GetDeviceSize(), &m_allocator, Util::AllocObject);
-    if (pMemory)
-    {
-        InitInternalClientCallbacks(&m_clientCb);
-
-        result = CreateDevice(info, m_clientCb, pMemory, &m_pDeviceImpl);
-    }
-
-    if (result != Pal::Result::Success)
-    {
-        m_pDeviceImpl->Destroy();
-        PAL_SAFE_FREE(m_pDeviceImpl, &m_allocator);
-    }
-
-    return result;
-}
-
-} // namespace GpuRt
-#endif

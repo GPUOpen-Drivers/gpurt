@@ -22,14 +22,14 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#define RootSig "RootConstants(num32BitConstants=16, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=8, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b1)"/*Build Settings binding*/
+                "CBV(b1),"\
+                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
 struct Constants
@@ -37,18 +37,10 @@ struct Constants
     uint  FlagsScratchOffset;        // Offset to flags in scratch buffer
     uint  ScratchNodesScratchOffset; // Offset to scratch nodes in build scratch buffer
     uint  UnsortedNodesBaseOffset;   // Offset to unsorted leaf nodes in build scratch buffer
-    uint  Fp16BoxNodesInBlasMode;    // Mode used for which BLAS interior nodes are FP16
-    float Fp16BoxModeMixedSaThresh;  // For fp16 mode "mixed", surface area threshold
-    uint  DoCollapse;
-    uint  DoTriangleSplitting;
-    uint  EnablePairCompression;
-    uint  EnablePairCostCheck;
     uint  SplitBoxesByteOffset;
     uint  NumBatchesScratchOffset;
     uint  BatchIndicesScratchOffset;
-    uint  NoCopySortedNodes;
     uint  sortedPrimIndicesOffset;
-    uint  enableEarlyPairCompression;
     uint  NumLeafNodes;
 };
 
@@ -65,6 +57,14 @@ struct Constants
 #include "IntersectCommon.hlsl"
 #include "RefitBoundsImpl.hlsl"
 
+//======================================================================================================================
+bool EnableLatePairCompression()
+{
+    return (Settings.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
+           (Settings.topLevelBuild == false) &&
+           (Settings.enableEarlyPairCompression == false);
+}
+
 //=====================================================================================================================
 // Main Function : RefitBounds
 //=====================================================================================================================
@@ -78,7 +78,7 @@ void RefitBounds(
                               numActivePrims,
                               ShaderConstants.NumLeafNodes,
                               ShaderConstants.ScratchNodesScratchOffset,
-                              ShaderConstants.NoCopySortedNodes);
+                              Settings.noCopySortedNodes);
     if (globalId < numActivePrims)
     {
         RefitBoundsImpl(globalId,
@@ -87,21 +87,23 @@ void RefitBounds(
                         bvhNodes,
                         ShaderConstants.UnsortedNodesBaseOffset,
                         ShaderConstants.sortedPrimIndicesOffset,
-                        ShaderConstants.DoCollapse,
-                        ShaderConstants.DoTriangleSplitting,
-                        ShaderConstants.NoCopySortedNodes,
-                        ShaderConstants.EnablePairCompression,
-                        ShaderConstants.enableEarlyPairCompression,
-                        ShaderConstants.EnablePairCostCheck,
+                        Settings.doCollapse,
+                        Settings.doTriangleSplitting,
+                        Settings.noCopySortedNodes,
+                        Settings.enableEarlyPairCompression,
+                        EnableLatePairCompression(),
+                        Settings.enablePairCostCheck,
                         ShaderConstants.SplitBoxesByteOffset,
                         ShaderConstants.NumBatchesScratchOffset,
                         ShaderConstants.BatchIndicesScratchOffset,
-                        ShaderConstants.Fp16BoxNodesInBlasMode,
-                        ShaderConstants.Fp16BoxModeMixedSaThresh,
+                        Settings.fp16BoxNodesMode,
+                        Settings.fp16BoxModeMixedSaThreshold,
                         0,
                         false,
                         false,
                         0,
-                        false);
+                        false,
+                        false,
+                        0);
     }
 }

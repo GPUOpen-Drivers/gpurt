@@ -47,6 +47,10 @@ __decl uint4 AmdExtD3DShaderIntrinsics_LoadDwordAtAddrx4(
 __decl uint2 AmdExtD3DShaderIntrinsics_AtomicMinU64(
     RWByteAddressBuffer uav, uint address, uint2 value) DUMMY_UINT2_FUNC
 
+// globallycoherent version
+__decl uint2 AmdExtD3DShaderIntrinsics_AtomicMinU64_gc(
+    globallycoherent RWByteAddressBuffer uav, uint address, uint2 value) DUMMY_UINT2_FUNC
+
 #ifdef AMD_VULKAN // To fix Vulkan compilation
 /**
 ***********************************************************************************************************************
@@ -58,11 +62,7 @@ __decl uint2 AmdExtD3DShaderIntrinsics_AtomicMinU64(
 #define AmdExtIntersectBvhNodeFlag_BoxSortEnable 0x1
 #endif
 
-#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 33
 __decl uint4 AmdExtD3DShaderIntrinsics_IntersectInternal(
-#else
-__decl uint4 AmdExtD3DShaderIntrinsics_IntersectBvhNode(
-#endif
     in uint2  nodePointer,
     in float  rayExtent,
     in float3 rayOrigin,

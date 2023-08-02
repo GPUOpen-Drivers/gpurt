@@ -329,6 +329,9 @@ def CompileShaderConfig(shaderConfig, args, shadersOutputDir,
     # Add Defines passed from CMAKE
     shaderConfig.defines = args.defines.replace(";",",") + ("" if shaderConfig.defines is None else str("," + shaderConfig.defines))
 
+    if isBVH:
+        shaderConfig.defines += ",GPURT_BVH_BUILD_SHADER=1"
+
     # Create a temporary working directory for this shader
     tempDirPath = shadersOutputDir + '/' + conversionOutputFilename
 

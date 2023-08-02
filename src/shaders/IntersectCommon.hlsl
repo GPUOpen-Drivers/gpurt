@@ -764,15 +764,6 @@ static uint4 image_bvh64_intersect_ray_base(
     }
 #endif
 
-#if AMD_VULKAN && GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 33
-    result = AmdExtD3DShaderIntrinsics_IntersectBvhNode(address,
-                                                        rayExtent,
-                                                        rayOrigin,
-                                                        rayDirection,
-                                                        rayDirectionInverse,
-                                                        boxSortHeuristic,
-                                                        BOX_EXPANSION_DEFAULT_AMOUNT);
-#else
     result = AmdExtD3DShaderIntrinsics_IntersectInternal(address,
                                                          rayExtent,
                                                          rayOrigin,
@@ -780,7 +771,6 @@ static uint4 image_bvh64_intersect_ray_base(
                                                          rayDirectionInverse,
                                                          boxSortHeuristic,
                                                          BOX_EXPANSION_DEFAULT_AMOUNT);
-#endif
 
 #else
     uint64_t hwNodePtr = (bvhAddress >> 3) + nodePointer;
@@ -828,10 +818,7 @@ static uint4 image_bvh64_intersect_ray_base(
         bool procedural = false;
         uint hwTriFlags = 0;
 
-        uint triangleId;
-        {
-            triangleId = FetchTriangleId(bvhAddress, nodePointer);
-        }
+        uint triangleId = FetchTriangleId(bvhAddress, nodePointer);
 
 #if GPURT_BUILD_RTIP2
         if (intersectRayVersion >= INTERSECT_RAY_VERSION_2)
@@ -842,11 +829,7 @@ static uint4 image_bvh64_intersect_ray_base(
 #endif
 
         {
-            TriangleData tri;
-            {
-                tri = FetchTriangleFromNode(bvhAddress, nodePointer);
-            }
-
+            TriangleData tri = FetchTriangleFromNode(bvhAddress, nodePointer);
             result = fast_intersect_triangle(rayOrigin,
                                              rayDirection,
                                              tri.v0,
@@ -854,7 +837,6 @@ static uint4 image_bvh64_intersect_ray_base(
                                              tri.v2);
 
             SwizzleBarycentrics(result, nodePointer, triangleId);
-
         }
 
 #if GPURT_BUILD_RTIP2
@@ -867,7 +849,6 @@ static uint4 image_bvh64_intersect_ray_base(
                                    opaque,
                                    result);
         }
-
 #endif
     }
     else

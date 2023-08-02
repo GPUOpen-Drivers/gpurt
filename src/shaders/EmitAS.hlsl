@@ -25,7 +25,9 @@
 #define RootSig "RootConstants(num32BitConstants=2, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u2, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
 // 32 bit constants
@@ -42,7 +44,9 @@ struct InputArgs
 [[vk::binding(1, 0)]] RWByteAddressBuffer SrcBuffer   : register(u1);
 
 // unused buffer
-[[vk::binding(2, 0)]] RWByteAddressBuffer EmitBuffer  : register(u2);
+[[vk::binding(2, 0)]] RWByteAddressBuffer EmitBuffer     : register(u2);
+[[vk::binding(3, 0)]] RWByteAddressBuffer ScratchBuffer  : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer DstMetadata    : register(u4);
 
 // The emit path uses DstBuffer as the true acceleration structure base (same as DstMetdata).
 #define DstMetadata DstBuffer
@@ -55,7 +59,7 @@ struct InputArgs
 #include "SerializeCommon.hlsl"
 
 //=====================================================================================================================
-AccelStructHeader FetchAccelStructHeader(RWByteAddressBuffer SrcBuffer)
+AccelStructHeader FetchAccelStructHeader()
 {
     // Fetch acceleration structure metadata size
     const uint32_t metadataSizeInBytes = SrcBuffer.Load<uint32_t>(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
@@ -73,7 +77,7 @@ AccelStructHeader FetchAccelStructHeader(RWByteAddressBuffer SrcBuffer)
 void EmitCurrentSize(in uint3 globalThreadId : SV_DispatchThreadID)
 {
     // Load acceleration structure header
-    const AccelStructHeader header = FetchAccelStructHeader(SrcBuffer);
+    const AccelStructHeader header = FetchAccelStructHeader();
 
     // Store size in destination buffer
     DstBuffer.Store2(ShaderConstants.offset, uint2(header.sizeInBytes, 0));
@@ -88,7 +92,7 @@ void EmitCurrentSize(in uint3 globalThreadId : SV_DispatchThreadID)
 void EmitCompactSize(in uint3 globalThreadId : SV_DispatchThreadID)
 {
     // Load acceleration structure header
-    const AccelStructHeader header = FetchAccelStructHeader(SrcBuffer);
+    const AccelStructHeader header = FetchAccelStructHeader();
 
     DstBuffer.Store2(ShaderConstants.offset, uint2(header.compactedSizeInBytes, 0));
 }
@@ -102,7 +106,7 @@ void EmitCompactSize(in uint3 globalThreadId : SV_DispatchThreadID)
 void EmitSerializeDesc(in uint3 globalThreadId : SV_DispatchThreadID)
 {
     // Load acceleration structure header
-    const AccelStructHeader header = FetchAccelStructHeader(SrcBuffer);
+    const AccelStructHeader header = FetchAccelStructHeader();
 
     const uint type = (header.info & ACCEL_STRUCT_HEADER_INFO_TYPE_MASK);
 
@@ -127,7 +131,7 @@ void EmitSerializeDesc(in uint3 globalThreadId : SV_DispatchThreadID)
 void EmitToolVisDesc(in uint3 globalThreadId : SV_DispatchThreadID)
 {
     // Load acceleration structure header
-    const AccelStructHeader header = FetchAccelStructHeader(SrcBuffer);
+    const AccelStructHeader header = FetchAccelStructHeader();
 
     const uint type = (header.info & ACCEL_STRUCT_HEADER_INFO_TYPE_MASK);
 

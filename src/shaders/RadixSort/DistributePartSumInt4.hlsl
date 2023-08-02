@@ -64,7 +64,7 @@ void DistributePartSumInt4Impl(
     int sum = ScratchBuffer.Load(partialSumsOffset + ((groupId >> 1) * sizeof(int)));
     v1.xyzw += sum;
 
-    safe_store_int4(v1, ScratchBuffer, inOutDataOffset, globalId, numElements);
+    safe_store_int4(v1, inOutDataOffset, globalId, numElements);
 }
 
 #if NO_SHADER_ENTRYPOINT == 0

@@ -26,12 +26,13 @@
 add_subdirectory(shaders)
 
 if (CMAKE_HOST_SYSTEM_NAME MATCHES "Linux" AND GPURT_CLIENT_API STREQUAL "VULKAN")
-    # Check if we can find dxc on the PATH or DK variable. If not, fall back to precompiled headers.
     find_program(DXC_PATH dxc)
     if ("${DXC_PATH}" STREQUAL "DXC_PATH-NOTFOUND")
         message(WARNING "Could not find dxc.")
         if (EXISTS ${GPU_RAY_TRACING_SOURCE_DIR}/tools/lnx)
             include(GpuRtGenerateShaders)
+        else()
+            message(FATAL_ERROR "Could not find shader compiler tool dxc.")
         endif()
     else()
         include(GpuRtGenerateShaders)

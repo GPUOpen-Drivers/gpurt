@@ -26,10 +26,10 @@
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u0, space=2147420894, visibility=SHADER_VISIBILITY_ALL),"\
-                "CBV(b1)"/*Build Settings binding*/
+                "CBV(b1),"\
+                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
 struct Constants
@@ -75,9 +75,6 @@ void UpdateQBVH(
     }
 
     UpdateQBVHImpl(globalThreadId.x,
-                   DstMetadata,
-                   ScratchBuffer,
-                   SrcBuffer,
                    ShaderConstants.propagationFlagsScratchOffset,
                    numWorkItems,
                    numWorkItems);

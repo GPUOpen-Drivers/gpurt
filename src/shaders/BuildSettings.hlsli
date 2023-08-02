@@ -52,6 +52,7 @@
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_ID)]]          uint enableEarlyPairCompression    = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_FAST_LBVH_ID)]]                       uint enableFastLBVH                = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_RTIP_LEVEL_ID)]]                             uint rtIpLevel                     = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_GEOMETRY_TYPE_ID)]]                          uint geometryType                  = 0;
 
 static const BuildSettingsData Settings = {
     topLevelBuild,
@@ -85,6 +86,9 @@ static const BuildSettingsData Settings = {
     0,
     0,
     0,
+    0,
+    0,
+    geometryType,
 };
 
 #endif

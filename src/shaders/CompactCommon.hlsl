@@ -90,8 +90,6 @@ uint CalcCompactedSize(
 
 //=====================================================================================================================
 void WriteCompactedSize(
-    RWByteAddressBuffer  DstBuffer,
-    RWByteAddressBuffer  EmitBuffer,
     in uint              emitCompactSize,
     in uint              accelStructType)
 {

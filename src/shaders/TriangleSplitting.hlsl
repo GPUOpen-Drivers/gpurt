@@ -236,8 +236,7 @@ void AllocRefs(TriangleSplittingArgs args,
 
         const uint smax = args.maxNumPrimitives - args.numPrimitives;
 
-        uint i;
-        for (i = 0; i < TS_KEYS_PER_THREAD; i++)
+        for (uint i = 0; i < TS_KEYS_PER_THREAD; i++)
         {
             const uint readIndex = rangeBegin + (localId * TS_KEYS_PER_THREAD) + i;
             uint count = 0;
@@ -262,7 +261,7 @@ void AllocRefs(TriangleSplittingArgs args,
         int threadSumLeft = 0;
 
         // Calculate scan on this thread's elements
-        for (i = 0; i < TS_KEYS_PER_THREAD; i++)
+        for (uint i = 0; i < TS_KEYS_PER_THREAD; i++)
         {
             int tmp = localKeys[i];
             localKeys[i] = threadSumLeft;
@@ -273,7 +272,7 @@ void AllocRefs(TriangleSplittingArgs args,
         int threadSumScannedLeft = WavePrefixSum(threadSumLeft);
 
         // Add partial sums back
-        for (i = 0; i < TS_KEYS_PER_THREAD; i++)
+        for (uint i = 0; i < TS_KEYS_PER_THREAD; i++)
         {
             localKeys[i] += threadSumScannedLeft;
         }
@@ -316,7 +315,7 @@ void AllocRefs(TriangleSplittingArgs args,
         GroupMemoryBarrierWithGroupSync();
 
         // Perform coalesced writes back to global memory
-        for (i = 0; i < TS_KEYS_PER_THREAD; i++)
+        for (uint i = 0; i < TS_KEYS_PER_THREAD; i++)
         {
             const uint storeIndex = rangeBegin + (localId * TS_KEYS_PER_THREAD) + i;
             const uint valueLeft = localKeys[i];
@@ -603,7 +602,7 @@ void TriangleSplittingImpl(
 
             case TS_PHASE_CALC_SUM:
             {
-                for (i = globalId; i < args.numPrimitives; i += numThreads)
+                for (uint i = globalId; i < args.numPrimitives; i += numThreads)
                 {
                     float priority;
 
@@ -695,7 +694,7 @@ void TriangleSplittingImpl(
                     ReadAccelStructHeaderField(
                         ACCEL_STRUCT_HEADER_OFFSETS_OFFSET + ACCEL_STRUCT_OFFSETS_PRIM_NODE_PTRS_OFFSET);
 
-                for (i = globalId; i < numRefs; i += numThreads)
+                for (uint i = globalId; i < numRefs; i += numThreads)
                 {
                     const uint index = i;
 
@@ -705,7 +704,7 @@ void TriangleSplittingImpl(
                     float largestLength = ref.bbox.max[0] - ref.bbox.min[0];
 
                     [unroll]
-                    for (a = 1; a < 3; a++)
+                    for (uint a = 1; a < 3; a++)
                     {
                         const float length = ref.bbox.max[a] - ref.bbox.min[a];
 
@@ -888,7 +887,7 @@ void TriangleSplittingImpl(
                         float wb = -FLT_MAX;
 
                         [unroll]
-                        for (a = 0; a < 3; a++)
+                        for (uint a = 0; a < 3; a++)
                         {
                             float length = left.max[a] - left.min[a];
 

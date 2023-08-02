@@ -42,7 +42,6 @@ static_assert(GPURT_RTIP1_1 == Pal::RayTracingIpLevel::RtIp1_1, "GPURT_HLSL_RTIP
 static_assert(GPURT_RTIP2_0 == Pal::RayTracingIpLevel::RtIp2_0, "GPURT_HLSL_RTIP mismatch.");
 #endif
 
-#ifdef AMD_VULKAN
 //=====================================================================================================================
 ///@note Enum is a reserved keyword in glslang. To workaround this limitation, define static constants to replace the
 ///      HLSL enums that follow for compatibility.
@@ -53,15 +52,6 @@ namespace PrimitiveType
     static const uint AABB          = 1;
     static const uint Instance      = 2;
 }
-#else
-//=====================================================================================================================
-enum PrimitiveType : uint
-{
-    Triangle,
-    AABB,
-    Instance,
-};
-#endif
 
 // These DUMMY_*_FUNC postfix stubs must be included at the end of every driver stub (AmdTraceRay*) declaration to
 // work around a Vulkan glslang issue where the compiler can't deal with calls to functions that don't have bodies.
@@ -813,57 +803,6 @@ static_assert(BVH_NODE_RIGHT_MIN_OFFSET == offsetof(BVHNode, bbox_right_min_or_v
 static_assert(BVH_NODE_FLAGS_OFFSET     == offsetof(BVHNode, flags), "");
 static_assert(BVH_NODE_RIGHT_MAX_OFFSET == offsetof(BVHNode, bbox_right_max), "");
 #endif
-
-//=====================================================================================================================
-// The structure is 64-byte aligned
-struct ScratchNode
-{
-    float3 bbox_min_or_v0;
-    uint   left_or_primIndex_or_instIndex; // left child for internal nodes /
-                                           // primitive index for primitive nodes /
-                                           // instance index for instance nodes
-    float3 bbox_max_or_v1;
-    uint   right_or_geometryIndex;         // right child for internal nodes /
-                                           // geometryIndex if it's a leaf node
-    float3 sah_or_v2_or_instBasePtr;       // SAH cost, area and density for internal nodes /
-                                           // vertex2 for triangle nodes /
-                                           // instanceNodeBasePointerLo, instanceNodeBasePointerHi for instance node
-    uint   parent;
-
-    uint   type;                           // type [0:2], triangle id [3:18] for max of 2 compressed triangles
-    uint   flags_and_instanceMask;         // flags [0:7], instanceMask [8:15]
-    uint   splitBox_or_nodePointer;        // TriangleSplitBox index for triangle nodes /
-                                           // BLAS node pointer for instance nodes
-    uint   numPrimitivesAndDoCollapse;     // number of tris collapsed, doCollapse is boolean bit in the LSB /
-                                           // scratch node index of the tri in the pair in PAIR_TRIANGLE_COMPRESSION
-};
-
-#define SCRATCH_NODE_FLAGS_DISABLE_TRIANGLE_SPLIT_SHIFT 31
-#define SCRATCH_NODE_FLAGS_DISABLE_TRIANGLE_SPLIT_MASK (1 << SCRATCH_NODE_FLAGS_DISABLE_TRIANGLE_SPLIT_SHIFT)
-
-#define SCRATCH_NODE_BBOX_MIN_OFFSET                  0
-#define SCRATCH_NODE_V0_OFFSET                        SCRATCH_NODE_BBOX_MIN_OFFSET
-#define SCRATCH_NODE_LEFT_OFFSET                      12
-#define SCRATCH_NODE_PRIMITIVE_ID_OFFSET              SCRATCH_NODE_LEFT_OFFSET
-#define SCRATCH_NODE_INSTANCE_ID_OFFSET               SCRATCH_NODE_PRIMITIVE_ID_OFFSET
-#define SCRATCH_NODE_BBOX_MAX_OFFSET                  16
-#define SCRATCH_NODE_V1_OFFSET                        SCRATCH_NODE_BBOX_MAX_OFFSET
-#define SCRATCH_NODE_RIGHT_OFFSET                     28
-#define SCRATCH_NODE_GEOMETRY_INDEX_OFFSET            SCRATCH_NODE_RIGHT_OFFSET
-#define SCRATCH_NODE_COST_OFFSET                      32
-#define SCRATCH_NODE_SA_OFFSET                        36
-#define SCRATCH_NODE_DENSITY_OFFSET                   40
-#define SCRATCH_NODE_V2_OFFSET                        SCRATCH_NODE_COST_OFFSET
-#define SCRATCH_NODE_INSTANCE_BASE_PTR_OFFSET         SCRATCH_NODE_V2_OFFSET
-#define SCRATCH_NODE_INSTANCE_NUM_PRIMS_OFFSET        SCRATCH_NODE_DENSITY_OFFSET
-#define SCRATCH_NODE_PARENT_OFFSET                    44
-#define SCRATCH_NODE_TYPE_OFFSET                      48
-#define SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET   52
-#define SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET           56
-#define SCRATCH_NODE_NODE_POINTER_OFFSET              SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET
-#define SCRATCH_NODE_NUM_MORTON_CELLS_OFFSET          SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET
-#define SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET 60
-#define SCRATCH_NODE_SIZE                             64
 
 //=====================================================================================================================
 struct InstanceSidebandData1_1

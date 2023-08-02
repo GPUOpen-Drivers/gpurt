@@ -26,10 +26,10 @@
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b1)" /*Build Settings binding*/
+                "CBV(b1),"\
+                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
 // 32 bit constants
@@ -89,9 +89,6 @@ void UpdateParallel(
     uint numWorkItems = ScratchBuffer.Load(UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET);
 
     UpdateQBVHImpl(globalThreadId,
-                   DstMetadata,
-                   ScratchBuffer,
-                   SrcBuffer,
                    ShaderConstants.propagationFlagsScratchOffset,
                    numWorkItems,
                    ShaderConstants.numThreads);
