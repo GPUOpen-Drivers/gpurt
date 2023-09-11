@@ -303,15 +303,28 @@ enum class InternalRayTracingCsType : uint32
     Count
 };
 
+// Hashed name/value pairs to pass to pipeline compiler
+struct PipelineCompilerOption
+{
+    uint32 hashedOptionName; // hash of associated option name, see the PipelineOptionName namespace
+    uint32 value;            // associated option value
+};
+
 // Contains information to build an internal gpurt pipeline
 struct PipelineBuildInfo
 {
-    uint64                   apiPsoHash;
-    const NodeMapping*       pNodes;
-    uint32                   nodeCount;
-    PipelineShaderCode       code;
-    InternalRayTracingCsType shaderType;
-    const char*              pPipelineName;
+    uint64                        apiPsoHash;
+    const NodeMapping*            pNodes;
+    uint32                        nodeCount;
+    PipelineShaderCode            code;
+    InternalRayTracingCsType      shaderType;
+#if GPURT_DEVELOPER
+    const char*                   pExperimentalCompilerOptions; // Optional null-terminated string to pass to client
+                                                                // pipeline compiler
+#endif
+    const PipelineCompilerOption* pHashedCompilerOptions;
+    uint32                        hashedCompilerOptionCount;
+    const char*                   pPipelineName;
 };
 
 // Specifies the compile time constant buffer for internal pipelines
@@ -539,17 +552,6 @@ enum TraceRayCounterMode : uint32
     TraceRayCounterTraversal       = 3, // Write traversal statistics counters
     TraceRayCounterCustom          = 4, // Custom logging
     TraceRayCounterDispatch        = 5, // Traversal counters accumulated across entire dispatch
-};
-
-// Build Mode Flags
-enum BuildModeFlags : uint32
-{
-    BuildModeNone                   = 0,
-    BuildModeCollapse               = 1,
-    BuildModeTriangleSplitting      = 2,
-    BuildModePairCompression        = 4,
-    BuildModePairCostCheck          = 8,
-    BuildModeEarlyPairCompression   = 16
 };
 
 // Acceleration structure build-time information about the acceleration structure's indirect buffers
@@ -984,6 +986,11 @@ struct RtDispatchInfo
     uint32 dimY;
     uint32 dimZ;
 
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 38
+    uint32 threadGroupSizeX;
+    uint32 threadGroupSizeY;
+    uint32 threadGroupSizeZ;
+#endif
     uint32 pipelineShaderCount;
     uint64 stateObjectHash;
 

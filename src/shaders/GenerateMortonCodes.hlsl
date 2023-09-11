@@ -346,8 +346,7 @@ void GenerateMortonCodesImpl(
 
         if (doTriangleSplitting)
         {
-            bounds = ScratchBuffer.Load<BoundingBox>(splitBoxesOffset +
-                sizeof(BoundingBox) * node.splitBox_or_nodePointer);
+            bounds = FetchSplitBoxAtIndex(splitBoxesOffset, node.splitBox_or_nodePointer);
         }
         else
         {
@@ -415,7 +414,7 @@ void GenerateMortonCodesImpl(
                 gridPos[2] = valuesWithNoSize[2];
                 gridPos[3] = w;
 
-                ScratchBuffer.Store<uint4>(gridPosOffset + primitiveIndex * sizeof(uint4), gridPos);
+                WriteGridPosAtIndex(gridPosOffset, primitiveIndex, gridPos);
             }
 
             // To address the bug in MergeSort().

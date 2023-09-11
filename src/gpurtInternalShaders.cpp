@@ -32,18 +32,26 @@ namespace GpuRt
 
 #define ArraySize(x) (sizeof(x) / sizeof((x)[0]))
 
+#if GPURT_DEVELOPER
+#define COMPILER_OPTION_INIT nullptr,nullptr,0
+#else // GPURT_DEVELOPER
+#define COMPILER_OPTION_INIT nullptr,0
+#endif
+
 // Helper macro used to set up the pipeline build info array
 #if GPURT_GENERATED_AMDIL_AVAILABLE
 #define PIPELINE_BUILD_INFO(x) { 0, \
                                  x ## Mapping, ArraySize(x ## Mapping), \
                                  PipelineShaderCode{ Cs ## x, sizeof(Cs ## x), nullptr, 0, Cs ## x ## _spv, sizeof(Cs ## x ## _spv) }, \
                                  InternalRayTracingCsType::x, \
+                                 COMPILER_OPTION_INIT, \
                                  #x }
 #else // GPURT_GENERATED_AMDIL_AVAILABLE
 #define PIPELINE_BUILD_INFO(x) { 0, \
                                  x ## Mapping, ArraySize(x ## Mapping), \
                                  PipelineShaderCode{ nullptr, 0, nullptr, 0, Cs ## x ## _spv, sizeof(Cs ## x ## _spv) }, \
                                  InternalRayTracingCsType::x, \
+                                 COMPILER_OPTION_INIT, \
                                  #x }
 #endif
 

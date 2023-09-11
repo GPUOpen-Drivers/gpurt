@@ -25,7 +25,7 @@
 #ifndef _SCRATCHNODE_HLSL
 #define _SCRATCHNODE_HLSL
 
-#include "RayTracingDefs.h"
+#include "rayTracingDefs.h"
 
 //=====================================================================================================================
 // The structure is 64-byte aligned

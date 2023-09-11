@@ -73,12 +73,16 @@ struct CompileTimeBuildSettings
     uint32 enableEarlyPairCompression;
     uint32 enableFastLBVH;
     uint32 rtIpLevel;
+    uint32 geometryType;
     uint32 unused2;
     uint32 unused3;
     uint32 unused4;
     uint32 unused5;
     uint32 unused6;
-    uint32 geometryType;
+    uint32 unused7;
+    uint32 unused8;
+    uint32 unused9;
+    uint32 enableInstanceRebraid;
 };
 
 #define BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_ID                        0
@@ -107,7 +111,8 @@ struct CompileTimeBuildSettings
 #define BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_ID          25
 #define BUILD_SETTINGS_DATA_ENABLE_FAST_LBVH_ID                       26
 #define BUILD_SETTINGS_DATA_RTIP_LEVEL_ID                             27
-#define BUILD_SETTINGS_DATA_GEOMETRY_TYPE_ID                          33
+#define BUILD_SETTINGS_DATA_GEOMETRY_TYPE_ID                          28
+#define BUILD_SETTINGS_DATA_ENABLE_INSTANCE_REBRAID_ID                37
 
 #ifdef __cplusplus
 } // namespace GpuRt

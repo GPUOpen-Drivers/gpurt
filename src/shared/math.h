@@ -23,8 +23,8 @@
  *
  **********************************************************************************************************************/
 //
-#ifndef _MATH_HLSL
-#define _MATH_HLSL
+#ifndef _MATH_H
+#define _MATH_H
 
 //=====================================================================================================================
 static BoundingBox CombineAABB(
@@ -68,8 +68,22 @@ static uint32_t bitFieldInsert(
     in uint32_t numBits,
     in uint32_t data)
 {
-    src &= ~(bits(numBits) << bitOffset);
-    return (src | (data << bitOffset));
+    const uint32_t mask = bits(numBits);
+    src &= ~(mask << bitOffset);
+    return (src | ((data & mask) << bitOffset));
+}
+
+//=====================================================================================================================
+// Helper function for inserting data into a uint64_t src bitfield and returning the output
+static uint64_t bitFieldInsert64(
+    in uint64_t src,
+    in uint64_t bitOffset,
+    in uint64_t numBits,
+    in uint64_t data)
+{
+    const uint64_t mask = bits64(numBits);
+    src &= ~(mask << bitOffset);
+    return (src | ((data & mask) << bitOffset));
 }
 
 //=====================================================================================================================

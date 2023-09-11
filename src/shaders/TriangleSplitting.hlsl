@@ -35,6 +35,7 @@ struct TriangleSplittingArgs
     uint refList1ScratchOffset;
     uint splitPrioritiesScratchOffset;
     uint currentStateScratchOffset;
+    uint taskQueueCounterScratchOffset;
     uint atomicFlagsScratchOffset;
     uint dynamicBlockIndexScratchOffset;
     uint sceneBoundsByteOffset;
@@ -43,70 +44,6 @@ struct TriangleSplittingArgs
 
 #define TS_KEYS_PER_THREAD         4
 #define TS_KEYS_PER_GROUP          (BUILD_THREADGROUP_SIZE * TS_KEYS_PER_THREAD)
-
-//=====================================================================================================================
-void AllocTasksTS(const uint numTasks, const uint phase, uint taskQueueOffset)
-{
-    // start = end
-    const uint end = ScratchBuffer.Load(taskQueueOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET);
-
-    ScratchBuffer.Store(taskQueueOffset + STATE_TASK_QUEUE_START_PHASE_INDEX_OFFSET, end);
-
-    ScratchBuffer.Store(taskQueueOffset + STATE_TASK_QUEUE_PHASE_OFFSET, phase);
-
-    DeviceMemoryBarrier();
-
-    ScratchBuffer.Store(taskQueueOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET, end + numTasks);
-}
-
-//=====================================================================================================================
-uint2 BeginTaskTS(const uint localId, uint taskQueueOffset)
-{
-    if (localId == 0)
-    {
-        ScratchBuffer.InterlockedAdd(taskQueueOffset + STATE_TASK_QUEUE_TASK_COUNTER_OFFSET, 1, SharedMem[0]);
-    }
-
-    GroupMemoryBarrierWithGroupSync();
-
-    const uint index = SharedMem[0];
-
-    // wait till there are valid tasks to do
-    do
-    {
-        DeviceMemoryBarrier();
-    } while (index >= ScratchBuffer.Load(taskQueueOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET));
-
-    const uint phase = ScratchBuffer.Load(taskQueueOffset + STATE_TASK_QUEUE_PHASE_OFFSET);
-
-    const uint startPhaseIndex = ScratchBuffer.Load(taskQueueOffset + STATE_TASK_QUEUE_START_PHASE_INDEX_OFFSET);
-
-    return uint2(index - startPhaseIndex, phase);
-}
-
-//=====================================================================================================================
-bool EndTaskTS(const uint localId, uint taskQueueOffset)
-{
-    bool returnValue = false;
-
-    DeviceMemoryBarrier();
-
-    if (localId == 0)
-    {
-        const uint endPhaseIndex = ScratchBuffer.Load(taskQueueOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET);
-
-        uint orig;
-        ScratchBuffer.InterlockedAdd(taskQueueOffset + STATE_TASK_QUEUE_NUM_TASKS_DONE_OFFSET, 1, orig);
-
-        // current phase is done
-        if (orig == (endPhaseIndex - 1))
-        {
-            returnValue = true;
-        }
-    }
-
-    return returnValue;
-}
 
 //=====================================================================================================================
 void WriteFlags(TriangleSplittingArgs args, uint index, Flags flags)
@@ -143,12 +80,6 @@ uint ReadPrefixSum(
     const uint offset = index * sizeof(Flags);
 
     return ScratchBuffer.Load(args.atomicFlagsScratchOffset + offset + FLAGS_PREFIX_SUM_OFFSET);
-}
-
-//=====================================================================================================================
-void WriteBox(TriangleSplittingArgs args, uint index, BoundingBox box)
-{
-    ScratchBuffer.Store<BoundingBox>(args.splitBoxesScratchOffset + (index * sizeof(BoundingBox)), box);
 }
 
 //=====================================================================================================================
@@ -545,7 +476,7 @@ void TriangleSplittingImpl(
     uint                    groupId,
     TriangleSplittingArgs   args)
 {
-    const uint taskQueueOffset      = args.currentStateScratchOffset;
+    const uint taskQueueOffset      = args.taskQueueCounterScratchOffset;
     const uint refListIndexOffset   = args.currentStateScratchOffset + STATE_TS_REF_LIST_INDEX_OFFSET;
     const uint numRefsOffset        = args.currentStateScratchOffset + STATE_TS_NUM_REFS_OFFSET;
     const uint numRefsAllocOffset   = args.currentStateScratchOffset + STATE_TS_NUM_REFS_ALLOC_OFFSET;
@@ -563,12 +494,12 @@ void TriangleSplittingImpl(
 
     if (globalId == 0)
     {
-        AllocTasksTS(numGroups, TS_PHASE_INIT, taskQueueOffset);
+        AllocTasks(numGroups, TS_PHASE_INIT, taskQueueOffset);
     }
 
     while (1)
     {
-        const uint2 task = BeginTaskTS(localId, taskQueueOffset);
+        const uint2 task = BeginTask(localId, taskQueueOffset);
 
         const uint taskIndex = task.x;
         const uint phase = task.y;
@@ -593,9 +524,9 @@ void TriangleSplittingImpl(
                     ScratchBuffer.Store<uint>(mutexOffset, 0);
                 }
 
-                if (EndTaskTS(localId, taskQueueOffset))
+                if (EndTask(localId, taskQueueOffset))
                 {
-                    AllocTasksTS(numGroups, TS_PHASE_CALC_SUM, taskQueueOffset);
+                    AllocTasks(numGroups, TS_PHASE_CALC_SUM, taskQueueOffset);
                 }
                 break;
             }
@@ -659,9 +590,9 @@ void TriangleSplittingImpl(
                     ScratchBuffer.Store<float>(args.splitPrioritiesScratchOffset + sizeof(float) * i, priority);
                 }
 
-                if (EndTaskTS(localId, taskQueueOffset))
+                if (EndTask(localId, taskQueueOffset))
                 {
-                    AllocTasksTS(RoundUpQuotient(args.numPrimitives, TS_KEYS_PER_GROUP),
+                    AllocTasks(RoundUpQuotient(args.numPrimitives, TS_KEYS_PER_GROUP),
                                  TS_PHASE_ALLOC_REFS, taskQueueOffset);
                 }
                 break;
@@ -673,9 +604,9 @@ void TriangleSplittingImpl(
 
                 AllocRefs(args, localId, globalSum);
 
-                if (EndTaskTS(localId, taskQueueOffset))
+                if (EndTask(localId, taskQueueOffset))
                 {
-                    AllocTasksTS(numGroups, TS_PHASE_SPLIT, taskQueueOffset);
+                    AllocTasks(numGroups, TS_PHASE_SPLIT, taskQueueOffset);
                 }
                 break;
             }
@@ -1001,7 +932,7 @@ void TriangleSplittingImpl(
                             {
                                 const uint writeIndex = ref.splitLeafBaseIndex >> 1;
 
-                                WriteBox(args, writeIndex, ref.bbox);
+                                WriteSplitBoxAtIndex(args.splitBoxesScratchOffset, writeIndex, ref.bbox);
 
                                 WriteScratchNodeSplitBoxIndex(args.scratchLeafNodesScratchOffset,
                                                               writeIndex,
@@ -1015,7 +946,7 @@ void TriangleSplittingImpl(
                             {
                                 const float surfaceArea = ComputeBoxSurfaceArea(ref.bbox);
 
-                                WriteBox(args, ref.leafIndex, ref.bbox);
+                                WriteSplitBoxAtIndex(args.splitBoxesScratchOffset, ref.leafIndex, ref.bbox);
 
                                 const float sahCost = surfaceArea * SAH_COST_TRIANGLE_INTERSECTION;
 
@@ -1045,7 +976,7 @@ void TriangleSplittingImpl(
 
                                 WriteScratchNode(args.scratchLeafNodesScratchOffset, writeIndex, leafNode);
 
-                                WriteBox(args, writeIndex, ref.bbox);
+                                WriteSplitBoxAtIndex(args.splitBoxesScratchOffset, writeIndex, ref.bbox);
 
                                 const uint extraPrimNodePtrOffset = basePrimNodePtrsOffset + (writeIndex * sizeof(uint));
                                 DstBuffer.Store(extraPrimNodePtrOffset, INVALID_IDX);
@@ -1056,7 +987,7 @@ void TriangleSplittingImpl(
                     }
                 }
 
-                if (EndTaskTS(localId, taskQueueOffset))
+                if (EndTask(localId, taskQueueOffset))
                 {
                     ScratchBuffer.Store(refListIndexOffset, !refListIndex);
 
@@ -1064,7 +995,7 @@ void TriangleSplittingImpl(
 
                     if (numRefsAlloc == 0)
                     {
-                        AllocTasksTS(numGroups, TS_PHASE_DONE, taskQueueOffset);
+                        AllocTasks(numGroups, TS_PHASE_DONE, taskQueueOffset);
                     }
                     else
                     {
@@ -1074,7 +1005,7 @@ void TriangleSplittingImpl(
 
                         ScratchBuffer.Store(numRefsOffset, numRefsAlloc);
 
-                        AllocTasksTS(numGroups, TS_PHASE_SPLIT, taskQueueOffset);
+                        AllocTasks(numGroups, TS_PHASE_SPLIT, taskQueueOffset);
                     }
                 }
                 break;

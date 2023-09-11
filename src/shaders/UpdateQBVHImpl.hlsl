@@ -96,11 +96,10 @@ void UpdateFloat32BoxNode(
 // up to date when this function is called.
 //
 void UpdateChildBoundingBox(
-    uint                type,
-    uint                metadataSize,
-    uint                parentNodePointer,
-    uint                nodePointer,
-    uint                childIdx)
+    uint metadataSize,
+    uint parentNodePointer,
+    uint nodePointer,
+    uint childIdx)
 {
     BoundingBox bbox = (BoundingBox)0;
     uint        boxNodeFlags = 0;
@@ -131,8 +130,9 @@ void UpdateChildBoundingBox(
 //=====================================================================================================================
 // Handle root node update
 void UpdateRootNode(
-    uint                metadataSize,
-    uint                rootNodePointer)
+    uint metadataSize,
+    uint rootNodePointer,
+    uint numActivePrims)
 {
     BoundingBox bbox         = (BoundingBox)0;
     uint        boxNodeFlags = 0;
@@ -152,7 +152,8 @@ void UpdateRootNode(
 
 //=====================================================================================================================
 void UpdateNodeFlagsTopLevel(
-    uint metadataSize, uint parentNodeOffset)
+    uint metadataSize,
+    uint parentNodeOffset)
 {
     // Read child pointers from source buffer
     const uint childPointers[4] = SrcBuffer.Load<uint[4]>(parentNodeOffset);
@@ -193,7 +194,6 @@ void UpdateQBVHImpl(
     const AccelStructMetadataHeader metadata = SrcBuffer.Load<AccelStructMetadataHeader>(0);
     const uint metadataSize = metadata.sizeInBytes;
     const AccelStructHeader header = SrcBuffer.Load<AccelStructHeader>(metadataSize);
-    const uint type = (header.info & ACCEL_STRUCT_HEADER_INFO_TYPE_MASK);
 
     // Root node is always fp32 regardless of mode for fp16 box nodes
     const uint rootNodePointer = CreateRootNodePointer();
@@ -205,7 +205,7 @@ void UpdateQBVHImpl(
         {
             AccelStructMetadataHeader resultMetadata = metadata;
 
-            if ((type == BOTTOM_LEVEL) || (header.numActivePrims > 0))
+            if ((Settings.topLevelBuild == 0) || (header.numActivePrims > 0))
             {
                 GpuVirtualAddress bvhVa = MakeGpuVirtualAddress(ShaderConstants.addressLo, ShaderConstants.addressHi);
 
@@ -255,12 +255,12 @@ void UpdateQBVHImpl(
     // The last child of the root node updates the root bounding box in the header
     if (nodePointer == rootNodePointer)
     {
-        UpdateRootNode(metadataSize, rootNodePointer);
+        UpdateRootNode(metadataSize, rootNodePointer, header.numActivePrims);
     }
 
     // Choice to decode parent pointer into node index using fp16. Mixing interior node types
     // relies on fp16 node size chunks for decoding (only in BLAS)
-    const bool decodeNodePtrAsFp16 = (type == BOTTOM_LEVEL) &&
+    const bool decodeNodePtrAsFp16 = (Settings.topLevelBuild == 0) &&
                                      (ShaderConstants.fp16BoxNodesInBlasMode != NO_NODES_IN_BLAS_AS_FP16);
 
     // Build tree up until we hit root node
@@ -294,7 +294,7 @@ void UpdateQBVHImpl(
         const uint childIdx =
             ComputeChildIndexAndValidBoxCount(metadataSize, parentNodePointer, nodePointer, numValidChildren);
 
-        UpdateChildBoundingBox(type, metadataSize, parentNodePointer, nodePointer, childIdx);
+        UpdateChildBoundingBox(metadataSize, parentNodePointer, nodePointer, childIdx);
 
         if (ShaderConstants.isUpdateInPlace == false)
         {
@@ -323,7 +323,7 @@ void UpdateQBVHImpl(
                 CopyChildPointersAndFlags(parentNodePointer, metadataSize);
             }
 
-            if (type == TOP_LEVEL)
+            if (Settings.topLevelBuild != 0)
             {
                 const uint parentNodeOffset = metadataSize + ExtractNodePointerOffset(parentNodePointer);
 
@@ -334,7 +334,7 @@ void UpdateQBVHImpl(
             // The last child of the root node updates the root bounding box in the header
             if (parentNodePointer == rootNodePointer)
             {
-                UpdateRootNode(metadataSize, rootNodePointer);
+                UpdateRootNode(metadataSize, rootNodePointer, header.numActivePrims);
             }
         }
 

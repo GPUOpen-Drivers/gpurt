@@ -34,8 +34,8 @@
 #ifndef _COMMON_HLSL
 #define _COMMON_HLSL
 
-#include "RayTracingDefs.h"
-#include "ScratchNode.hlsl"
+#include "../shared/rayTracingDefs.h"
+#include "../shared/scratchNode.h"
 
 #if !defined(__cplusplus)
 #include "BuildSettings.hlsli"
@@ -89,7 +89,7 @@ struct BuiltInTriangleIntersectionAttributes
 #define END_SEARCH        0xfffffff8
 
 #include "Extensions.hlsl"
-#include "Math.hlsl"
+#include "../shared/math.h"
 
 // Workaround for lack of 64 bit literals and casts in glslang
 static const uint64_t OneU64 = 1;

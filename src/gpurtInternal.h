@@ -28,6 +28,7 @@
 #include "gpurt/gpurtBuildSettings.h"
 #include "gpurt/gpurtCounter.h"
 #include "palInlineFuncs.h"
+#include "palHashLiteralString.h"
 
 namespace GpuRt
 {
@@ -58,10 +59,10 @@ static constexpr size_t RayTracingTDTRNodeSize          = 48;
 static constexpr size_t RayTracingStateTDTRBuildSize    = 64;
 
 static constexpr size_t RayTracingTSRefScratchSize      = 36;
-static constexpr size_t RayTracingStateTSBuildSize      = 40;
+static constexpr size_t RayTracingStateTSBuildSize      = 20;
 static constexpr size_t RayTracingAtomicFlags           = 8;
 
-static constexpr size_t RayTracingStateRebraidBuildSize = 28;
+static constexpr size_t RayTracingStateRebraidBuildSize = 8;
 
 static constexpr size_t RayTracingBuildDebugCounters    = 11;
 
@@ -72,6 +73,15 @@ static_assert(((RayTracingTDNodeSize % 8) == 0),
     "TDNode size must be 8-byte aligned to ensure that 64-bit atomic operations on the first field work correctly.");
 
 constexpr uint32 DefaultThreadGroupSize = 64;
+
+// =====================================================================================================================
+// Constant string hashes for compiler options
+namespace PipelineOptionName
+{
+constexpr uint32_t waveSize = Util::HashLiteralString("waveSize");
+constexpr uint32_t Wave32   = Util::HashLiteralString("Wave32");
+constexpr uint32_t Wave64   = Util::HashLiteralString("Wave64");
+}
 
 enum EncodeFlags : uint32
 {
@@ -138,7 +148,9 @@ struct RayTracingScratchDataOffsets
     uint32 triangleSplitRefs1;
     uint32 splitPriorities;
     uint32 triangleSplitState;
+    uint32 triangleSplitTaskQueueCounter;
     uint32 rebraidState;
+    uint32 rebraidTaskQueueCounter;
     uint32 atomicFlagsTS;
     uint32 refList;
     uint32 tdNodeList;
@@ -156,6 +168,7 @@ struct RayTracingScratchDataOffsets
     uint32 internalNodesIndex1; // BVH AC build only
     uint32 neighbourIndices;    // BVH PLOC build only
     uint32 currentState;        // BVH PLOC build only
+    uint32 plocTaskQueueCounter;// BVH PLOC build only
     uint32 atomicFlagsPloc;     // BVH PLOC build only
     uint32 clusterOffsets;      // BVH PLOC build only
     uint32 sceneBounds;
@@ -176,6 +189,7 @@ struct RayTracingScratchDataOffsets
     uint32 distributedPartSums;
     uint32 qbvhGlobalStack;
     uint32 qbvhGlobalStackPtrs;
+    uint32 reserved0;
     uint32 debugCounters;
 };
 
@@ -230,14 +244,6 @@ const uint32 ReservedLogicalIdCount = 1;
 
 // Array of internal pipeline source code
 extern const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsType::Count)];
-
-// =====================================================================================================================
-// Calculate acceleration structure internal node count for resulting BVH
-inline uint32 CalcNumInternalNodes(
-    uint32 primitiveCount)    // Primitive node count (instances or triangle/aabb geometry)
-{
-    return Util::Max(1U, (2 * primitiveCount) / 3);
-}
 
 // Layout used for build shader PSO hashes.
 union BuildShaderPsoHash

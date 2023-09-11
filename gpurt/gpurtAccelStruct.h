@@ -44,8 +44,8 @@
 //
 // Note this file is designed to be compilable as HLSL.
 
-#define GPURT_ACCEL_STRUCT_MAJOR_VERSION 15
-#define GPURT_ACCEL_STRUCT_MINOR_VERSION 9
+#define GPURT_ACCEL_STRUCT_MAJOR_VERSION 16
+#define GPURT_ACCEL_STRUCT_MINOR_VERSION 0
 #define GPURT_ACCEL_STRUCT_VERSION       ((GPURT_ACCEL_STRUCT_MAJOR_VERSION << 16) | GPURT_ACCEL_STRUCT_MINOR_VERSION)
 
 #ifdef __cplusplus
@@ -90,25 +90,19 @@ struct AccelStructMetadataHeader
     uint32 addressLo;           // Address of acceleration structure data section (low bits)
     uint32 addressHi;           // Address of acceleration structure data section (high bits)
     uint32 sizeInBytes;         // Metadata size in bytes (including this header)
-    uint32 reserved0;           // Reserved
     uint32 taskCounter;         // Task counter for dispatch-wide spin loop sync. Align to 8 bytes so taskCounter and
                                 // numTasksDone can be reset in one 64 bit CP write.
     uint32 numTasksDone;        // Number of tasks done
-    uint32 reserved1;           // Reserved
-    uint32 reserved2;           // Reserved
-    uint32 reserved3;           // Reserved
+    uint32 reserved0[16];       // Reserved
 };
 
 #define ACCEL_STRUCT_METADATA_VA_LO_OFFSET              0
 #define ACCEL_STRUCT_METADATA_VA_HI_OFFSET              4
 #define ACCEL_STRUCT_METADATA_SIZE_OFFSET               8
-#define ACCEL_STRUCT_METADATA_RESERVED_0                12
-#define ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET       16
-#define ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET     20
-#define ACCEL_STRUCT_METADATA_RESERVED_1                24
-#define ACCEL_STRUCT_METADATA_RESERVED_2                28
-#define ACCEL_STRUCT_METADATA_RESERVED_3                32
-#define ACCEL_STRUCT_METADATA_HEADER_SIZE               36
+#define ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET       12
+#define ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET     16
+#define ACCEL_STRUCT_METADATA_RESERVED_0                20
+#define ACCEL_STRUCT_METADATA_HEADER_SIZE               84
 
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_HEADER_SIZE == sizeof(AccelStructMetadataHeader), "Acceleration structure header mismatch");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_VA_LO_OFFSET == offsetof(AccelStructMetadataHeader, addressLo), "");

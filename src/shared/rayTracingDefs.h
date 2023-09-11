@@ -24,12 +24,13 @@
  **********************************************************************************************************************/
 // This header file contains shared definitions between the HLSL raytracing shaders and the prototype c++ code
 //
-#ifndef RAYTRACING_DEF_H
-#define RAYTRACING_DEF_H
+#ifndef _RAYTRACING_DEF_H
+#define _RAYTRACING_DEF_H
 
 #include "../../gpurt/gpurtAccelStruct.h"
 #include "../../gpurt/gpurtBuildSettings.h"
 #include "../../gpurt/gpurtDispatch.h"
+#include "accelStruct.h"
 
 // Due to lack of enum support in HLSL, we have these defines which should match Pal::RayTracingIpLevel in palDevice.h.
 #define GPURT_RTIP1_0 1
@@ -959,15 +960,15 @@ struct StackPtrs
 
 #define STACK_PTR_SIZE 12
 
-#define STACK_PTRS_SRC_PTR_OFFSET        0
-#define STACK_PTRS_DST_PTR_OFFSET        4
-#define STACK_PTRS_NUM_LEAFS_DONE_OFFSET 8
+#define STACK_PTRS_SRC_PTR_OFFSET         0
+#define STACK_PTRS_DST_PTR_OFFSET         4
+#define STACK_PTRS_NUM_LEAFS_DONE_OFFSET  8
 
 #ifdef __cplusplus
-static_assert(STACK_PTR_SIZE                   == sizeof(StackPtrs), "StackPtrs structure mismatch");
-static_assert(STACK_PTRS_SRC_PTR_OFFSET        == offsetof(StackPtrs, stackPtrSrcNodeId), "");
-static_assert(STACK_PTRS_DST_PTR_OFFSET        == offsetof(StackPtrs, stackPtrNodeDest),  "");
-static_assert(STACK_PTRS_NUM_LEAFS_DONE_OFFSET == offsetof(StackPtrs, numLeafsDone),      "");
+static_assert(STACK_PTR_SIZE                    == sizeof(StackPtrs), "StackPtrs structure mismatch");
+static_assert(STACK_PTRS_SRC_PTR_OFFSET         == offsetof(StackPtrs, stackPtrSrcNodeId), "");
+static_assert(STACK_PTRS_DST_PTR_OFFSET         == offsetof(StackPtrs, stackPtrNodeDest),  "");
+static_assert(STACK_PTRS_NUM_LEAFS_DONE_OFFSET  == offsetof(StackPtrs, numLeafsDone),      "");
 #endif
 
 //=====================================================================================================================
@@ -986,46 +987,6 @@ static_assert(STACK_PTRS_NUM_LEAFS_DONE_OFFSET == offsetof(StackPtrs, numLeafsDo
 #define COUNTER_EMPTYPRIM_OFFSET        0x20
 #define COUNTER_EMITCOMPACTSIZE_OFFSET  0x24
 #define COUNTER_BUILDFASTLBVH_OFFSET    0x28
-
-//=====================================================================================================================
-// Calculate internal BVH nodes
-static uint CalcBvhNodeCountInternal(
-    uint numPrimitives)
-{
-    // Note, the worst case QBVH node with a top-down build at the last level contains at least 2 BVH2 nodes.
-    // And any preceding level contains at most 1/4 nodes each. Thus, the worst case QBVH internal
-    // node calculation is as follows
-    //
-    // uint nodeCount = 0;
-    // uint lastLevelNodeCount = numPrimitives >> 1;
-    // while (lastLevelNodeCount > 0)
-    // {
-    //    nodeCount += lastLevelNodeCount;
-    //    lastLevelNodeCount >>= 2;
-    // }
-    //
-    // This results in a geometric progression:
-    // where a is n/2 and ratio is 1/4
-    //
-    // nodeCount = n/2 + n/8 + n/32 + n/128 + ...
-    // nodeCount = n/2 * (1 + 1/4 + 1/16 + 1/64 + ...)
-    // nodeCount = n/2 * summation(n=0:+inf){ (1/4) ^ n }
-    // nodeCount = n/2 * (1 / (1 - 1/4))
-    // nodeCount = 2n / 3
-    //
-    // approximation error approaches ~8.3% at primitive count of 2^29
-    //
-    // We need at least 1 internal node.
-    return max(1u, (2 * numPrimitives) / 3);
-}
-
-//=====================================================================================================================
-// Calculate total number of BVH nodes
-static uint CalcBvhNodeCount(
-    uint numPrimitives)
-{
-    return numPrimitives + CalcBvhNodeCountInternal(numPrimitives);
-}
 
 //=====================================================================================================================
 // Get leaf triangle node size in bytes
@@ -1079,98 +1040,12 @@ static uint GetBvhNodeSizeLeaf(
 }
 
 //=====================================================================================================================
-static uint CalcBvhNodeSizeInternal(uint numPrimitives)
-{
-    return CalcBvhNodeCountInternal(numPrimitives) * GetBvhNodeSizeInternal();
-}
-
-// =====================================================================================================================
-// Static helper function that calculates the size of the buffer for internal nodes
-static uint CalcBvhNodeSizeInternal(
-    uint numPrimitives,
-    uint fp16NodesInQbvhBlasMode,
-    bool isBottomLevel)
-{
-    const uint numInternalNodes = CalcBvhNodeCountInternal(numPrimitives);
-
-    uint numBox16Nodes = 0;
-    uint numBox32Nodes = 0;
-
-    if (isBottomLevel)
-    {
-        switch (fp16NodesInQbvhBlasMode)
-        {
-            case NO_NODES_IN_BLAS_AS_FP16:
-                // All nodes are fp32
-                numBox32Nodes = numInternalNodes;
-                break;
-
-            case LEAF_NODES_IN_BLAS_AS_FP16:
-                // Conservative estimate how many interior nodes can be converted to fp16
-                numBox16Nodes = (numPrimitives / 4);
-                numBox32Nodes = numInternalNodes - numBox16Nodes;
-                break;
-
-            case MIXED_NODES_IN_BLAS_AS_FP16:
-                // Conservative estimate: no fp32 nodes could be converted to fp16
-                // BVH storage savings realized after compaction copy
-                numBox32Nodes = numInternalNodes;
-                break;
-
-            case ALL_INTERIOR_NODES_IN_BLAS_AS_FP16:
-                // All but the root node are fp16
-                numBox16Nodes = numInternalNodes - 1;
-                numBox32Nodes = 1;
-                break;
-
-            default:
-                // Should not get here -- will return 0
-                break;
-        }
-    }
-    else
-    {
-        numBox32Nodes = numInternalNodes;
-    }
-
-    const uint sizeInBytes = (FLOAT16_BOX_NODE_SIZE * numBox16Nodes) +
-                             (FLOAT32_BOX_NODE_SIZE * numBox32Nodes);
-    return sizeInBytes;
-}
-
-//=====================================================================================================================
 static uint CalcParentPtrOffset(uint nodePtr)
 {
     // Subtract 1 from the index to account for negative offset calculations. I.e. index 0 is actually at -4 byte
     // offset from the end of the parent pointer memory
     const uint linkIndex = (nodePtr >> 3) - 1;
     return linkIndex * NODE_PTR_SIZE;
-}
-
-//=====================================================================================================================
-static uint CalcMetadataSizeInBytes(
-    uint internalNodeSizeInBytes,
-    uint leafNodeSizeInBytes)
-{
-    ///@note Each 64-bytes in acceleration structure occupies 4-Bytes of parent pointer memory
-    ///      for each primitive in the leaf node. E.g. an acceleration structure with 4 primitives
-    ///
-    ///   | A | 0 | 1 | 2 | 3 | (A: internal node, 0-3 are leaf nodes)
-    ///
-    ///   Parent pointer memory layout (-1 indicates root node)
-    ///
-    /// -- 1x and Pair Triangle Compression
-    ///   |-1 | x |
-    ///   | A | A |
-    ///   | A | A |
-    ///
-
-    const uint num64ByteChunks     = (internalNodeSizeInBytes + leafNodeSizeInBytes) / 64;
-    const uint numLinks            = num64ByteChunks;
-    const uint linkDataSizeInBytes = numLinks * NODE_PTR_SIZE;
-    const uint metadataSizeInBytes = ACCEL_STRUCT_METADATA_HEADER_SIZE + linkDataSizeInBytes;
-
-    return metadataSizeInBytes;
 }
 
 //=====================================================================================================================
@@ -1377,19 +1252,16 @@ struct Flags
 
 struct StatePLOC
 {
-    StateTaskQueueCounter   plocTaskCounters;
-
     uint                    numClusters;
     uint                    internalNodesIndex;
     uint                    clusterListIndex;
     uint                    numClustersAlloc;
 };
 
-#define STATE_PLOC_TASK_QUEUE_SIZE                          sizeof(StateTaskQueueCounter)
-#define STATE_PLOC_NUM_CLUSTERS_OFFSET                      STATE_PLOC_TASK_QUEUE_SIZE + 0
-#define STATE_PLOC_INTERNAL_NODES_INDEX_OFFSET              STATE_PLOC_TASK_QUEUE_SIZE + 4
-#define STATE_PLOC_CLUSTER_LIST_INDEX_OFFSET                STATE_PLOC_TASK_QUEUE_SIZE + 8
-#define STATE_PLOC_NUM_CLUSTERS_ALLOC_OFFSET                STATE_PLOC_TASK_QUEUE_SIZE + 12
+#define STATE_PLOC_NUM_CLUSTERS_OFFSET                      0
+#define STATE_PLOC_INTERNAL_NODES_INDEX_OFFSET              4
+#define STATE_PLOC_CLUSTER_LIST_INDEX_OFFSET                8
+#define STATE_PLOC_NUM_CLUSTERS_ALLOC_OFFSET                12
 
 //=====================================================================================================================
 #define REBRAID_PHASE_INIT                     0
@@ -1399,13 +1271,11 @@ struct StatePLOC
 
 struct RebraidState
 {
-    StateTaskQueueCounter   taskQueue;
     float                   sumValue;
     uint                    mutex;
 };
 
-#define STATE_REBRAID_TASK_QUEUE_SIZE                                 sizeof(StateTaskQueueCounter)
-#define STATE_REBRAID_SUM_VALUE_OFFSET                                STATE_REBRAID_TASK_QUEUE_SIZE + 0
+#define STATE_REBRAID_SUM_VALUE_OFFSET                                0
 #define STATE_REBRAID_MUTEX_OFFSET                                    STATE_REBRAID_SUM_VALUE_OFFSET + 4
 
 //=====================================================================================================================
@@ -1427,7 +1297,6 @@ struct ScratchTSRef
 
 struct ScratchTSState
 {
-    StateTaskQueueCounter   taskQueue;
     uint                    refListIndex;
     uint                    numRefs;
     uint                    numRefsAlloc;
@@ -1435,8 +1304,7 @@ struct ScratchTSState
     uint                    mutex;
 };
 
-#define STATE_TS_TASK_QUEUE_SIZE             sizeof(StateTaskQueueCounter)
-#define STATE_TS_REF_LIST_INDEX_OFFSET       STATE_TS_TASK_QUEUE_SIZE + 0
+#define STATE_TS_REF_LIST_INDEX_OFFSET       0
 #define STATE_TS_NUM_REFS_OFFSET             STATE_TS_REF_LIST_INDEX_OFFSET + 4
 #define STATE_TS_NUM_REFS_ALLOC_OFFSET       STATE_TS_NUM_REFS_OFFSET + 4
 #define STATE_TS_SUM_OFFSET                  STATE_TS_NUM_REFS_ALLOC_OFFSET + 4
@@ -1487,23 +1355,6 @@ typedef CompileTimeBuildSettings BuildSettingsData;
 #define BUILD_MODE_LINEAR   0
 // BUILD_MODE_AC was 1, but it has been removed.
 #define BUILD_MODE_PLOC     2
-
-//=====================================================================================================================
-static uint CalcNumQBVHInternalNodes(uint numPrimitives)
-{
-    return CalcBvhNodeCountInternal(numPrimitives);
-}
-
-//=====================================================================================================================
-static uint CalcNumQBVHNodes(uint numPrimitives)
-{
-    return CalcBvhNodeCount(numPrimitives);
-}
-
-#define BUILD_FLAGS_COLLAPSE                 1
-#define BUILD_FLAGS_TRIANGLE_SPLITTING       2
-#define BUILD_FLAGS_LATE_PAIR_COMPRESSION    4
-#define BUILD_FLAGS_PAIR_COST_CHECK          8
 
 #define SAH_COST_TRIANGLE_INTERSECTION       1.5
 #define SAH_COST_AABBB_INTERSECTION          1

@@ -34,7 +34,7 @@ add_library(gpurt STATIC)
 add_library(AMD::gpurt ALIAS gpurt)
 
 set_target_properties(gpurt PROPERTIES
-    CXX_STANDARD 17
+    CXX_STANDARD 20
     CXX_STANDARD_REQUIRED YES
     CXX_EXTENSIONS NO
 )

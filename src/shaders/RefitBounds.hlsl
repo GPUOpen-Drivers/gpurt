@@ -57,14 +57,6 @@ struct Constants
 #include "IntersectCommon.hlsl"
 #include "RefitBoundsImpl.hlsl"
 
-//======================================================================================================================
-bool EnableLatePairCompression()
-{
-    return (Settings.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
-           (Settings.topLevelBuild == false) &&
-           (Settings.enableEarlyPairCompression == false);
-}
-
 //=====================================================================================================================
 // Main Function : RefitBounds
 //=====================================================================================================================

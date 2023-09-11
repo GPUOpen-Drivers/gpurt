@@ -85,6 +85,7 @@ struct FastLBVHArgs
     uint enableInstancePrimCount;
     uint enableEarlyPairCompression;
     uint unsortedNodesBaseOffset;
+    uint reserved0;
 };
 
 //=====================================================================================================================
@@ -298,7 +299,6 @@ void FastAgglomerativeLbvhImpl(
     refitArgs.enableInstancePrimCount     = args.enableInstancePrimCount;
     refitArgs.unsortedNodesBaseOffset     = args.unsortedNodesBaseOffset;
     refitArgs.enableEarlyPairCompression  = args.enableEarlyPairCompression;
-
     // Total number of internal nodes is N - 1
     const uint numInternalNodes = args.numActivePrims - 1;
 
@@ -364,7 +364,7 @@ void FastAgglomerativeLbvhImpl(
             // Store invalid index as parent of root
             ScratchBuffer.Store(CalcScratchNodeOffset(args.baseScratchNodesOffset, currentNodeIndex) + SCRATCH_NODE_PARENT_OFFSET, 0xffffffff);
             // Store the index of the root node
-            ScratchBuffer.Store(args.rootNodeIndexOffset, currentNodeIndex);
+            WriteRootNodeIndex(args.rootNodeIndexOffset, currentNodeIndex);
             // Do not write the parent node since it's invalid.
             break;
         }

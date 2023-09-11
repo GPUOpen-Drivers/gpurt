@@ -64,6 +64,7 @@ struct RefitArgs
     uint enableInstancePrimCount;
     uint unsortedNodesBaseOffset;
     uint enableEarlyPairCompression;
+    uint reserved0;
 };
 
 //=====================================================================================================================
@@ -433,6 +434,13 @@ uint64_t RoundUpQuotient(
 }
 
 //=====================================================================================================================
+static uint32_t GetNumInternalNodeCount(
+    in uint32_t primitiveCount)
+{
+    return CalcAccelStructInternalNodeCount(primitiveCount, 4u);
+}
+
+//=====================================================================================================================
 TriangleData FetchTriangleFromNode(
     RWByteAddressBuffer DstBuffer,
     uint                metadataSize,
@@ -558,21 +566,23 @@ void WriteParentPointer(
 }
 
 //=====================================================================================================================
-uint GetChildCount(
-    GpuVirtualAddress address,
-    uint              nodePointer)
+uint GetBlasInternalNodeChildCount(
+    uint64_t blasBasePtr,
+    uint     nodePointer)
 {
+    const uint64_t blasBaseAddr = ExtractInstanceAddr(blasBasePtr);
+
     uint count = 0;
 
     if (
         IsBoxNode16(nodePointer))
     {
-        const Float16BoxNode node = FetchFloat16BoxNode(address, nodePointer);
+        const Float16BoxNode node = FetchFloat16BoxNode(blasBaseAddr, nodePointer);
         count = 1 + (node.child1 != INVALID_IDX) + (node.child2 != INVALID_IDX) + (node.child3 != INVALID_IDX);
     }
     else
     {
-        const Float32BoxNode node = FetchFloat32BoxNode(address,
+        const Float32BoxNode node = FetchFloat32BoxNode(blasBaseAddr,
                                                         nodePointer);
         count = 1 + (node.child1 != INVALID_IDX) + (node.child2 != INVALID_IDX) + (node.child3 != INVALID_IDX);
     }
@@ -652,7 +662,7 @@ void WriteInstanceDescriptor(
 {
     const uint instanceNodeOffset = ExtractNodePointerOffset(instNodePtr);
     const uint dstNodeOffset = bufferOffset + instanceNodeOffset;
-    const GpuVirtualAddress address =
+    const GpuVirtualAddress blasBaseAddr =
         GetInstanceAddr(desc.accelStructureAddressLo, desc.accelStructureAddressHiAndFlags);
 
     {
@@ -688,12 +698,12 @@ void WriteInstanceDescriptor(
 
             if (IsBoxNode32(blasRootNodePointer))
             {
-                blasRootNode = FetchFloat32BoxNode(address,
+                blasRootNode = FetchFloat32BoxNode(blasBaseAddr,
                                                    blasRootNodePointer);
             }
             else if (IsBoxNode16(blasRootNodePointer))
             {
-                blasRootNode = FetchFloat16BoxNodeAsFp32(address, blasRootNodePointer);
+                blasRootNode = FetchFloat16BoxNodeAsFp32(blasBaseAddr, blasRootNodePointer);
             }
             else
             {
@@ -701,7 +711,7 @@ void WriteInstanceDescriptor(
                 //
                 // Note, we only rebraid one level of the BLAS, the parent pointer is guaranteed to be the
                 // root node pointer.
-                blasRootNode = FetchFloat32BoxNode(address,
+                blasRootNode = FetchFloat32BoxNode(blasBaseAddr,
                                                    CreateRootNodePointer());
 
                 // Copy triangle box data from root node
@@ -858,6 +868,14 @@ static uint ReadAccelStructHeaderField(
     in uint offset)
 {
     return DstBuffer.Load(offset);
+}
+
+//======================================================================================================================
+bool EnableLatePairCompression()
+{
+    return (Settings.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
+           (Settings.topLevelBuild == false) &&
+           (Settings.enableEarlyPairCompression == false);
 }
 
 //=====================================================================================================================

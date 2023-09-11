@@ -22,7 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "../RayTracingDefs.h"
+#include "../../shared/rayTracingDefs.h"
 
 #define NUMBER_OF_BLOCKS_PER_GROUP 1
 #define NUM_BINS                   16

@@ -41,6 +41,7 @@ set(gpurtHlsl
     BuildBVHTDTR.hlsl
     BuildCommon.hlsl
     BuildCommonScratch.hlsl
+    TaskQueueCounter.hlsl
     BuildSettings.hlsli
     BuildParallel.hlsl
     BuildQBVH.hlsl
@@ -68,7 +69,6 @@ set(gpurtHlsl
     InitExecuteIndirect.hlsl
     IntersectCommon.hlsl
     MergeSort.hlsl
-    Math.hlsl
     PairCompression.hlsl
     RayQuery.hlsl
     RayQuery1_1.hlsl
@@ -78,7 +78,6 @@ set(gpurtHlsl
     Rebraid.hlsl
     RefitBounds.hlsl
     RefitBoundsImpl.hlsl
-    ScratchNode.hlsl
     SerializeAS.hlsl
     SerializeCommon.hlsl
     TraceRay.hlsl
@@ -94,7 +93,9 @@ set(gpurtHlsl
     UpdateQBVHImpl.hlsl
 )
 set(otherDeps
-    RayTracingDefs.h
+    ../shared/rayTracingDefs.h
+    ../shared/scratchNode.h
+    ../shared/math.h
 )
 
 list(TRANSFORM otherDeps PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")

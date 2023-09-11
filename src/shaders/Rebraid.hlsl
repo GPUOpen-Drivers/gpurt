@@ -44,6 +44,7 @@ struct RebraidArgs
     uint bvhLeafNodeDataScratchOffset;
     uint sceneBoundsOffset;
     uint stateScratchOffset;
+    uint taskQueueCounterScratchOffset;
     uint atomicFlagsScratchOffset;
     uint encodeArrayOfPointers;
     uint enableCentroidSceneBoundsWithSize;
@@ -66,6 +67,8 @@ struct RebraidArgs
 #define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
 groupshared uint SharedMem[MAX_LDS_ELEMENTS];
 
+#include "TaskQueueCounter.hlsl"
+
 #include "RadixSort/ScanExclusiveInt4DLBCommon.hlsl"
 #endif
 
@@ -73,70 +76,6 @@ groupshared uint SharedMem[MAX_LDS_ELEMENTS];
 #define REBRAID_KEYS_PER_GROUP          (BUILD_THREADGROUP_SIZE * REBRAID_KEYS_PER_THREAD)
 
 #define ENABLE_HIGHER_QUALITY           1
-
-//=====================================================================================================================
-void AllocTasksRB(const uint numTasks, const uint phase, uint taskQueueOffset)
-{
-    // start = end
-    const uint end = ScratchBuffer.Load(taskQueueOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET);
-
-    ScratchBuffer.Store(taskQueueOffset + STATE_TASK_QUEUE_START_PHASE_INDEX_OFFSET, end);
-
-    ScratchBuffer.Store(taskQueueOffset + STATE_TASK_QUEUE_PHASE_OFFSET, phase);
-
-    DeviceMemoryBarrier();
-
-    ScratchBuffer.Store(taskQueueOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET, end + numTasks);
-}
-
-//=====================================================================================================================
-uint2 BeginTaskRB(const uint localId, uint taskQueueOffset)
-{
-    if (localId == 0)
-    {
-        ScratchBuffer.InterlockedAdd(taskQueueOffset + STATE_TASK_QUEUE_TASK_COUNTER_OFFSET, 1, SharedMem[0]);
-    }
-
-    GroupMemoryBarrierWithGroupSync();
-
-    const uint index = SharedMem[0];
-
-    // wait till there are valid tasks to do
-    do
-    {
-        DeviceMemoryBarrier();
-    } while (index >= ScratchBuffer.Load(taskQueueOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET));
-
-    const uint phase = ScratchBuffer.Load(taskQueueOffset + STATE_TASK_QUEUE_PHASE_OFFSET);
-
-    const uint startPhaseIndex = ScratchBuffer.Load(taskQueueOffset + STATE_TASK_QUEUE_START_PHASE_INDEX_OFFSET);
-
-    return uint2(index - startPhaseIndex, phase);
-}
-
-//=====================================================================================================================
-bool EndTaskRB(const uint localId, uint taskQueueOffset)
-{
-    bool returnValue = false;
-
-    DeviceMemoryBarrier();
-
-    if (localId == 0)
-    {
-        const uint endPhaseIndex = ScratchBuffer.Load(taskQueueOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET);
-
-        uint orig;
-        ScratchBuffer.InterlockedAdd(taskQueueOffset + STATE_TASK_QUEUE_NUM_TASKS_DONE_OFFSET, 1, orig);
-
-        // current phase is done
-        if (orig == (endPhaseIndex - 1))
-        {
-            returnValue = true;
-        }
-    }
-
-    return returnValue;
-}
 
 //=====================================================================================================================
 void WriteFlags(RebraidArgs args, uint index, Flags flags)
@@ -176,6 +115,32 @@ uint ReadPrefixSum(
 }
 
 //=====================================================================================================================
+// Fetch bottom-level acceleration structure root child information.
+void FetchBlasRootChildInfo(
+    uint64_t               blasBaseAddr,
+    uint32_t               rootNodePtr,
+    out_param(BoundingBox) bbox[4],
+    out_param(uint4)       child)
+{
+    {
+        const Float32BoxNode node = FetchFloat32BoxNode(blasBaseAddr,
+                                                        rootNodePtr);
+        bbox[0].min = node.bbox0_min;
+        bbox[0].max = node.bbox0_max;
+        bbox[1].min = node.bbox1_min;
+        bbox[1].max = node.bbox1_max;
+        bbox[2].min = node.bbox2_min;
+        bbox[2].max = node.bbox2_max;
+        bbox[3].min = node.bbox3_min;
+        bbox[3].max = node.bbox3_max;
+        child[0] = node.child0;
+        child[1] = node.child1;
+        child[2] = node.child2;
+        child[3] = node.child3;
+    }
+}
+
+//=====================================================================================================================
 float CalculatePriorityUsingSAHComparison(RebraidArgs args, ScratchNode leaf)
 {
     const BoundingBox aabb = GetScratchNodeBoundingBox(leaf);
@@ -198,44 +163,29 @@ float CalculatePriorityUsingSAHComparison(RebraidArgs args, ScratchNode leaf)
     const GpuVirtualAddress address = GetInstanceAddr(asuint(leaf.sah_or_v2_or_instBasePtr.x),
                                                       asuint(leaf.sah_or_v2_or_instBasePtr.y));
 
-    const Float32BoxNode node = FetchFloat32BoxNode(address,
-                                                    rootNodePointer);
+    uint4 child = uint4(INVALID_IDX, INVALID_IDX, INVALID_IDX, INVALID_IDX);
 
-    BoundingBox temp;
-    temp.min = node.bbox0_min;
-    temp.max = node.bbox0_max;
+    BoundingBox bbox[4];
+    FetchBlasRootChildInfo(address, rootNodePointer, bbox, child);
 
-    temp = TransformBoundingBox(temp, desc.Transform);
-
+    BoundingBox temp = TransformBoundingBox(bbox[0], desc.Transform);
     float surfaceArea = ComputeBoxSurfaceArea(temp);
 
-    if (node.child1 != INVALID_IDX)
+    if (child[1] != INVALID_IDX)
     {
-        temp.min = node.bbox1_min;
-        temp.max = node.bbox1_max;
-
-        temp = TransformBoundingBox(temp, desc.Transform);
-
+        temp = TransformBoundingBox(bbox[1], desc.Transform);
         surfaceArea += ComputeBoxSurfaceArea(temp);
     }
 
-    if (node.child2 != INVALID_IDX)
+    if (child[2] != INVALID_IDX)
     {
-        temp.min = node.bbox2_min;
-        temp.max = node.bbox2_max;
-
-        temp = TransformBoundingBox(temp, desc.Transform);
-
+        temp = TransformBoundingBox(bbox[2], desc.Transform);
         surfaceArea += ComputeBoxSurfaceArea(temp);
     }
 
-    if (node.child3 != INVALID_IDX)
+    if (child[3] != INVALID_IDX)
     {
-        temp.min = node.bbox3_min;
-        temp.max = node.bbox3_max;
-
-        temp = TransformBoundingBox(temp, desc.Transform);
-
+        temp = TransformBoundingBox(bbox[3], desc.Transform);
         surfaceArea += ComputeBoxSurfaceArea(temp);
     }
 
@@ -251,7 +201,7 @@ void RebraidImpl(
     uint            groupId,
     RebraidArgs     args)
 {
-    const uint taskQueueOffset           = args.stateScratchOffset;
+    const uint taskQueueOffset           = args.taskQueueCounterScratchOffset;
     const uint sumValueOffset            = args.stateScratchOffset + STATE_REBRAID_SUM_VALUE_OFFSET;
     const uint mutexOffset               = args.stateScratchOffset + STATE_REBRAID_MUTEX_OFFSET;
 
@@ -267,7 +217,7 @@ void RebraidImpl(
 
     if (globalId == 0)
     {
-        AllocTasksRB(numGroups, REBRAID_PHASE_INIT, taskQueueOffset);
+        AllocTasks(numGroups, REBRAID_PHASE_INIT, taskQueueOffset);
     }
 
     const uint rootNodePointer = CreateRootNodePointer();
@@ -276,7 +226,7 @@ void RebraidImpl(
 
     while (1)
     {
-        const uint2 task = BeginTaskRB(localId, taskQueueOffset);
+        const uint2 task = BeginTask(localId, taskQueueOffset);
 
         const uint taskIndex = task.x;
         const uint phase = task.y;
@@ -305,9 +255,9 @@ void RebraidImpl(
                     ScratchBuffer.Store<uint>(mutexOffset, 0);
                 }
 
-                if (EndTaskRB(localId, taskQueueOffset))
+                if (EndTask(localId, taskQueueOffset))
                 {
-                    AllocTasksRB(numGroups, REBRAID_PHASE_CALC_SUM, taskQueueOffset);
+                    AllocTasks(numGroups, REBRAID_PHASE_CALC_SUM, taskQueueOffset);
                 }
                 break;
             }
@@ -381,9 +331,9 @@ void RebraidImpl(
                     }
                 }
 
-                if (EndTaskRB(localId, taskQueueOffset))
+                if (EndTask(localId, taskQueueOffset))
                 {
-                    AllocTasksRB(RoundUpQuotient(args.numPrimitives, REBRAID_KEYS_PER_GROUP),
+                    AllocTasks(RoundUpQuotient(args.numPrimitives, REBRAID_KEYS_PER_GROUP),
                                                  REBRAID_PHASE_OPEN, taskQueueOffset);
                 }
                 break;
@@ -453,27 +403,13 @@ void RebraidImpl(
 
                         if (numOpenings > 0)
                         {
-                            const GpuVirtualAddress address = GetInstanceAddr(
-                                                asuint(leaf.sah_or_v2_or_instBasePtr.x),
-                                                asuint(leaf.sah_or_v2_or_instBasePtr.y));
+                            const uint64_t instanceBasePointer =
+                                PackUint64(asuint(leaf.sah_or_v2_or_instBasePtr.x), asuint(leaf.sah_or_v2_or_instBasePtr.y));
 
-                            InstanceDesc desc;
-                            if (args.encodeArrayOfPointers != 0)
-                            {
-                                const GpuVirtualAddress addr = InstanceDescBuffer.Load<GpuVirtualAddress>(leaf.left_or_primIndex_or_instIndex *
-                                                                                                    GPU_VIRTUAL_ADDRESS_SIZE);
-                                desc = FetchInstanceDescAddr(addr);
-                            }
-                            else
-                            {
-                                desc = InstanceDescBuffer.Load<InstanceDesc>(leaf.left_or_primIndex_or_instIndex
-                                                                             * INSTANCE_DESC_SIZE);
-                            }
+                            const uint childCount =
+                                GetBlasInternalNodeChildCount(instanceBasePointer, rootNodePointer);
 
-                            const uint childCount = GetChildCount(address,
-                                                                  rootNodePointer);
-
-                            localKeys[keyIndex] = childCount - 1; // additional children
+                            localKeys[keyIndex] = childCount - 1; // Additional children
                             open[keyIndex] = true;
                         }
                         else
@@ -594,18 +530,17 @@ void RebraidImpl(
 
                         if (open[keyIndex])
                         {
-                            const Float32BoxNode node = FetchFloat32BoxNode(address,
-                                                                            rootNodePointer);
+                            uint4 child = uint4(INVALID_IDX, INVALID_IDX, INVALID_IDX, INVALID_IDX);
 
-                            BoundingBox temp;
-                            temp.min = node.bbox0_min;
-                            temp.max = node.bbox0_max;
-                            temp = TransformBoundingBox(temp, desc.Transform);
+                            BoundingBox bbox[4];
+                            FetchBlasRootChildInfo(address, rootNodePointer, bbox, child);
+
+                            BoundingBox temp = TransformBoundingBox(bbox[0], desc.Transform);
 
                             // update a new leaf
                             ScratchBuffer.Store<float3>(scratchNodeOffset + SCRATCH_NODE_BBOX_MIN_OFFSET, temp.min);
                             ScratchBuffer.Store<float3>(scratchNodeOffset + SCRATCH_NODE_BBOX_MAX_OFFSET, temp.max);
-                            ScratchBuffer.Store<uint>(scratchNodeOffset + SCRATCH_NODE_NODE_POINTER_OFFSET, node.child0);
+                            ScratchBuffer.Store<uint>(scratchNodeOffset + SCRATCH_NODE_NODE_POINTER_OFFSET, child[0]);
 
                             if (args.enableSAHCost == false)
                             {
@@ -625,18 +560,16 @@ void RebraidImpl(
                             // update leaf and siblings
                             uint numSiblings = 0;
 
-                            if (node.child1 != INVALID_IDX)
+                            if (child[1] != INVALID_IDX)
                             {
-                                temp.min = node.bbox1_min;
-                                temp.max = node.bbox1_max;
-                                temp = TransformBoundingBox(temp, desc.Transform);
+                                temp = TransformBoundingBox(bbox[1], desc.Transform);
 
                                 leaf.bbox_min_or_v0 = temp.min;
                                 leaf.bbox_max_or_v1 = temp.max;
 
                                 const uint writeIndex = args.numPrimitives + prevSum + localKeys[keyIndex] + numSiblings;
 
-                                leaf.splitBox_or_nodePointer = node.child1;
+                                leaf.splitBox_or_nodePointer = child[1];
 
                                 if (args.enableSAHCost == false)
                                 {
@@ -647,8 +580,8 @@ void RebraidImpl(
                                     leaf.numPrimitivesAndDoCollapse = asuint(cost[1]);
                                 }
 
-                                ScratchBuffer.Store<ScratchNode>(args.bvhLeafNodeDataScratchOffset
-                                                                 + writeIndex * sizeof(ScratchNode), leaf);
+                                ScratchBuffer.Store<ScratchNode>(
+                                    args.bvhLeafNodeDataScratchOffset + writeIndex * sizeof(ScratchNode), leaf);
 
                                 if (args.enableCentroidSceneBoundsWithSize)
                                 {
@@ -658,18 +591,16 @@ void RebraidImpl(
                                 numSiblings++;
                             }
 
-                            if (node.child2 != INVALID_IDX)
+                            if (child[2] != INVALID_IDX)
                             {
-                                temp.min = node.bbox2_min;
-                                temp.max = node.bbox2_max;
-                                temp = TransformBoundingBox(temp, desc.Transform);
+                                temp = TransformBoundingBox(bbox[2], desc.Transform);
 
                                 leaf.bbox_min_or_v0 = temp.min;
                                 leaf.bbox_max_or_v1 = temp.max;
 
                                 const uint writeIndex = args.numPrimitives + prevSum + localKeys[keyIndex] + numSiblings;
 
-                                leaf.splitBox_or_nodePointer = node.child2;
+                                leaf.splitBox_or_nodePointer = child[2];
 
                                 if (args.enableSAHCost == false)
                                 {
@@ -691,18 +622,16 @@ void RebraidImpl(
                                 numSiblings++;
                             }
 
-                            if (node.child3 != INVALID_IDX)
+                            if (child[3] != INVALID_IDX)
                             {
-                                temp.min = node.bbox3_min;
-                                temp.max = node.bbox3_max;
-                                temp = TransformBoundingBox(temp, desc.Transform);
+                                temp = TransformBoundingBox(bbox[3], desc.Transform);
 
                                 leaf.bbox_min_or_v0 = temp.min;
                                 leaf.bbox_max_or_v1 = temp.max;
 
                                 const uint writeIndex = args.numPrimitives + prevSum + localKeys[keyIndex] + numSiblings;
 
-                                leaf.splitBox_or_nodePointer = node.child3;
+                                leaf.splitBox_or_nodePointer = child[3];
 
                                 if (args.enableSAHCost == false)
                                 {
@@ -759,9 +688,9 @@ void RebraidImpl(
                     }
                 }
 
-                if (EndTaskRB(localId, taskQueueOffset))
+                if (EndTask(localId, taskQueueOffset))
                 {
-                    AllocTasksRB(numGroups, REBRAID_PHASE_DONE, taskQueueOffset);
+                    AllocTasks(numGroups, REBRAID_PHASE_DONE, taskQueueOffset);
                 }
 
                 break;

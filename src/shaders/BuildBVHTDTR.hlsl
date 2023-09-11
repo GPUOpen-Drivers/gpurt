@@ -39,7 +39,7 @@ struct TDArgs
     uint TDNodeScratchOffset;
     uint TDBinsScratchOffset;
     uint CurrentStateScratchOffset;
-    uint TdTaskCounterScratchOffset;
+    uint TdTaskQueueCounterScratchOffset;
     uint EncodeArrayOfPointers;
 };
 
@@ -75,7 +75,9 @@ struct TDArgs
 #include "BuildCommon.hlsl"
 #include "BuildCommonScratch.hlsl"
 
-groupshared uint SharedIndex;
+groupshared uint SharedMem[1];
+
+#include "TaskQueueCounter.hlsl"
 
 #if USE_LDS
 struct LDSData {
@@ -846,94 +848,6 @@ uint Align(uint value, uint alignment)
 }
 
 //=====================================================================================================================
-void AllocTasksTD(const uint numTasks, const uint phase, TDArgs args)
-{
-    const uint startPhaseIndexOffset = args.TdTaskCounterScratchOffset + STATE_TASK_QUEUE_START_PHASE_INDEX_OFFSET;
-    const uint endPhaseIndexOffset   = args.TdTaskCounterScratchOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET;
-    const uint phaseOffset           = args.TdTaskCounterScratchOffset + STATE_TASK_QUEUE_PHASE_OFFSET;
-
-    // start = end
-    const uint end = ScratchBuffer.Load(endPhaseIndexOffset);
-
-    ScratchBuffer.Store(startPhaseIndexOffset, end);
-
-    ScratchBuffer.Store(phaseOffset, phase);
-
-    DeviceMemoryBarrier();
-
-    ScratchBuffer.Store(endPhaseIndexOffset, end + numTasks);
-}
-
-//=====================================================================================================================
-uint2 BeginTaskTD(const uint localId, TDArgs args)
-{
-    const uint taskCounterOffset     = args.TdTaskCounterScratchOffset + STATE_TASK_QUEUE_TASK_COUNTER_OFFSET;
-    const uint startPhaseIndexOffset = args.TdTaskCounterScratchOffset + STATE_TASK_QUEUE_START_PHASE_INDEX_OFFSET;
-    const uint endPhaseIndexOffset   = args.TdTaskCounterScratchOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET;
-    const uint phaseOffset           = args.TdTaskCounterScratchOffset + STATE_TASK_QUEUE_PHASE_OFFSET;
-
-#if NO_SHADER_ENTRYPOINT == 0
-    if (localId == 0)
-    {
-        ScratchBuffer.InterlockedAdd(taskCounterOffset, 1, SharedIndex);
-    }
-
-    GroupMemoryBarrierWithGroupSync();
-
-    const uint index = SharedIndex;
-#else
-    // BuildParallel path
-    if (localId == 0)
-    {
-        ScratchBuffer.InterlockedAdd(taskCounterOffset, 1, SharedMem[0]);
-    }
-
-    GroupMemoryBarrierWithGroupSync();
-
-    const uint index = SharedMem[0];
-#endif
-
-    // wait till there are valid tasks to do
-    do
-    {
-        DeviceMemoryBarrier();
-    } while (index >= ScratchBuffer.Load(endPhaseIndexOffset));
-
-    const uint phase = ScratchBuffer.Load(phaseOffset);
-
-    const uint startPhaseIndex = ScratchBuffer.Load(startPhaseIndexOffset);
-
-    return uint2(index - startPhaseIndex, phase);
-}
-
-//=====================================================================================================================
-bool EndTaskTD(const uint localId, TDArgs args)
-{
-    bool returnValue = false;
-
-    const uint numTasksDoneOffset  = args.TdTaskCounterScratchOffset + STATE_TASK_QUEUE_NUM_TASKS_DONE_OFFSET;
-    const uint endPhaseIndexOffset = args.TdTaskCounterScratchOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET;
-
-    DeviceMemoryBarrier();
-
-    if (localId == 0)
-    {
-        const uint endPhaseIndex = ScratchBuffer.Load(endPhaseIndexOffset);
-
-        uint orig;
-        ScratchBuffer.InterlockedAdd(numTasksDoneOffset, 1, orig);
-
-        // current phase is done
-        if (orig == (endPhaseIndex - 1))
-        {
-            returnValue = true;
-        }
-    }
-
-    return returnValue;
-}
-
-//=====================================================================================================================
 // Main Function : BuildTD
 //=====================================================================================================================
 // todo: dont use scratch node and just go from TDNode->QBVH
@@ -943,6 +857,7 @@ void BuildBVHTDImpl(
     uint            groupId,
     TDArgs          args)
 {
+    const uint taskQueueOffset          = args.TdTaskQueueCounterScratchOffset;
     const uint numNodesOffset           = args.CurrentStateScratchOffset + STATE_TD_NUM_NODES_OFFSET;
     const uint numProcessedNodesOffset  = args.CurrentStateScratchOffset + STATE_TD_NUM_PROCESSED_NODES_OFFSET;
     const uint numNodesAllocatedOffset  = args.CurrentStateScratchOffset + STATE_TD_NUM_NODES_ALLOCATED_OFFSET;
@@ -977,12 +892,12 @@ void BuildBVHTDImpl(
 
     if (globalId == 0)
     {
-        AllocTasksTD(1, TD_PHASE_INIT_STATE, args);
+        AllocTasks(1, TD_PHASE_INIT_STATE, taskQueueOffset);
     }
 
     while (1)
     {
-        const uint2 task = BeginTaskTD(localId, args);
+        const uint2 task = BeginTask(localId, taskQueueOffset);
 
         const uint taskIndex = task.x;
         const uint phase = task.y;
@@ -1017,9 +932,9 @@ void BuildBVHTDImpl(
 
                     ScratchBuffer.Store<StateTDBuild>(args.CurrentStateScratchOffset, initState);
 
-                    if (EndTaskTD(localId, args))
+                    if (EndTask(localId, taskQueueOffset))
                     {
-                        AllocTasksTD(numGroups, TD_PHASE_INIT_REFS_TO_LEAVES, args);
+                        AllocTasks(numGroups, TD_PHASE_INIT_REFS_TO_LEAVES, taskQueueOffset);
                     }
                 }
                 break;
@@ -1029,9 +944,9 @@ void BuildBVHTDImpl(
             {
                 BuildRefList(globalId, args);
 
-                if (EndTaskTD(localId, args))
+                if (EndTask(localId, taskQueueOffset))
                 {
-                    AllocTasksTD(numGroups, TD_PHASE_CHECK_NEED_ALLOC, args);
+                    AllocTasks(numGroups, TD_PHASE_CHECK_NEED_ALLOC, taskQueueOffset);
                 }
 
                 break;
@@ -1059,7 +974,7 @@ void BuildBVHTDImpl(
                         ScratchBuffer.Store<ScratchNode>(args.BvhNodeDataScratchOffset, leafNode);
 
                         WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, 1);
-                        AllocTasksTD(numGroups, TD_PHASE_DONE, args);
+                        AllocTasks(numGroups, TD_PHASE_DONE, taskQueueOffset);
                     }
                 }
                 else if (numRefsAllocated == 0)
@@ -1072,14 +987,14 @@ void BuildBVHTDImpl(
 
                         WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, 0);
 
-                        AllocTasksTD(numGroups, TD_PHASE_DONE, args);
+                        AllocTasks(numGroups, TD_PHASE_DONE, taskQueueOffset);
                     }
                 }
                 else
                 {
-                    if (EndTaskTD(localId, args))
+                    if (EndTask(localId, taskQueueOffset))
                     {
-                        AllocTasksTD(1, TD_PHASE_ALLOC_ROOT_NODE, args);
+                        AllocTasks(1, TD_PHASE_ALLOC_ROOT_NODE, taskQueueOffset);
                     }
                 }
                 break;
@@ -1134,17 +1049,17 @@ void BuildBVHTDImpl(
 #if !USE_BVH_REBRAID
                     UpdateTDNodeLeftAndBinWidth(0, args);
                     DeviceMemoryBarrier();
-                    if (EndTaskTD(localId, args))
+                    if (EndTask(localId, taskQueueOffset))
                     {
-                        AllocTasksTD(numGroups, TD_PHASE_BIN_REFS, args);
+                        AllocTasks(numGroups, TD_PHASE_BIN_REFS, taskQueueOffset);
                     }
 #else
                     UpdateTDNodeRebraidState(0, TD_NODE_REBRAID_STATE_OPEN, args);
                     ScratchBuffer.Store(rebraidStateOffset, TD_REBRAID_STATE_NEED_OPEN);
                     DeviceMemoryBarrier();
-                    if (EndTaskTD(localId, args))
+                    if (EndTask(localId, taskQueueOffset))
                     {
-                        AllocTasksTD(numGroups, TD_PHASE_REBRAID_COUNT_OPENINGS, args);
+                        AllocTasks(numGroups, TD_PHASE_REBRAID_COUNT_OPENINGS, taskQueueOffset);
                     }
 #endif
                 }
@@ -1181,30 +1096,27 @@ void BuildBVHTDImpl(
                                 (currentNode.largestWidth * args.LengthPercentage)) &&
                             IsBoxNode(ref.nodePointer))
                         {
-                            uint2 instanceBasePointer =
-                                ScratchBuffer.Load2(args.BvhLeafNodeDataScratchOffset +
-                                                    ref.primitiveIndex * sizeof(ScratchNode) +
-                                                    SCRATCH_NODE_INSTANCE_BASE_PTR_OFFSET);
+                            const uint64_t instanceBasePointer =
+                                ScratchBuffer.Load<uint64_t>(args.BvhLeafNodeDataScratchOffset +
+                                                             ref.primitiveIndex * sizeof(ScratchNode) +
+                                                             SCRATCH_NODE_INSTANCE_BASE_PTR_OFFSET);
 
-                            const GpuVirtualAddress address = GetInstanceAddr(instanceBasePointer.x,
-                                                                              instanceBasePointer.y);
-
-                            const uint count = GetChildCount(address, ref.nodePointer);
+                            const uint count = GetBlasInternalNodeChildCount(instanceBasePointer, ref.nodePointer);
 
                             AllocTDRefScratch(count - 1, args);
                         }
                     }
 
-                    if (EndTaskTD(localId, args))
+                    if (EndTask(localId, taskQueueOffset))
                     {
-                        AllocTasksTD(1, TD_PHASE_REBRAID_CHECK_TERMINATION, args);
+                        AllocTasks(1, TD_PHASE_REBRAID_CHECK_TERMINATION, taskQueueOffset);
                     }
                 }
                 else
                 {
-                    if (EndTaskTD(localId, args))
+                    if (EndTask(localId, taskQueueOffset))
                     {
-                        AllocTasksTD(numGroups, TD_PHASE_REBRAID_UPDATE_NODES, args);
+                        AllocTasks(numGroups, TD_PHASE_REBRAID_UPDATE_NODES, taskQueueOffset);
                     }
                 }
                 break;
@@ -1242,9 +1154,9 @@ void BuildBVHTDImpl(
                         phase = TD_PHASE_REBRAID_OPEN;
                     }
 
-                    if (EndTaskTD(localId, args))
+                    if (EndTask(localId, taskQueueOffset))
                     {
-                        AllocTasksTD(numGroups, phase, args);
+                        AllocTasks(numGroups, phase, taskQueueOffset);
                     }
                 }
                 break;
@@ -1277,15 +1189,12 @@ void BuildBVHTDImpl(
                             (currentNode.largestWidth * args.LengthPercentage)) &&
                         IsBoxNode(ref.nodePointer))
                     {
-                        uint2 instanceBasePointer =
-                                ScratchBuffer.Load2(args.BvhLeafNodeDataScratchOffset +
-                                                    ref.primitiveIndex * sizeof(ScratchNode) +
-                                                    SCRATCH_NODE_INSTANCE_BASE_PTR_OFFSET);
+                        const uint64_t instanceBasePointer =
+                                ScratchBuffer.Load<uint64_t>(args.BvhLeafNodeDataScratchOffset +
+                                                             ref.primitiveIndex * sizeof(ScratchNode) +
+                                                             SCRATCH_NODE_INSTANCE_BASE_PTR_OFFSET);
 
-                        const GpuVirtualAddress address = GetInstanceAddr(instanceBasePointer.x,
-                                                                          instanceBasePointer.y);
-
-                        const uint count = GetChildCount(address, ref.nodePointer);
+                        const uint count = GetBlasInternalNodeChildCount(instanceBasePointer, ref.nodePointer);
 
                         uint startIndex = AllocTDRefScratch(count - 1, args);
 
@@ -1299,13 +1208,13 @@ void BuildBVHTDImpl(
                     }
                 }
 
-                if (EndTaskTD(localId, args))
+                if (EndTask(localId, taskQueueOffset))
                 {
                     uint numRefsAllocated = ScratchBuffer.Load(numRefsAllocatedOffset);
 
                     ScratchBuffer.Store(numRefsOffset, numRefsAllocated);
 
-                    AllocTasksTD(numGroups, TD_PHASE_REBRAID_UPDATE_NODES, args);
+                    AllocTasks(numGroups, TD_PHASE_REBRAID_UPDATE_NODES, taskQueueOffset);
                 }
                 break;
             }
@@ -1343,9 +1252,9 @@ void BuildBVHTDImpl(
                     }
                 }
 
-                if (EndTaskTD(localId, args))
+                if (EndTask(localId, taskQueueOffset))
                 {
-                    AllocTasksTD(numGroups, TD_PHASE_BIN_REFS, args);
+                    AllocTasks(numGroups, TD_PHASE_BIN_REFS, taskQueueOffset);
                 }
                 break;
             }
@@ -1402,9 +1311,9 @@ void BuildBVHTDImpl(
                     }
                 }
 
-                if (EndTaskTD(localId, args))
+                if (EndTask(localId, taskQueueOffset))
                 {
-                    AllocTasksTD(numGroups, TD_PHASE_FIND_BEST_SPLIT, args);
+                    AllocTasks(numGroups, TD_PHASE_FIND_BEST_SPLIT, taskQueueOffset);
                 }
                 break;
             }
@@ -1669,9 +1578,9 @@ void BuildBVHTDImpl(
                     }
                 }
 
-                if (EndTaskTD(localId, args))
+                if (EndTask(localId, taskQueueOffset))
                 {
-                    AllocTasksTD(numGroups, TD_PHASE_SECOND_PASS, args);
+                    AllocTasks(numGroups, TD_PHASE_SECOND_PASS, taskQueueOffset);
                 }
                 break;
             }
@@ -1865,13 +1774,13 @@ void BuildBVHTDImpl(
                     UpdateScratchNodeFlags(ref.nodeIndex, ref.primitiveIndex, args);
                 }
 
-                if (EndTaskTD(localId, args))
+                if (EndTask(localId, taskQueueOffset))
                 {
                     if (ScratchBuffer.Load(numLeavesOffset) == numRefs)
                     {
                         WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, numRefs);
 
-                        AllocTasksTD(numGroups, TD_PHASE_DONE, args);
+                        AllocTasks(numGroups, TD_PHASE_DONE, taskQueueOffset);
                     }
                     else
                     {
@@ -1880,7 +1789,7 @@ void BuildBVHTDImpl(
 
                         ScratchBuffer.Store(numNodesOffset, ScratchBuffer.Load(numNodesAllocatedOffset));
 
-                        AllocTasksTD(numGroups, TD_PHASE_UPDATE_NEW_NODES, args);
+                        AllocTasks(numGroups, TD_PHASE_UPDATE_NEW_NODES, taskQueueOffset);
                     }
                 }
                 break;
@@ -1906,15 +1815,15 @@ void BuildBVHTDImpl(
                     InitTDBins(index, args);
                 }
 #endif
-                if (EndTaskTD(localId, args))
+                if (EndTask(localId, taskQueueOffset))
                 {
                     // reset count for next pass
                     ScratchBuffer.Store(numBinsCounterOffset, 0);
 
 #if USE_BVH_REBRAID
-                    AllocTasksTD(numGroups, TD_PHASE_REBRAID_COUNT_OPENINGS, args);
+                    AllocTasks(numGroups, TD_PHASE_REBRAID_COUNT_OPENINGS, taskQueueOffset);
 #else
-                    AllocTasksTD(numGroups, TD_PHASE_BIN_REFS, args);
+                    AllocTasks(numGroups, TD_PHASE_BIN_REFS, taskQueueOffset);
 #endif
                 }
                 break;

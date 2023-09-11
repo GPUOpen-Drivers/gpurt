@@ -95,6 +95,7 @@ namespace BuildBVHPLOC
         uint32 clusterList1ScratchOffset;
         uint32 neighbourIndicesScratchOffset;
         uint32 currentStateScratchOffset;
+        uint32 taskQueueCounterScratchOffset;
         uint32 atomicFlagsPLOCScratchOffset;
         uint32 clusterOffsetsScratchOffset;
         uint32 dynamicBlockIndexScratchOffset;
@@ -179,7 +180,7 @@ namespace BuildQBVH
         uint32 qbvhGlobalStackPtrsScratchOffset;
         uint32 splitBoxesByteOffset;
         uint32 encodeArrayOfPointers;
-        uint32 fastLBVHRootNodeIndex;
+        uint32 fastLBVHRootNodeIndexScratchOffset;
         uint32 unsortedBvhLeafNodesOffset;
     };
 
@@ -308,6 +309,7 @@ namespace BuildParallel
         uint32 clusterList1;
         uint32 neighborIndices;
         uint32 currentState;
+        uint32 plocTaskQueueCounter;
         uint32 atomicFlagsPloc;
         uint32 clusterOffsets;
 
@@ -326,6 +328,7 @@ namespace BuildParallel
         uint32 refList1;
         uint32 splitPriorities;
         uint32 currentSplitState;
+        uint32 splitTaskQueueCounter;
         uint32 splitAtomicFlags;
 
         // Pair compression
@@ -338,7 +341,7 @@ namespace BuildParallel
         uint32 tdNodes;
         uint32 tdBins;
         uint32 tdState;
-        uint32 tdTaskCounters;
+        uint32 tdTaskQueueCounter;
 
         uint32 reservedUint4;
         uint32 reservedUint5;
@@ -347,6 +350,7 @@ namespace BuildParallel
         uint32 reservedUint8;
         uint32 reservedUint9;
         uint32 reservedUint10;
+        uint32 reservedUint11;
         // debug
         uint32 debugCounters;
     };
@@ -385,6 +389,7 @@ namespace Rebraid
         uint32 bvhLeafNodeDataScratchOffset;
         uint32 sceneBoundsOffset;
         uint32 stateScratchOffset;
+        uint32 taskQueueCounterScratchOffset;
         uint32 atomicFlagsScratchOffset;
         uint32 encodeArrayOfPointers;
         uint32 enableCentroidSceneBoundsWithSize;

@@ -39,7 +39,6 @@ struct BuildQbvhArgs
     uint enableFusedInstanceNode;
     uint enableFastLBVH;                // Enable the Fast LBVH path
     uint fastLBVHRootNodeIndex;
-    uint captureChildNumPrimsForRebraid;
     uint enableSAHCost;
     uint enableEarlyPairCompression;
     uint unsortedBvhLeafNodesOffset;
@@ -70,7 +69,7 @@ struct InputArgs
     uint stackPtrsScratchOffset;
     uint splitBoxesByteOffset;
     uint encodeArrayOfPointers;
-    uint fastLBVHRootNodeIndex;
+    uint fastLBVHRootNodeIndexScratchOffset;
     uint unsortedBvhLeafNodesOffset;
 };
 
@@ -92,14 +91,6 @@ struct InputArgs
 
 #define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
 groupshared uint SharedMem[MAX_LDS_ELEMENTS];
-
-//======================================================================================================================
-bool EnableLatePairCompression()
-{
-    return (Settings.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
-           (Settings.topLevelBuild == false) &&
-           (Settings.enableEarlyPairCompression == false);
-}
 
 //=====================================================================================================================
 static uint CalculateBvhNodesOffset(
@@ -128,7 +119,8 @@ BuildQbvhArgs GetBuildQbvhArgs()
     args.stackPtrsScratchOffset = ShaderConstants.stackPtrsScratchOffset;
     args.splitBoxesByteOffset = ShaderConstants.splitBoxesByteOffset;
     args.encodeArrayOfPointers = ShaderConstants.encodeArrayOfPointers;
-    args.fastLBVHRootNodeIndex = ShaderConstants.fastLBVHRootNodeIndex;
+    args.fastLBVHRootNodeIndex = FetchRootNodeIndex(
+        Settings.enableFastLBVH, ShaderConstants.fastLBVHRootNodeIndexScratchOffset);
     args.unsortedBvhLeafNodesOffset = ShaderConstants.unsortedBvhLeafNodesOffset;
 
     args.triangleCompressionMode = Settings.triangleCompressionMode;
@@ -137,7 +129,6 @@ BuildQbvhArgs GetBuildQbvhArgs()
     args.enableFusedInstanceNode = Settings.enableFusedInstanceNode;
     args.enableFastLBVH = Settings.enableFastLBVH;
     args.enableEarlyPairCompression = Settings.enableEarlyPairCompression;
-    args.captureChildNumPrimsForRebraid = !Settings.topLevelBuild;
     args.enableSAHCost = Settings.enableSAHCost;
 
     args.scratchNodesScratchOffset = CalculateBvhNodesOffset(header.numActivePrims, args);
@@ -231,8 +222,7 @@ BoundingBox GetScratchNodeBoundingBoxTS(
     {
         if (Settings.doTriangleSplitting)
         {
-            bbox = ScratchBuffer.Load<BoundingBox>(args.splitBoxesByteOffset +
-                                                   sizeof(BoundingBox) * node.splitBox_or_nodePointer);
+            bbox = FetchSplitBoxAtIndex(args.splitBoxesByteOffset, node.splitBox_or_nodePointer);
         }
         else
         {
@@ -301,6 +291,15 @@ uint StackPopNodeIdx(
     }
 
     return ScratchBuffer.Load(args.qbvhStackScratchOffset + (stackIndex * sizeof(uint)));
+}
+
+//=====================================================================================================================
+// Returns the second dword on the stack for a given stack index.
+uint StackPopSecondEntry(
+    BuildQbvhArgs args,
+    uint          stackIndex)
+{
+    return ScratchBuffer.Load(args.qbvhStackScratchOffset + ((2 * stackIndex + 1) * sizeof(uint)));
 }
 
 //=====================================================================================================================
@@ -374,7 +373,8 @@ static void InitBuildQbvhImpl(
     // @note This relies on fp16BoxNodesInBlasMode and collapse build flag being disabled in the shader constants for TLAS
 
     // Note the first entry is initialized below. Skip initializing it to invalid.
-    for (uint stackIndex = globalId + 1; stackIndex < CalcNumQBVHInternalNodes(args.numPrimitives); stackIndex += args.numThreads)
+    const uint maxInternalNodeCount = GetNumInternalNodeCount(args.numPrimitives);
+    for (uint stackIndex = globalId + 1; stackIndex < maxInternalNodeCount; stackIndex += args.numThreads)
     {
         if (StackHasTwoEntries(args))
         {
@@ -395,11 +395,12 @@ static void InitBuildQbvhImpl(
         stackPtrs.stackPtrSrcNodeId = 1;
         // Node destination in linear memory. Counts in 64B chunks.
         stackPtrs.stackPtrNodeDest = 2;
+
         stackPtrs.numLeafsDone = 0;
 
         ScratchBuffer.Store<StackPtrs>(args.stackPtrsScratchOffset, stackPtrs);
 
-        const uint32_t rootNodeIndex = args.enableFastLBVH ? args.fastLBVHRootNodeIndex : 0;
+        const uint32_t rootNodeIndex = args.fastLBVHRootNodeIndex;
 
         if (StackHasTwoEntries(args))
         {
@@ -547,15 +548,6 @@ uint WritePrimitiveNode(
                     nodePointer);
 
     return nodePointer;
-}
-
-//=====================================================================================================================
-// Returns the second dword on the stack for a given stack index.
-uint StackPopSecondEntry(
-    BuildQbvhArgs args,
-    uint          stackIndex)
-{
-    return ScratchBuffer.Load(args.qbvhStackScratchOffset + ((2 * stackIndex + 1) * sizeof(uint)));
 }
 
 //=====================================================================================================================
@@ -729,7 +721,7 @@ static void PullUpChildren(
         {
             bool isLeafNode = IsLeafNode(primIndex, numActivePrims);
 
-            if (args.captureChildNumPrimsForRebraid)
+            if (Settings.enableInstanceRebraid)
             {
                 numPrimitives[i] = FetchScratchNodeNumPrimitives(args.scratchNodesScratchOffset,
                                                                  primIndex,
@@ -837,6 +829,8 @@ static bool OverrideFp32BoxNodeToFp16(
         WriteScratchNodeType(baseScratchNodesOffset,
                              nodeIndex,
                              NODE_TYPE_BOX_FLOAT16);
+        // Make sure the node type is written before the node is queued to the stack
+        DeviceMemoryBarrier();
     }
 
     return writeNodeAsFp16;
@@ -938,7 +932,7 @@ void BuildQbvhImpl(
 
     if (globalId == 0)
     {
-        const uint32_t rootNodeIndex = args.enableFastLBVH ? args.fastLBVHRootNodeIndex : 0;
+        const uint32_t rootNodeIndex = args.fastLBVHRootNodeIndex;
 
         // Root node begins after the acceleration structure header and is always of type fp32
         // regardless of mode for fp16 box nodes
@@ -998,7 +992,7 @@ void BuildQbvhImpl(
     const uint stackIndex = globalId;
 
     // Skip threads that do not map to valid internal nodes
-    if (stackIndex >= CalcNumQBVHInternalNodes(args.numPrimitives))
+    if (stackIndex >= GetNumInternalNodeCount(args.numPrimitives))
     {
         return;
     }
@@ -1006,7 +1000,7 @@ void BuildQbvhImpl(
     // This isn't necessary, but not using a boolean seems to cause a shader hang. See comment at the end of
     // while loop
     bool isDone = false;
-    const uint32_t rootNodeIndex = args.enableFastLBVH ? args.fastLBVHRootNodeIndex : 0;
+    const uint32_t rootNodeIndex = args.fastLBVHRootNodeIndex;
 
     while (1)
     {
@@ -1144,7 +1138,7 @@ void BuildQbvhImpl(
             }
 
             // Handle root node specific data
-            if ((bvhNodeSrcIdx == rootNodeIndex) && args.captureChildNumPrimsForRebraid)
+            if ((bvhNodeSrcIdx == rootNodeIndex) && Settings.enableInstanceRebraid)
             {
                 // TODO: Handle for BVH8
                 // store the actual SAH cost rather than the number of primitives
@@ -1190,13 +1184,13 @@ void BuildQBVH(
 
     INIT_TASK;
 
-    BEGIN_TASK(RoundUpQuotient(CalcNumQBVHInternalNodes(args.numPrimitives), BUILD_THREADGROUP_SIZE));
+    BEGIN_TASK(RoundUpQuotient(GetNumInternalNodeCount(args.numPrimitives), BUILD_THREADGROUP_SIZE));
 
     {
         BuildQbvhImpl(globalId, localId, header.numActivePrims, args, topLevelBuild);
     }
 
-    END_TASK(RoundUpQuotient(CalcNumQBVHInternalNodes(args.numPrimitives), BUILD_THREADGROUP_SIZE));
+    END_TASK(RoundUpQuotient(GetNumInternalNodeCount(args.numPrimitives), BUILD_THREADGROUP_SIZE));
 
     if (topLevelBuild)
     {

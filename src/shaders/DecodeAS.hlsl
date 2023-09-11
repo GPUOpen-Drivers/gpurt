@@ -190,38 +190,46 @@ void DecodeAS(in uint3 globalThreadId : SV_DispatchThreadID)
             }
         }
 
-        // Copy vertices and aabbs
-        for (uint i = globalID; i < numPrimitives; i += ShaderConstants.NumThreads)
+        const uint64_t srcBvhAddress = SrcBuffer.Load<uint64_t>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET);
+
         {
-            const uint nodePointer = SrcBuffer.Load(basePrimNodePointersOffset + (i * NODE_PTR_SIZE));
-            if (nodePointer != INVALID_IDX)
+            // Copy vertices and aabbs
+            for (uint i = globalID; i < numPrimitives; i += ShaderConstants.NumThreads)
             {
-                // The stored node pointers do not account for the metadata, so add the metadata size to the node pointer
-                // address field before using it for offset calculations.
-                const uint srcLeafNodeOffset = ExtractNodePointerOffset(nodePointer) + metadataSizeInBytes;
-
-                const uint64_t srcBvhAddress = SrcBuffer.Load<uint64_t>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET);
-
-                PrimitiveData primitiveData;
-
+                const uint nodePointer = SrcBuffer.Load(basePrimNodePointersOffset + (i * NODE_PTR_SIZE));
+                if (nodePointer != INVALID_IDX)
                 {
+                    // The stored node pointers do not account for the metadata, so add the metadata size to the node
+                    // pointer address field before using it for offset calculations.
+                    const uint srcLeafNodeOffset = ExtractNodePointerOffset(nodePointer) + metadataSizeInBytes;
+
+                    PrimitiveData primitiveData;
                     const GpuVirtualAddress nodeAddress = srcBvhAddress + ExtractNodePointerOffset(nodePointer);
-                    primitiveData = FetchPrimitiveDataAddr(nodePointer, nodeAddress);
-                }
 
-                const uint geometryIndex  = primitiveData.geometryIndex;
-                const uint primitiveIndex = primitiveData.primitiveIndex;
-
-                const uint geometryInfoOffset = baseGeometryInfoOffset  + (geometryIndex * GEOMETRY_INFO_SIZE);
-                const uint baseGeometryOffset = baseVertexAndAabbOffset +
-                                                SrcBuffer.Load(geometryInfoOffset + GEOMETRY_INFO_GEOM_BUFFER_OFFSET);
-
-                if (geometryType == GEOMETRY_TYPE_TRIANGLES)
-                {
-                    uint3 v0;
-                    uint3 v1;
-                    uint3 v2;
                     {
+                        primitiveData = FetchPrimitiveDataAddr(nodePointer, nodeAddress);
+                    }
+
+                    const uint geometryIndex  = primitiveData.geometryIndex;
+                    const uint primitiveIndex = primitiveData.primitiveIndex;
+
+                    const uint geometryInfoOffset = baseGeometryInfoOffset  + (geometryIndex * GEOMETRY_INFO_SIZE);
+                    const uint baseGeometryOffset = baseVertexAndAabbOffset +
+                                                    SrcBuffer.Load(geometryInfoOffset + GEOMETRY_INFO_GEOM_BUFFER_OFFSET);
+
+                    if (geometryType == GEOMETRY_TYPE_TRIANGLES)
+                    {
+                        const uint geometryIndex  = primitiveData.geometryIndex;
+                        const uint primitiveIndex = primitiveData.primitiveIndex;
+
+                        const uint geometryInfoOffset = baseGeometryInfoOffset  + (geometryIndex * GEOMETRY_INFO_SIZE);
+                        const uint baseGeometryOffset = baseVertexAndAabbOffset +
+                                                        SrcBuffer.Load(geometryInfoOffset + GEOMETRY_INFO_GEOM_BUFFER_OFFSET);
+
+                        uint3 v0;
+                        uint3 v1;
+                        uint3 v2;
+
                         if (triangleCompressionMode != NO_TRIANGLE_COMPRESSION)
                         {
                             const uint  triangleId = SrcBuffer.Load(srcLeafNodeOffset + TRIANGLE_NODE_ID_OFFSET);
@@ -238,25 +246,21 @@ void DecodeAS(in uint3 globalThreadId : SV_DispatchThreadID)
                             v1 = SrcBuffer.Load3(srcLeafNodeOffset + TRIANGLE_NODE_V1_OFFSET);
                             v2 = SrcBuffer.Load3(srcLeafNodeOffset + TRIANGLE_NODE_V2_OFFSET);
                         }
+
+                        const uint byteOffset = baseGeometryOffset + (primitiveIndex * DECODE_PRIMITIVE_STRIDE_TRIANGLE);
+                        DstBuffer.Store3(byteOffset,                              v0);
+                        DstBuffer.Store3(byteOffset + DECODE_VERTEX_STRIDE,       v1);
+                        DstBuffer.Store3(byteOffset + (DECODE_VERTEX_STRIDE * 2), v2);
                     }
-
-                    const uint byteOffset = baseGeometryOffset + (primitiveIndex * DECODE_PRIMITIVE_STRIDE_TRIANGLE);
-                    DstBuffer.Store3(byteOffset,                              v0);
-                    DstBuffer.Store3(byteOffset + DECODE_VERTEX_STRIDE,       v1);
-                    DstBuffer.Store3(byteOffset + (DECODE_VERTEX_STRIDE * 2), v2);
-                }
-                else
-                {
-                    uint3 min;
-                    uint3 max;
-
+                    else
                     {
-                        min = SrcBuffer.Load3(srcLeafNodeOffset + USER_NODE_PROCEDURAL_MIN_OFFSET);
-                        max = SrcBuffer.Load3(srcLeafNodeOffset + USER_NODE_PROCEDURAL_MAX_OFFSET);
+                        const uint3 min = SrcBuffer.Load3(srcLeafNodeOffset + USER_NODE_PROCEDURAL_MIN_OFFSET);
+                        const uint3 max = SrcBuffer.Load3(srcLeafNodeOffset + USER_NODE_PROCEDURAL_MAX_OFFSET);
+
+                        const uint byteOffset = baseGeometryOffset + (primitiveIndex * DECODE_PRIMITIVE_STRIDE_AABB);
+                        DstBuffer.Store3(byteOffset, min);
+                        DstBuffer.Store3(byteOffset + 12, max);
                     }
-                    const uint byteOffset = baseGeometryOffset + (primitiveIndex * DECODE_PRIMITIVE_STRIDE_AABB);
-                    DstBuffer.Store3(byteOffset, min);
-                    DstBuffer.Store3(byteOffset + 12, max);
                 }
             }
         }

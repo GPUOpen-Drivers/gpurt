@@ -566,6 +566,22 @@ Pal::IPipeline* Device::GetInternalPipeline(
 
             buildInfo.pNodes = nodes;
             buildInfo.apiPsoHash = GetInternalPsoHash(buildInfo.shaderType, buildSettings);
+            PipelineCompilerOption wave64Option[1] = {
+                {PipelineOptionName::waveSize, PipelineOptionName::Wave64} };
+
+            switch (buildInfo.shaderType)
+            {
+                case InternalRayTracingCsType::BuildBVHTD:
+                case InternalRayTracingCsType::BuildBVHTDTR:
+                case InternalRayTracingCsType::BuildParallel:
+                    buildInfo.hashedCompilerOptionCount = 1;
+                    buildInfo.pHashedCompilerOptions = wave64Option;
+                    break;
+                default:
+                    buildInfo.hashedCompilerOptionCount = 0;
+                    buildInfo.pHashedCompilerOptions = nullptr;
+                    break;
+            }
 
             CompileTimeConstants compileConstants = {};
 
@@ -960,6 +976,15 @@ void Device::TraceRtDispatch(
     pConstants->constData.rayDispatchWidth       = dispatchInfo.dimX;
     pConstants->constData.rayDispatchHeight      = dispatchInfo.dimY;
     pConstants->constData.rayDispatchDepth       = dispatchInfo.dimZ;
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 38
+    // When not equal to 0 dispatch is rayquery.
+    if (dispatchInfo.threadGroupSizeX != 0)
+    {
+        pConstants->constData.rayDispatchWidth  = dispatchInfo.dimX * dispatchInfo.threadGroupSizeX;
+        pConstants->constData.rayDispatchHeight = dispatchInfo.dimY * dispatchInfo.threadGroupSizeY;
+        pConstants->constData.rayDispatchDepth  = dispatchInfo.dimZ * dispatchInfo.threadGroupSizeZ;
+    }
+#endif
 
     RayHistoryTraceListInfo traceListInfo = {};
 
@@ -1220,6 +1245,7 @@ void Device::TraceIndirectRtDispatch(
                 pConstants->counterMode            = 1;
                 pConstants->counterRayIdRangeBegin = 0;
                 pConstants->counterRayIdRangeEnd   = 0xFFFFFFFF;
+
                 pConstants->counterMask = GetRayHistoryLightCounterMask();
             }
 
@@ -1231,6 +1257,11 @@ void Device::TraceIndirectRtDispatch(
             // On indirect dispatches, we only allocate Gpu memory once for all trace buffers, set Gpu handle to last entry
             traceListInfo.traceBufferGpuMem                  = (i == (maxSrdCount - 1)) ? gpuMem : nullptr;
 
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 38
+            traceListInfo.counterInfo.dispatchRayDimensionX = dispatchInfo.threadGroupSizeX;
+            traceListInfo.counterInfo.dispatchRayDimensionY = dispatchInfo.threadGroupSizeY;
+            traceListInfo.counterInfo.dispatchRayDimensionZ = dispatchInfo.threadGroupSizeZ;
+#endif
             traceListInfo.counterInfo.counterMask            = 0;
             traceListInfo.counterInfo.counterStride          = sizeof(uint32);
             traceListInfo.counterInfo.counterMode            = 1;
@@ -1291,13 +1322,24 @@ void Device::WriteRayHistoryChunks(
         if (m_rayHistoryTraceList.At(i).pIndirectCounterMetadata)
         {
             auto* pIndirectCounterMetadata = m_rayHistoryTraceList.At(i).pIndirectCounterMetadata;
-            m_rayHistoryTraceList.At(i).counterInfo.dispatchRayDimensionX = pIndirectCounterMetadata->dispatchRayDimensionX;
-            m_rayHistoryTraceList.At(i).counterInfo.dispatchRayDimensionY = pIndirectCounterMetadata->dispatchRayDimensionY;
-            m_rayHistoryTraceList.At(i).counterInfo.dispatchRayDimensionZ = pIndirectCounterMetadata->dispatchRayDimensionZ;
+            uint32 dispatchSizeX = pIndirectCounterMetadata->dispatchRayDimensionX;
+            uint32 dispatchSizeY = pIndirectCounterMetadata->dispatchRayDimensionY;
+            uint32 dispatchSizeZ = pIndirectCounterMetadata->dispatchRayDimensionZ;
 
-            m_rayHistoryTraceList.At(i).dispatchDims.dimX = pIndirectCounterMetadata->dispatchRayDimensionX;
-            m_rayHistoryTraceList.At(i).dispatchDims.dimY = pIndirectCounterMetadata->dispatchRayDimensionY;
-            m_rayHistoryTraceList.At(i).dispatchDims.dimZ = pIndirectCounterMetadata->dispatchRayDimensionZ;
+            // Multiply by the thread group size if one is provided
+            if (m_rayHistoryTraceList.At(i).counterInfo.dispatchRayDimensionX != 0)
+            {
+                dispatchSizeX *= m_rayHistoryTraceList.At(i).counterInfo.dispatchRayDimensionX;
+                dispatchSizeY *= m_rayHistoryTraceList.At(i).counterInfo.dispatchRayDimensionY;
+                dispatchSizeZ *= m_rayHistoryTraceList.At(i).counterInfo.dispatchRayDimensionZ;
+            }
+            m_rayHistoryTraceList.At(i).counterInfo.dispatchRayDimensionX = dispatchSizeX;
+            m_rayHistoryTraceList.At(i).counterInfo.dispatchRayDimensionY = dispatchSizeY;
+            m_rayHistoryTraceList.At(i).counterInfo.dispatchRayDimensionZ = dispatchSizeZ;
+
+            m_rayHistoryTraceList.At(i).dispatchDims.dimX = dispatchSizeX;
+            m_rayHistoryTraceList.At(i).dispatchDims.dimY = dispatchSizeY;
+            m_rayHistoryTraceList.At(i).dispatchDims.dimZ = dispatchSizeZ;
         }
 
         CounterInfo counterInfo = m_rayHistoryTraceList.At(i).counterInfo;
@@ -1759,11 +1801,10 @@ void Device::InitExecuteIndirect(
                                sizeof(userData) / sizeof(uint32),
                                reinterpret_cast<const uint32*>(&userData));
 
-    Pal::IPipeline* pPipeline = GetInternalPipeline(InternalRayTracingCsType::InitExecuteIndirect, {}, 0);
-
     Pal::PipelineBindParams bindParams = {};
-    bindParams.pPipeline = pPipeline;
     bindParams.pipelineBindPoint = Pal::PipelineBindPoint::Compute;
+    bindParams.pPipeline = GetInternalPipeline(InternalRayTracingCsType::InitExecuteIndirect, {}, 0);
+    bindParams.apiPsoHash = GetInternalPsoHash(InternalRayTracingCsType::InitExecuteIndirect, {});
 
     pCmdBuffer->CmdBindPipeline(bindParams);
 
@@ -1796,6 +1837,7 @@ void Device::CopyBufferRaw(
     Pal::PipelineBindParams bindParams = {};
     bindParams.pipelineBindPoint = Pal::PipelineBindPoint::Compute;
     bindParams.pPipeline = GetInternalPipeline(InternalRayTracingCsType::CopyBufferRaw, {}, 0);
+    bindParams.apiPsoHash = GetInternalPsoHash(InternalRayTracingCsType::CopyBufferRaw, {});
 
     pCmdBuffer->CmdBindPipeline(bindParams);
 

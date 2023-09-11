@@ -54,6 +54,7 @@ struct BuildPlocArgs
     uint  clusterList1ScratchOffset;
     uint  neighbourIndicesScratchOffset;
     uint  currentStateScratchOffset;
+    uint  taskQueueCounterScratchOffset;
     uint  atomicFlagsScratchOffset;
     uint  offsetsScratchOffset;
     uint  dynamicBlockIndexScratchOffset;
@@ -61,12 +62,12 @@ struct BuildPlocArgs
     uint  baseBatchIndicesScratchOffset;
     uint  fp16BoxNodesInBlasMode;                   // Mode used for which BLAS interior nodes are FP16
     float fp16BoxModeMixedSaThresh;                 // For fp16 mode "mixed", surface area threshold
-    uint  flags;
     uint  splitBoxesByteOffset;
     uint  plocRadius;
     uint  primIndicesSortedScratchOffset;
     uint  numLeafNodes;
     uint  unsortedBvhLeafNodesOffset;
+    uint reserved0;
 };
 
 #define PLOC_RADIUS_MAX         10
@@ -104,9 +105,12 @@ struct BuildPlocArgs
 [[vk::binding(3, 0)]] RWByteAddressBuffer                  SrcBuffer     : register(u3);
 [[vk::binding(4, 0)]] RWByteAddressBuffer                  EmitBuffer    : register(u4);
 
+#include "BuildCommonScratch.hlsl"
+
 groupshared int SharedMem[(2 * PLOC_RADIUS_MAX + BUILD_THREADGROUP_SIZE) * LDS_AABB_STRIDE];
 
-#include "BuildCommonScratch.hlsl"
+#include "TaskQueueCounter.hlsl"
+
 #include "RadixSort/ScanExclusiveInt4DLBCommon.hlsl"
 
 // https://dcgi.fel.cvut.cz/home/meistdan/dissertation/publications/ploc/paper.pdf
@@ -290,82 +294,6 @@ uint LoadLdsClusterIndex(
 }
 
 //=====================================================================================================================
-void AllocTasks(const uint numTasks, const uint phase, const BuildPlocArgs args)
-{
-    const uint startPhaseIndexOffset = args.currentStateScratchOffset + STATE_TASK_QUEUE_START_PHASE_INDEX_OFFSET;
-    const uint endPhaseIndexOffset   = args.currentStateScratchOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET;
-    const uint phaseOffset           = args.currentStateScratchOffset + STATE_TASK_QUEUE_PHASE_OFFSET;
-
-    // start = end
-    const uint end = ScratchBuffer.Load(endPhaseIndexOffset);
-
-    ScratchBuffer.Store(startPhaseIndexOffset, end);
-
-    ScratchBuffer.Store(phaseOffset, phase);
-
-    DeviceMemoryBarrier();
-
-    ScratchBuffer.Store(endPhaseIndexOffset, end + numTasks);
-}
-
-//=====================================================================================================================
-uint2 BeginTask(const uint localId, const BuildPlocArgs args)
-{
-    const uint taskCounterOffset     = args.currentStateScratchOffset + STATE_TASK_QUEUE_TASK_COUNTER_OFFSET;
-    const uint startPhaseIndexOffset = args.currentStateScratchOffset + STATE_TASK_QUEUE_START_PHASE_INDEX_OFFSET;
-    const uint endPhaseIndexOffset   = args.currentStateScratchOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET;
-    const uint phaseOffset           = args.currentStateScratchOffset + STATE_TASK_QUEUE_PHASE_OFFSET;
-
-    if (localId == 0)
-    {
-        ScratchBuffer.InterlockedAdd(taskCounterOffset, 1, SharedMem[0]);
-    }
-
-    GroupMemoryBarrierWithGroupSync();
-
-    const uint index = SharedMem[0];
-
-    // wait till there are valid tasks to do
-    do
-    {
-        DeviceMemoryBarrier();
-    } while (index >= ScratchBuffer.Load(endPhaseIndexOffset));
-
-    const uint phase = ScratchBuffer.Load(phaseOffset);
-
-    const uint startPhaseIndex = ScratchBuffer.Load(startPhaseIndexOffset);
-    return uint2(index - startPhaseIndex, phase);
-}
-
-//=====================================================================================================================
-bool EndTask(const uint localId, const BuildPlocArgs args)
-{
-    const uint phaseOffset         = args.currentStateScratchOffset + STATE_TASK_QUEUE_PHASE_OFFSET;
-    const uint numTasksDoneOffset  = args.currentStateScratchOffset + STATE_TASK_QUEUE_NUM_TASKS_DONE_OFFSET;
-    const uint endPhaseIndexOffset = args.currentStateScratchOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET;
-
-    bool returnValue = false;
-
-    DeviceMemoryBarrier();
-
-    if (localId == 0)
-    {
-        const uint endPhaseIndex = ScratchBuffer.Load(endPhaseIndexOffset);
-
-        uint orig;
-        ScratchBuffer.InterlockedAdd(numTasksDoneOffset, 1, orig);
-
-        // current phase is done
-        if (orig == (endPhaseIndex - 1))
-        {
-            returnValue = true;
-        }
-    }
-
-    return returnValue;
-}
-
-//=====================================================================================================================
 void InitPLOC(
     uint            globalId,
     uint            numActivePrims,
@@ -442,7 +370,7 @@ void FindNearestNeighbour(
             // Would need to fetch paired triangle BBox here, if "enableEarlyPairCompression" is ON
             BoundingBox aabb = FetchScratchNodeBoundingBox(scratchNode,
                                                            IsLeafNode(nodeIndex, numActivePrims),
-                                                           (args.flags & BUILD_FLAGS_TRIANGLE_SPLITTING),
+                                                           Settings.doTriangleSplitting,
                                                            args.splitBoxesByteOffset,
                                                            Settings.enableEarlyPairCompression,
                                                            args.unsortedBvhLeafNodesOffset);
@@ -634,107 +562,31 @@ void FindNearestNeighbour(
             BoundingBox mergedBox = CombineAABB(aabbLeft, aabbRight);
             const float mergedBoxSurfaceArea = ComputeBoxSurfaceArea(mergedBox);
 
-            const uint mergedNodeOffset = CalcScratchNodeOffset(args.scratchNodesScratchOffset,
-                                                                mergedNodeIndex);
-
-            const uint leftNodeOffset  = CalcScratchNodeOffset(args.scratchNodesScratchOffset,
-                                                                leftNodeIndex);
-            const uint rightNodeOffset = CalcScratchNodeOffset(args.scratchNodesScratchOffset,
-                                                                rightNodeIndex);
+            const uint mergedNodeOffset = CalcScratchNodeOffset(args.scratchNodesScratchOffset, mergedNodeIndex);
+            const uint leftNodeOffset   = CalcScratchNodeOffset(args.scratchNodesScratchOffset, leftNodeIndex);
+            const uint rightNodeOffset  = CalcScratchNodeOffset(args.scratchNodesScratchOffset, rightNodeIndex);
 
             // Decide on what type of interior box node the parent should be
             // and write the type into scratch
             const ScratchNode leftNode  = ScratchBuffer.Load<ScratchNode>(leftNodeOffset);
             const ScratchNode rightNode = ScratchBuffer.Load<ScratchNode>(rightNodeOffset);
 
-            WriteScratchNodeType(args.scratchNodesScratchOffset,
-                                 mergedNodeIndex,
-                                 GetInternalNodeType());
-
-            WriteScratchNodeFlagsFromNodes(args.scratchNodesScratchOffset,
-                                           mergedNodeIndex,
-                                           leftNode,
-                                           rightNode);
-
-            WriteScratchNodeSurfaceArea(args.scratchNodesScratchOffset,
-                                        mergedNodeIndex,
-                                        mergedBoxSurfaceArea);
-
             ScratchBuffer.Store(mergedNodeOffset + SCRATCH_NODE_BBOX_MIN_OFFSET, mergedBox.min);
             ScratchBuffer.Store(mergedNodeOffset + SCRATCH_NODE_BBOX_MAX_OFFSET, mergedBox.max);
             ScratchBuffer.Store(mergedNodeOffset + SCRATCH_NODE_LEFT_OFFSET, leftNodeIndex);
             ScratchBuffer.Store(mergedNodeOffset + SCRATCH_NODE_RIGHT_OFFSET, rightNodeIndex);
 
-            const bool enableCollapse        = (args.flags & BUILD_FLAGS_COLLAPSE);
-            const bool enablePairCompression = (args.flags & BUILD_FLAGS_LATE_PAIR_COMPRESSION);
-
-            uint numLeft = FetchScratchNodeNumPrimitives(args.scratchNodesScratchOffset,
-                                                         leftNodeIndex,
-                                                         IsLeafNode(leftNodeIndex, numActivePrims));
-            uint numRight = FetchScratchNodeNumPrimitives(args.scratchNodesScratchOffset,
-                                                          rightNodeIndex,
-                                                          IsLeafNode(rightNodeIndex, numActivePrims));
-
-            // Ct is the cost of intersecting triangle
-            // Ci is the cost of interecting bbox
-            const float Ct = SAH_COST_TRIANGLE_INTERSECTION;
-            const float Ci = SAH_COST_AABBB_INTERSECTION;
-
-            float leftCost = FetchScratchNodeCost(args.scratchNodesScratchOffset, leftNodeIndex,
-                                                  IsLeafNode(leftNodeIndex, numActivePrims));
-
-            float rightCost = FetchScratchNodeCost(args.scratchNodesScratchOffset, rightNodeIndex,
-                                                   IsLeafNode(rightNodeIndex, numActivePrims));
-
-            float bestCost = leftCost + rightCost + Ci * mergedBoxSurfaceArea;
-            bool isCollapsed = false;
-
-            const uint numTris = numLeft + numRight;
-
-            if (enableCollapse || enablePairCompression)
-            {
-                const float splitCost    = Ci + leftCost / mergedBoxSurfaceArea + rightCost / mergedBoxSurfaceArea;
-                const float collapseCost = Ct * numTris;
-                const bool  useCostCheck = enableCollapse || (args.flags & BUILD_FLAGS_PAIR_COST_CHECK);
-
-                const bool leftCollapse      = (leftNode.numPrimitivesAndDoCollapse & 0x1) ||
-                                               IsLeafNode(leftNodeIndex, numActivePrims);
-                const bool rightCollapse     = (rightNode.numPrimitivesAndDoCollapse & 0x1) ||
-                                               IsLeafNode(rightNodeIndex, numActivePrims);
-                const bool collapseBothSides = leftCollapse && rightCollapse;
-
-                // Limit number of triangles collapsed in a single bounding box to MAX_COLLAPSED_TRIANGLES
-                if ((useCostCheck && (collapseCost > splitCost)) ||
-                    (numTris > MAX_COLLAPSED_TRIANGLES) ||
-                    (enablePairCompression && ((collapseBothSides == false) || (mergedNodeIndex == 0))))
-                {
-                    if (enablePairCompression)
-                    {
-                        if (leftCollapse)
-                        {
-                            WriteScratchBatchIndex(args.numBatchesScratchOffset,
-                                                   args.baseBatchIndicesScratchOffset,
-                                                   leftNodeIndex);
-                        }
-
-                        if (rightCollapse)
-                        {
-                            WriteScratchBatchIndex(args.numBatchesScratchOffset,
-                                                   args.baseBatchIndicesScratchOffset,
-                                                   rightNodeIndex);
-                        }
-                    }
-                }
-                else // do collapse
-                {
-                    bestCost = collapseCost * mergedBoxSurfaceArea;
-                    isCollapsed = true;
-                }
-
-            }
-
-            WriteScratchNodeCost(args.scratchNodesScratchOffset, mergedNodeIndex, bestCost, false);
-            WriteScratchNodeNumPrimitives(args.scratchNodesScratchOffset, mergedNodeIndex, numTris, isCollapsed);
+            MergeScratchNodes(
+                args.scratchNodesScratchOffset,
+                args.numBatchesScratchOffset,
+                args.baseBatchIndicesScratchOffset,
+                numActivePrims,
+                mergedNodeIndex,
+                leftNodeIndex,
+                leftNode,
+                rightNodeIndex,
+                rightNode,
+                mergedBoxSurfaceArea);
 
             ScratchBuffer.Store(leftNodeOffset + SCRATCH_NODE_PARENT_OFFSET, mergedNodeIndex);
             ScratchBuffer.Store(rightNodeOffset + SCRATCH_NODE_PARENT_OFFSET, mergedNodeIndex);
@@ -925,6 +777,7 @@ void BuildBvhPlocImpl(
     uint            numActivePrims,
     BuildPlocArgs   args)
 {
+    const uint taskQueueOffset          = args.taskQueueCounterScratchOffset;
     const uint numClustersOffset        = args.currentStateScratchOffset + STATE_PLOC_NUM_CLUSTERS_OFFSET;
     const uint internalNodesIndexOffset = args.currentStateScratchOffset + STATE_PLOC_INTERNAL_NODES_INDEX_OFFSET;
     const uint clusterListIndexOffset   = args.currentStateScratchOffset + STATE_PLOC_CLUSTER_LIST_INDEX_OFFSET;
@@ -939,7 +792,7 @@ void BuildBvhPlocImpl(
 
     if (numActivePrims <= 1)
     {
-        if ((args.flags & BUILD_FLAGS_LATE_PAIR_COMPRESSION) && (globalId == 0) && (numActivePrims == 1))
+        if ((EnableLatePairCompression()) && (globalId == 0) && (numActivePrims == 1))
         {
             // Ensure that a batch index is written out for single-primitive acceleration structures.
             WriteScratchBatchIndex(args.numBatchesScratchOffset, args.baseBatchIndicesScratchOffset, 0);
@@ -950,12 +803,12 @@ void BuildBvhPlocImpl(
 
     if (globalId == 0)
     {
-        AllocTasks(numGroups, PLOC_PHASE_INIT, args);
+        AllocTasks(numGroups, PLOC_PHASE_INIT, taskQueueOffset);
     }
 
     while (1)
     {
-        const uint2 task = BeginTask(localId, args);
+        const uint2 task = BeginTask(localId, taskQueueOffset);
 
         const uint taskIndex = task.x;
         const uint phase = task.y;
@@ -970,12 +823,12 @@ void BuildBvhPlocImpl(
             {
                 InitPLOC(globalId, numActivePrims, args);
 
-                if (EndTask(localId, args))
+                if (EndTask(localId, taskQueueOffset))
                 {
                     // + PLOC_RADIUS is needed to finish off the last stage
                     const uint numStages = RoundUpQuotient(numActivePrims + args.plocRadius, BUILD_THREADGROUP_SIZE);
 
-                    AllocTasks(numStages, PLOC_PHASE_FIND_NEAREST_NEIGHBOUR, args);
+                    AllocTasks(numStages, PLOC_PHASE_FIND_NEAREST_NEIGHBOUR, taskQueueOffset);
                 }
                 break;
             }
@@ -984,17 +837,17 @@ void BuildBvhPlocImpl(
             {
                 FindNearestNeighbour(globalId, localId, numActivePrims, args);
 
-                if (EndTask(localId, args))
+                if (EndTask(localId, taskQueueOffset))
                 {
                     const uint numClusters = ScratchBuffer.Load(numClustersAllocOffset);
 
                     if (numClusters > 1)
                     {
-                        AllocTasks(numGroups, PLOC_PHASE_UPDATE_CLUSTER_COUNT, args);
+                        AllocTasks(numGroups, PLOC_PHASE_UPDATE_CLUSTER_COUNT, taskQueueOffset);
                     }
                     else
                     {
-                        AllocTasks(numGroups, PLOC_PHASE_DONE, args);
+                        AllocTasks(numGroups, PLOC_PHASE_DONE, taskQueueOffset);
                     }
                 }
             }
@@ -1003,7 +856,7 @@ void BuildBvhPlocImpl(
             case PLOC_PHASE_UPDATE_CLUSTER_COUNT:
             {
                 UpdateClusterCount(globalId, args);
-                if (EndTask(localId, args))
+                if (EndTask(localId, taskQueueOffset))
                 {
                     const uint numClustersAlloc = ScratchBuffer.Load(numClustersAllocOffset);
                     const uint numStages   = RoundUpQuotient(numClustersAlloc + args.plocRadius, BUILD_THREADGROUP_SIZE);
@@ -1012,7 +865,7 @@ void BuildBvhPlocImpl(
                     ScratchBuffer.Store(numClustersAllocOffset, 0);
 
                     ScratchBuffer.Store(clusterListIndexOffset, !clusterListIndex);
-                    AllocTasks(numStages, PLOC_PHASE_FIND_NEAREST_NEIGHBOUR, args);
+                    AllocTasks(numStages, PLOC_PHASE_FIND_NEAREST_NEIGHBOUR, taskQueueOffset);
                 }
             }
                 break;

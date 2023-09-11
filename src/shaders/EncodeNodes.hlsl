@@ -291,14 +291,21 @@ void EncodeAABBNodes(
             // If the primitive was active during the initial build, it will have a valid primitive node pointer.
             if (nodePointer != INVALID_IDX)
             {
-                WriteProceduralNodeBoundingBox(metadataSize, nodePointer, boundingBox);
+
+                {
+
+                    WriteProceduralNodeBoundingBox(metadataSize, nodePointer, boundingBox);
+
+                    if (ShaderConstants.isUpdateInPlace == false)
+                    {
+                        WriteProceduralNodePrimitiveData(metadataSize,
+                                                         nodePointer,
+                                                         primitiveIndex);
+                    }
+                }
 
                 if (ShaderConstants.isUpdateInPlace == false)
                 {
-                    WriteProceduralNodePrimitiveData(metadataSize,
-                                                     nodePointer,
-                                                     primitiveIndex);
-
                     DstMetadata.Store(primNodePointerOffset, nodePointer);
                 }
 
@@ -316,6 +323,7 @@ void EncodeAABBNodes(
                                   instanceMask,
                                   boundingBox,
                                   true);
+
             }
             else if (ShaderConstants.isUpdateInPlace == false)
             {

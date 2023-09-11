@@ -36,7 +36,7 @@
                 "CBV(b1),"\
                 "UAV(u5)"
 
-#include "RayTracingDefs.h"
+#include "../shared/rayTracingDefs.h"
 
 struct ScratchOffsets
 {
@@ -62,6 +62,7 @@ struct ScratchOffsets
     // PLOC
     uint neighborIndices;
     uint currentState;
+    uint plocTaskQueueCounter;
     uint atomicFlagsPloc;
     uint clusterOffsets;
 
@@ -80,6 +81,7 @@ struct ScratchOffsets
     uint refList1;
     uint splitPriorities;
     uint currentSplitState;
+    uint splitTaskQueueCounter;
     uint splitAtomicFlags;
 
     // Pair compression
@@ -92,7 +94,7 @@ struct ScratchOffsets
     uint tdNodes;
     uint tdBins;
     uint tdState;
-    uint tdTaskCounters;
+    uint tdTaskQueueCounter;
     uint reservedUint4;
     uint reservedUint5;
     uint reservedUint6;
@@ -100,6 +102,7 @@ struct ScratchOffsets
     uint reservedUint8;
     uint reservedUint9;
     uint reservedUint10;
+    uint reservedUint11;
     // debug
     uint debugCounters;
 };
@@ -141,6 +144,8 @@ struct Constants
 
 #define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
 groupshared uint SharedMem[MAX_LDS_ELEMENTS];
+
+#include "TaskQueueCounter.hlsl"
 
 // The encode path uses SrcBuffer and DstBuffer as the true acceleration structure base.
 #define SrcBuffer DstMetadata
@@ -304,14 +309,6 @@ void BuildBvhLinear(
 }
 
 //======================================================================================================================
-bool EnableLatePairCompression()
-{
-    return (Settings.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
-           (Settings.topLevelBuild == false) &&
-           (Settings.enableEarlyPairCompression == false);
-}
-
-//======================================================================================================================
 void RefitBounds(
     uint globalId,
     uint numActivePrims)
@@ -389,18 +386,6 @@ void FastAgglomerativeLbvh(
 }
 
 //======================================================================================================================
-uint BuildModeFlags()
-{
-    uint flags = 0;
-    flags |= Settings.doCollapse ? BUILD_FLAGS_COLLAPSE : 0;
-    flags |= Settings.doTriangleSplitting ? BUILD_FLAGS_TRIANGLE_SPLITTING : 0;
-    flags |= EnableLatePairCompression() ? BUILD_FLAGS_LATE_PAIR_COMPRESSION : 0;
-    flags |= Settings.enablePairCostCheck ? BUILD_FLAGS_PAIR_COST_CHECK : 0;
-
-    return flags;
-}
-
-//======================================================================================================================
 void TriangleSplitting(
     uint       globalId,
     uint       localId,
@@ -418,6 +403,7 @@ void TriangleSplitting(
     args.refList1ScratchOffset          = ShaderConstants.offsets.refList1;
     args.splitPrioritiesScratchOffset   = ShaderConstants.offsets.splitPriorities;
     args.currentStateScratchOffset      = ShaderConstants.offsets.currentSplitState;
+    args.taskQueueCounterScratchOffset  = ShaderConstants.offsets.splitTaskQueueCounter;
     args.atomicFlagsScratchOffset       = ShaderConstants.offsets.splitAtomicFlags;
     args.dynamicBlockIndexScratchOffset = ShaderConstants.offsets.dynamicBlockIndex;
     args.sceneBoundsByteOffset          = ShaderConstants.offsets.sceneBounds;
@@ -443,6 +429,7 @@ void BuildBvhPloc(
     plocArgs.clusterList1ScratchOffset      = ShaderConstants.offsets.clusterList1;
     plocArgs.neighbourIndicesScratchOffset  = ShaderConstants.offsets.neighborIndices;
     plocArgs.currentStateScratchOffset      = ShaderConstants.offsets.currentState;
+    plocArgs.taskQueueCounterScratchOffset  = ShaderConstants.offsets.plocTaskQueueCounter;
     plocArgs.atomicFlagsScratchOffset       = ShaderConstants.offsets.atomicFlagsPloc;
     plocArgs.offsetsScratchOffset           = ShaderConstants.offsets.clusterOffsets;
     plocArgs.dynamicBlockIndexScratchOffset = ShaderConstants.offsets.dynamicBlockIndex;
@@ -451,7 +438,6 @@ void BuildBvhPloc(
     plocArgs.fp16BoxNodesInBlasMode         = Settings.fp16BoxNodesMode;
     plocArgs.fp16BoxModeMixedSaThresh       = Settings.fp16BoxModeMixedSaThreshold;
     plocArgs.plocRadius                     = Settings.plocRadius;
-    plocArgs.flags                          = BuildModeFlags();
     plocArgs.splitBoxesByteOffset           = ShaderConstants.offsets.splitBoxes;
     plocArgs.primIndicesSortedScratchOffset = ShaderConstants.offsets.primIndicesSorted;
     plocArgs.numLeafNodes                   = ShaderConstants.numLeafNodes;
@@ -474,6 +460,7 @@ void Rebraid(
     args.bvhLeafNodeDataScratchOffset       = ShaderConstants.offsets.unsortedBvhLeafNodes;
     args.sceneBoundsOffset                  = ShaderConstants.offsets.sceneBounds;
     args.stateScratchOffset                 = ShaderConstants.offsets.currentSplitState;
+    args.taskQueueCounterScratchOffset      = ShaderConstants.offsets.splitTaskQueueCounter;
     args.atomicFlagsScratchOffset           = ShaderConstants.offsets.splitAtomicFlags;
     args.encodeArrayOfPointers              = ShaderConstants.encodeArrayOfPointers;
     args.enableSAHCost                      = Settings.enableSAHCost;
@@ -500,7 +487,7 @@ void BuildBvhTD(
     args.TDNodeScratchOffset          = ShaderConstants.offsets.tdNodes;
     args.TDBinsScratchOffset          = ShaderConstants.offsets.tdBins;
     args.CurrentStateScratchOffset    = ShaderConstants.offsets.tdState;
-    args.TdTaskCounterScratchOffset   = ShaderConstants.offsets.tdTaskCounters;
+    args.TdTaskQueueCounterScratchOffset = ShaderConstants.offsets.tdTaskQueueCounter;
     args.EncodeArrayOfPointers        = ShaderConstants.encodeArrayOfPointers;
 
     BuildBVHTDImpl(globalId, localId, groupId, args);
@@ -534,6 +521,9 @@ BuildQbvhArgs GetBuildQbvhArgs(
 {
     BuildQbvhArgs qbvhArgs;
 
+    const uint rootNodeIndex = FetchRootNodeIndex(
+        Settings.enableFastLBVH, ShaderConstants.offsets.fastLBVHRootNodeIndex);
+
     qbvhArgs.numPrimitives               = numLeafNodes;
     qbvhArgs.metadataSizeInBytes         = DstMetadata.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
     qbvhArgs.numThreads                  = GetNumThreads();
@@ -547,21 +537,10 @@ BuildQbvhArgs GetBuildQbvhArgs(
     qbvhArgs.rebraidEnabled              = (Settings.rebraidType != RebraidType::Off);
     qbvhArgs.enableFusedInstanceNode     = Settings.enableFusedInstanceNode;
     qbvhArgs.enableFastLBVH              = Settings.enableFastLBVH;
-    qbvhArgs.fastLBVHRootNodeIndex       = Settings.enableFastLBVH ?
-        ScratchBuffer.Load(ShaderConstants.offsets.fastLBVHRootNodeIndex) : 0;
+    qbvhArgs.fastLBVHRootNodeIndex       = rootNodeIndex;
     qbvhArgs.enableEarlyPairCompression  = Settings.enableEarlyPairCompression;
     qbvhArgs.unsortedBvhLeafNodesOffset  = ShaderConstants.offsets.unsortedBvhLeafNodes;
-
-    if (!Settings.topLevelBuild)
-    {
-        qbvhArgs.captureChildNumPrimsForRebraid = true;
-    }
-    else
-    {
-        qbvhArgs.captureChildNumPrimsForRebraid = false;
-    }
-
-    qbvhArgs.enableSAHCost = Settings.enableSAHCost;
+    qbvhArgs.enableSAHCost               = Settings.enableSAHCost;
 
     return qbvhArgs;
 
@@ -644,9 +623,9 @@ void InitAccelerationStructure()
     DstBuffer.Store(0, ShaderConstants.header);
 
     // Initialize valid scratch buffer counters to 0
-    InitScratchCounter(ShaderConstants.offsets.currentState);
-    InitScratchCounter(ShaderConstants.offsets.tdTaskCounters);
-    InitScratchCounter(ShaderConstants.offsets.currentSplitState);
+    InitScratchCounter(ShaderConstants.offsets.plocTaskQueueCounter);
+    InitScratchCounter(ShaderConstants.offsets.tdTaskQueueCounter);
+    InitScratchCounter(ShaderConstants.offsets.splitTaskQueueCounter);
     InitScratchCounter(ShaderConstants.offsets.numBatches);
 
     // Initialize scene bounds
@@ -948,11 +927,11 @@ void BuildBvh(
         END_TASK(ShaderConstants.numThreadGroups);
         writeDebugCounter(COUNTER_INITQBVH_OFFSET);
 
-        BEGIN_TASK(RoundUpQuotient(CalcNumQBVHInternalNodes(numLeafNodes), BUILD_THREADGROUP_SIZE));
+        BEGIN_TASK(RoundUpQuotient(GetNumInternalNodeCount(numLeafNodes), BUILD_THREADGROUP_SIZE));
 
         BuildQbvh(globalId, localId, numLeafNodes, numActivePrims);
 
-        END_TASK(RoundUpQuotient(CalcNumQBVHInternalNodes(numLeafNodes), BUILD_THREADGROUP_SIZE));
+        END_TASK(RoundUpQuotient(GetNumInternalNodeCount(numLeafNodes), BUILD_THREADGROUP_SIZE));
         writeDebugCounter(COUNTER_BUILDQBVH_OFFSET);
     }
 

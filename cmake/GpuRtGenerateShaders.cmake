@@ -45,7 +45,12 @@ set(gpurtCompileConfig    "${gpurtToolsDir}/RTShaders.xml")
 set(gpurtStripWhitelist   "${gpurtToolsDir}/strip_whitelist.txt")
 
 # Headers that are shared between HLSL and other things
-set(gpurtSharedLanguageHeaders "${GPU_RAY_TRACING_SOURCE_DIR}/gpurt/gpurtCounter.h")
+set(gpurtCounterHeaderPath "${GPU_RAY_TRACING_SOURCE_DIR}/gpurt/gpurtCounter.h")
+set(gpurtSharedHeadersPath "${GPU_RAY_TRACING_SOURCE_DIR}/src/shared")
+set(gpurtSharedLanguageHeaders
+    ${gpurtCounterHeaderPath}
+    ${gpurtSharedHeadersPath}
+)
 
 # Outputs
 set(gpurtOutputDir "${CMAKE_CURRENT_BINARY_DIR}/pipelines")

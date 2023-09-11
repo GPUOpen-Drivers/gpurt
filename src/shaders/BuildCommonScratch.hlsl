@@ -47,8 +47,44 @@
 #ifndef _BUILDCOMMONSCRATCH_HLSL
 #define _BUILDCOMMONSCRATCH_HLSL
 
-#include "ScratchNode.hlsl"
+#include "../shared/scratchNode.h"
 #include "BuildCommon.hlsl"
+
+//=====================================================================================================================
+void WriteGridPosAtIndex(uint offset, uint index, uint4 gridPos)
+{
+    ScratchBuffer.Store<uint4>(offset + index * sizeof(uint4), gridPos);
+}
+
+//=====================================================================================================================
+uint4 FetchGridPosAtIndex(uint offset, uint index)
+{
+    return ScratchBuffer.Load<uint4>(offset + index * sizeof(uint4));
+}
+
+//=====================================================================================================================
+void WriteSplitBoxAtIndex(uint offset, uint index, BoundingBox box)
+{
+    ScratchBuffer.Store<BoundingBox>(offset + index * sizeof(BoundingBox), box);
+}
+
+//=====================================================================================================================
+BoundingBox FetchSplitBoxAtIndex(uint offset, uint index)
+{
+    return ScratchBuffer.Load<BoundingBox>(offset + index * sizeof(BoundingBox));
+}
+
+//=====================================================================================================================
+void WriteRootNodeIndex(uint offset, uint index)
+{
+    ScratchBuffer.Store(offset, index);
+}
+
+//=====================================================================================================================
+uint FetchRootNodeIndex(uint enableFastLBVH, uint offset)
+{
+    return enableFastLBVH ? ScratchBuffer.Load(offset) : 0;
+}
 
 //=====================================================================================================================
 void WriteScratchBatchIndex(
@@ -89,8 +125,7 @@ static BoundingBox FetchScratchNodeBoundingBox(
     {
         if (doTriangleSplit && isLeafNode)
         {
-            bbox = ScratchBuffer.Load<BoundingBox>(splitBoxesByteOffset +
-                                                   sizeof(BoundingBox) * node.splitBox_or_nodePointer);
+            bbox = FetchSplitBoxAtIndex(splitBoxesByteOffset, node.splitBox_or_nodePointer);
         }
         else
         {
@@ -573,6 +608,92 @@ float2 FetchSceneSize(uint sceneBoundsOffset)
 }
 
 //=====================================================================================================================
+void MergeScratchNodes(
+    uint        scratchNodesOffset,
+    uint        numBatchesScratchOffset,
+    uint        batchIndicesScratchOffset,
+    uint        numActivePrims,
+    uint        mergedNodeIndex,
+    uint        leftNodeIndex,
+    ScratchNode leftNode,
+    uint        rightNodeIndex,
+    ScratchNode rightNode,
+    float       mergedBoxSurfaceArea)
+{
+    const uint numLeft  = FetchScratchNodeNumPrimitives(leftNode, IsLeafNode(leftNodeIndex, numActivePrims));
+    const uint numRight = FetchScratchNodeNumPrimitives(rightNode, IsLeafNode(rightNodeIndex, numActivePrims));
+    const uint numTris  = numLeft + numRight;
+
+    const float Ct = SAH_COST_TRIANGLE_INTERSECTION;
+    const float Ci = SAH_COST_AABBB_INTERSECTION;
+
+    const float leftCost = FetchScratchNodeCost(scratchNodesOffset, leftNodeIndex,
+                                                IsLeafNode(leftNodeIndex, numActivePrims));
+
+    const float rightCost = FetchScratchNodeCost(scratchNodesOffset, rightNodeIndex,
+                                                 IsLeafNode(rightNodeIndex, numActivePrims));
+
+    const bool leftCollapse      = (leftNode.numPrimitivesAndDoCollapse & 0x1) ||
+                                    IsLeafNode(leftNodeIndex, numActivePrims);
+    const bool rightCollapse     = (rightNode.numPrimitivesAndDoCollapse & 0x1) ||
+                                    IsLeafNode(rightNodeIndex, numActivePrims);
+    const bool collapseBothSides = leftCollapse && rightCollapse;
+
+    float bestCost = leftCost + rightCost + Ci * mergedBoxSurfaceArea;
+
+    const float collapseCost = Ct * numTris;
+
+    bool isCollapsed = false;
+
+    if (EnableLatePairCompression()
+    )
+    {
+        const float splitCost    = Ci + leftCost / mergedBoxSurfaceArea + rightCost / mergedBoxSurfaceArea;
+        const bool  useCostCheck = Settings.enablePairCostCheck;
+
+        // Limit number of triangles collapsed in a single bounding box to MAX_COLLAPSED_TRIANGLES
+        if ((useCostCheck && (collapseCost > splitCost)) ||
+            (numTris > MAX_COLLAPSED_TRIANGLES) ||
+            (collapseBothSides == false) ||
+            (mergedNodeIndex == 0))
+        {
+            if (leftCollapse)
+            {
+                WriteScratchBatchIndex(numBatchesScratchOffset,
+                                       batchIndicesScratchOffset,
+                                       leftNodeIndex);
+            }
+
+            if (rightCollapse)
+            {
+                WriteScratchBatchIndex(numBatchesScratchOffset,
+                                       batchIndicesScratchOffset,
+                                       rightNodeIndex);
+            }
+        }
+        else // do collapse
+        {
+            bestCost = collapseCost * mergedBoxSurfaceArea;
+            isCollapsed = true;
+        }
+    }
+
+    WriteScratchNodeType(scratchNodesOffset,
+                         mergedNodeIndex,
+                         GetInternalNodeType());
+    WriteScratchNodeFlagsFromNodes(scratchNodesOffset,
+                                   mergedNodeIndex,
+                                   leftNode,
+                                   rightNode);
+    WriteScratchNodeSurfaceArea(scratchNodesOffset,
+                                mergedNodeIndex,
+                                mergedBoxSurfaceArea);
+    WriteScratchNodeCost(scratchNodesOffset, mergedNodeIndex, bestCost, false);
+    WriteScratchNodeNumPrimitives(scratchNodesOffset, mergedNodeIndex, numTris, isCollapsed);
+
+}
+
+//=====================================================================================================================
 void RefitNode(
     uint                rootIndex,
     uint                nodeIndex,
@@ -620,7 +741,6 @@ void RefitNode(
                                                      args.splitBoxesOffset,
                                                      args.enableEarlyPairCompression,
                                                      args.unsortedNodesBaseOffset);
-        rightCost = isLeafNode ? FetchScratchLeafNodeCost(rightNode) : FetchScratchInternalNodeCost(rightNode);
         numMortonCells += isLeafNode ? 1 : rightNode.splitBox_or_nodePointer;
     }
 
@@ -634,7 +754,6 @@ void RefitNode(
                                                     args.splitBoxesOffset,
                                                     args.enableEarlyPairCompression,
                                                     args.unsortedNodesBaseOffset);
-        leftCost = isLeafNode ? FetchScratchLeafNodeCost(leftNode) : FetchScratchInternalNodeCost(leftNode);
         numMortonCells += isLeafNode ? 1 : leftNode.splitBox_or_nodePointer;
     }
 
@@ -651,63 +770,17 @@ void RefitNode(
                                 mergedBox.min,
                                 mergedBox.max);
 
-    WriteScratchNodeSurfaceArea(args.baseScratchNodesOffset,
-                                nodeIndex,
-                                mergedBoxSurfaceArea);
-
-    float bestCost = leftCost + rightCost + Ci * mergedBoxSurfaceArea;
-    bool isCollapsed = false;
-
-    if (args.doCollapse || args.enablePairCompression)
-    {
-        const float splitCost    = Ci + leftCost / mergedBoxSurfaceArea + rightCost / mergedBoxSurfaceArea;
-        const float collapseCost = Ct * numTris;
-        const bool  useCostCheck = args.doCollapse || args.enablePairCostCheck;
-
-        const bool leftCollapse      = (leftNode.numPrimitivesAndDoCollapse & 0x1) ||
-                                       IsLeafNode(lc, args.numActivePrims);
-        const bool rightCollapse     = (rightNode.numPrimitivesAndDoCollapse & 0x1) ||
-                                       IsLeafNode(rc, args.numActivePrims);
-        const bool collapseBothSides = leftCollapse && rightCollapse;
-
-        // Limit number of triangles collapsed in a single bounding box to MAX_COLLAPSED_TRIANGLES
-        if ((useCostCheck && (collapseCost > splitCost)) ||
-            (numTris > MAX_COLLAPSED_TRIANGLES) ||
-            (args.enablePairCompression && ((collapseBothSides == false) || (nodeIndex == rootIndex))))
-        {
-            if (args.enablePairCompression)
-            {
-                if (leftCollapse)
-                {
-                    WriteScratchBatchIndex(args.numBatchesOffset, args.baseBatchIndicesOffset, lc);
-                }
-
-                if (rightCollapse)
-                {
-                    WriteScratchBatchIndex(args.numBatchesOffset, args.baseBatchIndicesOffset, rc);
-                }
-            }
-        }
-        else
-        {
-            bestCost = collapseCost * mergedBoxSurfaceArea;
-            isCollapsed = true;
-        }
-    }
-
-    WriteScratchNodeCost(args.baseScratchNodesOffset, nodeIndex, bestCost, false);
-    WriteScratchNodeNumPrimitives(args.baseScratchNodesOffset, nodeIndex, numTris, isCollapsed);
-
-    // Decide on what type of interior box node the parent should be
-    // and write the type into scratch
-    WriteScratchNodeType(args.baseScratchNodesOffset,
-                         nodeIndex,
-                         GetInternalNodeType());
-
-    WriteScratchNodeFlagsFromNodes(args.baseScratchNodesOffset,
-                                   nodeIndex,
-                                   leftNode,
-                                   rightNode);
+    MergeScratchNodes(
+        args.baseScratchNodesOffset,
+        args.numBatchesOffset,
+        args.baseBatchIndicesOffset,
+        args.numActivePrims,
+        nodeIndex,
+        lc,
+        leftNode,
+        rc,
+        rightNode,
+        mergedBoxSurfaceArea);
 
     if (args.enableInstancePrimCount)
     {

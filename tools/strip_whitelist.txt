@@ -9,6 +9,10 @@ RayQueryProceed1_1
 TraceRay1_1
 TraceRayUsingRayQuery1_1
 TraceRayUsingHitToken1_1
+GetInstanceID
+GetInstanceIndex
+GetObjectToWorldTransform
+GetWorldToObjectTransform
 #if GPURT_BUILD_RTIP2
 TraceRayInline2_0
 RayQueryProceed2_0

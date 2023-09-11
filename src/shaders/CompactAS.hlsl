@@ -573,5 +573,4 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
             DstMetadata.Store(dstNodePtrOffset, dstNodePointer);
         }
     }
-
 }

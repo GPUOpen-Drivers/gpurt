@@ -35,6 +35,7 @@
 #include "gpurtInternal.h"
 #include "gpurtInternalShaderBindings.h"
 #include "gpurtBvhBuilder.h"
+#include "shared/accelStruct.h"
 
 #include <float.h>
 
@@ -288,39 +289,16 @@ uint32 BvhBuilder::GetLeafNodeSize(
 }
 
 // =====================================================================================================================
-// Helper function to determine Metadata size
-uint32 BvhBuilder::CalcMetadataSizeInBytes(
-    uint32 internalNodeSize,
-    uint32 leafNodeSize)
+uint32 BvhBuilder::GetNumInternalNodeCount() const
 {
-    // @note Each 64-bytes in acceleration structure occupies 4-Bytes of parent pointer memory
-    // for each primitive in the leaf node. E.g. an acceleration strucuture with 4 primitives
-    //
-    // | A | 0 | 1 | 2 | 3 | (A: internal node, 0-3 are leaf nodes)
-    //
-    // Parent pointer memory layout (-1 indicates root node)
-    //
-    // -- 1x Triangle Compression
-    // |-1 | x |
-    // | A | A |
-    // | A | A |
-    //
-
-    const uint32 num64ByteChunks = (internalNodeSize + leafNodeSize) / 64;
-    const uint32 numLinks = num64ByteChunks;
-    const uint32 linkDataSizeInBytes = numLinks * sizeof(uint32);
-    const uint32 metadataSizeInBytes = sizeof(AccelStructMetadataHeader) + linkDataSizeInBytes;
-
-    return metadataSizeInBytes;
+    return CalcAccelStructInternalNodeCount(m_buildConfig.numLeafNodes, 4u);
 }
 
 // =====================================================================================================================
-// Static helper function that calculates the size of the buffer for internal nodes
+// Calculate the size required for internal nodes
 uint32 BvhBuilder::CalculateInternalNodesSize()
 {
-    const uint32 leafAabbCount = m_buildConfig.numLeafNodes;
-
-    uint32 numInternalNodes = CalcNumInternalNodes(leafAabbCount);
+    uint32 numInternalNodes = GetNumInternalNodeCount();
     uint32 numBox16Nodes = 0;
     switch (m_buildConfig.fp16BoxNodesInBlasMode)
     {
@@ -330,7 +308,7 @@ uint32 BvhBuilder::CalculateInternalNodesSize()
 
     case Fp16BoxNodesInBlasMode::LeafNodes:
         // Conservative estimate how many interior nodes can be converted to fp16
-        numBox16Nodes = (leafAabbCount / 4);
+        numBox16Nodes = (m_buildConfig.numLeafNodes / 4);
         numInternalNodes -= numBox16Nodes;
         break;
 
@@ -552,213 +530,254 @@ uint32 BvhBuilder::CalculateResultBufferInfo(
 uint32 BvhBuilder::CalculateScratchBufferInfo(
     RayTracingScratchDataOffsets* pOffsets)
 {
-    //-----------------------------------------------------------------------------------------------------------//
-    //  ScratchAccelerationStructureData layout
-    //
-    //-------------- Type: All ----------------------------------------------------------------------------------//
-    //  TaskQueue Counters (phase, taskCounter, startIndex, endIndex, numTaskDone)
-    //  AABB               (ScratchNode InternalAABB[node_count = (2 * aabbCount) - 1])...AABB + Sorted Leaf
-    //  PropagationFlags   (uint32_t PropagationFlags[NumPrimitives])
-    //  TriangleSplitBox   (BoundingBox TriangleSplitBoxes[NumPrimitives])                     - Bottom Level Only
-
-    //  ============ PASS 1 ============
-    //  AABB              (ScratchNode LeafAABB[NumPrimitives])
-    //  TriangleSplitRef  (ScratchTSRef TriangleSplitRefs[NumPrimitives])                     - Bottom Level Only
-    //  SceneAABB         (D3D12_RAYTRACING_AABB SceneAABB)
-    //  MortonCodes       (uint32/uint64 MortonCodes[NumPrimitives])
-    //  MortonCodesSorted (uint32/uint64 MortonCodesSorted[NumPrimitives])
-    //  PrimIndicesSorted (uint32 PrimIndicesSorted[NumPrimitives])
-    //  DeviceHistogram
-    //  TempKeys          (uint32/uint64 TempKeys[NumPrimitives])
-    //  TempVals          (uint32 TempVals[NumPrimitives])
-    //  DevicePartialSum
-
-    //  ============ PASS 2 ============
-    //  ClusterList0      (uint32 ClusterList0[NumPrimitives])                                - BVH AC only
-    //  ClusterList1      (uint32 ClusterList1[NumPrimitives])                                - BVH AC only
-    //  NumClusterList0   (uint32 NumClusterList0)                                            - BVH AC only
-    //  NumClusterList1   (uint32 NumClusterList1)                                            - BVH AC only
-    //  InternalNodesIndex0   (uint32 NumClusterList0)                                        - BVH AC only
-    //  InternalNodesIndex1   (uint32 NumClusterList1)                                        - BVH AC only
-
-    //  ============ PASS 3 ============
-    //  QBVH Global Stack (uint2 GlobalStack[internal_node_count])
-    //  QBVH Stack Ptrs   (StackPtrs StackPtrs)
-    //  BVH2Prims         (BVHNode bvh2prims[NumPrimitives])                                    -Bottom Level Only
-    //  Collapse Stack    (CTask CollapseStack[node_count])                                     -Bottom Level Only
-    //  Collapse Stack Ptrs (StackPtrs StackPtrs)                                               -Bottom Level Only
-    //  OBB K-DOPs        (OBBKdop obbKdops[aabbCount])
-    //-----------------------------------------------------------------------------------------------------------//
+    //--------------------------------------------
+    // ScratchBuffer layout in each pass:
+    //            [0]     [1]    [2]
+    // BVH2 & QBVH | State        | TS/Rebraid
+    // BVH2 & QBVH | State        | TD
+    // BVH2 & QBVH | State | BVH2 | Sort
+    // BVH2 & QBVH | State | BVH2 | PLOC/LTD
+    // BVH2 & QBVH | State        | QBVH
 
     const bool willDumpScratchOffsets = m_deviceSettings.enableBuildAccelStructScratchDumping;
     // Reserve the beginning of the scratch buffer for the offsets data if dumping.
     uint32 runningOffset = willDumpScratchOffsets ? sizeof(RayTracingScratchDataOffsets) : 0;
 
-    // Scratch data for storing internal BVH node data
-    const uint32 bvhNodeData = runningOffset;
-    const uint32 aabbCount = m_buildConfig.numLeafNodes;
+    uint32 baseOffset1 = 0; // [1] end of State section
+    uint32 baseOffset2 = 0; // [2] end of BVH2 section
+    uint32 maxSize = 0;
 
     // The scratch acceleration structure is built as a BVH2.
+    const uint32 aabbCount = m_buildConfig.numLeafNodes;
     const uint32 nodeCount = (aabbCount > 0) ? ((2 * aabbCount) - 1) : 0;
-    runningOffset += nodeCount * RayTracingScratchNodeSize;
 
-    // Propagation flags
-    const uint32 propagationFlags = runningOffset;
-
-    // Round up to multiple of primitive count. Encode* clears the flags based on the expansion factor which
-    // must be a multiple of numPrimitives.
-    const uint32 propagationFlagSlotCount =
-        (m_buildConfig.numPrimitives == 0) ? 0 : Util::RoundUpToMultiple(aabbCount, m_buildConfig.numPrimitives);
-
-    runningOffset += propagationFlagSlotCount * sizeof(uint32);
-
-    uint32 triangleSplitState = 0xFFFFFFFF;
+    //--------------------------------------------
+    // BVH2 & QBVH
+    uint32 bvhNodeData = 0xFFFFFFFF;
+    uint32 bvhLeafNodeData = 0xFFFFFFFF;
     uint32 triangleSplitBoxes = 0xFFFFFFFF;
+    uint32 fastLBVHRootNodeIndex = 0xFFFFFFFF;
 
-    if (m_buildConfig.triangleSplitting)
-    {
-        triangleSplitState = runningOffset;
-        runningOffset += RayTracingStateTSBuildSize;
-
-        triangleSplitBoxes = runningOffset;
-        runningOffset += aabbCount * sizeof(Aabb);
-    }
-
-    uint32 currentState = 0xFFFFFFFF;
-
-    if ((m_buildConfig.topDownBuild == false) && (m_buildConfig.buildMode == BvhBuildMode::PLOC))
-    {
-        currentState = runningOffset;
-        runningOffset += RayTracingTaskQueueCounterSize;    // PLOC task counters
-        runningOffset += RayTracingStatePLOCSize;           // PLOC state
-    }
-
-    uint32 tdState = 0xFFFFFFFF;
+    //--------------------------------------------
+    // TaskQueueCounter
+    uint32 triangleSplitTaskQueueCounter = 0xFFFFFFFF;
+    uint32 rebraidTaskQueueCounter = 0xFFFFFFFF;
     uint32 tdTaskQueueCounter = 0xFFFFFFFF;
+    uint32 plocTaskQueueCounter = 0xFFFFFFFF;
 
-    if (m_buildConfig.topDownBuild)
-    {
-        tdState = runningOffset;
-
-        if (m_buildConfig.rebraidType == GpuRt::RebraidType::V1)
-        {
-            runningOffset += RayTracingStateTDTRBuildSize;
-        }
-        else
-        {
-            runningOffset += RayTracingStateTDBuildSize;
-        }
-
-        tdTaskQueueCounter = runningOffset;               // td /tdtr taskCounter
-        runningOffset += RayTracingTaskQueueCounterSize;
-    }
-
-    const uint32 dynamicBlockIndex = runningOffset;
-    runningOffset += sizeof(uint32);
-
+    //--------------------------------------------
+    // State
+    uint32 triangleSplitState = 0xFFFFFFFF;
+    uint32 rebraidState = 0xFFFFFFFF;
+    uint32 currentState = 0xFFFFFFFF;
+    uint32 tdState = 0xFFFFFFFF;
     uint32 numBatches = 0xFFFFFFFF;
+    uint32 debugCounters = 0;
+    uint32 dynamicBlockIndex = 0xFFFFFFFF;
+    uint32 sceneBounds = 0xFFFFFFFF;
+
+    //--------------------------------------------
+    // BVH2
+    uint32 propagationFlags = 0xFFFFFFFF;
     uint32 batchIndices = 0xFFFFFFFF;
     uint32 indexBufferInfo = 0xFFFFFFFF;
-
-    if ((m_buildConfig.triangleCompressionMode == TriangleCompressionMode::Pair) &&
-        (m_buildConfig.enableEarlyPairCompression == false))
-    {
-        numBatches = runningOffset;
-        runningOffset += sizeof(uint32);
-
-        batchIndices = runningOffset;
-        runningOffset += aabbCount * sizeof(uint32);
-
-        indexBufferInfo = runningOffset;
-        runningOffset += BvhBuilder::CalculateIndexBufferInfoSize(m_buildArgs.inputs.inputElemCount);
-    }
-
-    uint32 debugCounters = 0;
-
-    if (m_deviceSettings.enableBVHBuildDebugCounters)
-    {
-        // Adding a Build debug counter
-        // Allocate memory for counters
-        debugCounters = runningOffset;
-        runningOffset += sizeof(uint32) * RayTracingBuildDebugCounters;
-    }
-
-    uint32 rebraidState = 0xFFFFFFFF;
-
-    if (m_buildConfig.rebraidType == GpuRt::RebraidType::V2)
-    {
-        rebraidState = runningOffset;
-        runningOffset += RayTracingStateRebraidBuildSize;
-    }
-
     uint32 primIndicesSorted = 0xFFFFFFFF;
 
-    if (m_buildConfig.noCopySortedNodes)
-    {
-        // Sorted primitive indices buffer size. This array must be available for
-        // the next passes when noCopySortedNodes is enabled.
-        primIndicesSorted = runningOffset;
-        runningOffset += aabbCount * sizeof(uint32);
-    }
+    //--------------------------------------------
+    // TS / Rebraid
+    uint32 triangleSplitRefs0 = 0xFFFFFFFF;
+    uint32 triangleSplitRefs1 = 0xFFFFFFFF;
+    uint32 splitPriorities = 0xFFFFFFFF;
+    uint32 atomicFlagsTS = 0xFFFFFFFF;
 
-    uint32 fastLBVHRootNodeIndex = 0xFFFFFFFF;
-    if (m_buildConfig.enableFastLBVH)
-    {
-        fastLBVHRootNodeIndex = runningOffset;
-        runningOffset += sizeof(uint32);
-    }
+    //--------------------------------------------
+    // TD
+    uint32 refList = 0xFFFFFFFF;
+    uint32 refOffsets = 0xFFFFFFFF; // not used
+    uint32 tdBins = 0xFFFFFFFF;
+    uint32 tdNodeList = 0xFFFFFFFF;
 
-    uint32 maxSize = runningOffset;
-
-    const uint32 passOffset = runningOffset;
-    const auto ApplyPassOffset = [willDumpScratchOffsets, passOffset, &runningOffset]()
-    {
-        // Do not overwrite the running offset when dumping the scratch buffer offsets.
-        if (willDumpScratchOffsets == false)
-        {
-            runningOffset = passOffset;
-        }
-    };
-
-    // ============ PASS 1 ============
-
-    ApplyPassOffset();
-
-    uint32 bvhLeafNodeData = 0xFFFFFFFF; // Unsorted leaf buffer
-    uint32 sceneBounds = 0xFFFFFFFF;
+    //--------------------------------------------
+    // Sort + Linear/LBvh
     uint32 mortonCodes = 0xFFFFFFFF;
     uint32 mortonCodesSorted = 0xFFFFFFFF;
     uint32 primIndicesSortedSwap = 0xFFFFFFFF;
     uint32 histogram = 0xFFFFFFFF;
     uint32 tempKeys = 0xFFFFFFFF;
     uint32 tempVals = 0xFFFFFFFF;
-
     uint32 atomicFlags = 0xFFFFFFFF;
     uint32 distributedPartSums = 0xFFFFFFFF;
 
-    uint32 refList = 0xFFFFFFFF;
-    uint32 tdNodeList = 0xFFFFFFFF;
-    uint32 refOffsets = 0xFFFFFFFF;
-    uint32 tdBins = 0xFFFFFFFF;
+    //--------------------------------------------
+    // PLOC / LTD
+    uint32 clustersList0 = 0xFFFFFFFF;
+    uint32 clustersList1 = 0xFFFFFFFF;
+    uint32 numClusterList0 = 0xFFFFFFFF; // not used
+    uint32 numClusterList1 = 0xFFFFFFFF; // not used
+    uint32 internalNodesIndex0 = 0xFFFFFFFF; // not used
+    uint32 internalNodesIndex1 = 0xFFFFFFFF; // not used
+    uint32 neighbourIndices = 0xFFFFFFFF;
+    uint32 atomicFlagsPloc = 0xFFFFFFFF;
+    uint32 clusterOffsets = 0xFFFFFFFF;
 
-    if (m_buildConfig.noCopySortedNodes)
+    //--------------------------------------------
+    // QBVH
+    uint32 qbvhGlobalStack = 0;
+    uint32 qbvhGlobalStackPtrs = 0;
+
+    // ============ BVH2 & QBVH ============
     {
-        // Scratch data for storing unsorted leaf nodes. No additional memory is
-        // used, so runningOffset doesn't need to be updated.
-        bvhLeafNodeData = bvhNodeData + (m_buildConfig.numLeafNodes - 1) * RayTracingScratchNodeSize;
+        // Scratch data for storing internal BVH node data
+        bvhNodeData = runningOffset;
+        runningOffset += nodeCount * RayTracingScratchNodeSize;
+
+        // Unsorted leaf buffer
+        if (m_buildConfig.noCopySortedNodes)
+        {
+            // Scratch data for storing unsorted leaf nodes. No additional memory is
+            // used, so runningOffset doesn't need to be updated.
+            bvhLeafNodeData = bvhNodeData + (m_buildConfig.numLeafNodes - 1) * RayTracingScratchNodeSize;
+        }
+        else
+        {
+            // Additional scratch data for storing unsorted leaf nodes
+            bvhLeafNodeData = runningOffset;
+            runningOffset += aabbCount * RayTracingScratchNodeSize;
+        }
+
+        if (m_buildConfig.triangleSplitting)
+        {
+            triangleSplitBoxes = runningOffset;
+            runningOffset += aabbCount * sizeof(Aabb);
+        }
+
+        if (m_buildConfig.enableFastLBVH)
+        {
+            fastLBVHRootNodeIndex = runningOffset;
+            runningOffset += sizeof(uint32);
+        }
+
     }
-    else
+
+    // ============ TaskQueueCounter ============
     {
-        // Additional scratch data for storing unsorted leaf nodes
-        bvhLeafNodeData = runningOffset;
-        runningOffset += aabbCount * RayTracingScratchNodeSize;
+        if (m_buildConfig.triangleSplitting)
+        {
+            triangleSplitTaskQueueCounter = runningOffset;
+            runningOffset += RayTracingTaskQueueCounterSize;
+        }
+
+        if (m_buildConfig.rebraidType == GpuRt::RebraidType::V2)
+        {
+            rebraidTaskQueueCounter = runningOffset;
+            runningOffset += RayTracingTaskQueueCounterSize;
+        }
+
+        if (m_buildConfig.topDownBuild)
+        {
+            tdTaskQueueCounter = runningOffset;               // td /tdtr taskCounter
+            runningOffset += RayTracingTaskQueueCounterSize;
+        }
+
+        if ((m_buildConfig.topDownBuild == false) && (m_buildConfig.buildMode == BvhBuildMode::PLOC))
+        {
+            plocTaskQueueCounter = runningOffset;             // PLOC task counters
+            runningOffset += RayTracingTaskQueueCounterSize;
+        }
+
     }
 
-    uint32 triangleSplitRefs0 = 0xFFFFFFFF;
-    uint32 triangleSplitRefs1 = 0xFFFFFFFF;
-    uint32 splitPriorities = 0xFFFFFFFF;
-    uint32 atomicFlagsTS = 0xFFFFFFFF;
+    // ============ State ============
+    {
+        if (m_buildConfig.triangleSplitting)
+        {
+            triangleSplitState = runningOffset;
+            runningOffset += RayTracingStateTSBuildSize;
+        }
 
+        if (m_buildConfig.rebraidType == GpuRt::RebraidType::V2)
+        {
+            rebraidState = runningOffset;
+            runningOffset += RayTracingStateRebraidBuildSize;
+        }
+
+        if ((m_buildConfig.topDownBuild == false) && (m_buildConfig.buildMode == BvhBuildMode::PLOC))
+        {
+            currentState = runningOffset;
+            runningOffset += RayTracingStatePLOCSize;           // PLOC state
+        }
+
+        if (m_buildConfig.topDownBuild)
+        {
+            tdState = runningOffset;
+            if (m_buildConfig.rebraidType == GpuRt::RebraidType::V1)
+            {
+                runningOffset += RayTracingStateTDTRBuildSize;
+            }
+            else
+            {
+                runningOffset += RayTracingStateTDBuildSize;
+            }
+        }
+
+        if ((m_buildConfig.triangleCompressionMode == TriangleCompressionMode::Pair) &&
+            (m_buildConfig.enableEarlyPairCompression == false))
+        {
+            numBatches = runningOffset;
+            runningOffset += sizeof(uint32);
+        }
+
+        if (m_deviceSettings.enableBVHBuildDebugCounters)
+        {
+            // Adding a Build debug counter
+            // Allocate memory for counters
+            debugCounters = runningOffset;
+            runningOffset += sizeof(uint32) * RayTracingBuildDebugCounters;
+        }
+
+        dynamicBlockIndex = runningOffset;
+        runningOffset += sizeof(uint32);
+
+        sceneBounds = runningOffset;
+        runningOffset += sizeof(Aabb) + 2 * sizeof(float);  // scene bounding box + min/max prim size
+        if (m_buildConfig.topLevelBuild == true)
+        {
+            runningOffset += sizeof(Aabb);  // scene bounding box for rebraid
+        }
+    }
+    baseOffset1 = runningOffset;
+
+    // ============ BVH2 ============
+    {
+        // Propagation flags
+        propagationFlags = runningOffset;
+            // Round up to multiple of primitive count. Encode* clears the flags based on the expansion factor which
+            // must be a multiple of numPrimitives.
+            const uint32 propagationFlagSlotCount =
+            (m_buildConfig.numPrimitives == 0) ? 0 : Util::RoundUpToMultiple(aabbCount, m_buildConfig.numPrimitives);
+        runningOffset += propagationFlagSlotCount * sizeof(uint32);
+
+        if ((m_buildConfig.triangleCompressionMode == TriangleCompressionMode::Pair) &&
+            (m_buildConfig.enableEarlyPairCompression == false))
+        {
+            batchIndices = runningOffset;
+            runningOffset += aabbCount * sizeof(uint32);
+
+            indexBufferInfo = runningOffset;
+            runningOffset += BvhBuilder::CalculateIndexBufferInfoSize(m_buildArgs.inputs.inputElemCount);
+        }
+
+        // Sorted primitive indices buffer size.
+        primIndicesSorted = runningOffset;
+        runningOffset += aabbCount * sizeof(uint32);
+    }
+    baseOffset2 = runningOffset;
+
+    // ============ TS/Rebraid ============
+    if (willDumpScratchOffsets == false)
+    {
+        runningOffset = baseOffset2;
+    }
     if (m_buildConfig.triangleSplitting)
     {
         triangleSplitRefs0 = runningOffset;
@@ -778,16 +797,49 @@ uint32 BvhBuilder::CalculateScratchBufferInfo(
         atomicFlagsTS = runningOffset;  // TODO: calculate number of blocks based on KEYS_PER_THREAD
         runningOffset += aabbCount * RayTracingAtomicFlags;
     }
+    maxSize = Util::Max(maxSize, runningOffset);
 
-    sceneBounds = runningOffset;
-    runningOffset += sizeof(Aabb) + 2 * sizeof(float);  // scene bounding box + min/max prim size
-
-    if (m_buildConfig.topLevelBuild == true)
+    // ============ TD ============
+    if (willDumpScratchOffsets == false)
     {
-        runningOffset += sizeof(Aabb);  // scene bounding box for rebraid
+        runningOffset = baseOffset2;
     }
+    if (m_buildConfig.topDownBuild)
+    {
+        refList = runningOffset;
+        if (m_buildConfig.rebraidType == GpuRt::RebraidType::V1)
+        {
+            runningOffset += RayTracingTDTRRefScratchSize * aabbCount;
+        }
+        else
+        {
+            runningOffset += RayTracingTDRefScratchSize * aabbCount;
+        }
 
-    if ((m_buildConfig.topLevelBuild == false) || (m_buildConfig.topDownBuild == false))
+        // Align the beginning of the TDBins structs to 8 bytes so that 64-bit atomic operations on the first field in
+        // the struct work correctly.
+        runningOffset = Util::RoundUpToMultiple(runningOffset, 8u);
+        tdBins = runningOffset;
+        runningOffset += RayTracingTDBinsSize * (aabbCount / 3);
+
+        tdNodeList = runningOffset;
+        if (m_buildConfig.rebraidType == GpuRt::RebraidType::V1)
+        {
+            runningOffset += RayTracingTDTRNodeSize * (aabbCount - 1);
+        }
+        else
+        {
+            runningOffset += RayTracingTDNodeSize * (aabbCount - 1);
+        }
+    }
+    maxSize = Util::Max(maxSize, runningOffset);
+
+    // ============ Sort ============
+    if (willDumpScratchOffsets == false)
+    {
+        runningOffset = baseOffset2;
+    }
+    if (m_buildConfig.topDownBuild == false)
     {
         const uint32 dataSize = m_deviceSettings.enableMortonCode30 ? sizeof(uint32) : sizeof(uint64);
 
@@ -798,14 +850,6 @@ uint32 BvhBuilder::CalculateScratchBufferInfo(
         // Sorted morton codes buffer size
         mortonCodesSorted = runningOffset;
         runningOffset += aabbCount * dataSize;
-
-        if (m_buildConfig.noCopySortedNodes == false)
-        {
-            // Sorted primitive indices buffer size. This array goes away after this pass
-            // if noCopySortedNodes is disabled
-            primIndicesSorted = runningOffset;
-            runningOffset += aabbCount * sizeof(uint32);
-        }
 
         // Merge Sort
         if (m_deviceSettings.enableMergeSort)
@@ -851,7 +895,6 @@ uint32 BvhBuilder::CalculateScratchBufferInfo(
 
                 distributedPartSums = runningOffset;
                 runningOffset += numGroupsBottomLevelScan * sizeof(uint32);
-
                 if (m_buildConfig.numHistogramElements >= m_radixSortConfig.scanThresholdTwoLevel)
                 {
                     const uint32 numGroupsMidLevelScan =
@@ -862,56 +905,13 @@ uint32 BvhBuilder::CalculateScratchBufferInfo(
             }
         }
     }
-    else
-    {
-        refList = runningOffset;
-
-        if (m_buildConfig.rebraidType == GpuRt::RebraidType::V1)
-        {
-            runningOffset += RayTracingTDTRRefScratchSize * aabbCount;
-        }
-        else
-        {
-            runningOffset += RayTracingTDRefScratchSize * aabbCount;
-        }
-
-        // Align the beginning of the TDBins structs to 8 bytes so that 64-bit atomic operations on the first field in
-        // the struct work correctly.
-        runningOffset = Util::RoundUpToMultiple(runningOffset, 8u);
-
-        tdBins = runningOffset;
-
-        runningOffset += RayTracingTDBinsSize * (aabbCount / 3);
-
-        tdNodeList = runningOffset;
-
-        if (m_buildConfig.rebraidType == GpuRt::RebraidType::V1)
-        {
-            runningOffset += RayTracingTDTRNodeSize * (aabbCount - 1);
-        }
-        else
-        {
-            runningOffset += RayTracingTDNodeSize * (aabbCount - 1);
-        }
-
-    }
-
     maxSize = Util::Max(maxSize, runningOffset);
 
-    // ============ PASS 2 ============
-
-    ApplyPassOffset();
-
-    uint32 clustersList0 = 0xFFFFFFFF;
-    uint32 clustersList1 = 0xFFFFFFFF;
-    uint32 numClusterList0 = 0xFFFFFFFF;
-    uint32 numClusterList1 = 0xFFFFFFFF;
-    uint32 internalNodesIndex0 = 0xFFFFFFFF;
-    uint32 internalNodesIndex1 = 0xFFFFFFFF;
-    uint32 neighbourIndices = 0xFFFFFFFF;
-    uint32 atomicFlagsPloc = 0xFFFFFFFF;
-    uint32 clusterOffsets = 0xFFFFFFFF;
-
+    // ============ PLOC/LTD ============
+    if (willDumpScratchOffsets == false)
+    {
+        runningOffset = baseOffset2;
+    }
     if (m_buildConfig.topDownBuild == false)
     {
         if (m_buildConfig.buildMode == BvhBuildMode::PLOC)
@@ -932,39 +932,34 @@ uint32 BvhBuilder::CalculateScratchBufferInfo(
             runningOffset += aabbCount * sizeof(uint32);
         }
     }
-
     maxSize = Util::Max(maxSize, runningOffset);
 
-    // ============ PASS 3 ============
+    // ============ QBVH ============
+    if (willDumpScratchOffsets == false)
+    {
+        runningOffset = baseOffset2;
+    }
+    {
+        // ..and QBVH global stack
+        qbvhGlobalStack = runningOffset;
 
-    ApplyPassOffset();
+        const uint32 maxStackEntry = GetNumInternalNodeCount();
 
-    uint32 qbvhGlobalStack = 0;
-    uint32 qbvhGlobalStackPtrs = 0;
+        // Stack pointers require 2 entries per node when fp16 and fp32 box nodes intermix in BLAS
+        const Fp16BoxNodesInBlasMode intNodeTypes = m_buildConfig.fp16BoxNodesInBlasMode;
+        const bool intNodeTypesMix = (intNodeTypes != Fp16BoxNodesInBlasMode::NoNodes) &&
+            (intNodeTypes != Fp16BoxNodesInBlasMode::AllNodes);
+        const bool intNodeTypesMixInBlas = intNodeTypesMix &&
+            (m_buildArgs.inputs.type == AccelStructType::BottomLevel);
 
-    uint32 bvh2Prims = 0;
+        bool stackHasTwoEntries = intNodeTypesMixInBlas;
 
-    // ..and QBVH global stack
-    qbvhGlobalStack = runningOffset;
+        const uint32 stackEntrySize = stackHasTwoEntries ? 2u : 1u;
+        runningOffset += maxStackEntry * stackEntrySize * sizeof(uint32);
 
-    const uint32 maxStackEntry = CalcNumInternalNodes(m_buildConfig.numLeafNodes);
-
-    // Stack pointers require 2 entries per node when fp16 and fp32 box nodes intermix in BLAS
-    const Fp16BoxNodesInBlasMode intNodeTypes = m_buildConfig.fp16BoxNodesInBlasMode;
-    const bool intNodeTypesMix = (intNodeTypes != Fp16BoxNodesInBlasMode::NoNodes) &&
-        (intNodeTypes != Fp16BoxNodesInBlasMode::AllNodes);
-    const bool intNodeTypesMixInBlas = intNodeTypesMix &&
-        (m_buildArgs.inputs.type == AccelStructType::BottomLevel);
-
-    bool stackHasTwoEntries = intNodeTypesMixInBlas;
-
-    const uint32 stackEntrySize = stackHasTwoEntries ? 2u : 1u;
-    runningOffset += maxStackEntry * stackEntrySize * sizeof(uint32);
-
-    qbvhGlobalStackPtrs = runningOffset;
-
-    runningOffset += RayTracingQBVHStackPtrsSize;
-
+        qbvhGlobalStackPtrs = runningOffset;
+        runningOffset += RayTracingQBVHStackPtrsSize;
+    }
     maxSize = Util::Max(maxSize, runningOffset);
 
     // If the caller requested offsets, return them.
@@ -976,7 +971,9 @@ uint32 BvhBuilder::CalculateScratchBufferInfo(
         pOffsets->triangleSplitRefs1 = triangleSplitRefs1;
         pOffsets->splitPriorities = splitPriorities;
         pOffsets->triangleSplitState = triangleSplitState;
+        pOffsets->triangleSplitTaskQueueCounter = triangleSplitTaskQueueCounter;
         pOffsets->rebraidState = rebraidState;
+        pOffsets->rebraidTaskQueueCounter = rebraidTaskQueueCounter;
         pOffsets->atomicFlagsTS = atomicFlagsTS;
         pOffsets->refList = refList;
         pOffsets->tdNodeList = tdNodeList;
@@ -993,6 +990,7 @@ uint32 BvhBuilder::CalculateScratchBufferInfo(
         pOffsets->internalNodesIndex1 = internalNodesIndex1;
         pOffsets->neighbourIndices = neighbourIndices;
         pOffsets->currentState = currentState;
+        pOffsets->plocTaskQueueCounter = plocTaskQueueCounter;
         pOffsets->atomicFlagsPloc = atomicFlagsPloc;
         pOffsets->clusterOffsets = clusterOffsets;
         pOffsets->sceneBounds = sceneBounds;
@@ -2103,8 +2101,16 @@ void BvhBuilder::InitBuildSettings()
     m_buildSettings.useMortonCode30              = m_deviceSettings.enableMortonCode30;
     m_buildSettings.enableMergeSort              = m_deviceSettings.enableMergeSort;
     m_buildSettings.fastBuildThreshold           = m_deviceSettings.fastBuildThreshold;
-
     m_buildSettings.enableFusedInstanceNode      = m_deviceSettings.enableFusedInstanceNode;
+
+    // m_buildConfig.rebraidType is only enabled on TLAS builds, as result we need a separate compile time
+    // setting to enable rebraid support in BLAS build shaders.
+    if ((m_deviceSettings.rebraidType != RebraidType::Off) && (m_buildSettings.topLevelBuild == 0))
+    {
+        // Enable instance rebraid support in build shaders. Note, currently this only enables additional
+        // code paths in BLAS build shaders.
+        m_buildSettings.enableInstanceRebraid = 1;
+    }
 
     m_buildSettings.tsPriority                   = m_deviceSettings.tsPriority;
     // Force priority to 1 if the client set it to 0
@@ -3157,6 +3163,7 @@ void BvhBuilder::Rebraid()
 
         m_scratchOffsets.sceneBounds,
         m_scratchOffsets.rebraidState,
+        m_scratchOffsets.rebraidTaskQueueCounter,
         m_scratchOffsets.atomicFlagsTS,
         encodeArrayOfPointers,
 
@@ -3164,7 +3171,7 @@ void BvhBuilder::Rebraid()
         m_deviceSettings.enableSAHCost,
     };
 
-    ResetTaskQueueCounters(m_scratchOffsets.rebraidState);
+    ResetTaskQueueCounters(m_scratchOffsets.rebraidTaskQueueCounter);
 
     BindPipeline(InternalRayTracingCsType::Rebraid);
 
@@ -3319,6 +3326,7 @@ void BvhBuilder::BuildBVHPLOC()
         m_scratchOffsets.clusterList1,
         m_scratchOffsets.neighbourIndices,
         m_scratchOffsets.currentState,
+        m_scratchOffsets.plocTaskQueueCounter,
         m_scratchOffsets.atomicFlagsPloc,
         m_scratchOffsets.clusterOffsets,
         m_scratchOffsets.dynamicBlockIndex,
@@ -3326,7 +3334,6 @@ void BvhBuilder::BuildBVHPLOC()
         m_scratchOffsets.batchIndices,
         m_buildSettings.fp16BoxNodesMode,
         m_deviceSettings.fp16BoxModeMixedSaThresh,
-        BuildModeFlags(),
         m_scratchOffsets.triangleSplitBoxes,
         m_deviceSettings.plocRadius,
         m_scratchOffsets.primIndicesSorted,
@@ -3336,7 +3343,7 @@ void BvhBuilder::BuildBVHPLOC()
 
     ResetTaskCounter(HeaderBufferBaseVa());
 
-    ResetTaskQueueCounters(m_scratchOffsets.currentState);
+    ResetTaskQueueCounters(m_scratchOffsets.plocTaskQueueCounter);
 
     // Set shader constants
     entryOffset = WriteUserDataEntries(&shaderConstants, BuildBVHPLOC::NumEntries, entryOffset);
@@ -3710,7 +3717,7 @@ uint32 BvhBuilder::GetParallelBuildNumThreadGroups()
 // Executes the build QBVH shader
 void BvhBuilder::BuildQBVH()
 {
-    const uint32 nodeCount       = CalcNumInternalNodes(m_buildConfig.numLeafNodes);
+    const uint32 nodeCount       = GetNumInternalNodeCount();
     const uint32 numThreadGroups = GetNumPersistentThreadGroups(nodeCount);
 
     const BuildQBVH::Constants shaderConstants =
@@ -3765,7 +3772,7 @@ void BvhBuilder::BuildQBVH()
 // Executes the build top QBVH shader
 void BvhBuilder::BuildQBVHTop()
 {
-    const uint32 nodeCount       = CalcNumInternalNodes(m_buildConfig.numLeafNodes);
+    const uint32 nodeCount       = GetNumInternalNodeCount();
     const uint32 numThreadGroups = GetNumPersistentThreadGroups(nodeCount);
 
     const BuildQBVH::Constants shaderConstants =
@@ -4144,6 +4151,7 @@ void BvhBuilder::BuildParallel()
     shaderConstants.offsets.neighborIndices      = m_scratchOffsets.neighbourIndices;
 
     shaderConstants.offsets.currentState         = m_scratchOffsets.currentState;
+    shaderConstants.offsets.plocTaskQueueCounter = m_scratchOffsets.plocTaskQueueCounter;
     shaderConstants.offsets.atomicFlagsPloc      = m_scratchOffsets.atomicFlagsPloc;
     shaderConstants.offsets.clusterOffsets       = m_scratchOffsets.clusterOffsets;
 
@@ -4162,10 +4170,12 @@ void BvhBuilder::BuildParallel()
     if (m_buildConfig.rebraidType == RebraidType::V2)
     {
         shaderConstants.offsets.currentSplitState = m_scratchOffsets.rebraidState;
+        shaderConstants.offsets.splitTaskQueueCounter = m_scratchOffsets.rebraidTaskQueueCounter;
     }
     else
     {
         shaderConstants.offsets.currentSplitState = m_scratchOffsets.triangleSplitState;
+        shaderConstants.offsets.splitTaskQueueCounter = m_scratchOffsets.triangleSplitTaskQueueCounter;
     }
 
     shaderConstants.offsets.splitAtomicFlags    = m_scratchOffsets.atomicFlagsTS;
@@ -4180,15 +4190,15 @@ void BvhBuilder::BuildParallel()
         shaderConstants.offsets.tdNodes             = m_scratchOffsets.tdNodeList;
         shaderConstants.offsets.tdBins              = m_scratchOffsets.tdBins;
         shaderConstants.offsets.tdState             = m_scratchOffsets.tdState;
-        shaderConstants.offsets.tdTaskCounters      = m_scratchOffsets.tdTaskQueueCounter;
+        shaderConstants.offsets.tdTaskQueueCounter  = m_scratchOffsets.tdTaskQueueCounter;
     }
 
     shaderConstants.offsets.debugCounters       = m_scratchOffsets.debugCounters;
 
+    ResetTaskQueueCounters(m_scratchOffsets.rebraidTaskQueueCounter);
+    ResetTaskQueueCounters(m_scratchOffsets.triangleSplitTaskQueueCounter);
     ResetTaskQueueCounters(m_scratchOffsets.tdTaskQueueCounter);
-    ResetTaskQueueCounters(m_scratchOffsets.currentState);
-    ResetTaskQueueCounters(m_scratchOffsets.rebraidState);
-    ResetTaskQueueCounters(m_scratchOffsets.triangleSplitState);
+    ResetTaskQueueCounters(m_scratchOffsets.plocTaskQueueCounter);
 
     BindPipeline(InternalRayTracingCsType::BuildParallel);
 
@@ -4581,19 +4591,4 @@ uint32 BvhBuilder::WriteDestBuffers(
     return entryOffset;
 }
 
-// =====================================================================================================================
-uint32 BvhBuilder::BuildModeFlags()
-{
-    uint32 buildModeFlags = 0;
-
-    buildModeFlags |= m_buildConfig.triangleSplitting ? BuildModeTriangleSplitting : BuildModeNone;
-    buildModeFlags |= m_buildConfig.collapse ? BuildModeCollapse : BuildModeNone;
-    buildModeFlags |= (m_buildConfig.triangleCompressionMode == TriangleCompressionMode::Pair) ?
-                      BuildModePairCompression :
-                      BuildModeNone;
-    buildModeFlags |= m_deviceSettings.enablePairCompressionCostCheck ? BuildModePairCostCheck : BuildModeNone;
-    buildModeFlags |= m_buildConfig.enableEarlyPairCompression ? BuildModeEarlyPairCompression : BuildModeNone;
-
-    return buildModeFlags;
-}
 }

@@ -69,11 +69,6 @@ public:
     // Helper function to determine nodes size
     uint32 CalculateNodesSize();
 
-    // Helper function to determine Metadata size
-    uint32 CalcMetadataSizeInBytes(
-        uint32 internalNodeSize,
-        uint32 leafNodeSize);
-
     // Helper function to determine geometry info size
     static uint32 CalculateGeometryInfoSize(
         uint32 numGeometryDescs);
@@ -421,8 +416,6 @@ private:
                          Util::RoundUpQuotient(numWorkItems, threadGroupSize));
     }
 
-    uint32 BuildModeFlags();
-
     template<typename T>
     void WriteImmediateData(
         gpusize  destVa,
@@ -467,6 +460,8 @@ private:
         uint32               userDataOffset);
 
     uint32 GetLeafNodeExpansion() const;
+
+    uint32 GetNumInternalNodeCount() const;
 
 #if GPURT_DEVELOPER
     // Driver generated RGP markers are only added in internal builds because they expose details about the
