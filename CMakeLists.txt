@@ -39,6 +39,12 @@ set_target_properties(gpurt PROPERTIES
     CXX_EXTENSIONS NO
 )
 
+option(GPURT_ENABLE_GPU_DEBUG "Enable GPU debugging features (assert, debug prints)." OFF)
+
+if (GPURT_ENABLE_GPU_DEBUG)
+    target_compile_definitions(gpurt PRIVATE GPURT_ENABLE_GPU_DEBUG=1)
+endif()
+
 # Force client to specify developer mode
 if (NOT DEFINED GPURT_DEVELOPER_MODE)
     message(FATAL_ERROR "Client must specify developer mode")

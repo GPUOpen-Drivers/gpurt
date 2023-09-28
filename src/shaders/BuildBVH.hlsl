@@ -23,27 +23,16 @@
  *
  **********************************************************************************************************************/
 #if NO_SHADER_ENTRYPOINT == 0
-#define RootSig "RootConstants(num32BitConstants=6, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "CBV(b0), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
-                "CBV(b1),"\
+                "CBV(b255),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
 
-//=====================================================================================================================
-// 32 bit constants
-struct InputArgs
-{
-    uint AllowUpdate;
-    uint BvhNodeDataScratchOffset;
-    uint BvhLeafNodeDataScratchOffset;
-    uint MortonCodesSortedScratchOffset;
-    uint PrimIndicesSortedScratchOffset;
-    uint NumLeafNodes;
-};
-
-[[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
+#include "../shared/rayTracingDefs.h"
+[[vk::binding(1, 0)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b0);
 
 [[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer DstMetadata   : register(u1);
@@ -86,6 +75,7 @@ struct FastLBVHArgs
     uint enableEarlyPairCompression;
     uint unsortedNodesBaseOffset;
     uint reserved0;
+    uint reserved1;
 };
 
 //=====================================================================================================================
@@ -216,6 +206,7 @@ void CopyUnsortedScratchLeafNode(
     ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, unsortedNode.flags_and_instanceMask);
     ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, unsortedNode.splitBox_or_nodePointer);
     ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET, unsortedNode.numPrimitivesAndDoCollapse);
+
 }
 
 //=====================================================================================================================
@@ -511,9 +502,9 @@ void BuildBVH(
             CopyUnsortedScratchLeafNode(
                 globalId,
                 numActivePrims,
-                ShaderConstants.PrimIndicesSortedScratchOffset,
-                ShaderConstants.BvhLeafNodeDataScratchOffset,
-                ShaderConstants.BvhNodeDataScratchOffset,
+                ShaderConstants.offsets.primIndicesSorted,
+                ShaderConstants.offsets.bvhLeafNodeData,
+                ShaderConstants.offsets.bvhNodeData,
                 0,
                 0,
                 0,
@@ -524,8 +515,8 @@ void BuildBVH(
 #if USE_BUILD_LBVH == 1
         const uint bvhNodes = CalculateScratchBvhNodesOffset(
                                   numActivePrims,
-                                  ShaderConstants.NumLeafNodes,
-                                  ShaderConstants.BvhNodeDataScratchOffset,
+                                  ShaderConstants.numLeafNodes,
+                                  ShaderConstants.offsets.bvhNodeData,
                                   Settings.noCopySortedNodes);
         // Set internal nodes
         if (globalId < (numActivePrims - 1))
@@ -534,8 +525,8 @@ void BuildBVH(
                 globalId,
                 numActivePrims,
                 bvhNodes,
-                ShaderConstants.PrimIndicesSortedScratchOffset,
-                ShaderConstants.MortonCodesSortedScratchOffset,
+                ShaderConstants.offsets.primIndicesSorted,
+                ShaderConstants.offsets.mortonCodesSorted,
                 Settings.useMortonCode30,
                 Settings.noCopySortedNodes);
         }

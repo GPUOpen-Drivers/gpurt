@@ -25,26 +25,17 @@
 #if NO_SHADER_ENTRYPOINT == 0
 //=====================================================================================================================
 // Root signature
-#define RootSig "RootConstants(num32BitConstants=5, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "CBV(b0), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
-                "CBV(b1),"\
+                "CBV(b255),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
 
-//=====================================================================================================================
-// 32 bit constants
-struct Constants
-{
-    uint LeafNodeDataByteOffset;   // Leaf node data byte offset
-    uint SceneBoundsByteOffset;    // Scene bounds byte offset
-    uint MortonCodeDataByteOffset; // Morton code data byte offset
-    uint SplitBoxesByteOffset;
-    uint numLeafNodes;
-};
+#include "../shared/rayTracingDefs.h"
 
-[[vk::push_constant]] ConstantBuffer<Constants> ShaderConstants : register(b0);
+[[vk::binding(1, 0)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b0);
 
 [[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer DstMetadata   : register(u1);
@@ -468,7 +459,7 @@ void GenerateMortonCodes(
 
     if (primitiveIndex < numPrimitives)
     {
-        const BoundingBox sceneBounds = FetchSceneBounds(ShaderConstants.SceneBoundsByteOffset);
+        const BoundingBox sceneBounds = FetchSceneBounds(ShaderConstants.offsets.sceneBounds);
 
         const float3 sceneExtent = sceneBounds.max - sceneBounds.min;
         const float3 sceneMin    = sceneBounds.min;
@@ -477,14 +468,14 @@ void GenerateMortonCodes(
             sceneMin,
             sceneExtent,
             primitiveIndex,
-            ShaderConstants.LeafNodeDataByteOffset,
-            ShaderConstants.MortonCodeDataByteOffset,
+            ShaderConstants.offsets.bvhLeafNodeData,
+            ShaderConstants.offsets.mortonCodes,
             Settings.doTriangleSplitting,
-            ShaderConstants.SplitBoxesByteOffset,
+            ShaderConstants.offsets.triangleSplitBoxes,
             Settings.enableVariableBitsMortonCode,
             Settings.useMortonCode30,
             0,
-            float2(0,0),
+            float2(0, 0),
             false,
             0);
     }

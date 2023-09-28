@@ -44,8 +44,17 @@ struct Constants;
 // Helper class used by GPURT to perform various BVH operations like building, copying, etc.
 class BvhBuilder
 {
+    friend class BvhBatcher;
 public:
-    // Constructor for the ray tracing bvh builder class
+    // Constructor for the ray tracing bvh builder class that will perform a build/update
+    explicit BvhBuilder(Pal::ICmdBuffer*             pCmdBuf,
+                        Internal::Device*      const pDevice,
+                        const Pal::DeviceProperties& deviceProps,
+                        ClientCallbacks              clientCb,
+                        const DeviceSettings&        deviceSettings,
+                        const AccelStructBuildInfo&  info);
+
+    // Constructor for the ray tracing bvh builder class that will perform a copy or emit build info
     explicit BvhBuilder(Pal::ICmdBuffer*             pCmdBuf,
                         Internal::Device*      const pDevice,
                         const Pal::DeviceProperties& deviceProps,
@@ -78,8 +87,17 @@ public:
         uint32 numGeometryDescs);
 
     // Builds or updates an acceleration structure and stores it in a result buffer
-    void BuildRaytracingAccelerationStructure(
-        const AccelStructBuildInfo& buildInfo);
+    void BuildRaytracingAccelerationStructure();
+
+    // Handles pre-build dump event invocation
+    void PreBuildDumpEvents();
+
+    // Handles post-build dump event invocation
+    void PostBuildDumpEvents();
+
+    void InitializeBuildConfigs();
+
+    uint32 EncodePrimitives();
 
     uint32 CalculateScratchBufferInfo(
         RayTracingScratchDataOffsets* pOffsets);
@@ -197,7 +215,7 @@ private:
         ClientCallbacks              clientCb,
         const DeviceSettings&        deviceSettings);
 
-    static uint32 GetLeafNodeSize(
+    uint32 GetLeafNodeSize(
         const DeviceSettings& settings, const BuildConfig& config);
 
     static uint32 GetNumHistogramElements(
@@ -206,6 +224,8 @@ private:
 
     void InitBuildConfig(
         const AccelStructBuildInfo& buildArgs);
+
+    void InitBuildShaderConstants();
 
     void UpdateBuildConfig();
 
@@ -258,8 +278,7 @@ private:
 
     // BVH construction shader functions
 
-    void InitAccelerationStructure(
-        uint32 accelStructSize);
+    void InitAccelerationStructure();
 
     // Builds a new acceleration structure and stores it in a result buffer
     void BuildAccelerationStructure();
@@ -267,8 +286,7 @@ private:
     // Updates an existing acceleration structure and stores it in a result buffer
     void UpdateAccelerationStructure();
 
-    void EmitPostBuildInfo(
-        uint32 resultDataSize);
+    void EmitPostBuildInfo();
 
     Pal::BufferViewInfo AllocGeometryConstants(
         const Geometry& geometry,
@@ -291,13 +309,20 @@ private:
     uint32 GetParallelBuildNumThreadGroups();
 
     void BuildParallel();
-    void BuildMultiDispatch();
 
     void Rebraid();
 
     void GenerateMortonCodes();
 
+    void DispatchBuildBVHPipeline(
+        InternalRayTracingCsType pipeline);
+
     void BuildBVH();
+
+    void SortScratchLeaves();
+
+    void BuildLbvhOrSortLeaves();
+    void BuildBvhPlocOrRefit();
 
     void BuildBVHTD();
 
@@ -308,8 +333,6 @@ private:
     void UpdateParallel();
 
     void BuildQBVH();
-
-    void BuildQBVHTop();
 
     void RefitBounds();
 
@@ -326,17 +349,10 @@ private:
         uint32  numDwords);
 
     void BitHistogram(
-        uint32 inputArrayOffset,
-        uint32 outputArrayOffset,
         uint32 bitShiftSize,
         uint32 numElems);
 
     void ScatterKeysAndValues(
-        uint32 inputKeysOffset,
-        uint32 inputValuesOffset,
-        uint32 histogramsOffset,
-        uint32 outputKeysOffset,
-        uint32 outputValuesOffset,
         uint32 bitShiftSize,
         uint32 numElems);
 
@@ -344,7 +360,6 @@ private:
     void SortRadixInt32();
 
     void ScanExclusiveAdd(
-        uint32 inOutArrayOffset,
         uint32 numElems);
 
     void ScanExclusiveAddOneLevel(
@@ -364,15 +379,15 @@ private:
         uint32 numWorkGroups);
 
     void ScanExclusiveAddTwoLevel(
-        uint32 inOutArrayOffset,
         uint32 numElems);
     void ScanExclusiveAddThreeLevel(
-        uint32 inOutArrayOffset,
         uint32 numElems);
 
     void ScanExclusiveAddDLB(
-        uint32 inOutArrayOffset,
         uint32 numElems);
+
+    void ScanExclusiveAddDLBInit();
+    void ScanExclusiveAddDLBScan();
 
     // Helper functions
     void Dispatch(
@@ -390,6 +405,8 @@ private:
         uint32  entryOffset);
 
     uint32 WriteDestBuffers(uint32 entryOffset);
+
+    uint32 WriteBuildShaderConstantBuffer(uint32 entryOffset);
 
     uint32 NumPrimitivesAfterSplit(
         uint32 primitiveCount,
@@ -466,7 +483,8 @@ private:
 #if GPURT_DEVELOPER
     // Driver generated RGP markers are only added in internal builds because they expose details about the
     // construction of acceleration structure.
-    void PushRGPMarker(const char* pFormat, ...);
+    template <class... Args>
+    void PushRGPMarker(const char* pFormat, Args&&... args);
     void PopRGPMarker();
 
     void OutputBuildInfo();
@@ -490,9 +508,13 @@ private:
     Pal::ICmdBuffer*                  m_pPalCmdBuffer;       // The associated PAL cmdbuffer
     RayTracingScratchDataOffsets      m_scratchOffsets;      // Scratch offsets for the build
     CompileTimeBuildSettings          m_buildSettings;
+    BuildShaderConstants              m_buildShaderConstants;
+    gpusize                           m_shaderConstantsGpuVa{};
     const RadixSortConfig             m_radixSortConfig;
     uint64                            m_emitCompactDstGpuVa;
     uint32                            m_buildSettingsHash;
+
+    AccelStructInfo                   m_dumpInfo;
 };
 
 };

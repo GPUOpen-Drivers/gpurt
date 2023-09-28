@@ -28,7 +28,7 @@
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b1),"\
+                "CBV(b255),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
 
@@ -150,7 +150,7 @@ uint CalcTopLevelBoxNodeFlags(
 void EncodeInstances(
     in uint3 globalThreadId : SV_DispatchThreadID)
 {
-    const bool isUpdate    = IsUpdate(ShaderConstants.buildFlags);
+    const bool isUpdate    = IsUpdate();
     const bool allowUpdate = AllowUpdate(ShaderConstants.buildFlags);
 
     uint index = globalThreadId.x;

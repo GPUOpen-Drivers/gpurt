@@ -41,6 +41,7 @@ set(gpurtHlsl
     BuildBVHTDTR.hlsl
     BuildCommon.hlsl
     BuildCommonScratch.hlsl
+    Debug.hlsl
     TaskQueueCounter.hlsl
     BuildSettings.hlsli
     BuildParallel.hlsl
@@ -66,9 +67,11 @@ set(gpurtHlsl
     Extensions.hlsl
     GenerateMortonCodes.hlsl
     GpuRtLibrary.hlsl
+    InitAccelerationStructure.hlsl
     InitExecuteIndirect.hlsl
     IntersectCommon.hlsl
     MergeSort.hlsl
+    MortonCodes.hlsl
     PairCompression.hlsl
     RayQuery.hlsl
     RayQuery1_1.hlsl
@@ -93,14 +96,19 @@ set(gpurtHlsl
     UpdateQBVHImpl.hlsl
 )
 set(otherDeps
+    ../../gpurt/gpurtAccelStruct.h
+    ../../gpurt/gpurtBuildSettings.h
+    ../../gpurt/gpurtCounter.h
+    ../../gpurt/gpurtDispatch.h
+    ../shared/accelStruct.h
+    ../shared/debugBuffer.h
+    ../shared/gpurtBuildConstants.h
+    ../shared/math.h
     ../shared/rayTracingDefs.h
     ../shared/scratchNode.h
-    ../shared/math.h
 )
 
-list(TRANSFORM otherDeps PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
-list(TRANSFORM gpurtHlsl PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
+set(GPURT_SHADER_SOURCE_FILES "${gpurtHlsl}" "${otherDeps}" PARENT_SCOPE)
 
-set(GPURT_GEN_SHADERS_SOURCE "${gpurtHlsl}" "${otherDeps}")
-set(GPURT_GEN_SHADERS_SOURCE "${GPURT_GEN_SHADERS_SOURCE}" PARENT_SCOPE)
+list(TRANSFORM gpurtHlsl PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
 

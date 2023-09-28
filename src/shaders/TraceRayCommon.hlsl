@@ -138,6 +138,7 @@ static HitGroupInfo GetHitGroupInfo(
 
 //=====================================================================================================================
 static uint64_t CalculateInstanceNodePtr64(
+    in uint32_t rtIpLevel,
     in uint64_t instanceBaseAddr,
     in uint32_t instanceNodePtr)
 {
@@ -603,14 +604,20 @@ static void WriteDispatchCounters(
 }
 
 //=====================================================================================================================
-static void UpdateWaveTraversalStatistics(in uint nodePtr)
+static void UpdateWaveTraversalStatistics(
+    in uint rtIpLevel,
+    in uint nodePtr)
 {
     if (LogCounters(0, TRACERAY_COUNTER_MODE_DISPATCH))
     {
         const uint activeLaneCount = WaveActiveCountBits(true);
         uint4 laneCnt;
-        laneCnt.x = WaveActiveCountBits(IsBoxNodeBasedOnStaticPipelineFlags(nodePtr));
-        laneCnt.y = WaveActiveCountBits(IsTriangleNode(nodePtr));
+
+        {
+            laneCnt.x = WaveActiveCountBits(IsBoxNode1_1(nodePtr));
+            laneCnt.y = WaveActiveCountBits(IsTriangleNode1_1(nodePtr));
+        }
+
         laneCnt.z = WaveActiveCountBits(IsUserNodeInstance(nodePtr));
         laneCnt.w = WaveActiveCountBits(IsUserNodeProcedural(nodePtr));
 

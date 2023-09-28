@@ -22,29 +22,18 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#define RootSig "RootConstants(num32BitConstants=8, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "CBV(b0), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b1),"\
+                "CBV(b255),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
 
-//=====================================================================================================================
-struct Constants
-{
-    uint  FlagsScratchOffset;        // Offset to flags in scratch buffer
-    uint  ScratchNodesScratchOffset; // Offset to scratch nodes in build scratch buffer
-    uint  UnsortedNodesBaseOffset;   // Offset to unsorted leaf nodes in build scratch buffer
-    uint  SplitBoxesByteOffset;
-    uint  NumBatchesScratchOffset;
-    uint  BatchIndicesScratchOffset;
-    uint  sortedPrimIndicesOffset;
-    uint  NumLeafNodes;
-};
+#include "../shared/rayTracingDefs.h"
 
-[[vk::push_constant]] ConstantBuffer<Constants> ShaderConstants : register(b0);
+[[vk::binding(1, 0)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b0);
 
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer  DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer                   DstMetadata   : register(u1);
@@ -68,26 +57,26 @@ void RefitBounds(
     const uint numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
     const uint bvhNodes = CalculateScratchBvhNodesOffset(
                               numActivePrims,
-                              ShaderConstants.NumLeafNodes,
-                              ShaderConstants.ScratchNodesScratchOffset,
+                              ShaderConstants.numLeafNodes,
+                              ShaderConstants.offsets.bvhNodeData,
                               Settings.noCopySortedNodes);
     if (globalId < numActivePrims)
     {
         RefitBoundsImpl(globalId,
                         numActivePrims,
-                        ShaderConstants.FlagsScratchOffset,
+                        ShaderConstants.offsets.propagationFlags,
                         bvhNodes,
-                        ShaderConstants.UnsortedNodesBaseOffset,
-                        ShaderConstants.sortedPrimIndicesOffset,
+                        ShaderConstants.offsets.bvhLeafNodeData,
+                        ShaderConstants.offsets.primIndicesSorted,
                         Settings.doCollapse,
                         Settings.doTriangleSplitting,
                         Settings.noCopySortedNodes,
                         Settings.enableEarlyPairCompression,
                         EnableLatePairCompression(),
                         Settings.enablePairCostCheck,
-                        ShaderConstants.SplitBoxesByteOffset,
-                        ShaderConstants.NumBatchesScratchOffset,
-                        ShaderConstants.BatchIndicesScratchOffset,
+                        ShaderConstants.offsets.triangleSplitBoxes,
+                        ShaderConstants.offsets.numBatches,
+                        ShaderConstants.offsets.batchIndices,
                         Settings.fp16BoxNodesMode,
                         Settings.fp16BoxModeMixedSaThreshold,
                         0,
@@ -96,6 +85,7 @@ void RefitBounds(
                         0,
                         false,
                         false,
+                        0,
                         0);
     }
 }

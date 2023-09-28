@@ -22,7 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#define RootSig "RootConstants(num32BitConstants=30, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=26, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 1)),"\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
@@ -31,7 +31,7 @@
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b1),"\
+                "CBV(b255),"\
                 "UAV(u6, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u7, visibility=SHADER_VISIBILITY_ALL)"
 
@@ -94,11 +94,11 @@ void EncodeTriangleNodes(
     }
 
     uint primitiveIndex = globalThreadId.x;
-    bool isUpdate = IsUpdate(ShaderConstants.BuildFlags);
+    bool isUpdate = IsUpdate();
 
     if (primitiveIndex < numPrimitives)
     {
-        if ((ShaderConstants.enableEarlyPairCompression == true) &&
+        if ((Settings.enableEarlyPairCompression == true) &&
             (isUpdate == false))
         {
             EncodePairedTriangleNode(GeometryBuffer,
@@ -264,14 +264,14 @@ void EncodeAABBNodes(
     if (primitiveIndex < ShaderConstants.NumPrimitives)
     {
         const uint metadataSize =
-            IsUpdate(ShaderConstants.BuildFlags) ? SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : ShaderConstants.metadataSizeInBytes;
+            IsUpdate() ? SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : ShaderConstants.metadataSizeInBytes;
 
         // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
         const AccelStructOffsets offsets =
             SrcBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
 
         const uint basePrimNodePtr =
-            IsUpdate(ShaderConstants.BuildFlags) ? offsets.primNodePtrs : ShaderConstants.BasePrimNodePtrOffset;
+            IsUpdate() ? offsets.primNodePtrs : ShaderConstants.BasePrimNodePtrOffset;
 
         // Get bounds for this thread
         const BoundingBox boundingBox = FetchBoundingBoxData(GeometryBuffer,
@@ -284,7 +284,7 @@ void EncodeAABBNodes(
         const uint primNodePointerOffset =
             metadataSize + basePrimNodePtr + ((primitiveOffset + primitiveIndex) * sizeof(uint));
 
-        if (IsUpdate(ShaderConstants.BuildFlags))
+        if (IsUpdate())
         {
             const uint nodePointer = SrcBuffer.Load(primNodePointerOffset);
 
@@ -315,7 +315,7 @@ void EncodeAABBNodes(
                                   TransformBuffer,
                                   metadataSize,
                                   ShaderConstants.BaseUpdateStackScratchOffset,
-                                  ShaderConstants.TriangleCompressionMode,
+                                  Settings.triangleCompressionMode,
                                   ShaderConstants.isUpdateInPlace,
                                   nodePointer,
                                   0,

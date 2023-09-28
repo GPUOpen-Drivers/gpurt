@@ -541,7 +541,7 @@ void TriangleSplittingImpl(
 
                     if ((node.flags_and_instanceMask & SCRATCH_NODE_FLAGS_DISABLE_TRIANGLE_SPLIT_MASK) ||
                         (IsNodeActive(node) == false) ||
-                        (IsTriangleNode(node.type) == false))
+                        (IsScratchTriangleNode(node) == false))
                     {
                         priority = 0;
                     }

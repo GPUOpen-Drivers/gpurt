@@ -91,7 +91,7 @@ void WriteScratchInactiveTriangleNode(
     uint                flattenedPrimitiveIndex, //geometryBasePrimOffset + primitiveIndex,
     uint                primNodePointerOffset)
 {
-    if (IsUpdate(geometryArgs.BuildFlags) == false)
+    if (IsUpdate() == false)
     {
         const uint scratchLeafNodeOffset =
             geometryArgs.LeafNodeDataByteOffset + (flattenedPrimitiveIndex * ByteStrideScratchNode);
@@ -508,7 +508,7 @@ void EncodePairedTriangleNodeImpl(
     uint                       vertexOffset,
     bool                       writeNodesToUpdateStack)
 {
-    const uint metadataSize = IsUpdate(geometryArgs.BuildFlags) ?
+    const uint metadataSize = IsUpdate() ?
         SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : geometryArgs.metadataSizeInBytes;
 
     // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
@@ -516,7 +516,7 @@ void EncodePairedTriangleNodeImpl(
         SrcBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
 
     const uint basePrimNodePtr =
-        IsUpdate(geometryArgs.BuildFlags) ? offsets.primNodePtrs : geometryArgs.BasePrimNodePtrOffset;
+        IsUpdate() ? offsets.primNodePtrs : geometryArgs.BasePrimNodePtrOffset;
 
     const uint flattenedPrimitiveIndex = geometryBasePrimOffset + primitiveIndex;
     const uint primNodePointerOffset =

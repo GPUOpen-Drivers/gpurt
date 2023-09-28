@@ -25,27 +25,16 @@
 #if NO_SHADER_ENTRYPOINT == 0
 //=====================================================================================================================
 // Root signature
-#define RootSig "RootConstants(num32BitConstants=6, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "CBV(b0),"\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
-                "CBV(b1)"/*Build Settings binding*/
+                "CBV(b255)"/*Build Settings binding*/
 
-//=====================================================================================================================
-// 32 bit constants
-struct Constants
-{
-    uint InputKeysScratchOffset;
-    uint OutputKeysScratchOffset;
-    uint OutputValuesScratchOffset;
-    uint OutputValuesSwapScratchOffset;
-    uint UseMortonCode30;
-    uint numLeafNodes;
-};
-
-[[vk::push_constant]] ConstantBuffer<Constants> ShaderConstants           : register(b0);
+#include "../shared/rayTracingDefs.h"
+[[vk::binding(0, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b0);
 
 [[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer                      : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata   : register(u1);
@@ -58,8 +47,14 @@ struct Constants
 #include "Common.hlsl"
 #include "BuildCommonScratch.hlsl"
 
-#define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
-groupshared int SharedMem[MAX_LDS_ELEMENTS];
+// Max number of elements
+#define GROUP_CAPACITY         (2 * BUILD_THREADGROUP_SIZE)
+#define MAX_DWORDS_PER_ELEMENT 2
+#define KEYS_SIZE              (GROUP_CAPACITY * MAX_DWORDS_PER_ELEMENT)
+#define VALUES_SIZE            GROUP_CAPACITY
+#define NUM_LDS_ELEMENTS       (KEYS_SIZE + VALUES_SIZE)
+
+groupshared int SharedMem[NUM_LDS_ELEMENTS];
 #endif
 
 //=====================================================================================================================
@@ -538,10 +533,10 @@ void MergeSort(
                   localId,
                   groupId,
                   numPrimitives,
-                  ShaderConstants.InputKeysScratchOffset,
-                  ShaderConstants.OutputKeysScratchOffset,
-                  ShaderConstants.OutputValuesScratchOffset,
-                  ShaderConstants.OutputValuesSwapScratchOffset,
-                  ShaderConstants.UseMortonCode30);
+                  ShaderConstants.offsets.mortonCodes,
+                  ShaderConstants.offsets.mortonCodesSorted,
+                  ShaderConstants.offsets.primIndicesSorted,
+                  ShaderConstants.offsets.primIndicesSortedSwap,
+                  Settings.useMortonCode30);
 }
 #endif

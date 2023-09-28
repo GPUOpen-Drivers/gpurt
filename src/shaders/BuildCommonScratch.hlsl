@@ -109,6 +109,13 @@ ScratchNode FetchScratchNode(
 }
 
 //=====================================================================================================================
+static bool IsScratchTriangleNode(
+    in ScratchNode node)
+{
+    return (GetNodeType(node.type) <= NODE_TYPE_TRIANGLE_1);
+}
+
+//=====================================================================================================================
 // Calculate BBox for scratch node for BVH2 builder
 static BoundingBox FetchScratchNodeBoundingBox(
     in ScratchNode node,
@@ -121,7 +128,7 @@ static BoundingBox FetchScratchNodeBoundingBox(
     BoundingBox bbox;
 
     // For triangle geometry we need to generate bounding box from split boxes
-    if (IsTriangleNode(node.type))
+    if (IsScratchTriangleNode(node))
     {
         if (doTriangleSplit && isLeafNode)
         {
@@ -150,6 +157,29 @@ static BoundingBox FetchScratchNodeBoundingBox(
                 bbox.max = max(nodeBbox.max, pairedNodeBbox.max);
             }
         }
+    }
+    else
+    {
+        // Internal nodes and AABB geometry encodes bounding box in scratch node
+        bbox.min = node.bbox_min_or_v0;
+        bbox.max = node.bbox_max_or_v1;
+    }
+
+    return bbox;
+}
+
+//=====================================================================================================================
+static BoundingBox GetScratchNodeBoundingBox(
+    in ScratchNode node)
+{
+    BoundingBox bbox;
+
+    // For triangle geometry we need to generate bounding box from triangle vertices
+    if (IsScratchTriangleNode(node))
+    {
+        bbox = GenerateTriangleBoundingBox(node.bbox_min_or_v0,
+                                           node.bbox_max_or_v1,
+                                           node.sah_or_v2_or_instBasePtr);
     }
     else
     {
@@ -363,6 +393,16 @@ void WriteScratchNodeParent(
     const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
 
     ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_PARENT_OFFSET, parent);
+}
+
+//=====================================================================================================================
+uint FetchScratchNodeParent(
+    uint baseScratchNodesOffset,
+    uint nodeIndex)
+{
+    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
+
+    return ScratchBuffer.Load<uint>(nodeOffset + SCRATCH_NODE_PARENT_OFFSET);
 }
 
 //=====================================================================================================================
@@ -607,6 +647,34 @@ float2 FetchSceneSize(uint sceneBoundsOffset)
     return minMax;
 }
 
+//======================================================================================================================
+uint GetBvhNodesOffset(
+    uint numActivePrims,
+    uint numLeafNodes,
+    uint bvhNodeDataOffset,
+    uint bvhLeafNodeDataOffset,
+    uint primIndicesSortedOffset)
+{
+    if ((Settings.noCopySortedNodes == true) && (Settings.enableFastLBVH == false) && (numActivePrims == 1))
+    {
+        // If there is one active primitive among a number of inactive primitives and
+        // NoCopySortedNodes is enabled, then we need to move the root to match the
+        // offset of the single active primitive.
+        // The FastLBVH does not need to do this, because it provides the root's index
+        // in ShaderConstants.offsets.fastLBVHRootNodeIndex.
+        const uint nodeIndex = FetchSortedPrimIndex(primIndicesSortedOffset, 0);
+        return bvhLeafNodeDataOffset + nodeIndex * SCRATCH_NODE_SIZE;
+    }
+    else
+    {
+        return CalculateScratchBvhNodesOffset(
+                   numActivePrims,
+                   numLeafNodes,
+                   bvhNodeDataOffset,
+                   Settings.noCopySortedNodes);
+    }
+}
+
 //=====================================================================================================================
 void MergeScratchNodes(
     uint        scratchNodesOffset,
@@ -624,7 +692,9 @@ void MergeScratchNodes(
     const uint numRight = FetchScratchNodeNumPrimitives(rightNode, IsLeafNode(rightNodeIndex, numActivePrims));
     const uint numTris  = numLeft + numRight;
 
-    const float Ct = SAH_COST_TRIANGLE_INTERSECTION;
+    const float Ct =
+        SAH_COST_TRIANGLE_INTERSECTION;
+
     const float Ci = SAH_COST_AABBB_INTERSECTION;
 
     const float leftCost = FetchScratchNodeCost(scratchNodesOffset, leftNodeIndex,
@@ -643,12 +713,13 @@ void MergeScratchNodes(
 
     const float collapseCost = Ct * numTris;
 
+    const float splitCost    = Ci + leftCost / mergedBoxSurfaceArea + rightCost / mergedBoxSurfaceArea;
+
     bool isCollapsed = false;
 
     if (EnableLatePairCompression()
     )
     {
-        const float splitCost    = Ci + leftCost / mergedBoxSurfaceArea + rightCost / mergedBoxSurfaceArea;
         const bool  useCostCheck = Settings.enablePairCostCheck;
 
         // Limit number of triangles collapsed in a single bounding box to MAX_COLLAPSED_TRIANGLES

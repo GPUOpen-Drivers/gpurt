@@ -45,7 +45,7 @@
 // Note this file is designed to be compilable as HLSL.
 
 #define GPURT_ACCEL_STRUCT_MAJOR_VERSION 16
-#define GPURT_ACCEL_STRUCT_MINOR_VERSION 0
+#define GPURT_ACCEL_STRUCT_MINOR_VERSION 1
 #define GPURT_ACCEL_STRUCT_VERSION       ((GPURT_ACCEL_STRUCT_MAJOR_VERSION << 16) | GPURT_ACCEL_STRUCT_MINOR_VERSION)
 
 #ifdef __cplusplus
@@ -145,8 +145,8 @@ union AccelStructHeaderInfo2
     struct
     {
         uint32 compacted              : 1;   // This BVH has been compacted
-        uint32 reserved               : 2;   // Unused bits
-        uint32 reserved2              : 29;  // Unused bits
+        uint32 reserved               : 1;   // Unused bits
+        uint32 reserved2              : 30;  // Unused bits
     };
 
     uint32 u32All;
@@ -196,7 +196,7 @@ struct AccelStructHeader
     uint32                 accelStructVersion;      // GPURT_ACCEL_STRUCT_VERSION
     uint32                 uuidLo;                  // Client-specific UUID (low part)
     uint32                 uuidHi;                  // Client-specific UUID (high part)
-    uint32                 reserved;                // Unused bits
+    uint32                 rtIpLevel;               // Raytracing hardware IP level
 #if __cplusplus
     uint32                 fp32RootBoundingBox[6];  // Root bounding box for bottom level acceleration structures
 #else
@@ -271,7 +271,7 @@ struct AccelStructHeader
 #define ACCEL_STRUCT_HEADER_VERSION_OFFSET                      60
 #define ACCEL_STRUCT_HEADER_UUID_LO_OFFSET                      64
 #define ACCEL_STRUCT_HEADER_UUID_HI_OFFSET                      68
-#define ACCEL_STRUCT_HEADER_RESERVED_OFFSET                     72
+#define ACCEL_STRUCT_HEADER_RTIP_LEVEL_OFFSET                   72
 #define ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET                76
 #define ACCEL_STRUCT_HEADER_INFO_2_OFFSET                       100
 #define ACCEL_STRUCT_HEADER_PACKED_FLAGS_OFFSET                 104
@@ -298,7 +298,7 @@ GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET          == offset
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_VERSION_OFFSET                 == offsetof(AccelStructHeader, accelStructVersion),   "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_UUID_LO_OFFSET                 == offsetof(AccelStructHeader, uuidLo),               "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_UUID_HI_OFFSET                 == offsetof(AccelStructHeader, uuidHi),               "");
-GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_RESERVED_OFFSET                == offsetof(AccelStructHeader, reserved),             "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_RTIP_LEVEL_OFFSET              == offsetof(AccelStructHeader, rtIpLevel),            "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET           == offsetof(AccelStructHeader, fp32RootBoundingBox),  "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_INFO_2_OFFSET                  == offsetof(AccelStructHeader, info2),                "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_PACKED_FLAGS_OFFSET            == offsetof(AccelStructHeader, packedFlags),          "");

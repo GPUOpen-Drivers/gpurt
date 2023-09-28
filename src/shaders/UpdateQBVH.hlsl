@@ -27,7 +27,7 @@
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u0, space=2147420894, visibility=SHADER_VISIBILITY_ALL),"\
-                "CBV(b1),"\
+                "CBV(b255),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
 

@@ -34,17 +34,19 @@ struct PairCompressionArgs
 };
 
 #if NO_SHADER_ENTRYPOINT == 0
-#define RootSig "RootConstants(num32BitConstants=7, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "CBV(b0), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b1),"\
+                "CBV(b255),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
-[[vk::push_constant]] ConstantBuffer<PairCompressionArgs> ShaderConstants : register(b0);
+#include "../shared/rayTracingDefs.h"
+
+[[vk::binding(1, 0)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b0);
 
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer  DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer  DstMetadata   : register(u1);
@@ -59,6 +61,18 @@ struct PairCompressionArgs
 
 #define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
 groupshared uint SharedMem[MAX_LDS_ELEMENTS];
+
+//=====================================================================================================================
+static uint CalculateBvhNodesOffset(
+    uint numActivePrims)
+{
+    return GetBvhNodesOffset(
+               numActivePrims,
+               ShaderConstants.numLeafNodes,
+               ShaderConstants.offsets.bvhNodeData,
+               ShaderConstants.offsets.bvhLeafNodeData,
+               ShaderConstants.offsets.primIndicesSorted);
+}
 
 #endif
 
@@ -79,18 +93,6 @@ struct Quad
 //=====================================================================================================================
 // This array is declared as a static global in order to avoid it being duplicated multiple times in scratch memory.
 static Quad quadArray[PAIR_BATCH_SIZE];
-
-//=====================================================================================================================
-static uint CalculateBvhNodesOffset(
-    in uint                numActivePrims,
-    in PairCompressionArgs args)
-{
-    return CalculateScratchBvhNodesOffset(
-               numActivePrims,
-               args.numLeafNodes,
-               args.scratchNodesScratchOffset,
-               Settings.noCopySortedNodes);
-}
 
 //=====================================================================================================================
 void WriteBatchIndex(uint localId, uint index, uint data)
@@ -676,8 +678,15 @@ void PairCompression(
     if (geometryType == GEOMETRY_TYPE_TRIANGLES)
     {
         const uint numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
-        PairCompressionArgs args = (PairCompressionArgs)ShaderConstants;
-        args.scratchNodesScratchOffset = CalculateBvhNodesOffset(numActivePrims, args);
+
+        PairCompressionArgs args;
+
+        args.numBatchesScratchOffset      = ShaderConstants.offsets.numBatches;
+        args.batchIndicesScratchOffset    = ShaderConstants.offsets.batchIndices;
+        args.indexBufferInfoScratchOffset = ShaderConstants.offsets.indexBufferInfo;
+        args.flagsScratchOffset           = ShaderConstants.offsets.propagationFlags;
+
+        args.scratchNodesScratchOffset = CalculateBvhNodesOffset(numActivePrims);
 
         const uint buildInfo = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_INFO_OFFSET);
         const uint buildFlags = (buildInfo >> ACCEL_STRUCT_HEADER_INFO_FLAGS_SHIFT) & ACCEL_STRUCT_HEADER_INFO_FLAGS_MASK;

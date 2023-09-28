@@ -47,5 +47,6 @@
         <Shader path="InitExecuteIndirect.hlsl" entryPoint="InitExecuteIndirect" outputName="InitExecuteIndirect" />
         <Shader path="PairCompression.hlsl" entryPoint="PairCompression" />
         <Shader path="MergeSort.hlsl" entryPoint="MergeSort" />
+        <Shader path="InitAccelerationStructure.hlsl" entryPoint="InitAccelerationStructure" />
     </BVH>
 </RTShaders>

@@ -65,6 +65,7 @@ struct RefitArgs
     uint unsortedNodesBaseOffset;
     uint enableEarlyPairCompression;
     uint reserved0;
+    uint reserved1;
 };
 
 //=====================================================================================================================
@@ -358,18 +359,6 @@ BoundingBox GenerateInstanceBoundingBox(
 }
 
 //=====================================================================================================================
-uint FloatToUint(float v)
-{
-    const uint bitShift = 31;
-    const uint bitMask = 0x80000000;
-
-    uint ui = uint(asuint(v));
-    ui ^= (1 + ~(ui >> bitShift) | bitMask);
-
-    return ui;
-}
-
-//=====================================================================================================================
 uint3 Float3ToUint3(in float3 v)
 {
     uint3 ui = uint3(FloatToUint(v.x), FloatToUint(v.y), FloatToUint(v.z));
@@ -653,7 +642,7 @@ static Float32BoxNode FetchFloat32BoxNode(
 void WriteInstanceDescriptor(
     in uint               bufferOffset,   // Additional buffer offset
     in InstanceDesc       desc,
-    in uint               index,
+    in uint               instanceIndex,
     in uint               instNodePtr,
     in uint               blasMetadataSize,
     in uint               blasRootNodePointer,
@@ -676,7 +665,7 @@ void WriteInstanceDescriptor(
         node.sideband.Transform[0]     = desc.Transform[0];
         node.sideband.Transform[1]     = desc.Transform[1];
         node.sideband.Transform[2]     = desc.Transform[2];
-        node.sideband.instanceIndex    = index;
+        node.sideband.instanceIndex    = instanceIndex;
         node.sideband.padding0         = 0;
         node.sideband.blasMetadataSize = blasMetadataSize;
         node.sideband.blasNodePointer  = blasRootNodePointer;

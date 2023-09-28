@@ -38,12 +38,13 @@
 #include "../shared/scratchNode.h"
 
 #if !defined(__cplusplus)
-#include "BuildSettings.hlsli"
+#define out_param(x) out x
+#define inout_param(x) inout x
 #endif
 
 #if !defined(__cplusplus)
-#define out_param(x) out x
-#define inout_param(x) inout x
+#include "BuildSettings.hlsli"
+#include "Debug.hlsl"
 #endif
 
 #ifdef AMD_VULKAN_GLSLANG
@@ -55,12 +56,6 @@ struct BuiltInTriangleIntersectionAttributes
     float2 barycentrics;
 };
 
-#endif
-
-#if GPURT_ENABLE_GPU_ASSERTS
-#define GPU_ASSERT(cond) if (!(cond)) { AmdExtD3DShaderIntrinsics_Halt(); }
-#else
-#define GPU_ASSERT(cond)
 #endif
 
 //=====================================================================================================================
@@ -128,10 +123,9 @@ static const BoundingBox InvalidBoundingBox =
 #define PIPELINE_FLAG_ENABLE_TRAVERSAL_CTR           0x10000000
 #define PIPELINE_FLAG_RESERVED                       0x08000000
 #define PIPELINE_FLAG_ENABLE_FUSED_INSTANCE          0x04000000
-#define PIPELINE_FLAG_RESERVED2                      0x02000000
-#define PIPELINE_FLAG_RESERVED3                      0x01000000
-#define PIPELINE_FLAG_RESERVED4                      0x00800000
-#define PIPELINE_FLAG_RESERVED5                      0x00400000
+#define PIPELINE_FLAG_RESERVED1                      0x02000000
+#define PIPELINE_FLAG_RESERVED2                      0x01000000
+#define PIPELINE_FLAG_RESERVED3                      0x00800000
 
 #define HIT_KIND_TRIANGLE_FRONT_FACE 0xFE
 #define HIT_KIND_TRIANGLE_BACK_FACE  0xFF
@@ -187,6 +181,18 @@ static bool EnableTraversalCounter()
     return (AmdTraceRayGetStaticFlags() & PIPELINE_FLAG_ENABLE_TRAVERSAL_CTR);
 }
 #endif
+
+//=====================================================================================================================
+static uint FloatToUint(float v)
+{
+    const uint bitShift = 31;
+    const uint bitMask = 0x80000000;
+
+    uint ui = uint(asuint(v));
+    ui ^= (1 + ~(ui >> bitShift) | bitMask);
+
+    return ui;
+}
 
 //=====================================================================================================================
 static GpuVirtualAddress MakeGpuVirtualAddress(uint lowBits, uint highBits)
@@ -258,10 +264,12 @@ static uint64_t PackInstanceBasePointer(GpuVirtualAddress instanceVa, uint insta
     instanceBasePointer |= (instanceFlags & D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_NON_OPAQUE)
                            ? (1ull << NODE_POINTER_FORCE_NON_OPAQUE_SHIFT) : 0;
 
-    // Set 'Skip Procedural' for triangles and 'Skip Triangles' for procedural geometry
-    instanceBasePointer |= (geometryType == GEOMETRY_TYPE_TRIANGLES)
-                           ? (1ull << NODE_POINTER_SKIP_PROCEDURAL_SHIFT)
-                           : (1ull << NODE_POINTER_SKIP_TRIANGLES_SHIFT);
+    {
+        // Set 'Skip Procedural' for triangles and 'Skip Triangles' for procedural geometry
+        instanceBasePointer |= (geometryType == GEOMETRY_TYPE_TRIANGLES)
+                            ? (1ull << NODE_POINTER_SKIP_PROCEDURAL_SHIFT)
+                            : (1ull << NODE_POINTER_SKIP_TRIANGLES_SHIFT);
+    }
 
     return instanceBasePointer;
 }
@@ -310,12 +318,14 @@ static uint CreateRootNodePointer(
     return PackNodePointer(NODE_TYPE_BOX_FLOAT32, sizeof(AccelStructHeader));
 }
 
+#if GPURT_BVH_BUILD_SHADER
+#endif
+
 //=====================================================================================================================
-static bool IsTriangleNode(uint nodePtr)
+static bool IsTriangleNode1_1(
+    uint nodePtr)
 {
-    {
-        return (GetNodeType(nodePtr) <= NODE_TYPE_TRIANGLE_1);
-    }
+    return (GetNodeType(nodePtr) <= NODE_TYPE_TRIANGLE_1);
 }
 
 //=====================================================================================================================
@@ -338,7 +348,7 @@ static bool CheckHandleTriangleNode(in uint pointerOrType)
     const uint pipelineRayFlag = AmdTraceRayGetStaticFlags();
     skipTriangleFlag = (pipelineRayFlag & PIPELINE_FLAG_SKIP_TRIANGLES) ? true : false;
 
-    return (IsTriangleNode(pointerOrType) && (!skipTriangleFlag));
+    return (IsTriangleNode1_1(pointerOrType) && (!skipTriangleFlag));
 }
 
 //=====================================================================================================================
@@ -432,14 +442,6 @@ static uint3 CalcTriangleVertexOffsets(uint nodeType)
 }
 
 //=====================================================================================================================
-struct TriangleData
-{
-    float3 v0; ///< Vertex 0
-    float3 v1; ///< Vertex 1
-    float3 v2; ///< Vertex 2
-};
-
-//=====================================================================================================================
 // Calculate an AABB from the 3 points of the triangle.
 static BoundingBox GenerateTriangleBoundingBox(float3 v0, float3 v1, float3 v2)
 {
@@ -463,28 +465,6 @@ static BoundingBox GenerateTriangleBoundingBox(float3 v0, float3 v1, float3 v2)
 
     return bbox;
 };
-
-//=====================================================================================================================
-static BoundingBox GetScratchNodeBoundingBox(in ScratchNode node)
-{
-    BoundingBox bbox;
-
-    // For triangle geometry we need to generate bounding box from triangle vertices
-    if (IsTriangleNode(node.type))
-    {
-        bbox = GenerateTriangleBoundingBox(node.bbox_min_or_v0,
-                                           node.bbox_max_or_v1,
-                                           node.sah_or_v2_or_instBasePtr);
-    }
-    else
-    {
-        // Internal nodes and AABB geometry encodes bounding box in scratch node
-        bbox.min = node.bbox_min_or_v0;
-        bbox.max = node.bbox_max_or_v1;
-    }
-
-    return bbox;
-}
 
 //=====================================================================================================================
 // Compresses a single bounding box into a uint3 representing each bounding plane using half floats
@@ -585,9 +565,9 @@ static float max3(float3 val)
 }
 
 //=====================================================================================================================
-static bool IsUpdate(uint buildFlags)
+static bool IsUpdate()
 {
-    return buildFlags & DDI_BUILD_FLAG_PERFORM_UPDATE;
+    return Settings.isUpdate;
 }
 
 //=====================================================================================================================
@@ -699,7 +679,7 @@ static uint CalcPrimitiveIndexOffset(
     uint nodePointer)
 {
     uint offset;
-    if (IsTriangleNode(nodePointer))
+    if (IsTriangleNode1_1(nodePointer))
     {
         offset = GetNodeType(nodePointer) * 4;
     }

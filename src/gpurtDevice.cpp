@@ -23,6 +23,7 @@
  *
  **********************************************************************************************************************/
 #include "gpurtInternal.h"
+#include "gpurtBvhBatcher.h"
 #include "gpurtBvhBuilder.h"
 #include "gpurt/gpurtLib.h"
 #include "gpurt/gpurtCounter.h"
@@ -370,6 +371,9 @@ Device::Device(
     m_isTraceActive(false),
     m_accelStructTraceSource(this),
     m_rayHistoryTraceSource(this),
+#if GPURT_ENABLE_GPU_DEBUG
+    m_debugMonitor(this),
+#endif
     m_rayHistoryTraceList(this)
 {
 }
@@ -592,11 +596,12 @@ Pal::IPipeline* Device::GetInternalPipeline(
 
             const uint32 lastNodeIndex = pPipelineBuildInfo->nodeCount;
 
+            static constexpr uint32 ReservedBuildSettingsCBVIndex = 255;
             nodes[lastNodeIndex].type          = NodeType::ConstantBuffer;
             nodes[lastNodeIndex].dwSize        = 2;
             nodes[lastNodeIndex].dwOffset      = nodeOffset;
             nodes[lastNodeIndex].logicalId     = cbvCount + ReservedLogicalIdCount;
-            nodes[lastNodeIndex].srdStartIndex = cbvBindingCount;
+            nodes[lastNodeIndex].srdStartIndex = ReservedBuildSettingsCBVIndex;
             nodes[lastNodeIndex].srdStride     = nodes[lastNodeIndex].dwSize;
 
             // Set binding and descSet to irrelevant value to avoid messing up the resource mapping for Vulkan.
@@ -664,6 +669,68 @@ Pal::IPipeline* Device::GetInternalPipeline(
     }
 
     return (pPipelinePair != nullptr) ? pPipelinePair->pPipeline : nullptr;
+}
+
+// =====================================================================================================================
+// Binds the pipeline that corresponds with the provided internal shader type
+void Device::BindPipeline(
+    Pal::ICmdBuffer*                pCmdBuffer,
+    InternalRayTracingCsType        type,
+    const CompileTimeBuildSettings& buildSettings,
+    uint32                          buildSettingsHash) const
+{
+    const Pal::IPipeline* pPipeline = GetInternalPipeline(type, buildSettings, buildSettingsHash);
+
+    Pal::PipelineBindParams bindParam = {};
+    bindParam.pipelineBindPoint       = Pal::PipelineBindPoint::Compute;
+    bindParam.pPipeline               = pPipeline;
+    bindParam.apiPsoHash              = GetInternalPsoHash(type, buildSettings);
+
+#if GPURT_DEVELOPER
+    OutputPipelineName(pCmdBuffer, type);
+#endif
+
+    pCmdBuffer->CmdBindPipeline(bindParam);
+}
+
+// =====================================================================================================================
+// Setup the SRD tables for the provided buffer views
+uint32 Device::WriteBufferSrdTable(
+    Pal::ICmdBuffer*           pCmdBuffer,
+    const Pal::BufferViewInfo* pBufferViews,
+    uint32                     count,
+    bool                       typedBuffer,
+    uint32                     entryOffset) const
+{
+    const uint32  bufferSrdSizeDw = GetBufferSrdSizeDw();
+    Pal::IDevice* pPalDevice      = GetPalDevice();
+    const void*   pNullBuffer     = GetInitInfo().pDeviceProperties->gfxipProperties.nullSrds.pNullBufferView;
+
+    gpusize tableVa;
+    void* pTable = pCmdBuffer->CmdAllocateEmbeddedData(bufferSrdSizeDw * count, bufferSrdSizeDw, &tableVa);
+
+    for (uint32 i = 0; i < count; i++)
+    {
+        const Pal::BufferViewInfo* pCurrentBufInfo = &pBufferViews[i];
+
+        if (pCurrentBufInfo->gpuAddr == 0)
+        {
+            memcpy(pTable, pNullBuffer, bufferSrdSizeDw * sizeof(uint32));
+        }
+        else if (typedBuffer)
+        {
+            pPalDevice->CreateTypedBufferViewSrds(1, pCurrentBufInfo, pTable);
+        }
+        else
+        {
+            pPalDevice->CreateUntypedBufferViewSrds(1, pCurrentBufInfo, pTable);
+        }
+        pTable = Util::VoidPtrInc(pTable, bufferSrdSizeDw * sizeof(uint32));
+    }
+
+    entryOffset = WriteUserDataEntries(pCmdBuffer, &tableVa, 1, entryOffset);
+
+    return entryOffset;
 }
 
 // =====================================================================================================================
@@ -1697,9 +1764,10 @@ void Device::BuildAccelStruct(
                        this,
                        *m_info.pDeviceProperties,
                        clientCb,
-                       deviceSettings);
+                       deviceSettings,
+                       buildInfo);
 
-    builder.BuildRaytracingAccelerationStructure(buildInfo);
+    builder.BuildRaytracingAccelerationStructure();
 
     pCmdBuffer->CmdRestoreComputeState(Pal::ComputeStateAll);
 }
@@ -1716,16 +1784,13 @@ void Device::BuildAccelStructs(
 
     pCmdBuffer->CmdSaveComputeState(Pal::ComputeStateAll);
 
-    for (const AccelStructBuildInfo& info : buildInfo)
-    {
-        BvhBuilder builder(pCmdBuffer,
-                           this,
-                           *m_info.pDeviceProperties,
-                           clientCb,
-                           m_info.deviceSettings);
+    BvhBatcher batcher(pCmdBuffer,
+                       this,
+                       *m_info.pDeviceProperties,
+                       clientCb,
+                       m_info.deviceSettings);
 
-        builder.BuildRaytracingAccelerationStructure(info);
-    }
+    batcher.BuildAccelerationStructureBatch(buildInfo);
 
     pCmdBuffer->CmdRestoreComputeState(Pal::ComputeStateAll);
 }
@@ -1929,6 +1994,45 @@ void Device::CreateTypedBufferViewSrds(
     pDevice->CreateTypedBufferViewSrds(count, pBufferViewInfo, pOut);
 }
 
+// =====================================================================================================================
+// Performs a generic barrier that's used to synchronize internal ray tracing shaders
+void Device::RaytracingBarrier(
+    Pal::ICmdBuffer* pCmdBuffer)
+{
+    if (m_info.deviceSettings.enableAcquireReleaseInterface)
+    {
+        Pal::AcquireReleaseInfo acqRelInfo = {};
+        acqRelInfo.srcGlobalStageMask  = Pal::PipelineStageCs;
+        acqRelInfo.dstGlobalStageMask  = Pal::PipelineStageCs;
+        acqRelInfo.srcGlobalAccessMask = Pal::CoherShader;
+        acqRelInfo.dstGlobalAccessMask = Pal::CoherShader;
+
+        acqRelInfo.reason = m_info.deviceSettings.rgpBarrierReason;
+
+        pCmdBuffer->CmdReleaseThenAcquire(acqRelInfo);
+    }
+    else
+    {
+        Pal::BarrierInfo barrierInfo = {};
+        barrierInfo.waitPoint = Pal::HwPipePreCs;
+
+        const Pal::HwPipePoint pipePoint = Pal::HwPipePostCs;
+        barrierInfo.pipePointWaitCount = 1;
+        barrierInfo.pPipePoints = &pipePoint;
+
+        Pal::BarrierTransition transition = {};
+        transition.srcCacheMask = Pal::CoherShader;
+        transition.dstCacheMask = Pal::CoherShader;
+
+        barrierInfo.transitionCount = 1;
+        barrierInfo.pTransitions = &transition;
+
+        barrierInfo.reason = m_info.deviceSettings.rgpBarrierReason;
+
+        pCmdBuffer->CmdBarrier(barrierInfo);
+    }
+}
+
 #if GPURT_DEVELOPER
 // =====================================================================================================================
 void Device::PushRGPMarker(
@@ -1957,7 +2061,7 @@ void Device::PopRGPMarker(Pal::ICmdBuffer* pCmdBuffer)
 // Driver generated RGP markers
 void Device::OutputPipelineName(
     Pal::ICmdBuffer*         pCmdBuffer,
-    InternalRayTracingCsType type)
+    InternalRayTracingCsType type) const
 {
     constexpr uint32 MaxStrLength = 256;
     char buildShaderInfo[MaxStrLength];

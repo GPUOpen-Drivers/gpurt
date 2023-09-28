@@ -41,6 +41,13 @@ typedef uint64_t uint64;
 #define constexpr static const
 #endif
 
+namespace GpuDebugFlags
+{
+    static const uint32 HostAssert = 1;
+    static const uint32 HostPrint  = 2;
+    static const uint32 ShaderHalt = 4;
+};
+
 // Settings passed to the build shaders via compile time constant buffer. Note that adding settings here will cause
 // additional shaders to be compiled when the setting changes.
 struct CompileTimeBuildSettings
@@ -81,8 +88,9 @@ struct CompileTimeBuildSettings
     uint32 unused6;
     uint32 unused7;
     uint32 unused8;
-    uint32 unused9;
     uint32 enableInstanceRebraid;
+    uint32 gpuDebugFlags;
+    uint32 isUpdate;
 };
 
 #define BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_ID                        0
@@ -112,7 +120,9 @@ struct CompileTimeBuildSettings
 #define BUILD_SETTINGS_DATA_ENABLE_FAST_LBVH_ID                       26
 #define BUILD_SETTINGS_DATA_RTIP_LEVEL_ID                             27
 #define BUILD_SETTINGS_DATA_GEOMETRY_TYPE_ID                          28
-#define BUILD_SETTINGS_DATA_ENABLE_INSTANCE_REBRAID_ID                37
+#define BUILD_SETTINGS_DATA_ENABLE_INSTANCE_REBRAID_ID                36
+#define BUILD_SETTINGS_DATA_GPU_DEBUG_FLAGS_ID                        37
+#define BUILD_SETTINGS_DATA_IS_UPDATE_ID                              38
 
 #ifdef __cplusplus
 } // namespace GpuRt

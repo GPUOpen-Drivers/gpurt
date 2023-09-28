@@ -189,7 +189,7 @@ static void TraceRayInlineImpl1_1(
     if (IsValidTrace(rayQuery.rayDesc, accelStruct, instanceMask, rayQuery.rayFlags, 0))
     {
         LogAccelStruct(accelStruct);
-        rayQuery.currNodePtr = CreateRootNodePointerBasedOnStaticPipelineFlags();
+        rayQuery.currNodePtr = CreateRootNodePointer1_1();
     }
     else
     {
@@ -264,7 +264,7 @@ static bool RayQueryProceedImpl1_1(
     GpuVirtualAddress bvhAddress          = GetRayQueryBvhAddress(rayQuery);
 
     // BLAS root node is always fp32 regardless of mode for fp16 box nodes
-    const uint blasRootNodePtr = CreateRootNodePointerBasedOnStaticPipelineFlags();
+    const uint blasRootNodePtr = CreateRootNodePointer1_1();
 
     const bool rayForceOpaque    = (rayQuery.rayFlags & RAY_FLAG_FORCE_OPAQUE);
     const bool rayForceNonOpaque = (rayQuery.rayFlags & RAY_FLAG_FORCE_NON_OPAQUE);
@@ -359,7 +359,7 @@ static bool RayQueryProceedImpl1_1(
         {
             rayQuery.numIterations++;
             WriteRayHistoryTokenNodePtr(rayId, rayQuery.currNodePtr);
-            UpdateWaveTraversalStatistics(rayQuery.currNodePtr);
+            UpdateWaveTraversalStatistics(GPURT_RTIP1_1, rayQuery.currNodePtr);
         }
 #endif
         // Backup last traversed node pointer
@@ -382,7 +382,7 @@ static bool RayQueryProceedImpl1_1(
         rayQuery.currNodePtr = INVALID_NODE;
 
         // Check if it is an internal node
-        if (IsBoxNodeBasedOnStaticPipelineFlags(rayQuery.prevNodePtr))
+        if (IsBoxNode1_1(rayQuery.prevNodePtr))
         {
 #if DEVELOPER
             if (EnableTraversalCounter())
@@ -392,7 +392,7 @@ static bool RayQueryProceedImpl1_1(
 #endif
             ProcessBoxIntersection(rayQuery, intersectionResult, lastNodePtr);
         }
-        else if (IsTriangleNode(rayQuery.prevNodePtr))
+        else if (IsTriangleNode1_1(rayQuery.prevNodePtr))
         {
 #if DEVELOPER
             if (EnableTraversalCounter())

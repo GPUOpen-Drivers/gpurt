@@ -50,17 +50,25 @@ struct TDArgs
 #if NO_SHADER_ENTRYPOINT == 0
 #define USE_LDS     1
 
-#define RootSig "RootConstants(num32BitConstants=13, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=1, b0, visibility=SHADER_VISIBILITY_ALL), "\
+                "CBV(b1),"\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b1),"\
+                "CBV(b255),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
 
-[[vk::push_constant]] ConstantBuffer<TDArgs> args : register(b0);
+#include "../shared/rayTracingDefs.h"
+
+struct RootConstants
+{
+    uint numThreads;
+};
+[[vk::push_constant]] ConstantBuffer<RootConstants> ShaderRootConstants    : register(b0);
+[[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b1);
 
 [[vk::binding(0, 0)]]                  RWByteAddressBuffer DstBuffer          : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata        : register(u1);
@@ -1858,8 +1866,29 @@ void BuildBVHTD(
     uint groupId  : SV_GroupID,
     uint localId  : SV_GroupThreadID)
 {
-    TDArgs newArgs = args;
-    newArgs.NumPrimitives = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
-    BuildBVHTDImpl(globalId, localId, groupId, newArgs);
+    uint numPrimitives = ShaderConstants.numPrimitives;
+
+    if (Settings.doTriangleSplitting || (Settings.rebraidType == RebraidType::V2))
+    {
+        numPrimitives = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
+    }
+
+    TDArgs args;
+
+    args.NumPrimitives                = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
+    args.NumThreads                   = ShaderRootConstants.numThreads;
+    args.MaxRefCountSize              = numPrimitives * ShaderConstants.rebraidFactor;
+    args.LengthPercentage             = 0.1;
+    args.BvhNodeDataScratchOffset     = ShaderConstants.offsets.bvhNodeData;
+    args.BvhLeafNodeDataScratchOffset = ShaderConstants.offsets.bvhLeafNodeData;
+    args.SceneBoundsOffset            = ShaderConstants.offsets.sceneBounds;
+    args.RefScratchOffset             = ShaderConstants.offsets.tdRefs;
+    args.TDNodeScratchOffset          = ShaderConstants.offsets.tdNodeList;
+    args.TDBinsScratchOffset          = ShaderConstants.offsets.tdBins;
+    args.CurrentStateScratchOffset    = ShaderConstants.offsets.tdState;
+    args.TdTaskQueueCounterScratchOffset = ShaderConstants.offsets.tdTaskQueueCounter;
+    args.EncodeArrayOfPointers        = ShaderConstants.encodeArrayOfPointers;
+
+    BuildBVHTDImpl(globalId, localId, groupId, args);
 }
 #endif

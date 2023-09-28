@@ -31,7 +31,7 @@
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 3)),"\
                 "DescriptorTable(CBV(b0, numDescriptors = 4294967295, space = 1)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b1),"\
+                "CBV(b255),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
 

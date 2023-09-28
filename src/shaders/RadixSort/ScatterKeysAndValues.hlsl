@@ -23,30 +23,26 @@
  *
  **********************************************************************************************************************/
 #if NO_SHADER_ENTRYPOINT == 0
-#define RootSig "RootConstants(num32BitConstants=9, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=2, b0, visibility=SHADER_VISIBILITY_ALL), "\
+                "CBV(b1),"\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
-                "CBV(b1)"/*Build Settings binding*/
+                "CBV(b255)"/*Build Settings binding*/
 
 //=====================================================================================================================
 // 32 bit constants
-struct InputArgs
+struct RootConstants
 {
-    uint BitShiftSize;                 // Number of bits to shift
-    uint NumGroups;                    // Number of work groups dispatched
-    uint InputKeysScratchOffset;       // Scratch buffer offset to int4/uint64_t4 input keys
-    uint InputValuesScratchOffset;     // Scratch buffer offset to int4 input values
-    uint InputHistogramsScratchOffset; // Scratch buffer offset to int input histogram
-    uint OutputKeysScratchOffset;      // Scratch buffer offset to int/uint64_t output keys
-    uint OutputValuesScratchOffset;    // Scratch buffer offset to int output values
-    uint UseMortonCode30;
-    uint numLeafNodes;
+    uint BitShiftSize; // Number of bits to shift
+    uint NumGroups;    // Number of work groups dispatched
 };
+#include "../../shared/rayTracingDefs.h"
 
-[[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
+[[vk::push_constant]] ConstantBuffer<RootConstants> ShaderRootConstants    : register(b0);
+[[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b1);
 
 [[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer DstMetadata   : register(u1);
@@ -522,6 +518,17 @@ void ScatterKeysAndValuesImpl(
 }
 
 #if NO_SHADER_ENTRYPOINT == 0
+//======================================================================================================================
+// Swap two uint variables
+void SwapUint(
+    inout uint x,
+    inout uint y)
+{
+    const uint temp = x;
+    x = y;
+    y = temp;
+}
+
 //=====================================================================================================================
 // Main Function        : ScatterKeysAndValues
 //=====================================================================================================================
@@ -536,17 +543,44 @@ void ScatterKeysAndValues(
             ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET) :
             ShaderConstants.numLeafNodes;
 
+    const uint inputKeysOffset    = ShaderConstants.offsets.mortonCodes;
+    const uint outputKeysOffset   = ShaderConstants.offsets.mortonCodesSorted;
+    // Passing in 0 for initial primitive indices since we auto-generate them for the first pass
+    const uint inputValuesOffset  = 0;
+    const uint outputValuesOffset = ShaderConstants.offsets.primIndicesSorted;
+
+    const uint scratchKeysOffset   = ShaderConstants.offsets.tempKeys;
+    const uint scratchValuesOffset = ShaderConstants.offsets.tempVals;
+
+    uint currentFromKeys = inputKeysOffset;
+    uint currentFromVals = inputValuesOffset;
+    uint currentToKeys   = scratchKeysOffset;
+    uint currentToVals   = scratchValuesOffset;
+
+    if (ShaderRootConstants.BitShiftSize > 0)
+    {
+        currentFromKeys = outputKeysOffset;
+        currentFromVals = outputValuesOffset;
+    }
+    const uint BitsPerPass = 4;
+    const uint pass = ShaderRootConstants.BitShiftSize / BitsPerPass;
+    if (pass % 2 == 1)
+    {
+        SwapUint(currentFromKeys, currentToKeys);
+        SwapUint(currentFromVals, currentToVals);
+    }
+
     ScatterKeysAndValuesImpl(
         groupId,
         localId,
-        ShaderConstants.BitShiftSize,
+        ShaderRootConstants.BitShiftSize,
         numPrimitives,
-        ShaderConstants.NumGroups,
-        ShaderConstants.InputKeysScratchOffset,
-        ShaderConstants.InputValuesScratchOffset,
-        ShaderConstants.InputHistogramsScratchOffset,
-        ShaderConstants.OutputKeysScratchOffset,
-        ShaderConstants.OutputValuesScratchOffset,
-        ShaderConstants.UseMortonCode30);
+        ShaderRootConstants.NumGroups,
+        currentFromKeys,
+        currentFromVals,
+        ShaderConstants.offsets.histogram,
+        currentToKeys,
+        currentToVals,
+        Settings.useMortonCode30);
 }
 #endif

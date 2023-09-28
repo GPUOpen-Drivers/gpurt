@@ -47,33 +47,26 @@ struct BuildQbvhArgs
 };
 
 #if NO_SHADER_ENTRYPOINT == 0
-#define RootSig "RootConstants(num32BitConstants=10, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=1, b0, visibility=SHADER_VISIBILITY_ALL), "\
+                "CBV(b1),"\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b1),"\
+                "CBV(b255),"\
                 "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
 
-//=====================================================================================================================
-// 32 bit constants
-struct InputArgs
+#include "../shared/rayTracingDefs.h"
+
+struct RootConstants
 {
-    uint numPrimitives;
-    uint metadataSizeInBytes;
     uint numThreads;
-    uint scratchNodesScratchOffset;
-    uint qbvhStackScratchOffset;
-    uint stackPtrsScratchOffset;
-    uint splitBoxesByteOffset;
-    uint encodeArrayOfPointers;
-    uint fastLBVHRootNodeIndexScratchOffset;
-    uint unsortedBvhLeafNodesOffset;
 };
 
-[[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
+[[vk::push_constant]] ConstantBuffer<RootConstants> ShaderRootConstants    : register(b0);
+[[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b1);
 
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer  DstBuffer          : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer  DstMetadata        : register(u1);
@@ -89,19 +82,21 @@ struct InputArgs
 #include "BuildCommonScratch.hlsl"
 #include "CompactCommon.hlsl"
 
-#define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
-groupshared uint SharedMem[MAX_LDS_ELEMENTS];
+// BVH 8 requires up to 8 LDS elements per thread
+#define MAX_ELEMENTS_PER_THREAD 8
+#define MAX_LDS_ELEMENTS_PER_THREADGROUP (MAX_ELEMENTS_PER_THREAD * BUILD_THREADGROUP_SIZE)
+groupshared uint SharedMem[MAX_LDS_ELEMENTS_PER_THREADGROUP];
 
 //=====================================================================================================================
 static uint CalculateBvhNodesOffset(
-    in uint          numActivePrims,
-    in BuildQbvhArgs args)
+    uint numActivePrims)
 {
-    return CalculateScratchBvhNodesOffset(
+    return GetBvhNodesOffset(
                numActivePrims,
-               args.numPrimitives,
-               args.scratchNodesScratchOffset,
-               Settings.noCopySortedNodes);
+               ShaderConstants.numLeafNodes,
+               ShaderConstants.offsets.bvhNodeData,
+               ShaderConstants.offsets.bvhLeafNodeData,
+               ShaderConstants.offsets.primIndicesSorted);
 }
 
 //=====================================================================================================================
@@ -109,41 +104,41 @@ BuildQbvhArgs GetBuildQbvhArgs()
 {
     const AccelStructHeader header = DstBuffer.Load<AccelStructHeader>(0);
 
-    BuildQbvhArgs args;
+    BuildQbvhArgs qbvhArgs;
 
-    args.numPrimitives = ShaderConstants.numPrimitives;
-    args.metadataSizeInBytes = ShaderConstants.metadataSizeInBytes;
-    args.numThreads = ShaderConstants.numThreads;
-    args.scratchNodesScratchOffset = ShaderConstants.scratchNodesScratchOffset;
-    args.qbvhStackScratchOffset = ShaderConstants.qbvhStackScratchOffset;
-    args.stackPtrsScratchOffset = ShaderConstants.stackPtrsScratchOffset;
-    args.splitBoxesByteOffset = ShaderConstants.splitBoxesByteOffset;
-    args.encodeArrayOfPointers = ShaderConstants.encodeArrayOfPointers;
-    args.fastLBVHRootNodeIndex = FetchRootNodeIndex(
-        Settings.enableFastLBVH, ShaderConstants.fastLBVHRootNodeIndexScratchOffset);
-    args.unsortedBvhLeafNodesOffset = ShaderConstants.unsortedBvhLeafNodesOffset;
+    const uint rootNodeIndex = FetchRootNodeIndex(
+        Settings.enableFastLBVH, ShaderConstants.offsets.fastLBVHRootNodeIndex);
 
-    args.triangleCompressionMode = Settings.triangleCompressionMode;
-    args.fp16BoxNodesInBlasMode = Settings.fp16BoxNodesMode;
-    args.rebraidEnabled = (Settings.rebraidType != RebraidType::Off);
-    args.enableFusedInstanceNode = Settings.enableFusedInstanceNode;
-    args.enableFastLBVH = Settings.enableFastLBVH;
-    args.enableEarlyPairCompression = Settings.enableEarlyPairCompression;
-    args.enableSAHCost = Settings.enableSAHCost;
+    qbvhArgs.numPrimitives               = ShaderConstants.numPrimitives;
+    qbvhArgs.metadataSizeInBytes         = DstMetadata.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
+    qbvhArgs.numThreads                  = ShaderRootConstants.numThreads;
+    qbvhArgs.qbvhStackScratchOffset      = ShaderConstants.offsets.qbvhGlobalStack;
+    qbvhArgs.stackPtrsScratchOffset      = ShaderConstants.offsets.qbvhGlobalStackPtrs;
+    qbvhArgs.splitBoxesByteOffset        = ShaderConstants.offsets.triangleSplitBoxes;
+    qbvhArgs.triangleCompressionMode     = Settings.triangleCompressionMode;
+    qbvhArgs.fp16BoxNodesInBlasMode      = Settings.fp16BoxNodesMode;
+    qbvhArgs.encodeArrayOfPointers       = ShaderConstants.encodeArrayOfPointers;
+    qbvhArgs.rebraidEnabled              = (Settings.rebraidType != RebraidType::Off);
+    qbvhArgs.enableFusedInstanceNode     = Settings.enableFusedInstanceNode;
+    qbvhArgs.enableFastLBVH              = Settings.enableFastLBVH;
+    qbvhArgs.fastLBVHRootNodeIndex       = rootNodeIndex;
+    qbvhArgs.enableEarlyPairCompression  = Settings.enableEarlyPairCompression;
+    qbvhArgs.unsortedBvhLeafNodesOffset  = ShaderConstants.offsets.bvhLeafNodeData;
+    qbvhArgs.enableSAHCost               = Settings.enableSAHCost;
 
-    args.scratchNodesScratchOffset = CalculateBvhNodesOffset(header.numActivePrims, args);
+    qbvhArgs.scratchNodesScratchOffset = CalculateBvhNodesOffset(header.numActivePrims);
 
     // Read active primitive count from header
-    args.numPrimitives = header.numActivePrims;
+    qbvhArgs.numPrimitives = header.numActivePrims;
 
     // With pair compresssion enabled, the leaf node count in header represents actual valid
     // primitives
     if (EnableLatePairCompression())
     {
-        args.numPrimitives = header.numLeafNodes;
+        qbvhArgs.numPrimitives = header.numLeafNodes;
     }
 
-    return args;
+    return qbvhArgs;
 }
 #endif
 
@@ -218,7 +213,7 @@ BoundingBox GetScratchNodeBoundingBoxTS(
     BoundingBox bbox;
 
     // For triangle geometry we need to generate bounding box from triangle vertices
-    if ((topLevelBuild == false) && IsTriangleNode(node.type))
+    if ((topLevelBuild == false) && IsScratchTriangleNode(node))
     {
         if (Settings.doTriangleSplitting)
         {
@@ -450,7 +445,7 @@ uint WritePrimitiveNode(
 
     {
         uint destIndex;
-        if (IsTriangleNode(nodeType) &&
+        if (IsScratchTriangleNode(scratchNode) &&
             ((args.triangleCompressionMode != NO_TRIANGLE_COMPRESSION) || Settings.doTriangleSplitting))
         {
             destIndex = numLeafsDone;
@@ -1183,6 +1178,12 @@ void BuildQBVH(
     uint waveId       = 0;
 
     INIT_TASK;
+
+    BEGIN_TASK(RoundUpQuotient(GetNumInternalNodeCount(args.numPrimitives), BUILD_THREADGROUP_SIZE));
+
+    InitBuildQbvhImpl(globalId, args);
+
+    END_TASK(RoundUpQuotient(GetNumInternalNodeCount(args.numPrimitives), BUILD_THREADGROUP_SIZE));
 
     BEGIN_TASK(RoundUpQuotient(GetNumInternalNodeCount(args.numPrimitives), BUILD_THREADGROUP_SIZE));
 

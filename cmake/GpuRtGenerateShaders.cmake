@@ -36,21 +36,12 @@ find_package(Python3
 get_target_property(COMPILE_DEFINITIONS gpurt COMPILE_DEFINITIONS)
 set(gpurtDefines "${COMPILE_DEFINITIONS}")
 
-set(gpurtToolsDir         "${GPU_RAY_TRACING_SOURCE_DIR}/tools")
-set(gpurtShadersSourceDir "${GPU_RAY_TRACING_SOURCE_DIR}/src/shaders")
+set(gpurtToolsDir "${GPU_RAY_TRACING_SOURCE_DIR}/tools")
 
 # Shared tools
 set(gpurtCompileScript    "${gpurtToolsDir}/CompileRTShaders.py")
 set(gpurtCompileConfig    "${gpurtToolsDir}/RTShaders.xml")
 set(gpurtStripWhitelist   "${gpurtToolsDir}/strip_whitelist.txt")
-
-# Headers that are shared between HLSL and other things
-set(gpurtCounterHeaderPath "${GPU_RAY_TRACING_SOURCE_DIR}/gpurt/gpurtCounter.h")
-set(gpurtSharedHeadersPath "${GPU_RAY_TRACING_SOURCE_DIR}/src/shared")
-set(gpurtSharedLanguageHeaders
-    ${gpurtCounterHeaderPath}
-    ${gpurtSharedHeadersPath}
-)
 
 # Outputs
 set(gpurtOutputDir "${CMAKE_CURRENT_BINARY_DIR}/pipelines")
@@ -59,13 +50,40 @@ set(gpurtShaders
     "${gpurtOutputDir}/g_GpuRtLibrary.h"
 )
 
+set(gpurtDebugInfoFile "${CMAKE_CURRENT_BINARY_DIR}/g_gpurtDebugInfo.h")
+
 # Make the outputs accessible in the source code.
 target_include_directories(gpurt PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
+set(originalShaderSourceDir "${GPU_RAY_TRACING_SOURCE_DIR}/src/shaders/")
+set(originalShaderSource ${GPURT_SHADER_SOURCE_FILES})
+list(TRANSFORM originalShaderSource PREPEND "${originalShaderSourceDir}")
+
+if (GPURT_ENABLE_GPU_DEBUG)
+    # Mimic the directory structure of the source tree so relative paths to shared headers work
+    set(debugShaderDirectory "${CMAKE_CURRENT_BINARY_DIR}/debugShaders/src/shaders/")
+    set(gpurtShaderSource ${GPURT_SHADER_SOURCE_FILES})
+    set(gpurtShadersSourceDir ${debugShaderDirectory})
+    list(TRANSFORM gpurtShaderSource PREPEND "${debugShaderDirectory}")
+    set(preprocessArgs "")
+    foreach(originalSourceFile ${GPURT_SHADER_SOURCE_FILES})
+        set(originalSourcePath "${originalShaderSourceDir}${originalSourceFile}")
+        set(newSourceFilePath "${debugShaderDirectory}${originalSourceFile}")
+        list(APPEND preprocessArgs "${originalSourcePath}" "${newSourceFilePath}")
+    endforeach()
+    set(gpurtDebugPreprocessorScript "${gpurtToolsDir}/DebugPreprocessShaders.py")
+    add_custom_command(
+        OUTPUT  ${gpurtShaderSource} ${gpurtDebugInfoFile}
+        DEPENDS ${originalShaderSource} ${gpurtDebugPreprocessorScript}
+        COMMAND Python3::Interpreter ${gpurtDebugPreprocessorScript} ${preprocessArgs} ${gpurtDebugInfoFile}
+    )
+else()
+    set(gpurtShaderSource "${originalShaderSource}")
+    set(gpurtShadersSourceDir "${originalShaderSourceDir}")
+endif()
+
 set(gpurtSharedDependencies
-    ${GPURT_GEN_SHADERS_SOURCE}
-    ${gpurtShaderHeaders}
-    ${gpurtSharedLanguageHeaders}
+    ${gpurtShaderSource}
     ${gpurtCompileScript}
     ${gpurtCompileConfig}
 )

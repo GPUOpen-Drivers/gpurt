@@ -252,7 +252,7 @@ static bool TraceRayCommon(
                                                          result.geometryIndex,
                                                          instanceContribution);
 
-            const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(accelStruct, result.instNodePtr);
+            const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(rtIpLevel, accelStruct, result.instNodePtr);
 #if DEVELOPER
             if (EnableTraversalCounter())
             {

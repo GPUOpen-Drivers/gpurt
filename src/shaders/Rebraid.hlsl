@@ -27,32 +27,24 @@
 // It prioritizes the largest sized Instances for a single opening.
 
 #if NO_SHADER_ENTRYPOINT == 0
-#define RootSig "RootConstants(num32BitConstants=10, b0),"\
+#define RootSig "RootConstants(num32BitConstants=1, b0),"\
+                "CBV(b1),"\
                 "UAV(u0),"\
                 "UAV(u1),"\
                 "UAV(u2),"\
                 "UAV(u3),"\
-                "CBV(b1),"\
+                "CBV(b255),"\
                 "UAV(u4)"
-#endif
 
-struct RebraidArgs
+#include "../shared/rayTracingDefs.h"
+
+struct RootConstants
 {
-    uint numPrimitives;
     uint numThreadGroups;
-    uint maxNumPrims;
-    uint bvhLeafNodeDataScratchOffset;
-    uint sceneBoundsOffset;
-    uint stateScratchOffset;
-    uint taskQueueCounterScratchOffset;
-    uint atomicFlagsScratchOffset;
-    uint encodeArrayOfPointers;
-    uint enableCentroidSceneBoundsWithSize;
-    uint enableSAHCost;
 };
 
-#if NO_SHADER_ENTRYPOINT == 0
-[[vk::push_constant]] ConstantBuffer<RebraidArgs> ShaderConstants : register(b0);
+[[vk::push_constant]] ConstantBuffer<RootConstants> ShaderRootConstants    : register(b0);
+[[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b1);
 
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstBuffer          : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata        : register(u1);
@@ -76,6 +68,22 @@ groupshared uint SharedMem[MAX_LDS_ELEMENTS];
 #define REBRAID_KEYS_PER_GROUP          (BUILD_THREADGROUP_SIZE * REBRAID_KEYS_PER_THREAD)
 
 #define ENABLE_HIGHER_QUALITY           1
+
+//=====================================================================================================================
+struct RebraidArgs
+{
+    uint numPrimitives;
+    uint numThreadGroups;
+    uint maxNumPrims;
+    uint bvhLeafNodeDataScratchOffset;
+    uint sceneBoundsOffset;
+    uint stateScratchOffset;
+    uint taskQueueCounterScratchOffset;
+    uint atomicFlagsScratchOffset;
+    uint encodeArrayOfPointers;
+    uint enableCentroidSceneBoundsWithSize;
+    uint enableSAHCost;
+};
 
 //=====================================================================================================================
 void WriteFlags(RebraidArgs args, uint index, Flags flags)
@@ -713,6 +721,20 @@ void Rebraid(
     uint localId  : SV_GroupThreadID,
     uint groupId  : SV_GroupID)
 {
-    RebraidImpl(globalId, localId, groupId, ShaderConstants);
+
+    RebraidArgs args;
+
+    args.numPrimitives                      = ShaderConstants.numPrimitives;
+    args.numThreadGroups                    = ShaderRootConstants.numThreadGroups;
+    args.maxNumPrims                        = ShaderConstants.rebraidFactor * ShaderConstants.numPrimitives;
+    args.bvhLeafNodeDataScratchOffset       = ShaderConstants.offsets.bvhLeafNodeData;
+    args.sceneBoundsOffset                  = ShaderConstants.offsets.sceneBounds;
+    args.stateScratchOffset                 = ShaderConstants.offsets.rebraidState;
+    args.taskQueueCounterScratchOffset      = ShaderConstants.offsets.rebraidTaskQueueCounter;
+    args.atomicFlagsScratchOffset           = ShaderConstants.offsets.splitAtomicFlags;
+    args.encodeArrayOfPointers              = ShaderConstants.encodeArrayOfPointers;
+    args.enableSAHCost                      = Settings.enableSAHCost;
+
+    RebraidImpl(globalId, localId, groupId, args);
 }
 #endif

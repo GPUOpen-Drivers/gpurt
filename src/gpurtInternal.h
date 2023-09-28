@@ -27,6 +27,9 @@
 #include "gpurt/gpurtAccelStruct.h"
 #include "gpurt/gpurtBuildSettings.h"
 #include "gpurt/gpurtCounter.h"
+#include "shared/gpurtBuildConstants.h"
+#include "gpurtDebugMonitor.h"
+
 #include "palInlineFuncs.h"
 #include "palHashLiteralString.h"
 
@@ -137,61 +140,6 @@ static RadixSortConfig GetRadixSortConfig(
 
     return config;
 }
-
-// =====================================================================================================================
-// Scratch data offsets required for BVH construction
-struct RayTracingScratchDataOffsets
-{
-    uint32 bvhNodeData;
-    uint32 triangleSplitBoxes;
-    uint32 triangleSplitRefs0;
-    uint32 triangleSplitRefs1;
-    uint32 splitPriorities;
-    uint32 triangleSplitState;
-    uint32 triangleSplitTaskQueueCounter;
-    uint32 rebraidState;
-    uint32 rebraidTaskQueueCounter;
-    uint32 atomicFlagsTS;
-    uint32 refList;
-    uint32 tdNodeList;
-    uint32 tdBins;
-    uint32 tdState;
-    uint32 tdTaskQueueCounter;
-    uint32 refOffsets;
-    uint32 bvhLeafNodeData;
-    uint32 fastLBVHRootNodeIndex;
-    uint32 clusterList0;        // BVH AC build only
-    uint32 clusterList1;        // BVH AC build only
-    uint32 numClusterList0;     // BVH AC build only
-    uint32 numClusterList1;     // BVH AC build only
-    uint32 internalNodesIndex0; // BVH AC build only
-    uint32 internalNodesIndex1; // BVH AC build only
-    uint32 neighbourIndices;    // BVH PLOC build only
-    uint32 currentState;        // BVH PLOC build only
-    uint32 plocTaskQueueCounter;// BVH PLOC build only
-    uint32 atomicFlagsPloc;     // BVH PLOC build only
-    uint32 clusterOffsets;      // BVH PLOC build only
-    uint32 sceneBounds;
-    uint32 mortonCodes;
-    uint32 mortonCodesSorted;
-    uint32 primIndicesSorted;
-    uint32 primIndicesSortedSwap;
-    uint32 propagationFlags;
-    uint32 numBatches;
-    uint32 batchIndices;
-    uint32 indexBufferInfo;
-    uint32 updateStack;
-    uint32 histogram;
-    uint32 tempKeys;
-    uint32 tempVals;
-    uint32 dynamicBlockIndex;
-    uint32 atomicFlags;
-    uint32 distributedPartSums;
-    uint32 qbvhGlobalStack;
-    uint32 qbvhGlobalStackPtrs;
-    uint32 reserved0;
-    uint32 debugCounters;
-};
 
 struct DispatchDimensions
 {
@@ -541,6 +489,19 @@ public:
         const CompileTimeBuildSettings& buildSettings,
         uint32                          buildSettingsHash) const;
 
+    void BindPipeline(
+        Pal::ICmdBuffer*                pCmdBuffer,
+        InternalRayTracingCsType        type,
+        const CompileTimeBuildSettings& buildSettings,
+        uint32                          buildSettingsHash) const;
+
+    uint32 WriteBufferSrdTable(
+        Pal::ICmdBuffer*           pCmdBuffer,
+        const Pal::BufferViewInfo* pBufferViews,
+        uint32                     count,
+        bool                       typedBuffer,
+        uint32                     entryOffset) const;
+
     // Computes size for decoded acceleration structure
     //
     // @param type              Type of post build info
@@ -616,6 +577,12 @@ public:
         const Pal::BufferViewInfo* pBufferViewInfo,
         void*                      pOut);
 
+    // Performs a generic barrier that's used to synchronize internal ray tracing shaders
+    //
+    // @param pCmdBuffer       [in] Command buffer where commands will be written
+    void RaytracingBarrier(
+        Pal::ICmdBuffer* pCmdBuffer);
+
     Pal::IDevice* GetPalDevice() const { return m_info.pPalDevice; };
 
     const DeviceInitInfo& GetInitInfo() const { return m_info; }
@@ -625,6 +592,15 @@ public:
 
     Pal::RayTracingIpLevel GetRtIpLevel() const { return m_rtIpLevel; }
 
+    const DeviceSettings& Settings() const { return m_info.deviceSettings; }
+
+#if GPURT_ENABLE_GPU_DEBUG
+    gpusize GetGpuDebugBufferVa() const
+    {
+        return m_debugMonitor.DebugBufferVa();
+    }
+#endif
+
 #if GPURT_DEVELOPER
     // Driver generated RGP markers are only added in internal builds because they expose details about the
     // construction of acceleration structure.
@@ -633,10 +609,10 @@ public:
 
     void OutputPipelineName(
         Pal::ICmdBuffer* pCmdBuffer,
-        InternalRayTracingCsType type);
+        InternalRayTracingCsType type) const;
 #endif
 
-protected:
+private:
 
     void SetUpClientCallbacks(
         ClientCallbacks* pClientCb);
@@ -660,6 +636,10 @@ protected:
     GpuRt::RayHistoryTraceSource             m_rayHistoryTraceSource;
     RayHistoryBufferList                     m_rayHistoryTraceList;
     Util::Mutex                              m_traceRayHistoryLock;
+
+#if GPURT_ENABLE_GPU_DEBUG
+    GpuRt::DebugMonitor                      m_debugMonitor;
+#endif
 };
 }  // namespace Internal
 } // namespace GpuRt

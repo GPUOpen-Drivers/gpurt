@@ -23,7 +23,8 @@
  *
  **********************************************************************************************************************/
 #if NO_SHADER_ENTRYPOINT == 0
-#define RootSig "RootConstants(num32BitConstants=4, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=1, b0, visibility=SHADER_VISIBILITY_ALL), "\
+                "CBV(b1),"\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
@@ -31,15 +32,14 @@
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
-struct InputArgs
+struct RootConstants
 {
     uint NumElements;
-    uint InOutArrayScratchOffset;
-    uint DynamicBlockIndexScratchOffset;
-    uint AtomicFlagsScratchOffset;
 };
+#include "../../shared/rayTracingDefs.h"
 
-[[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
+[[vk::push_constant]] ConstantBuffer<RootConstants> ShaderRootConstants    : register(b0);
+[[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b1);
 
 [[vk::binding(0, 0)]] RWByteAddressBuffer                  DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer                  DstMetadata   : register(u1);
@@ -149,9 +149,9 @@ void InitScanExclusiveInt4DLB(
     in uint3 groupID        : SV_GroupID)
 {
     InitScanExclusiveInt4DLBImpl(globalThreadID.x,
-                                 ShaderConstants.NumElements,
-                                 ShaderConstants.DynamicBlockIndexScratchOffset,
-                                 ShaderConstants.AtomicFlagsScratchOffset);
+                                 ShaderRootConstants.NumElements,
+                                 ShaderConstants.offsets.dynamicBlockIndex,
+                                 ShaderConstants.offsets.prefixSumAtomicFlags);
 }
 #endif
 
@@ -302,9 +302,9 @@ void ScanExclusiveInt4DLB(
 {
     ScanExclusiveInt4DLBImpl(globalThreadID.x,
                              localThreadID.x,
-                             ShaderConstants.NumElements,
-                             ShaderConstants.DynamicBlockIndexScratchOffset,
-                             ShaderConstants.AtomicFlagsScratchOffset,
-                             ShaderConstants.InOutArrayScratchOffset);
+                             ShaderRootConstants.NumElements,
+                             ShaderConstants.offsets.dynamicBlockIndex,
+                             ShaderConstants.offsets.prefixSumAtomicFlags,
+                             ShaderConstants.offsets.histogram);
 }
 #endif

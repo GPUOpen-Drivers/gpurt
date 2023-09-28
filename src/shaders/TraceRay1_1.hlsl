@@ -149,7 +149,7 @@ static IntersectionResult TraceRayImpl1_1(
 
     // Start from root node which follows acceleration structure header
     // BLAS root node is always fp32 regardless of mode for fp16 box nodes
-    const uint blasRootNodePtr   = CreateRootNodePointerBasedOnStaticPipelineFlags();
+    const uint blasRootNodePtr   = CreateRootNodePointer1_1();
     uint       packedNodePointer = blasRootNodePtr;
     uint       tlasNodePtr       = INVALID_IDX;
 
@@ -199,11 +199,11 @@ static IntersectionResult TraceRayImpl1_1(
 
             intersection.numIterations++;
 
-            if (IsBoxNodeBasedOnStaticPipelineFlags(packedNodePointer))
+            if (IsBoxNode1_1(packedNodePointer))
             {
                 intersection.numRayBoxTest++;
             }
-            else if (IsTriangleNode(packedNodePointer))
+            else if (IsTriangleNode1_1(packedNodePointer))
             {
                 intersection.numRayTriangleTest++;
             }
@@ -212,7 +212,7 @@ static IntersectionResult TraceRayImpl1_1(
                 intersection.instanceIntersections++;
             }
 
-            UpdateWaveTraversalStatistics(packedNodePointer);
+            UpdateWaveTraversalStatistics(GPURT_RTIP1_1, packedNodePointer);
         }
 #endif
 
@@ -236,7 +236,7 @@ static IntersectionResult TraceRayImpl1_1(
         packedNodePointer = INVALID_NODE;
 
         // Check if it is an internal node
-        if (IsBoxNodeBasedOnStaticPipelineFlags(prevNodePtr))
+        if (IsBoxNode1_1(prevNodePtr))
         {
             // Determine nodes to push to stack
             if (isGoingDown)
@@ -344,7 +344,8 @@ static IntersectionResult TraceRayImpl1_1(
                                                                    geometryIndex,
                                                                    instanceContribution);
 
-                            const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(topLevelBvh, instNodePtr);
+                            const uint64_t instNodePtr64 =
+                                CalculateInstanceNodePtr64(GPURT_RTIP1_1, topLevelBvh, instNodePtr);
 #if DEVELOPER
                             if (EnableTraversalCounter())
                             {
@@ -464,7 +465,7 @@ static IntersectionResult TraceRayImpl1_1(
 
             if (isCulled == false)
             {
-                const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(topLevelBvh, instNodePtr);
+                const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(GPURT_RTIP1_1, topLevelBvh, instNodePtr);
 #if DEVELOPER
                 if (EnableTraversalCounter())
                 {

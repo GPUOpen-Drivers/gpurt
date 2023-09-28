@@ -38,13 +38,13 @@ namespace GpuRt
 // update their definition of GPURT_CLIENT_INTERFACE_MAJOR_VERSION to indicate that they have made the required changes
 // to support a new version. When the client version is updated, the old interface will be compiled out and only the
 // new one will remain.
-#define GPURT_INTERFACE_MAJOR_VERSION 38
+#define GPURT_INTERFACE_MAJOR_VERSION 39
 
 // Minor interface version. This number is incrememnted when a compatible interface change is made. Compatible changes
 // do not require client driver changes to maintain existing functionality. GPURT assumes all structures are zero
 // initialized by the client, therefore new fields may be added in minor versions as long as zero is an acceptable
 // default value.
-#define GPURT_INTERFACE_MINOR_VERSION 1
+#define GPURT_INTERFACE_MINOR_VERSION 0
 
 // Minimum major interface version. This is the minimum interface version GPURT supports in order to support backward
 // compatibility. When it is equal to GPURT_INTERFACE_MAJOR_VERSION, only the latest interface version is supported.

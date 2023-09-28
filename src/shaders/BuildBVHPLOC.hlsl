@@ -68,6 +68,7 @@ struct BuildPlocArgs
     uint  numLeafNodes;
     uint  unsortedBvhLeafNodesOffset;
     uint reserved0;
+    uint reserved1;
 };
 
 #define PLOC_RADIUS_MAX         10
@@ -86,16 +87,22 @@ struct BuildPlocArgs
 #if NO_SHADER_ENTRYPOINT == 0
 #include "Common.hlsl"
 
-#define RootSig "RootConstants(num32BitConstants=19, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=1, b0, visibility=SHADER_VISIBILITY_ALL), "\
+                "CBV(b1),"\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b1),"\
+                "CBV(b255),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
 
-[[vk::push_constant]] ConstantBuffer<BuildPlocArgs> ShaderConstants : register(b0);
+struct RootConstants
+{
+    uint numThreads;
+};
+[[vk::push_constant]] ConstantBuffer<RootConstants> ShaderRootConstants    : register(b0);
+[[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b1);
 
 [[vk::binding(0, 0)]] RWByteAddressBuffer                  DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata   : register(u1);
@@ -115,19 +122,19 @@ groupshared int SharedMem[(2 * PLOC_RADIUS_MAX + BUILD_THREADGROUP_SIZE) * LDS_A
 
 // https://dcgi.fel.cvut.cz/home/meistdan/dissertation/publications/ploc/paper.pdf
 // https://github.com/meistdan/ploc/blob/master/gpu-ray-traversal/src/rt/ploc/PLOCBuilderKernels.cu
-#endif
 
 //=====================================================================================================================
 static uint CalculateBvhNodesOffset(
-    in uint          numActivePrims,
-    in BuildPlocArgs args)
+    uint numActivePrims)
 {
-    return CalculateScratchBvhNodesOffset(
+    return GetBvhNodesOffset(
                numActivePrims,
-               args.numLeafNodes,
-               args.scratchNodesScratchOffset,
-               Settings.noCopySortedNodes);
+               ShaderConstants.numLeafNodes,
+               ShaderConstants.offsets.bvhNodeData,
+               ShaderConstants.offsets.bvhLeafNodeData,
+               ShaderConstants.offsets.primIndicesSorted);
 }
+#endif
 
 //=====================================================================================================================
 uint ReadClusterList(
@@ -890,12 +897,32 @@ void BuildBVHPLOC(
     uint groupId = groupIdIn;
 
     const uint numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
-    BuildPlocArgs args = (BuildPlocArgs)ShaderConstants;
-    args.scratchNodesScratchOffset = CalculateBvhNodesOffset(numActivePrims, args);
+    BuildPlocArgs plocArgs;
+
+    plocArgs.numThreads                     = ShaderRootConstants.numThreads;
+    plocArgs.clusterList0ScratchOffset      = ShaderConstants.offsets.clusterList0;
+    plocArgs.clusterList1ScratchOffset      = ShaderConstants.offsets.clusterList1;
+    plocArgs.neighbourIndicesScratchOffset  = ShaderConstants.offsets.neighborIndices;
+    plocArgs.currentStateScratchOffset      = ShaderConstants.offsets.currentState;
+    plocArgs.taskQueueCounterScratchOffset  = ShaderConstants.offsets.plocTaskQueueCounter;
+    plocArgs.atomicFlagsScratchOffset       = ShaderConstants.offsets.atomicFlagsPloc;
+    plocArgs.offsetsScratchOffset           = ShaderConstants.offsets.clusterOffsets;
+    plocArgs.dynamicBlockIndexScratchOffset = ShaderConstants.offsets.dynamicBlockIndex;
+    plocArgs.numBatchesScratchOffset        = ShaderConstants.offsets.numBatches;
+    plocArgs.baseBatchIndicesScratchOffset  = ShaderConstants.offsets.batchIndices;
+    plocArgs.fp16BoxNodesInBlasMode         = Settings.fp16BoxNodesMode;
+    plocArgs.fp16BoxModeMixedSaThresh       = Settings.fp16BoxModeMixedSaThreshold;
+    plocArgs.plocRadius                     = Settings.plocRadius;
+    plocArgs.splitBoxesByteOffset           = ShaderConstants.offsets.triangleSplitBoxes;
+    plocArgs.primIndicesSortedScratchOffset = ShaderConstants.offsets.primIndicesSorted;
+    plocArgs.numLeafNodes                   = ShaderConstants.numLeafNodes;
+    plocArgs.unsortedBvhLeafNodesOffset     = ShaderConstants.offsets.bvhLeafNodeData;
+
+    plocArgs.scratchNodesScratchOffset = CalculateBvhNodesOffset(numActivePrims);
 
     if (numActivePrims > 0)
     {
-        BuildBvhPlocImpl(globalId, localId, groupId, numActivePrims, args);
+        BuildBvhPlocImpl(globalId, localId, groupId, numActivePrims, plocArgs);
     }
 }
 #endif

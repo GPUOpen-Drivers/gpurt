@@ -83,8 +83,7 @@ enum class StaticPipelineFlag : uint32
     Reserved2                      = (1u << 25),
     Reserved3                      = (1u << 24),
     Reserved4                      = (1u << 23),
-    Reserved5                      = (1u << 22),
-    Reserved6                      = (1u << 21),
+    Reserved6                      = (1u << 22),
 };
 
 // TODO #gpurt: Abstract these?  Some of these probably should come from PAL device properties
@@ -300,6 +299,7 @@ enum class InternalRayTracingCsType : uint32
     PairCompression,
     MergeSort,
     Update,
+    InitAccelerationStructure,
     Count
 };
 
@@ -737,6 +737,8 @@ struct DeviceSettings
     uint32                      numMortonSizeBits;
     uint32                      trianglePairingSearchRadius; // The search radius for paired triangle, used by EarlyCompression
 
+    uint32                      gpuDebugFlags;
+
 };
 
 // Describes a postbuild info write request from some acceleration structures to some location.
@@ -811,6 +813,8 @@ struct AccelStructInfo
     uint32                  sizeInBytes;             // Result buffer size in bytes
     uint64                  scratchGpuVa;            // Scratch buffer GPU VA
     uint32                  scratchSizeInBytes;      // Scratch buffer size in bytes
+    Pal::IGpuMemory*        pTimeStampVidMem;        // Pointer to time stamp memory
+    uint64                  timeStampVidMemoffset;   // Offset into time stamp memory
 };
 
 // AMD GUID
@@ -1090,15 +1094,23 @@ extern Pal::Result ClientAccelStructBuildDumpEvent(
 //
 // @param pCmdBuffer       [in] PAL command buffer that will contain the dump commands
 // @param info             [in] Information about the acceleration structure being dumped
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 39
 // @param gpuMem          [out] GPU memory allocated by this function to store the timestamps
 // @param offset           [out] offset into GPU memory to store the timestamps
+#endif
 //
 // @returns Pal::Result::Success if allocation succeeded and the dump should be handled; any error otherwise.
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 39
+extern Pal::Result ClientAccelStatsBuildDumpEvent(
+    Pal::ICmdBuffer*        pCmdbuf, // PAL command buffer that will handle the dump
+    GpuRt::AccelStructInfo* pInfo);  // Information about the accel struct being dumped
+#else
 extern Pal::Result ClientAccelStatsBuildDumpEvent(
     Pal::ICmdBuffer*              pCmdbuf,               // PAL command buffer that will handle the dump
     const GpuRt::AccelStructInfo& info,                  // Information about the accel struct being dumped
     Pal::IGpuMemory**             ppGpuMem,              // Pointer time stamp memory
     uint64*                       pOffset);              // Offset into time stamp memory
+#endif
 
 // Client-provided callback to build an internal compute pipeline.  This is called by gpurt during initialization
 // of a gpurt device.
@@ -1241,15 +1253,23 @@ typedef Pal::Result (*FnClientAccelStructBuildDumpEvent)(
 //
 // @param pCmdBuffer       [in] PAL command buffer that will contain the dump commands
 // @param info             [in] Information about the acceleration structure being dumped
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 39
 // @param gpuMem          [out] GPU memory allocated by this function to store the timestamps
 // @param offset           [out] offset into GPU memory to store the timestamps
+#endif
 //
 // @returns Pal::Result::Success if allocation succeeded and the dump should be handled; any error otherwise.
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 39
+typedef Pal::Result (*FnClientAccelStatsBuildDumpEvent)(
+    Pal::ICmdBuffer*        pCmdbuf, // PAL command buffer that will handle the dump
+    GpuRt::AccelStructInfo* pInfo);  // Information about the accel struct being dumped
+#else
 typedef Pal::Result (*FnClientAccelStatsBuildDumpEvent)(
     Pal::ICmdBuffer*              pCmdbuf,               // PAL command buffer that will handle the dump
     const GpuRt::AccelStructInfo& info,                  // Information about the accel struct being dumped
     Pal::IGpuMemory**             ppGpuMem,              // Pointer time stamp memory
     uint64*                       pOffset);              // Offset into time stamp memory
+#endif
 
 // Client-provided callback to build an internal compute pipeline.  This is called by gpurt during initialization
 // of a gpurt device.

@@ -49,7 +49,8 @@ void RefitBoundsImpl(
     int4                reservedUint4,
     uint                enableInstancePrimCount,
     uint                reservedUint5,
-    uint                reservedUint6
+    uint                reservedUint6,
+    uint                reservedUint7
 )
 {
     const bool doLatePairCompression = enablePairCompression && (!enableEarlyPairCompression);

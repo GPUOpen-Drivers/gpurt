@@ -68,7 +68,7 @@ void BitHistogram(
     uint numPrimitives,
     uint useMortonCode30)
 {
-    for (; groupId < totalGroups; groupId += ShaderConstants.numThreadGroups)
+    for (; groupId < totalGroups; groupId += ShaderRootConstants.numThreadGroups)
     {
         BitHistogramImpl(
             localId,
@@ -123,11 +123,11 @@ void ScanExclusiveAdd(
     }
     else if (radixSortScanLevel == 1)
     {
-        BEGIN_TASK(ShaderConstants.numThreadGroups);
+        BEGIN_TASK(ShaderRootConstants.numThreadGroups);
 
         ScanExclusiveInt4Impl(globalId, localId, ShaderConstants.offsets.histogram, numElements);
 
-        END_TASK(ShaderConstants.numThreadGroups);
+        END_TASK(ShaderRootConstants.numThreadGroups);
     }
     else if (radixSortScanLevel == 2)
     {
@@ -135,7 +135,7 @@ void ScanExclusiveAdd(
         const uint numGroupsTopLevelScan          = RoundUpQuotient(numGroupsBottomLevelScan, GroupBlockSizeScan);
         const uint numGroupsBottomLevelDistribute = RoundUpQuotient(numElements, GroupBlockSizeDistribute);
 
-        const uint partialSumsOffset = ShaderConstants.offsets.partialSums;
+        const uint partialSumsOffset = ShaderConstants.offsets.distributedPartialSums;
         const uint histogramOffset   = ShaderConstants.offsets.histogram;
 
         BEGIN_TASK(numGroupsBottomLevelScan);
@@ -184,7 +184,7 @@ void ScanExclusiveAdd(
         const uint numGroupsBottomLevelDistribute = RoundUpQuotient(numElements, GroupBlockSizeDistribute);
         const uint numGroupsMidLevelDistribute    = RoundUpQuotient(numGroupsBottomLevelDistribute, GroupBlockSizeDistribute);
 
-        const uint partSumsBottomLevelOffset = ShaderConstants.offsets.partialSums;
+        const uint partSumsBottomLevelOffset = ShaderConstants.offsets.distributedPartialSums;
         const uint partSumsMidLevelOffset    = partSumsBottomLevelOffset + (numGroupsBottomLevelScan * sizeof(uint));
         const uint histogramOffset           = ShaderConstants.offsets.histogram;
 
@@ -261,7 +261,6 @@ void ScatterKeysAndValues(
     uint groupId,
     uint localId,
     uint bitShiftSize,
-    uint numElements,
     uint totalNumGroups,
     uint inputKeysOffset,
     uint inputValuesOffset,
@@ -270,7 +269,7 @@ void ScatterKeysAndValues(
     uint numPrimitives,
     uint useMortonCode30)
 {
-    for (; groupId < totalNumGroups; groupId += ShaderConstants.numThreadGroups)
+    for (; groupId < totalNumGroups; groupId += ShaderRootConstants.numThreadGroups)
     {
         ScatterKeysAndValuesImpl(
             groupId,
@@ -323,21 +322,20 @@ void RadixSort(
 
     for (uint passIdx = 0; passIdx < passes; passIdx++)
     {
-        BEGIN_TASK(ShaderConstants.numThreadGroups);
+        BEGIN_TASK(ShaderRootConstants.numThreadGroups);
 
         BitHistogram(localId, groupId, totalNumGroups, bitShiftCount, currentFromKeys, numPrimitives, useMortonCode30);
 
-        END_TASK(ShaderConstants.numThreadGroups);
+        END_TASK(ShaderRootConstants.numThreadGroups);
 
         ScanExclusiveAdd(numTasksWait, waveId, globalId, localId, groupId, numHistogramElements, radixSortScanLevel);
 
-        BEGIN_TASK(ShaderConstants.numThreadGroups);
+        BEGIN_TASK(ShaderRootConstants.numThreadGroups);
 
         ScatterKeysAndValues(
             groupId,
             localId,
             bitShiftCount,
-            numElements,
             totalNumGroups,
             currentFromKeys,
             currentFromVals,
@@ -346,7 +344,7 @@ void RadixSort(
             numPrimitives,
             useMortonCode30);
 
-        END_TASK(ShaderConstants.numThreadGroups);
+        END_TASK(ShaderRootConstants.numThreadGroups);
 
         // The first pass uses the input buffer. Swap between output and temp resources for later passes.
         if (bitShiftCount == 0)

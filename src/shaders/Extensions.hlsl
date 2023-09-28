@@ -51,6 +51,8 @@ __decl uint2 AmdExtD3DShaderIntrinsics_AtomicMinU64(
 __decl uint2 AmdExtD3DShaderIntrinsics_AtomicMinU64_gc(
     globallycoherent RWByteAddressBuffer uav, uint address, uint2 value) DUMMY_UINT2_FUNC
 
+__decl void AmdExtD3DShaderIntrinsics_Halt() DUMMY_VOID_FUNC
+
 #ifdef AMD_VULKAN // To fix Vulkan compilation
 /**
 ***********************************************************************************************************************

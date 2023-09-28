@@ -99,6 +99,7 @@ const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsTyp
     PIPELINE_BUILD_INFO(PairCompression),
     PIPELINE_BUILD_INFO(MergeSort),
     PIPELINE_BUILD_INFO(Update),
+    PIPELINE_BUILD_INFO(InitAccelerationStructure),
 };
 
 #undef PIPELINE_BUILD_INFO

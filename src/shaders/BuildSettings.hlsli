@@ -22,7 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-//When you include this file, don't forget to bind b1 to the shader root signature.
+//When you include this file, don't forget to bind b255 to the shader root signature.
 #ifndef _BUILDSETTINGS_HLSLI
 #define _BUILDSETTINGS_HLSLI
 
@@ -54,6 +54,8 @@
 [[vk::constant_id(BUILD_SETTINGS_DATA_RTIP_LEVEL_ID)]]                             uint rtIpLevel                     = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_GEOMETRY_TYPE_ID)]]                          uint geometryType                  = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_INSTANCE_REBRAID_ID)]]                uint enableInstanceRebraid         = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_GPU_DEBUG_FLAGS_ID)]]                        uint gpuDebugFlags                 = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_IS_UPDATE_ID)]]                              uint isUpdate                      = 0;
 
 static const BuildSettingsData Settings = {
     topLevelBuild,
@@ -92,8 +94,9 @@ static const BuildSettingsData Settings = {
     0,
     0,
     0,
-    0,
     enableInstanceRebraid,
+    gpuDebugFlags,
+    isUpdate,
 };
 
 #endif

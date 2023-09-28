@@ -56,15 +56,11 @@ struct GeometryArgs
     uint vertexCount;                   // Vertex count
     uint DestLeafByteOffset;            // Offset to this geometry's location in the dest leaf node buffer
     uint LeafNodeExpansionFactor;       // Leaf node expansion factor (> 1 for triangle splitting)
-    uint TriangleCompressionMode;       // Triangle Compression mode
     uint IndexBufferInfoScratchOffset;
     uint IndexBufferVaLo;
     uint IndexBufferVaHi;
     uint SceneBoundsCalculationType;
-    uint enableTriangleSplitting;
-    uint enableEarlyPairCompression;
     uint trianglePairingSearchRadius;   // The search radius for paired triangle, used by EarlyCompression
-    uint enableFastLBVH;
 };
 
 //======================================================================================================================
@@ -277,15 +273,14 @@ uint ComputePrimitiveOffset(
 {
     uint primitiveOffset = 0;
 
-    const uint metadataSize = IsUpdate(geometryArgs.BuildFlags) ?
+    const uint metadataSize = IsUpdate() ?
                               SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : geometryArgs.metadataSizeInBytes;
 
     // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
     const AccelStructOffsets offsets =
         SrcBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
 
-    const uint baseGeometryInfoOffset =
-        IsUpdate(geometryArgs.BuildFlags) ? offsets.geometryInfo : geometryArgs.BaseGeometryInfoOffset;
+    const uint baseGeometryInfoOffset = IsUpdate() ? offsets.geometryInfo : geometryArgs.BaseGeometryInfoOffset;
 
     for (uint geomIdx = 0; geomIdx < geometryArgs.GeometryIndex; ++geomIdx)
     {
@@ -312,10 +307,10 @@ void WriteGeometryInfo(
     uint         primitiveStride)
 {
     // For builds and not-in-place updates, write the geometry info.
-    if ((IsUpdate(geometryArgs.BuildFlags) == false) ||
-        (IsUpdate(geometryArgs.BuildFlags) && (geometryArgs.isUpdateInPlace == false)))
+    if ((IsUpdate() == false) ||
+        (IsUpdate() && (geometryArgs.isUpdateInPlace == false)))
     {
-        const uint metadataSize = IsUpdate(geometryArgs.BuildFlags) ?
+        const uint metadataSize = IsUpdate() ?
             SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : geometryArgs.metadataSizeInBytes;
 
         // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
@@ -323,7 +318,7 @@ void WriteGeometryInfo(
             SrcBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
 
         const uint baseGeometryInfoOffset =
-            IsUpdate(geometryArgs.BuildFlags) ? offsets.geometryInfo : geometryArgs.BaseGeometryInfoOffset;
+            IsUpdate() ? offsets.geometryInfo : geometryArgs.BaseGeometryInfoOffset;
 
         const uint geometryInfoOffset =
             metadataSize + baseGeometryInfoOffset +
@@ -338,10 +333,10 @@ void WriteGeometryInfo(
         DstMetadata.Store<GeometryInfo>(geometryInfoOffset, info);
     }
 
-    if ((IsUpdate(geometryArgs.BuildFlags) == false) &&
-        (geometryArgs.TriangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
+    if ((IsUpdate() == false) &&
+        (Settings.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
         // when enableEarlyTriangleCompression, we don't allocate scratch space for indexbuffer info
-        (geometryArgs.enableEarlyPairCompression == false))
+        (Settings.enableEarlyPairCompression == false))
     {
         IndexBufferInfo indexBufferInfo;
         indexBufferInfo.gpuVaLo    = geometryArgs.IndexBufferVaLo;
@@ -617,7 +612,7 @@ void ClearFlagsForRefitAndUpdate(
     {
         const uint stride = geometryArgs.LeafNodeExpansionFactor * sizeof(uint);
         const uint flagOffset = geometryArgs.PropagationFlagsScratchOffset + (flattenedPrimitiveIndex * stride);
-        const uint initValue = geometryArgs.enableFastLBVH ? 0xffffffffu : 0;
+        const uint initValue = Settings.enableFastLBVH ? 0xffffffffu : 0;
         for (uint i = 0; i < geometryArgs.LeafNodeExpansionFactor; ++i)
         {
             ScratchBuffer.Store(flagOffset + (i * sizeof(uint)), initValue);
@@ -636,7 +631,7 @@ void EncodeTriangleNode(
     uint                       vertexOffset,
     bool                       writeNodesToUpdateStack)
 {
-    const uint metadataSize = IsUpdate(geometryArgs.BuildFlags) ?
+    const uint metadataSize = IsUpdate() ?
         SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : geometryArgs.metadataSizeInBytes;
 
     // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
@@ -644,7 +639,7 @@ void EncodeTriangleNode(
         SrcBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
 
     const uint basePrimNodePtr =
-        IsUpdate(geometryArgs.BuildFlags) ? offsets.primNodePtrs : geometryArgs.BasePrimNodePtrOffset;
+        IsUpdate() ? offsets.primNodePtrs : geometryArgs.BasePrimNodePtrOffset;
 
     const uint flattenedPrimitiveIndex = geometryBasePrimOffset + primitiveIndex;
     const uint primNodePointerOffset =
@@ -679,7 +674,7 @@ void EncodeTriangleNode(
         // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
         const uint instanceMask = (boundingBox.min.x > boundingBox.max.x) ? 0 : 0xff;
 
-        if (IsUpdate(geometryArgs.BuildFlags))
+        if (IsUpdate())
         {
             nodePointer = SrcBuffer.Load(primNodePointerOffset);
 
@@ -691,7 +686,7 @@ void EncodeTriangleNode(
                 {
                     uint3 vertexOffsets;
 
-                    if (geometryArgs.TriangleCompressionMode != NO_TRIANGLE_COMPRESSION)
+                    if (Settings.triangleCompressionMode != NO_TRIANGLE_COMPRESSION)
                     {
                         triangleId = SrcBuffer.Load(nodeOffset + TRIANGLE_NODE_ID_OFFSET);
                         vertexOffsets = CalcTriangleCompressionVertexOffsets(nodeType, triangleId);
@@ -733,7 +728,7 @@ void EncodeTriangleNode(
             }
 
             // The shared bounding box for this pair of triangles will be updated by the thread handling triangle 0.
-            const bool skipPairUpdatePush = (geometryArgs.TriangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
+            const bool skipPairUpdatePush = (Settings.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
                                             (GetNodeType(nodePointer) == NODE_TYPE_TRIANGLE_1);
 
             if ((nodePointer != INVALID_IDX) && (skipPairUpdatePush == false))
@@ -744,7 +739,7 @@ void EncodeTriangleNode(
                                   TransformBuffer,
                                   metadataSize,
                                   geometryArgs.BaseUpdateStackScratchOffset,
-                                  geometryArgs.TriangleCompressionMode,
+                                  Settings.triangleCompressionMode,
                                   geometryArgs.isUpdateInPlace,
                                   nodePointer,
                                   triangleId,
@@ -799,7 +794,7 @@ void EncodeTriangleNode(
     }
     else
     {
-        if (IsUpdate(geometryArgs.BuildFlags) == false)
+        if (IsUpdate() == false)
         {
             // Deactivate primitive by setting bbox_min_or_v0.x to NaN
             const uint scratchLeafNodeOffset =

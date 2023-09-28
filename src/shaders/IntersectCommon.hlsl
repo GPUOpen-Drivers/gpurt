@@ -75,17 +75,18 @@ static bool IsValidTrace(
 }
 
 //=====================================================================================================================
-static bool IsBoxNodeBasedOnStaticPipelineFlags(uint pointer)
+static bool IsBoxNode1_1(
+    uint nodePtr)
 {
-    return IsBoxNode(pointer
+    return IsBoxNode(nodePtr
                     );
 }
 
 //=====================================================================================================================
-static uint CreateRootNodePointerBasedOnStaticPipelineFlags()
+static uint CreateRootNodePointer1_1()
 {
     return CreateRootNodePointer(
-                                );
+        );
 }
 
 //=====================================================================================================================
@@ -783,7 +784,7 @@ static uint4 image_bvh64_intersect_ray_base(
     }
 #endif
 
-    if (IsBoxNodeBasedOnStaticPipelineFlags(nodePointer))
+    if (IsBoxNode1_1(nodePointer))
     {
         // When using 16bit bboxes in BLAS, convert to a full 32bit box on load for simplicity
         Float32BoxNode node;
@@ -813,7 +814,7 @@ static uint4 image_bvh64_intersect_ray_base(
                                    BOX_EXPANSION_DEFAULT_AMOUNT,
                                    boxSortHeuristic);
     }
-    else if (IsTriangleNode(nodePointer))
+    else if (IsTriangleNode1_1(nodePointer))
     {
         bool procedural = false;
         uint hwTriFlags = 0;

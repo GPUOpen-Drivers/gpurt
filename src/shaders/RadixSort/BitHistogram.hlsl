@@ -23,27 +23,26 @@
  *
  **********************************************************************************************************************/
 #if NO_SHADER_ENTRYPOINT == 0
-#define RootSig "RootConstants(num32BitConstants=6, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=2, b0, visibility=SHADER_VISIBILITY_ALL), "\
+                "CBV(b1),"\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
-                "CBV(b1)"/*Build Settings binding*/
+                "CBV(b255)"/*Build Settings binding*/
 
 //=====================================================================================================================
 // 32 bit constants
-struct InputArgs
+struct RootConstants
 {
     uint BitShiftSize; // Number of bits to shift
     uint NumGroups;    // Number of work groups dispatched
-    uint InputArrayScratchOffset;
-    uint OutputArrayScratchOffset;
-    uint UseMortonCode30;
-    uint numLeafNodes;
 };
+#include "../../shared/rayTracingDefs.h"
 
-[[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
+[[vk::push_constant]] ConstantBuffer<RootConstants> ShaderRootConstants    : register(b0);
+[[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b1);
 
 [[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer DstMetadata   : register(u1);
@@ -137,6 +136,17 @@ void BitHistogramImpl(
 }
 
 #if NO_SHADER_ENTRYPOINT == 0
+//======================================================================================================================
+// Swap two uint variables
+void SwapUint(
+    inout uint x,
+    inout uint y)
+{
+    const uint temp = x;
+    x = y;
+    y = temp;
+}
+
 //=====================================================================================================================
 // Main Function                                                                                                      //
 // The kernel computes 16 bins histogram of the 256 input elements.                                                   //
@@ -153,14 +163,41 @@ void BitHistogram(
             ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET) :
             ShaderConstants.numLeafNodes;
 
+    const uint inputKeysOffset    = ShaderConstants.offsets.mortonCodes;
+    const uint outputKeysOffset   = ShaderConstants.offsets.mortonCodesSorted;
+    // Passing in 0 for initial primitive indices since we auto-generate them for the first pass
+    const uint inputValuesOffset  = 0;
+    const uint outputValuesOffset = ShaderConstants.offsets.primIndicesSorted;
+
+    const uint scratchKeysOffset   = ShaderConstants.offsets.tempKeys;
+    const uint scratchValuesOffset = ShaderConstants.offsets.tempVals;
+
+    uint currentFromKeys = inputKeysOffset;
+    uint currentFromVals = inputValuesOffset;
+    uint currentToKeys   = scratchKeysOffset;
+    uint currentToVals   = scratchValuesOffset;
+
+    if (ShaderRootConstants.BitShiftSize > 0)
+    {
+        currentFromKeys = outputKeysOffset;
+        currentFromVals = outputValuesOffset;
+    }
+    const uint BitsPerPass = 4;
+    const uint pass = ShaderRootConstants.BitShiftSize / BitsPerPass;
+    if (pass % 2 == 1)
+    {
+        SwapUint(currentFromKeys, currentToKeys);
+        SwapUint(currentFromVals, currentToVals);
+    }
+
     BitHistogramImpl(
         localThreadId,
         groupId,
-        ShaderConstants.NumGroups,
+        ShaderRootConstants.NumGroups,
         numPrimitives,
-        ShaderConstants.BitShiftSize,
-        ShaderConstants.InputArrayScratchOffset,
-        ShaderConstants.OutputArrayScratchOffset,
-        ShaderConstants.UseMortonCode30);
+        ShaderRootConstants.BitShiftSize,
+        currentFromKeys,
+        ShaderConstants.offsets.histogram,
+        Settings.useMortonCode30);
 }
 #endif

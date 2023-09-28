@@ -31,6 +31,7 @@
 #include "../../gpurt/gpurtBuildSettings.h"
 #include "../../gpurt/gpurtDispatch.h"
 #include "accelStruct.h"
+#include "gpurtBuildConstants.h"
 
 // Due to lack of enum support in HLSL, we have these defines which should match Pal::RayTracingIpLevel in palDevice.h.
 #define GPURT_RTIP1_0 1
@@ -1503,5 +1504,13 @@ struct HitGroupInfo
     uint2 anyHitId;
     uint2 intersectionId;
     uint  tableIndex;
+};
+
+//=====================================================================================================================
+struct TriangleData
+{
+    float3 v0; ///< Vertex 0
+    float3 v1; ///< Vertex 1
+    float3 v2; ///< Vertex 2
 };
 #endif
