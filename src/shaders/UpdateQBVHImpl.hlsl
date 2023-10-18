@@ -39,31 +39,6 @@ uint SignalParentNode(
 }
 
 //=====================================================================================================================
-BoundingBox GenerateNodeBoundingBox(
-    uint                metadataSize,
-    uint                nodePointer)
-{
-    const uint nodeOffset = metadataSize + ExtractNodePointerOffset(nodePointer);
-
-    BoundingBox bbox;
-
-    {
-        if (IsBoxNode16(nodePointer))
-        {
-            const Float16BoxNode node = DstMetadata.Load<Float16BoxNode>(nodeOffset);
-            bbox = GenerateBoxNode16BoundingBox(node);
-        }
-        else
-        {
-            const Float32BoxNode node = DstMetadata.Load<Float32BoxNode>(nodeOffset);
-            bbox = GenerateBoxNode32BoundingBox(node);
-        }
-    }
-
-    return bbox;
-}
-
-//=====================================================================================================================
 // Computes box node flags by merging individual child flags
 uint ComputeMergedFloat32BoxNodeFlags(
     in uint flags)
@@ -74,80 +49,6 @@ uint ComputeMergedFloat32BoxNodeFlags(
     const uint flags3 = ExtractBoxNodeFlagsField(flags, 3);
 
     return (flags0 & flags1 & flags2 & flags3);
-}
-
-//=====================================================================================================================
-void UpdateFloat32BoxNode(
-    uint                     boxNodeOffset,
-    inout_param(BoundingBox) bbox,
-    inout_param(uint)        boxNodeFlags)
-{
-    const Float32BoxNode boxNode = FetchFloat32BoxNode(
-                                                       boxNodeOffset);
-
-    // Initialise bounds and node flags from fp32 node
-    bbox = GenerateBoxNode32BoundingBox(boxNode);
-    boxNodeFlags = ComputeMergedFloat32BoxNodeFlags(boxNode.flags);
-
-}
-
-//=====================================================================================================================
-// Generates the merged child bounding box and updates in parent node. This function assumes that the child node is
-// up to date when this function is called.
-//
-void UpdateChildBoundingBox(
-    uint metadataSize,
-    uint parentNodePointer,
-    uint nodePointer,
-    uint childIdx)
-{
-    BoundingBox bbox = (BoundingBox)0;
-    uint        boxNodeFlags = 0;
-
-    uint childNodeOffset  = metadataSize + ExtractNodePointerOffset(nodePointer);
-    uint parentNodeOffset = metadataSize + ExtractNodePointerOffset(parentNodePointer);
-
-    {
-        UpdateFloat32BoxNode(childNodeOffset, bbox, boxNodeFlags);
-
-        {
-            if (IsBoxNode32(parentNodePointer))
-            {
-                const uint childBoundsOffset = FLOAT32_BOX_NODE_BB0_MIN_OFFSET + (childIdx * FLOAT32_BBOX_STRIDE);
-                DstMetadata.Store<BoundingBox>(parentNodeOffset + childBoundsOffset, bbox);
-            }
-            else // Float16BoxNode
-            {
-                const uint  bbox16Offset = FLOAT16_BOX_NODE_BB0_OFFSET + (childIdx * FLOAT16_BBOX_STRIDE);
-                const uint3 bbox16 = CompressBBoxToUint3(bbox);
-
-                DstMetadata.Store<uint3>(parentNodeOffset + bbox16Offset, bbox16);
-            }
-        }
-    }
-}
-
-//=====================================================================================================================
-// Handle root node update
-void UpdateRootNode(
-    uint metadataSize,
-    uint rootNodePointer,
-    uint numActivePrims)
-{
-    BoundingBox bbox         = (BoundingBox)0;
-    uint        boxNodeFlags = 0;
-    uint        instanceMask = 0;
-
-    const uint boxNodeOffset = metadataSize + sizeof(AccelStructHeader);
-
-    {
-        UpdateFloat32BoxNode(boxNodeOffset, bbox, boxNodeFlags);
-    }
-
-    DstMetadata.Store<BoundingBox>(metadataSize + ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET, bbox);
-
-    const uint packedFlags = PackInstanceMaskAndNodeFlags(instanceMask, boxNodeFlags);
-    DstMetadata.Store(metadataSize + ACCEL_STRUCT_HEADER_PACKED_FLAGS_OFFSET, packedFlags);
 }
 
 //=====================================================================================================================
@@ -184,6 +85,8 @@ void UpdateNodeFlagsTopLevel(
     DstMetadata.Store(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, parentNodeFlags);
 }
 
+#include "UpdateQBVH1_1.hlsl"
+
 //=====================================================================================================================
 void UpdateQBVHImpl(
     uint                globalID,
@@ -191,154 +94,10 @@ void UpdateQBVHImpl(
     uint                numWorkItems,
     uint                numThreads)
 {
-    const AccelStructMetadataHeader metadata = SrcBuffer.Load<AccelStructMetadataHeader>(0);
-    const uint metadataSize = metadata.sizeInBytes;
-    const AccelStructHeader header = SrcBuffer.Load<AccelStructHeader>(metadataSize);
-
-    // Root node is always fp32 regardless of mode for fp16 box nodes
-    const uint rootNodePointer = CreateRootNodePointer();
-
-    // Handle the header for not-in-place updates
-    if (globalID == 0)
+    switch (Settings.rtIpLevel)
     {
-        if (ShaderConstants.isUpdateInPlace == false)
-        {
-            AccelStructMetadataHeader resultMetadata = metadata;
-
-            if ((Settings.topLevelBuild == 0) || (header.numActivePrims > 0))
-            {
-                GpuVirtualAddress bvhVa = MakeGpuVirtualAddress(ShaderConstants.addressLo, ShaderConstants.addressHi);
-
-                bvhVa += metadataSize;
-
-                resultMetadata.addressLo = LowPart(bvhVa);
-                resultMetadata.addressHi = HighPart(bvhVa);
-            }
-            else
-            {
-                resultMetadata.addressLo = 0;
-                resultMetadata.addressHi = 0;
-            }
-
-            DstMetadata.Store<AccelStructMetadataHeader>(0, resultMetadata);
-
-            DstMetadata.Store(metadataSize + ACCEL_STRUCT_HEADER_VERSION_OFFSET,                 header.accelStructVersion);
-            DstMetadata.Store(metadataSize + ACCEL_STRUCT_HEADER_INFO_OFFSET,                    header.info);
-            DstMetadata.Store(metadataSize + ACCEL_STRUCT_HEADER_METADATA_SIZE_OFFSET,           header.metadataSizeInBytes);
-            DstMetadata.Store(metadataSize + ACCEL_STRUCT_HEADER_BYTE_SIZE_OFFSET,               header.sizeInBytes);
-            DstMetadata.Store(metadataSize + ACCEL_STRUCT_HEADER_NUM_PRIMS_OFFSET,               header.numPrimitives);
-            DstMetadata.Store(metadataSize + ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET,        header.numActivePrims);
-            DstMetadata.Store(metadataSize + ACCEL_STRUCT_HEADER_NUM_DESCS_OFFSET,               header.numDescs);
-            DstMetadata.Store(metadataSize + ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET,           header.geometryType);
-            DstMetadata.Store(metadataSize + ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP32_NODES_OFFSET, header.numInternalNodesFp32);
-            DstMetadata.Store(metadataSize + ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP16_NODES_OFFSET, header.numInternalNodesFp16);
-            DstMetadata.Store(metadataSize + ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET,          header.numLeafNodes);
-            DstMetadata.Store(metadataSize + ACCEL_STRUCT_HEADER_COMPACTED_BYTE_SIZE_OFFSET,     header.compactedSizeInBytes);
-
-            DstMetadata.Store<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET, header.offsets);
-
-            WriteParentPointer(metadataSize,
-                               rootNodePointer,
-                               INVALID_IDX);
-        }
-    }
-
-    if (globalID >= numWorkItems)
-    {
-        return;
-    }
-
-    // initialise node pointer from stack
-    uint offset = GetUpdateStackOffset(ShaderConstants.baseUpdateStackScratchOffset, globalID);
-    uint nodePointer = ScratchBuffer.Load(offset);
-
-    // The last child of the root node updates the root bounding box in the header
-    if (nodePointer == rootNodePointer)
-    {
-        UpdateRootNode(metadataSize, rootNodePointer, header.numActivePrims);
-    }
-
-    // Choice to decode parent pointer into node index using fp16. Mixing interior node types
-    // relies on fp16 node size chunks for decoding (only in BLAS)
-    const bool decodeNodePtrAsFp16 = (Settings.topLevelBuild == 0) &&
-                                     (ShaderConstants.fp16BoxNodesInBlasMode != NO_NODES_IN_BLAS_AS_FP16);
-
-    // Build tree up until we hit root node
-    while (1)
-    {
-        if (nodePointer == rootNodePointer)
-        {
-            // Pick the next node to process
-            uint nextIndex;
-            ScratchBuffer.InterlockedAdd(UPDATE_SCRATCH_TASK_COUNT_OFFSET, 1, nextIndex);
-            // Skip the initial set of nodes processed when the shader launches
-            nextIndex += numThreads;
-
-            if (nextIndex < numWorkItems)
-            {
-                offset = GetUpdateStackOffset(ShaderConstants.baseUpdateStackScratchOffset, nextIndex);
-                nodePointer = ScratchBuffer.Load(offset);
-            }
-            else
-            {
-                // Nothing left to do
-                break;
-            }
-        }
-
-        const uint parentNodePointer = ReadParentPointer(metadataSize,
-                                                         ExtractNodePointerCollapse(nodePointer));
-
-        uint numValidChildren = 0;
-
-        const uint childIdx =
-            ComputeChildIndexAndValidBoxCount(metadataSize, parentNodePointer, nodePointer, numValidChildren);
-
-        UpdateChildBoundingBox(metadataSize, parentNodePointer, nodePointer, childIdx);
-
-        if (ShaderConstants.isUpdateInPlace == false)
-        {
-            WriteParentPointer(metadataSize,
-                               ExtractNodePointerCollapse(nodePointer),
-                               parentNodePointer);
-        }
-
-        // Ensure the child bounding box write is done
-        DeviceMemoryBarrier();
-
-        uint originalFlagValue = SignalParentNode(baseFlagsOffset,
-                                                  parentNodePointer,
-                                                  decodeNodePtrAsFp16);
-
-        if (originalFlagValue < (numValidChildren - 1))
-        {
-            // Allocate new node on next iteration
-            nodePointer = rootNodePointer;
-            continue;
-        }
-        else
-        {
-            if (ShaderConstants.isUpdateInPlace == false)
-            {
-                CopyChildPointersAndFlags(parentNodePointer, metadataSize);
-            }
-
-            if (Settings.topLevelBuild != 0)
-            {
-                const uint parentNodeOffset = metadataSize + ExtractNodePointerOffset(parentNodePointer);
-
-                UpdateNodeFlagsTopLevel(metadataSize, parentNodeOffset);
-
-            }
-
-            // The last child of the root node updates the root bounding box in the header
-            if (parentNodePointer == rootNodePointer)
-            {
-                UpdateRootNode(metadataSize, rootNodePointer, header.numActivePrims);
-            }
-        }
-
-        // Set parent node as next node index
-        nodePointer = parentNodePointer;
+        default:
+            UpdateQBVHImpl1_1(globalID, baseFlagsOffset, numWorkItems, numThreads);
+            return;
     }
 }

@@ -62,7 +62,7 @@
 namespace GpuRt
 {
 
-#include <pipelines/g_internal_shaders.h>
+#include "pipelines/g_internal_shaders.h"
 
 //=====================================================================================================================
 // Enumeration for supported intrinsic functions in GPURT
@@ -1091,7 +1091,6 @@ void Device::TraceRtDispatch(
         memset(pMappedData, 0, RAY_TRACING_COUNTER_RESERVED_BYTE_SIZE);
         traceListInfo.pRayHistoryTraceBuffer = pMappedData;
         traceListInfo.traceBufferGpuMem      = gpuMem;
-        traceListInfo.isIndirect             = false;
 
         AddMetadataToList(dispatchInfo, pipelineType, &traceListInfo);
 
@@ -1176,6 +1175,7 @@ void Device::AddMetadataToList(
     counterInfo.counterMode            = 1;
     counterInfo.counterRayIdRangeBegin = 0;
     counterInfo.counterRayIdRangeEnd   = 0xFFFFFFFF;
+    counterInfo.isIndirect             = false;
 
     if (dispatchInfo.hitGroupTable.stride > 0ULL)
     {
@@ -1338,9 +1338,9 @@ void Device::TraceIndirectRtDispatch(
             traceListInfo.counterInfo.pipelineShaderCount    = dispatchInfo.pipelineShaderCount;
             traceListInfo.counterInfo.pipelineType           = uint32(pipelineType);
             traceListInfo.counterInfo.rayCounterDataSize     = traceSizeInBytes;
+            traceListInfo.counterInfo.isIndirect             = true;
             traceListInfo.traversalFlags.boxSortMode         = dispatchInfo.boxSortMode;
             traceListInfo.traversalFlags.usesNodePtrFlags    = dispatchInfo.usesNodePtrFlags;
-            traceListInfo.isIndirect                         = true;
 
             if (pCounterMetadataVa != nullptr)
             {
@@ -1384,7 +1384,7 @@ void Device::WriteRayHistoryChunks(
     uint32 traceBufferCount = m_rayHistoryTraceList.NumElements();
     for (uint32 i = 0; i < traceBufferCount; ++i)
     {
-        bool isIndirect = m_rayHistoryTraceList.At(i).isIndirect;
+        bool isIndirect = m_rayHistoryTraceList.At(i).counterInfo.isIndirect;
 
         if (m_rayHistoryTraceList.At(i).pIndirectCounterMetadata)
         {

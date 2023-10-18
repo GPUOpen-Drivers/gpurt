@@ -271,6 +271,9 @@ static uint64_t PackInstanceBasePointer(GpuVirtualAddress instanceVa, uint insta
                             : (1ull << NODE_POINTER_SKIP_TRIANGLES_SHIFT);
     }
 
+    instanceBasePointer |= (geometryType == GEOMETRY_TYPE_AABBS)
+                       ? (1ull << NODE_POINTER_DISABLE_TRIANGLE_CULL_SHIFT) : 0;
+
     return instanceBasePointer;
 }
 

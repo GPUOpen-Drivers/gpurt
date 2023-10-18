@@ -64,6 +64,9 @@ set(gpurtHlsl
     EncodePairedTriangle.hlsl
     EncodePairedTriangleImpl.hlsl
     EncodeTopLevel.hlsl
+    EncodeTopLevelBuild.hlsl
+    EncodeTopLevelCommon.hlsl
+    EncodeTopLevelUpdate.hlsl
     Extensions.hlsl
     GenerateMortonCodes.hlsl
     GpuRtLibrary.hlsl
@@ -93,6 +96,7 @@ set(gpurtHlsl
     Update.hlsl
     UpdateParallel.hlsl
     UpdateQBVH.hlsl
+    UpdateQBVH1_1.hlsl
     UpdateQBVHImpl.hlsl
 )
 set(otherDeps

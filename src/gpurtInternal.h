@@ -182,7 +182,6 @@ struct RayHistoryTraceListInfo
     RayHistoryTraversalFlags    traversalFlags;
 
     IndirectCounterMetadata*    pIndirectCounterMetadata;
-    bool                        isIndirect;
 };
 
 typedef Util::Vector<RayHistoryTraceListInfo, 8, Internal::Device> RayHistoryBufferList;
@@ -410,14 +409,14 @@ public:
     void NotifyTlasBuild(gpusize address);
 
     // Returns true if the ray history trace source is currently available for use.
-    virtual bool RayHistoryTraceAvailable() const
+    virtual bool RayHistoryTraceAvailable() const override
     {
         return m_rayHistoryTraceSource.Available();
     }
 
     // Returns true if a trace is active. If true, the client should call TraceRtDispatch() for each direct dispatch
     // and TraceIndirectRtDispatch() for each potential indirect dispatch.
-    virtual bool RayHistoryTraceActive() const
+    virtual bool RayHistoryTraceActive() const override
     {
         return m_rayHistoryTraceSource.Active();
     }
@@ -428,7 +427,7 @@ public:
         Pal::ICmdBuffer*                pCmdBuffer,
         RtPipelineType                  pipelineType,
         RtDispatchInfo                  dispatchInfo,
-        DispatchRaysConstants*          pConstants);
+        DispatchRaysConstants*          pConstants) override;
 
     // Notifies GPURT about an indirect RT dispatch similar to TraceRtDispatch(). Multiple disaptches may occur in
     // one invocation, and the max count must be provided. At most MaxSupportedIndirectCounters will be traced.
@@ -442,7 +441,7 @@ public:
         RtDispatchInfo                dispatchInfo,
         uint32                        maxDispatchCount,
         gpusize*                      pCounterMetadataVa,
-        void*                         pIndirectConstants);
+        void*                         pIndirectConstants) override;
 
     void AddMetadataToList(
         RtDispatchInfo              dispatchInfo,

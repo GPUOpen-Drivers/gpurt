@@ -57,6 +57,7 @@ public:
         Util::Span<BvhBuilder> builders);
 
 private:
+    template <bool IsTlas>
     void BuildRaytracingAccelerationStructureBatch(
         Util::Span<BvhBuilder> builders,
         Util::Span<BvhBuilder> updaters);

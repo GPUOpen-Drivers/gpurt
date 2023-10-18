@@ -67,8 +67,8 @@ void BvhBatcher::BuildAccelerationStructureBatch(
     Util::Vector<BvhBuilder, 1, Internal::Device> tlasBuilders(m_pDevice);
     Util::Vector<BvhBuilder, 1, Internal::Device> tlasUpdaters(m_pDevice);
 
-    blasBuilders.Reserve(buildInfos.size());
-    blasUpdaters.Reserve(buildInfos.size());
+    blasBuilders.Reserve(static_cast<uint32>(buildInfos.size()));
+    blasUpdaters.Reserve(static_cast<uint32>(buildInfos.size()));
 
     for (const AccelStructBuildInfo& info : buildInfos)
     {
@@ -110,13 +110,13 @@ void BvhBatcher::BuildAccelerationStructureBatch(
     if ((blasBuilders.IsEmpty() == false) || (blasUpdaters.IsEmpty() == false))
     {
         RGP_PUSH_MARKER("BLAS: %u builds, %u updates", blasBuilders.size(), blasUpdaters.size());
-        BuildRaytracingAccelerationStructureBatch(blasBuilders, blasUpdaters);
+        BuildRaytracingAccelerationStructureBatch<false>(blasBuilders, blasUpdaters);
         RGP_POP_MARKER();
     }
     if ((tlasBuilders.IsEmpty() == false) || (tlasUpdaters.IsEmpty() == false))
     {
         RGP_PUSH_MARKER("TLAS: %u builds, %u updates", tlasBuilders.size(), tlasUpdaters.size());
-        BuildRaytracingAccelerationStructureBatch(tlasBuilders, tlasUpdaters);
+        BuildRaytracingAccelerationStructureBatch<true>(tlasBuilders, tlasUpdaters);
         RGP_POP_MARKER();
     }
 
@@ -125,6 +125,7 @@ void BvhBatcher::BuildAccelerationStructureBatch(
 
 // =====================================================================================================================
 // Executes each build phase for each builder within the batch
+template <bool IsTlas>
 void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
     Util::Span<BvhBuilder> builders, // Batch of BVH builds
     Util::Span<BvhBuilder> updaters) // Batch of BVH updates
@@ -165,7 +166,20 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
         else
         {
             RGP_PUSH_MARKER("BuildMultiDispatch");
-            BuildMultiDispatch(builders);
+            if constexpr (IsTlas)
+            {
+                // Build one TLAS at a time.
+                // Workaround for crashes in cases where there are multiple TLAS and some are TopDown
+                // Games usually have one TLAS per batch, so this shouldn't cause a significant performance impact
+                for (size_t index = 0; index < builders.size(); ++index)
+                {
+                    BuildMultiDispatch(builders.Subspan(index, 1u));
+                }
+            }
+            else
+            {
+                BuildMultiDispatch(builders);
+            }
             RGP_POP_MARKER();
         }
 
@@ -284,7 +298,8 @@ void BvhBatcher::DispatchInitAccelerationStructure(
     static constexpr size_t MaxNumBuildersPerDispatch = 64;
     for (size_t offset = 0; offset < builders.size(); offset += MaxNumBuildersPerDispatch)
     {
-        const uint32 numBuildersToDispatch = Util::Min(MaxNumBuildersPerDispatch, builders.size() - offset);
+        const uint32 numBuildersToDispatch = static_cast<uint32>(Util::Min(MaxNumBuildersPerDispatch,
+                                                                           builders.size() - offset));
         const Util::Span<BvhBuilder> buildersToDispatch(builders.Data() + offset, numBuildersToDispatch);
 
         Util::Vector<Pal::BufferViewInfo, 64, Internal::Device> constants(m_pDevice);

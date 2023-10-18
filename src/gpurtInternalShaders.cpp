@@ -28,7 +28,7 @@
 namespace GpuRt
 {
 
-#include <pipelines/g_internal_shaders.h>
+#include "pipelines/g_internal_shaders.h"
 
 #define ArraySize(x) (sizeof(x) / sizeof((x)[0]))
 

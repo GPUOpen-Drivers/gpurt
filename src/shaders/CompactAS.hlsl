@@ -448,8 +448,17 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
                 const uint dstNodeDataOffset  = dstOffsetDataLeafNodes + nodeOffset;
 
                 // Copy instance node
-                const InstanceNode node = SrcBuffer.Load<InstanceNode>(srcNodeDataOffset);
-                DstMetadata.Store<InstanceNode>(dstNodeDataOffset, node);
+                // Note, fused instance nodes are twice the size of normal instance nodes. We need to copy it correspondingly.
+                if (enableFusedInstanceNode)
+                {
+                    const FusedInstanceNode node = SrcBuffer.Load<FusedInstanceNode>(srcNodeDataOffset);
+                    DstMetadata.Store<FusedInstanceNode>(dstNodeDataOffset, node);
+                }
+                else
+                {
+                    const InstanceNode node = SrcBuffer.Load<InstanceNode>(srcNodeDataOffset);
+                    DstMetadata.Store<InstanceNode>(dstNodeDataOffset, node);
+                }
 
                 // Top level acceleration structures do not have geometry info.
 

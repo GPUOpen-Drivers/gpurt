@@ -37,7 +37,7 @@
 // recent version, tools may assume the non-present fields are zero.
 
 #define GPURT_COUNTER_MAJOR_VERSION 1
-#define GPURT_COUNTER_MINOR_VERSION 0
+#define GPURT_COUNTER_MINOR_VERSION 1
 #define GPURT_COUNTER_VERSION       ((GPURT_COUNTER_MAJOR_VERSION << 16) | GPURT_COUNTER_MINOR_VERSION)
 
 #include "gpurtAccelStruct.h"
@@ -87,6 +87,7 @@ struct DispatchCounterData
     uint32 maxActiveLaneCountPerIteration; // Maximum active lane count amongst unique node types for a wave iteration.
 };
 
+#ifdef __cplusplus
 // ====================================================================================================================
 // Ray tracing counter information
 struct CounterInfo
@@ -106,7 +107,16 @@ struct CounterInfo
     uint32 counterRayIdRangeBegin;       // Partial rayID range begin
     uint32 counterRayIdRangeEnd;         // Partial rayID range end
     uint32 pipelineType;                 // Pipeline type (native RT or RayQuery). RayTracing=0, Compute=1, Graphics=2
+    struct
+    {
+        uint32 isIndirect   : 1;         // Execute indirect
+        uint32 reserved     : 31;
+    };
 };
+#else
+typedef uint32 CounterInfo;
+#endif
+
 #ifdef __cplusplus
 #pragma pack(pop)
 #endif
