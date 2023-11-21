@@ -22,7 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#define RootSig "RootConstants(num32BitConstants=12, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=10, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
@@ -43,10 +43,8 @@ struct Constants
     uint sceneBoundsByteOffset;         // Scene bounds byte offset
     uint propagationFlagsScratchOffset; // Offset of update flags in scratch memory
     uint baseUpdateStackScratchOffset;  // Offset of update scratch
-    uint internalFlags;                 // Internal flags
     uint buildFlags;                    // Build flags
     uint leafNodeExpansionFactor;       // Leaf node expansion factor (> 1 for rebraid)
-    uint sceneBoundsCalculationType;
     uint enableFastLBVH;
 };
 
@@ -82,7 +80,7 @@ void EncodeInstances(
     {
         InstanceDesc desc;
 
-        if (ShaderConstants.internalFlags & ENCODE_FLAG_ARRAY_OF_POINTERS)
+        if (Settings.encodeArrayOfPointers)
         {
             GpuVirtualAddress addr = InstanceDescBuffer.Load<GpuVirtualAddress>(index * GPU_VIRTUAL_ADDRESS_SIZE);
             desc = FetchInstanceDescAddr(addr);

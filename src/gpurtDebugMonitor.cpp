@@ -157,6 +157,9 @@ void DebugMonitor::PrintMessage(
     case 8:
         PRINT_GPU_MESSAGE(ReadArg(0), ReadArg(1), ReadArg(2), ReadArg(3), ReadArg(4), ReadArg(5), ReadArg(6), ReadArg(7));
         break;
+    case 9:
+        PRINT_GPU_MESSAGE(ReadArg(0), ReadArg(1), ReadArg(2), ReadArg(3), ReadArg(4), ReadArg(5), ReadArg(6), ReadArg(7), ReadArg(8));
+        break;
     default:
         PAL_TRIGGER_ASSERT("Exceeded max supported arguments");
         break;

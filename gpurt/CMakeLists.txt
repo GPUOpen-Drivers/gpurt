@@ -24,8 +24,9 @@
  #######################################################################################################################
 
 target_include_directories(gpurt PRIVATE .)
+target_include_directories(gpurt_internal PRIVATE .)
 
-target_sources(gpurt PRIVATE
+target_sources(gpurt_internal PRIVATE
     CMakeLists.txt
 )
 

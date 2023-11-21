@@ -81,10 +81,6 @@ void RefitBounds(
                         Settings.fp16BoxModeMixedSaThreshold,
                         0,
                         false,
-                        false,
-                        0,
-                        false,
-                        false,
                         0,
                         0);
     }

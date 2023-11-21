@@ -236,8 +236,7 @@ uint AllocScratchNode(uint parent, BoundingBox box, TDArgs args)
     internalNode.splitBox_or_nodePointer = 0;
     internalNode.numPrimitivesAndDoCollapse = 0;
 
-    ScratchBuffer.Store<ScratchNode>(args.BvhNodeDataScratchOffset +
-                                     sizeof(ScratchNode) * orig, internalNode);
+    WriteScratchNode(args.BvhNodeDataScratchOffset, orig, internalNode);
 
     return orig;
 }
@@ -247,11 +246,7 @@ uint AllocScratchNode(uint parent, BoundingBox box, TDArgs args)
 uint AllocScratchLeafNode(uint instanceIndex, uint nodePointer, TDArgs args)
 {
     // check if the pre allocated instance is used; if not, use it, if used, alloc a new instance
-    const uint offset = args.BvhLeafNodeDataScratchOffset + (instanceIndex * sizeof(ScratchNode)) +
-                        SCRATCH_NODE_NODE_POINTER_OFFSET;
-
-    uint original;
-    ScratchBuffer.InterlockedCompareExchange(offset, 0, nodePointer, original);
+    const uint original = AllocateScratchNodePointer(args.BvhLeafNodeDataScratchOffset, instanceIndex, nodePointer);
 
     // not used
     if (original == 0)
@@ -285,8 +280,7 @@ uint AllocTDRefScratch(uint numRefs, TDArgs args)
 void SetScratchLeafNode(uint nodeIndex, TDRefScratch ref, uint scratchLeafNodeBaseIndex, TDArgs args)
 {
     // alloc internal leaf node copying from the initial encode leaf
-    ScratchNode leafNode = ScratchBuffer.Load<ScratchNode>(args.BvhLeafNodeDataScratchOffset +
-                                                           (ref.primitiveIndex * sizeof(ScratchNode)));
+    ScratchNode leafNode = FetchScratchNode(args.BvhLeafNodeDataScratchOffset, ref.primitiveIndex);
     leafNode.parent         = ref.nodeIndex;
     leafNode.bbox_min_or_v0 = ref.box.min;
     leafNode.bbox_max_or_v1 = ref.box.max;
@@ -294,9 +288,8 @@ void SetScratchLeafNode(uint nodeIndex, TDRefScratch ref, uint scratchLeafNodeBa
     leafNode.splitBox_or_nodePointer = ref.nodePointer;
 #endif
 
-    const uint leafIndex  = scratchLeafNodeBaseIndex + nodeIndex;
-    const uint nodeOffset = args.BvhNodeDataScratchOffset + (leafIndex * sizeof(ScratchNode));
-    ScratchBuffer.Store<ScratchNode>(nodeOffset, leafNode);
+    const uint leafIndex = scratchLeafNodeBaseIndex + nodeIndex;
+    WriteScratchNode(args.BvhNodeDataScratchOffset, leafIndex, leafNode);
 
     const uint numLeavesOffset = args.CurrentStateScratchOffset + STATE_TD_NUM_LEAVES_OFFSET;
     ScratchBuffer.InterlockedAdd(numLeavesOffset, 1);
@@ -305,7 +298,7 @@ void SetScratchLeafNode(uint nodeIndex, TDRefScratch ref, uint scratchLeafNodeBa
 //=====================================================================================================================
 ScratchNode GetScratchNode(uint index, TDArgs args)
 {
-    return ScratchBuffer.Load<ScratchNode>(args.BvhNodeDataScratchOffset + sizeof(ScratchNode) * index);
+    return FetchScratchNode(args.BvhNodeDataScratchOffset, index);
 }
 
 //=====================================================================================================================
@@ -330,24 +323,32 @@ UintBoundingBox GetTDNodeCentroidBox(uint index, TDArgs args)
 //=====================================================================================================================
 void SetScratchNodeChildLeft(uint index, uint leftIndex, TDArgs args)
 {
-    ScratchBuffer.Store(args.BvhNodeDataScratchOffset + sizeof(ScratchNode) * index +
-                        SCRATCH_NODE_LEFT_OFFSET, leftIndex);
+    WriteScratchNodeData(
+        args.BvhNodeDataScratchOffset,
+        index,
+        SCRATCH_NODE_LEFT_OFFSET,
+        leftIndex);
 }
 
 //=====================================================================================================================
 void SetScratchNodeChildRight(uint index, uint rightIndex, TDArgs args)
 {
-    ScratchBuffer.Store(args.BvhNodeDataScratchOffset + sizeof(ScratchNode) * index +
-                        SCRATCH_NODE_RIGHT_OFFSET, rightIndex);
+    WriteScratchNodeData(
+        args.BvhNodeDataScratchOffset,
+        index,
+        SCRATCH_NODE_RIGHT_OFFSET,
+        rightIndex);
 }
 
 //=====================================================================================================================
 void UpdateScratchNodeFlags(uint scratchNodeIndex, uint leafScratchNodeIndex, TDArgs args)
 {
-    const uint leafNodeOffset =
-        args.BvhLeafNodeDataScratchOffset + (leafScratchNodeIndex * sizeof(ScratchNode));
-
-    const uint flagsAndInstanceMask = ScratchBuffer.Load(leafNodeOffset + SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET);
+    uint flagsAndInstanceMask =
+        FETCH_SCRATCH_NODE_DATA(
+            uint,
+            args.BvhLeafNodeDataScratchOffset,
+            leafScratchNodeIndex,
+            SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET);
 
     UpdateParentScratchNodeFlags(args.BvhNodeDataScratchOffset,
                                  scratchNodeIndex,
@@ -739,8 +740,7 @@ void WriteChildrenTreeRefList(
     out BoundingBox centroidBox,
     TDArgs          args)
 {
-    ScratchNode node = ScratchBuffer.Load<ScratchNode>(args.BvhLeafNodeDataScratchOffset +
-                                                       ref.primitiveIndex * sizeof(ScratchNode));
+    ScratchNode node = FetchScratchNode(args.BvhLeafNodeDataScratchOffset, ref.primitiveIndex);
 
     const GpuVirtualAddress address = GetInstanceAddr(asuint(node.sah_or_v2_or_instBasePtr.x),
                                                       asuint(node.sah_or_v2_or_instBasePtr.y));
@@ -780,8 +780,7 @@ void BuildRefList(uint globalIndex, TDArgs args)
 
     for (uint i = globalIndex; i < args.NumPrimitives; i += args.NumThreads)
     {
-        ScratchNode leafNode = ScratchBuffer.Load<ScratchNode>(args.BvhLeafNodeDataScratchOffset +
-                                                               i * sizeof(ScratchNode));
+        ScratchNode leafNode = FetchScratchNode(args.BvhLeafNodeDataScratchOffset, i);
 
         if (IsNodeActive(leafNode))
         {
@@ -973,13 +972,11 @@ void BuildBVHTDImpl(
                         TDRefScratch ref = ReadRefList(0, args);
 
                         // alloc internal leaf node copying from the initial encode leaf
-                        ScratchNode leafNode =
-                            ScratchBuffer.Load<ScratchNode>(args.BvhLeafNodeDataScratchOffset +
-                                                            ref.primitiveIndex * sizeof(ScratchNode));
+                        ScratchNode leafNode = FetchScratchNode(args.BvhLeafNodeDataScratchOffset, ref.primitiveIndex);
 #if USE_BVH_REBRAID
                         leafNode.splitBox_or_nodePointer = CreateRootNodePointer();
 #endif
-                        ScratchBuffer.Store<ScratchNode>(args.BvhNodeDataScratchOffset, leafNode);
+                        WriteScratchNodeAtOffset(args.BvhNodeDataScratchOffset, leafNode);
 
                         WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, 1);
                         AllocTasks(numGroups, TD_PHASE_DONE, taskQueueOffset);
@@ -1104,10 +1101,12 @@ void BuildBVHTDImpl(
                                 (currentNode.largestWidth * args.LengthPercentage)) &&
                             IsBoxNode(ref.nodePointer))
                         {
-                            const uint64_t instanceBasePointer =
-                                ScratchBuffer.Load<uint64_t>(args.BvhLeafNodeDataScratchOffset +
-                                                             ref.primitiveIndex * sizeof(ScratchNode) +
-                                                             SCRATCH_NODE_INSTANCE_BASE_PTR_OFFSET);
+                            uint64_t instanceBasePointer =
+                                FETCH_SCRATCH_NODE_DATA(
+                                    uint64_t,
+                                    args.BvhLeafNodeDataScratchOffset,
+                                    ref.primitiveIndex,
+                                    SCRATCH_NODE_INSTANCE_BASE_PTR_OFFSET);
 
                             const uint count = GetBlasInternalNodeChildCount(instanceBasePointer, ref.nodePointer);
 
@@ -1197,10 +1196,12 @@ void BuildBVHTDImpl(
                             (currentNode.largestWidth * args.LengthPercentage)) &&
                         IsBoxNode(ref.nodePointer))
                     {
-                        const uint64_t instanceBasePointer =
-                                ScratchBuffer.Load<uint64_t>(args.BvhLeafNodeDataScratchOffset +
-                                                             ref.primitiveIndex * sizeof(ScratchNode) +
-                                                             SCRATCH_NODE_INSTANCE_BASE_PTR_OFFSET);
+                        uint64_t instanceBasePointer =
+                            FETCH_SCRATCH_NODE_DATA(
+                                uint64_t,
+                                args.BvhLeafNodeDataScratchOffset,
+                                ref.primitiveIndex,
+                                SCRATCH_NODE_INSTANCE_BASE_PTR_OFFSET);
 
                         const uint count = GetBlasInternalNodeChildCount(instanceBasePointer, ref.nodePointer);
 

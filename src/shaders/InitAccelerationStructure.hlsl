@@ -22,11 +22,17 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
+#ifdef IS_UPDATE
+#define RootSig "RootConstants(num32BitConstants=1, b0, visibility=SHADER_VISIBILITY_ALL), "\
+                "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
+                "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 2)),"
+#else
 #define RootSig "RootConstants(num32BitConstants=1, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "DescriptorTable(CBV(b0, numDescriptors = 4294967295, space = 1)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 2)),"\
                 "CBV(b255)"
+#endif
 
 //=====================================================================================================================
 
@@ -39,97 +45,131 @@ struct RootConstants
 
 #include "Common.hlsl"
 
+#ifndef IS_UPDATE
 struct Constants
 {
-    uint rebraidType;
-    uint triangleCompressionMode;
+    uint numLeafNodes;
     uint debugCountersScratchOffset;
     uint sceneBoundsScratchOffset;
     uint numBatchesScratchOffset;
-    uint numLeafNodes;
+
+    uint rebraidTaskQueueCounterScratchOffset;
+    uint tdTaskQueueCounterScratchOffset;
+    uint plocTaskQueueCounterScratchOffset;
     // Add padding for 16-byte alignment rules
     uint pad0;
-    uint pad1;
 
     AccelStructHeader header;
     AccelStructMetadataHeader metadataHeader;
 };
 
 [[vk::binding(0, 1)]] ConstantBuffer<Constants> BatchBuilderConstants[] : register(b0, space1);
+#endif
+
 [[vk::binding(0, 0)]] RWByteAddressBuffer       BatchHeaderBuffers[]    : register(u0, space1);
 [[vk::binding(1, 0)]] RWByteAddressBuffer       BatchScratchBuffers[]   : register(u0, space2);
 
-[RootSignature(RootSig)]
-[numthreads(BUILD_THREADGROUP_SIZE, 1, 1)]
-void InitAccelerationStructure(
-    uint globalId : SV_DispatchThreadID)
+// =====================================================================================================================
+// Reset the taskQueue build counters
+void ResetTaskQueueCounters(
+    RWByteAddressBuffer scratchBuffer,
+    uint                counterOffset)
 {
-    if (globalId >= ShaderRootConstants.numBuilders)
+    const uint RayTracingTaskQueueCounters = 5;
+    for (uint i = 0; i < RayTracingTaskQueueCounters; ++i)
     {
-        return;
+        scratchBuffer.Store(counterOffset + (i * sizeof(uint)), 0u);
+    }
+}
+
+static const uint INVALID_SCRATCH_OFFSET = 0xFFFFFFFF;
+
+// =====================================================================================================================
+[RootSignature(RootSig)]
+[numthreads(1, 1, 1)]
+void InitAccelerationStructure(
+    uint globalId : SV_DispatchThreadID,
+    uint groupId  : SV_GroupId)
+{
+    const RWByteAddressBuffer HeaderBuffer  = BatchHeaderBuffers[groupId];
+    const RWByteAddressBuffer ScratchBuffer = BatchScratchBuffers[groupId];
+
+#ifdef IS_UPDATE
+
+    // Reset the task counters for update parallel.
+    HeaderBuffer.Store(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 0u);
+    HeaderBuffer.Store(ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET, 0u);
+
+    // Reset update stack pointer and update task counter.
+    ScratchBuffer.Store<uint2>(0, uint2(0u, 0u));
+
+#else
+
+    const ConstantBuffer<Constants> BuilderConstants = BatchBuilderConstants[groupId];
+
+    if (Settings.enableBVHBuildDebugCounters)
+    {
+        // Clear debug counters
+        const uint countersOffset = BuilderConstants.debugCountersScratchOffset;
+        const uint RayTracingBuildDebugCounters = 11;
+
+        for (uint i = 0; i < RayTracingBuildDebugCounters; ++i)
+        {
+            ScratchBuffer.Store<uint>(countersOffset + (i * sizeof(uint)), 0u);
+        }
     }
 
-    while (true)
+    const uint InitialMax = FloatToUint(-FLT_MAX);
+    const uint InitialMin = FloatToUint(FLT_MAX);
+
+    if (BuilderConstants.numLeafNodes != 0)
     {
-        if (WaveIsFirstLane() == false)
+        const bool isRebraidEnabled = BuilderConstants.rebraidTaskQueueCounterScratchOffset != INVALID_SCRATCH_OFFSET;
+        if (isRebraidEnabled)
         {
-            continue;
+            const uint sceneBounds[] =
+            {
+                InitialMin, InitialMin, InitialMin,
+                InitialMax, InitialMax, InitialMax,
+                InitialMin, InitialMax, // size
+
+                InitialMin, InitialMin, InitialMin, //used for rebraid
+                InitialMax, InitialMax, InitialMax,
+            };
+            ScratchBuffer.Store(BuilderConstants.sceneBoundsScratchOffset, sceneBounds);
+            ResetTaskQueueCounters(ScratchBuffer, BuilderConstants.rebraidTaskQueueCounterScratchOffset);
+        }
+        else
+        {
+            const uint sceneBounds[] =
+            {
+                InitialMin, InitialMin, InitialMin,
+                InitialMax, InitialMax, InitialMax,
+                InitialMin, InitialMax, // size
+            };
+
+            ScratchBuffer.Store(BuilderConstants.sceneBoundsScratchOffset, sceneBounds);
         }
 
-        const uint builderIndex = WaveReadLaneFirst(globalId);
-        const ConstantBuffer<Constants> BuilderConstants = BatchBuilderConstants[builderIndex];
-        const RWByteAddressBuffer       HeaderBuffer     = BatchHeaderBuffers[builderIndex];
-        const RWByteAddressBuffer       ScratchBuffer    = BatchScratchBuffers[builderIndex];
-
-        if (Settings.enableBVHBuildDebugCounters)
+        const bool isPairCompressionEnabled = BuilderConstants.numBatchesScratchOffset != INVALID_SCRATCH_OFFSET;
+        if (isPairCompressionEnabled)
         {
-            // Clear debug counters
-            const uint countersOffset = BuilderConstants.debugCountersScratchOffset;
-            const uint RayTracingBuildDebugCounters = 11;
-            for (uint i = 0; i < RayTracingBuildDebugCounters; ++i)
-            {
-                ScratchBuffer.Store<uint>(countersOffset + (i * sizeof(uint)), 0u);
-            }
+            ScratchBuffer.Store(BuilderConstants.numBatchesScratchOffset, 0);
         }
-
-        const uint InitialMax = FloatToUint(-FLT_MAX);
-        const uint InitialMin = FloatToUint(FLT_MAX);
-
-        if (BuilderConstants.numLeafNodes != 0)
-        {
-            if (BuilderConstants.rebraidType == RebraidType::V2)
-            {
-                const uint sceneBounds[] =
-                {
-                    InitialMin, InitialMin, InitialMin,
-                    InitialMax, InitialMax, InitialMax,
-                    InitialMin, InitialMax, // size
-
-                    InitialMin, InitialMin, InitialMin, //used for rebraid
-                    InitialMax, InitialMax, InitialMax,
-                };
-                ScratchBuffer.Store(BuilderConstants.sceneBoundsScratchOffset, sceneBounds);
-            }
-            else
-            {
-                const uint sceneBounds[] =
-                {
-                    InitialMin, InitialMin, InitialMin,
-                    InitialMax, InitialMax, InitialMax,
-                    InitialMin, InitialMax, // size
-                };
-
-                ScratchBuffer.Store(BuilderConstants.sceneBoundsScratchOffset, sceneBounds);
-            }
-
-            if (BuilderConstants.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION)
-            {
-                ScratchBuffer.Store(BuilderConstants.numBatchesScratchOffset, 0);
-            }
-        }
-
-        HeaderBuffer.Store<AccelStructMetadataHeader>(0, BuilderConstants.metadataHeader);
-        HeaderBuffer.Store<AccelStructHeader>(BuilderConstants.header.metadataSizeInBytes, BuilderConstants.header);
-        break;
     }
+
+    const bool isTopDownBuild = BuilderConstants.tdTaskQueueCounterScratchOffset != INVALID_SCRATCH_OFFSET;
+    if (isTopDownBuild)
+    {
+        ResetTaskQueueCounters(ScratchBuffer, BuilderConstants.tdTaskQueueCounterScratchOffset);
+    }
+    else if (BuilderConstants.plocTaskQueueCounterScratchOffset != INVALID_SCRATCH_OFFSET)
+    {
+        ResetTaskQueueCounters(ScratchBuffer, BuilderConstants.plocTaskQueueCounterScratchOffset);
+    }
+
+    HeaderBuffer.Store<AccelStructMetadataHeader>(0, BuilderConstants.metadataHeader);
+    HeaderBuffer.Store<AccelStructHeader>(BuilderConstants.header.metadataSizeInBytes, BuilderConstants.header);
+
+#endif
 }

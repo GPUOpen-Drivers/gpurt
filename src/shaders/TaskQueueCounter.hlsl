@@ -85,3 +85,13 @@ bool EndTask(const uint localId, uint taskQueueOffset)
 
     return returnValue;
 }
+
+//======================================================================================================================
+// Set a scratch buffer counter to 0 if it has a valid index
+void InitScratchCounter(uint offset)
+{
+    if (offset != INVALID_IDX)
+    {
+        ScratchBuffer.Store(offset, 0);
+    }
+}

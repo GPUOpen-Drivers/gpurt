@@ -25,12 +25,7 @@
 #pragma once
 
 #include "gpurt/gpurt.h"
-
-namespace Pal
-{
-class ICmdBuffer;
-enum class ImmediateDataWidth : uint32;
-}
+#include "gpurt/gpurtBackend.h"
 
 namespace GpuRt
 {
@@ -47,7 +42,8 @@ class BvhBuilder
     friend class BvhBatcher;
 public:
     // Constructor for the ray tracing bvh builder class that will perform a build/update
-    explicit BvhBuilder(Pal::ICmdBuffer*             pCmdBuf,
+    explicit BvhBuilder(ClientCmdBufferHandle        cmdBuffer,
+                        const IBackend&              backend,
                         Internal::Device*      const pDevice,
                         const Pal::DeviceProperties& deviceProps,
                         ClientCallbacks              clientCb,
@@ -55,7 +51,8 @@ public:
                         const AccelStructBuildInfo&  info);
 
     // Constructor for the ray tracing bvh builder class that will perform a copy or emit build info
-    explicit BvhBuilder(Pal::ICmdBuffer*             pCmdBuf,
+    explicit BvhBuilder(ClientCmdBufferHandle        cmdBuffer,
+                        const IBackend&              backend,
                         Internal::Device*      const pDevice,
                         const Pal::DeviceProperties& deviceProps,
                         ClientCallbacks              clientCb,
@@ -63,11 +60,6 @@ public:
 
     // Destructor for the ray tracing bvh builder class
     ~BvhBuilder();
-
-    // Helper function to determine buffer size
-    uint32 CalculateResultBufferInfo(
-        AccelStructDataOffsets* pOffsets,
-        uint32*                 pMetadataSizeInBytes);
 
     // Helper function to determine internal nodes size
     uint32 CalculateInternalNodesSize();
@@ -99,7 +91,31 @@ public:
 
     uint32 EncodePrimitives();
 
-    uint32 CalculateScratchBufferInfo(
+    // data offset and size in ResultBuffer
+    struct ResultBufferInfo
+    {
+        uint32 baseOffset;
+        uint32 nodeSize;
+        uint32 dataSize;
+    };
+
+    // data offset and size in ScratchBuffer
+    struct ScratchBufferInfo
+    {
+        uint32 baseOffset;
+        uint32 bvh2Size;
+        uint32 qbvhSize;
+    };
+
+    uint32 CalculateScratchBufferSize(
+        const ResultBufferInfo& resultBufferInfo,
+        const ScratchBufferInfo& scratchBufferInfo);
+
+    ResultBufferInfo CalculateResultBufferInfo(
+        AccelStructDataOffsets* pOffsets,
+        uint32* pMetadataSizeInBytes);
+
+    ScratchBufferInfo CalculateScratchBufferInfo(
         RayTracingScratchDataOffsets* pOffsets);
 
     uint32 CalculateUpdateScratchBufferInfo(
@@ -207,6 +223,7 @@ private:
         bool                            needEncodeDispatch;
         bool                            enableEarlyPairCompression;
         bool                            enableFastLBVH;
+        bool                            enableMergeSort;
     };
 
     BvhBuilder(
@@ -288,7 +305,7 @@ private:
 
     void EmitPostBuildInfo();
 
-    Pal::BufferViewInfo AllocGeometryConstants(
+    BufferViewInfo AllocGeometryConstants(
         const Geometry& geometry,
         uint32  geometryIndex,
         uint32* pPrimitiveOffset,
@@ -297,7 +314,7 @@ private:
         uint64* pIbVa);
 
     uint32 WriteBufferSrdTable(
-        const Pal::BufferViewInfo* pBufferViews,
+        const BufferViewInfo*      pBufferViews,
         uint32                     count,
         bool                       typedBuffer,
         uint32                     entryOffset);
@@ -405,6 +422,8 @@ private:
         uint32  entryOffset);
 
     uint32 WriteDestBuffers(uint32 entryOffset);
+    uint32 WriteEncodeBuffers(uint32 entryOffset);
+    uint32 WriteUpdateBuffers(uint32 entryOffset);
 
     uint32 WriteBuildShaderConstantBuffer(uint32 entryOffset);
 
@@ -417,11 +436,9 @@ private:
         return m_buildArgs.scratchAddr.gpu;
     }
 
-    uint32 GetOptimalNumThreadGroups(uint32 threadGroupSize);
-
     uint32 GetNumThreadGroupsCopy()
     {
-        return GetOptimalNumThreadGroups(DefaultThreadGroupSize);
+        return m_backend.GetOptimalNumThreadGroups(DefaultThreadGroupSize);
     }
 
     uint32 GetNumPersistentThreadGroups(
@@ -429,7 +446,7 @@ private:
         uint32 threadGroupSize = DefaultThreadGroupSize,
         uint32 wavesPerSimd = 1)
     {
-        return Util::Min(GetOptimalNumThreadGroups(threadGroupSize) * wavesPerSimd,
+        return Util::Min(m_backend.GetOptimalNumThreadGroups(threadGroupSize) * wavesPerSimd,
                          Util::RoundUpQuotient(numWorkItems, threadGroupSize));
     }
 
@@ -451,9 +468,9 @@ private:
         uint32        dwordCount);
 
     void WriteImmediateSingle(
-        gpusize                 destVa,
-        uint64                  value,
-        Pal::ImmediateDataWidth width);
+        gpusize            destVa,
+        uint64             value,
+        ImmediateDataWidth width);
 
     void ResetTaskCounter(
         gpusize metadataHeaderGpuVa);
@@ -461,7 +478,7 @@ private:
     void ResetTaskQueueCounters(
         uint32 offset);
 
-    Pal::BufferViewInfo SetupVertexBuffer(
+    BufferViewInfo SetupVertexBuffer(
         const GeometryTriangles& desc,
         uint32* pStride,
         uint32* pVertexCompCount) const;
@@ -505,15 +522,17 @@ private:
     AccelStructBuildInfo              m_buildArgs;           // Accel struct build arguments
     const Pal::DeviceProperties&      m_deviceProps;         // PAL device properties
     uint32                            m_metadataSizeInBytes; // Metadata size in bytes
-    Pal::ICmdBuffer*                  m_pPalCmdBuffer;       // The associated PAL cmdbuffer
+    ClientCmdBufferHandle             m_cmdBuffer;           // Associated command buffer handle
     RayTracingScratchDataOffsets      m_scratchOffsets;      // Scratch offsets for the build
+    const IBackend&                   m_backend;             // Backend interface
     CompileTimeBuildSettings          m_buildSettings;
     BuildShaderConstants              m_buildShaderConstants;
     gpusize                           m_shaderConstantsGpuVa{};
     const RadixSortConfig             m_radixSortConfig;
     uint64                            m_emitCompactDstGpuVa;
     uint32                            m_buildSettingsHash;
-
+    ResultBufferInfo                  m_resultBufferInfo;
+    ScratchBufferInfo                 m_scratchBufferInfo;
     AccelStructInfo                   m_dumpInfo;
 };
 

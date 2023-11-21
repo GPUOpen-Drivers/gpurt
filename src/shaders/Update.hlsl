@@ -22,7 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#define RootSig "RootConstants(num32BitConstants=10, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=9, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
@@ -39,7 +39,6 @@
 // 32 bit constants
 struct InputArgs
 {
-    uint isUpdateInPlace;
     uint addressLo;
     uint addressHi;
     uint propagationFlagsScratchOffset;

@@ -24,10 +24,7 @@
  **********************************************************************************************************************/
 
 #include "RayQuery1_1.hlsl"
-
-#if GPURT_BUILD_RTIP2
 #include "RayQuery2_0.hlsl"
-#endif
 
 //=====================================================================================================================
 // TraceRayInline() internal
@@ -54,7 +51,6 @@ static void TraceRayInlineCommon(
                                   rayDesc,
                                   dispatchThreadId);
             break;
-#if GPURT_BUILD_RTIP2
         case GPURT_RTIP2_0:
             TraceRayInlineImpl2_0(rayQuery,
                                   accelStructLo,
@@ -65,7 +61,6 @@ static void TraceRayInlineCommon(
                                   rayDesc,
                                   dispatchThreadId);
             break;
-#endif
         default:
             break;
     }
@@ -89,13 +84,11 @@ static bool RayQueryProceedCommon(
                                                        constRayFlags,
                                                        dispatchThreadId);
             break;
-#if GPURT_BUILD_RTIP2
         case GPURT_RTIP2_0:
             continueTraversal = RayQueryProceedImpl2_0(rayQuery,
                                                        constRayFlags,
                                                        dispatchThreadId);
             break;
-#endif
         default: break;
     }
 
@@ -104,7 +97,11 @@ static bool RayQueryProceedCommon(
     {
         if (continueTraversal == false)
         {
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 42
+            const uint rayId = GetRayId(AmdExtDispatchThreadIdFlat());
+#else
             const uint rayId = GetRayId(dispatchThreadId);
+#endif
             WriteDispatchCounters(rayQuery.numIterations);
             WriteTraversalCounter(rayQuery, rayId);
 

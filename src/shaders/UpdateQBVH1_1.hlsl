@@ -109,7 +109,7 @@ void UpdateQBVHImpl1_1(
     // Handle the header for not-in-place updates
     if (globalID == 0)
     {
-        if (ShaderConstants.isUpdateInPlace == false)
+        if (Settings.isUpdateInPlace == false)
         {
             AccelStructMetadataHeader resultMetadata = metadata;
 
@@ -204,7 +204,7 @@ void UpdateQBVHImpl1_1(
 
         UpdateChildBoundingBox1_1(metadataSize, parentNodePointer, nodePointer, childIdx);
 
-        if (ShaderConstants.isUpdateInPlace == false)
+        if (Settings.isUpdateInPlace == false)
         {
             WriteParentPointer(metadataSize,
                                ExtractNodePointerCollapse(nodePointer),
@@ -226,7 +226,7 @@ void UpdateQBVHImpl1_1(
         }
         else
         {
-            if (ShaderConstants.isUpdateInPlace == false)
+            if (Settings.isUpdateInPlace == false)
             {
                 CopyChildPointersAndFlags(parentNodePointer, metadataSize);
             }

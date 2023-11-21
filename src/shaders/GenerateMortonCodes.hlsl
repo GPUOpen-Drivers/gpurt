@@ -323,9 +323,7 @@ void GenerateMortonCodesImpl(
     uint    enableVariableBits,
     uint    useMortonCode30,
     uint    numSizeBits,
-    float2  sizeMinMax,
-    bool    enableGridPos,
-    uint    gridPosOffset)
+    float2  sizeMinMax)
 {
     ScratchNode node = FetchScratchNode(leafNodesOffset, primitiveIndex);
 
@@ -344,8 +342,16 @@ void GenerateMortonCodesImpl(
             bounds = GetScratchNodeBoundingBox(node);
         }
 
+        const bool isDegenerate = IsInvalidBoundingBox(bounds);
+
         const float3 center = (0.5 * (bounds.max + bounds.min));
-        const float3 normalizedPos = ((center - sceneMin) / sceneExtent);
+        float3 normalizedPos = ((center - sceneMin) / sceneExtent);
+
+        // TODO: optimize this based on instance transform or primitive centroid
+        if (isDegenerate)
+        {
+            normalizedPos = float3(0.5, 0.5, 0.5);
+        }
 
         if (useMortonCode30)
         {
@@ -356,7 +362,7 @@ void GenerateMortonCodesImpl(
         }
         else
         {
-            if (sizeMinMax.y == sizeMinMax.x)
+            if (sizeMinMax.x >= sizeMinMax.y)
             {
                 numSizeBits = 0;
             }
@@ -395,17 +401,6 @@ void GenerateMortonCodesImpl(
                 mortonCode = (ExpandForSizeBits(bitsToExpand) << 1) | sizeValue;
 
                 mortonCode = (mortonCode << numAxisBitsWithNoSize) | (mortonCodeTemp & ((1ULL << numAxisBitsWithNoSize) - 1));
-            }
-
-            if (enableGridPos)
-            {
-                uint4 gridPos;
-                gridPos[0] = valuesWithNoSize[0];
-                gridPos[1] = valuesWithNoSize[1];
-                gridPos[2] = valuesWithNoSize[2];
-                gridPos[3] = w;
-
-                WriteGridPosAtIndex(gridPosOffset, primitiveIndex, gridPos);
             }
 
             // To address the bug in MergeSort().
@@ -475,9 +470,7 @@ void GenerateMortonCodes(
             Settings.enableVariableBitsMortonCode,
             Settings.useMortonCode30,
             0,
-            float2(0, 0),
-            false,
-            0);
+            float2(0, 0));
     }
 }
 #endif

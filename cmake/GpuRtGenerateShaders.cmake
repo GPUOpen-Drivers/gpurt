@@ -39,9 +39,8 @@ set(gpurtDefines "${COMPILE_DEFINITIONS}")
 set(gpurtToolsDir "${GPU_RAY_TRACING_SOURCE_DIR}/tools")
 
 # Shared tools
-set(gpurtCompileScript    "${gpurtToolsDir}/CompileRTShaders.py")
-set(gpurtCompileConfig    "${gpurtToolsDir}/RTShaders.xml")
-set(gpurtStripWhitelist   "${gpurtToolsDir}/strip_whitelist.txt")
+set(gpurtCompileScript  "${gpurtToolsDir}/CompileRTShaders.py")
+set(gpurtStripWhitelist "${gpurtToolsDir}/strip_whitelist.txt")
 
 # Outputs
 set(gpurtOutputDir "${CMAKE_CURRENT_BINARY_DIR}/pipelines")
@@ -53,7 +52,7 @@ set(gpurtShaders
 set(gpurtDebugInfoFile "${CMAKE_CURRENT_BINARY_DIR}/g_gpurtDebugInfo.h")
 
 # Make the outputs accessible in the source code.
-target_include_directories(gpurt PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(gpurt_internal PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 set(originalShaderSourceDir "${GPU_RAY_TRACING_SOURCE_DIR}/src/shaders/")
 set(originalShaderSource ${GPURT_SHADER_SOURCE_FILES})
@@ -85,7 +84,6 @@ endif()
 set(gpurtSharedDependencies
     ${gpurtShaderSource}
     ${gpurtCompileScript}
-    ${gpurtCompileConfig}
 )
 
 # Create custom command that outputs the generated shaders
@@ -127,7 +125,6 @@ if(GPURT_CLIENT_API STREQUAL "VULKAN")
             ${SPIRV_COMPILER_ARGUMENT}
             ${SPIRV_REMAP_ARGUMENT}
             --defines "\"${gpurtDefines}\""
-            --shaderConfig "${gpurtCompileConfig}"
             --whiteListPath "${gpurtStripWhitelist}"
             "${gpurtShadersSourceDir}"
             --strict
@@ -141,4 +138,4 @@ endif()
 add_custom_target(GpuRtGenerateShaders DEPENDS ${gpurtShaders})
 
 # Make gpurt dependent on RT shader generation
-add_dependencies(gpurt GpuRtGenerateShaders)
+add_dependencies(gpurt_internal GpuRtGenerateShaders)

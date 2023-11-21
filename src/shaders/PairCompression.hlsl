@@ -277,14 +277,14 @@ void WriteCompressedNodes(
                                               GetQuadScratchNodeVertexOffset(quad.scratchNodeIndexAndOffset[1]),
                                               geometryFlags);
 
-            const uint scratchNodeOffset = scratchNodesScratchOffset + (keptIndex * sizeof(ScratchNode));
+            const uint scratchNodeOffset = CalcScratchNodeOffset(scratchNodesScratchOffset, keptIndex);
 
             // Store triangle Id only. The triangle node type is determined at BuildQBVH
             const uint triangleTypeAndId = (triangleId << 3);
-            ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_TYPE_OFFSET, triangleTypeAndId);
+            WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_TYPE_OFFSET, triangleTypeAndId);
 
             // Repurpose the node pointer for saving the index of the other node in the pair.
-            ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_NODE_POINTER_OFFSET, scratchIdxTri0);
+            WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_NODE_POINTER_OFFSET, scratchIdxTri0);
         }
     }
 }
@@ -321,12 +321,21 @@ bool CompareVertices(
     }
 
     // Compress two vertices that have different indices but the same positions together.
-    const uint scratchOffset0 = args.scratchNodesScratchOffset + (scratchIndex0 * sizeof(ScratchNode));
-    const uint scratchOffset1 = args.scratchNodesScratchOffset + (scratchIndex1 * sizeof(ScratchNode));
-
     const uint scratchVertexStride = SCRATCH_NODE_V1_OFFSET;
-    const float3 vertex0 = ScratchBuffer.Load<float3>(scratchOffset0 + (scratchVertex0 * scratchVertexStride));
-    const float3 vertex1 = ScratchBuffer.Load<float3>(scratchOffset1 + (scratchVertex1 * scratchVertexStride));
+
+    float3 vertex0 =
+        FETCH_SCRATCH_NODE_DATA(
+            float3,
+            args.scratchNodesScratchOffset,
+            scratchIndex0,
+            scratchVertex0 * scratchVertexStride);
+
+    float3 vertex1 =
+        FETCH_SCRATCH_NODE_DATA(
+            float3,
+            args.scratchNodesScratchOffset,
+            scratchIndex1,
+            scratchVertex1 * scratchVertexStride);
 
     if (all(vertex0 == vertex1))
     {
@@ -480,7 +489,7 @@ void PairCompressionImpl(
     uint                localId,
     PairCompressionArgs args)
 {
-    const uint numBatches = ScratchBuffer.Load(args.numBatchesScratchOffset);
+    const uint numBatches = FetchNumBatches(args.numBatchesScratchOffset);
 
     if (globalId >= numBatches)
     {
@@ -570,23 +579,21 @@ void PairCompressionImpl(
                                                 parentNode.right_or_geometryIndex :
                                                 parentNode.left_or_primIndex_or_instIndex;
 
-        const uint possiblyNotEliminatedOffset = args.scratchNodesScratchOffset +
-                                                 (possiblyNotEliminatedIndex * sizeof(ScratchNode));
-
-        const uint grandParentNodeOffset  = args.scratchNodesScratchOffset + (parentNode.parent * sizeof(ScratchNode));
         const ScratchNode grandParentNode = FetchScratchNode(args.scratchNodesScratchOffset,
                                                              parentNode.parent);
 
-        if (grandParentNode.left_or_primIndex_or_instIndex == eliminatedNode.parent)
-        {
-            ScratchBuffer.Store(grandParentNodeOffset + SCRATCH_NODE_LEFT_OFFSET, possiblyNotEliminatedIndex);
-        }
-        else
-        {
-            ScratchBuffer.Store(grandParentNodeOffset + SCRATCH_NODE_RIGHT_OFFSET, possiblyNotEliminatedIndex);
-        }
+        WriteScratchNodeData(
+            args.scratchNodesScratchOffset,
+            parentNode.parent,
+            (grandParentNode.left_or_primIndex_or_instIndex == eliminatedNode.parent ?
+                SCRATCH_NODE_LEFT_OFFSET : SCRATCH_NODE_RIGHT_OFFSET),
+            possiblyNotEliminatedIndex);
 
-        ScratchBuffer.Store(possiblyNotEliminatedOffset + SCRATCH_NODE_PARENT_OFFSET, parentNode.parent);
+        WriteScratchNodeData(
+            args.scratchNodesScratchOffset,
+            possiblyNotEliminatedIndex,
+            SCRATCH_NODE_PARENT_OFFSET,
+            parentNode.parent);
 
         if (eliminatedNode.parent == currentBatchRootIndex)
         {

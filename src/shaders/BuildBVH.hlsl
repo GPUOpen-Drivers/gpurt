@@ -180,12 +180,7 @@ void CopyUnsortedScratchLeafNode(
     uint numActivePrims,
     uint sortedPrimIndicesOffset,
     uint unsortedNodesBaseOffset,
-    uint bvhNodesBaseOffset,
-    uint centroidBoxesScratchOffset,
-    uint gridPosOffset,
-    uint reservedUint0,
-    bool reservedUint1,
-    uint4 reservedUint2)
+    uint bvhNodesBaseOffset)
 {
     // Store leaf node bounding boxes
     const uint nodeIndex = FetchSortedPrimIndex(sortedPrimIndicesOffset, primIndex);
@@ -194,19 +189,18 @@ void CopyUnsortedScratchLeafNode(
 
     const uint scratchNodeOffset = CalcScratchNodeOffset(bvhNodesBaseOffset, LEAFIDX(primIndex));
 
-    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_V0_OFFSET,             unsortedNode.bbox_min_or_v0);
-    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_PRIMITIVE_ID_OFFSET,   unsortedNode.left_or_primIndex_or_instIndex);
-    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_V1_OFFSET,             unsortedNode.bbox_max_or_v1);
-    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_GEOMETRY_INDEX_OFFSET, unsortedNode.right_or_geometryIndex);
-    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_V2_OFFSET,             unsortedNode.sah_or_v2_or_instBasePtr);
+    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_V0_OFFSET,             unsortedNode.bbox_min_or_v0);
+    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_PRIMITIVE_ID_OFFSET,   unsortedNode.left_or_primIndex_or_instIndex);
+    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_V1_OFFSET,             unsortedNode.bbox_max_or_v1);
+    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_GEOMETRY_INDEX_OFFSET, unsortedNode.right_or_geometryIndex);
+    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_V2_OFFSET,             unsortedNode.sah_or_v2_or_instBasePtr);
 
     // DO NOT COPY PARENT!!!
 
-    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_TYPE_OFFSET, unsortedNode.type);
-    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, unsortedNode.flags_and_instanceMask);
-    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, unsortedNode.splitBox_or_nodePointer);
-    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET, unsortedNode.numPrimitivesAndDoCollapse);
-
+    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_TYPE_OFFSET, unsortedNode.type);
+    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, unsortedNode.flags_and_instanceMask);
+    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, unsortedNode.splitBox_or_nodePointer);
+    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET, unsortedNode.numPrimitivesAndDoCollapse);
 }
 
 //=====================================================================================================================
@@ -327,9 +321,9 @@ void FastAgglomerativeLbvhImpl(
         if (parentNodeIndex != numInternalNodes)
         {
             // Make the parent node point to the current child
-            ScratchBuffer.Store(CalcScratchNodeOffset(args.baseScratchNodesOffset, parentNodeIndex) + childOffset, currentNodeIndex);
+            WriteScratchNodeData(args.baseScratchNodesOffset, parentNodeIndex, childOffset, currentNodeIndex);
             // Link the child to its parent
-            ScratchBuffer.Store(CalcScratchNodeOffset(args.baseScratchNodesOffset, currentNodeIndex) + SCRATCH_NODE_PARENT_OFFSET, parentNodeIndex);
+            WriteScratchNodeData(args.baseScratchNodesOffset, currentNodeIndex, SCRATCH_NODE_PARENT_OFFSET, parentNodeIndex);
         }
 
         // ... and pass the opposite range of keys to the parent
@@ -353,7 +347,7 @@ void FastAgglomerativeLbvhImpl(
         if (parentNodeIndex == numInternalNodes)
         {
             // Store invalid index as parent of root
-            ScratchBuffer.Store(CalcScratchNodeOffset(args.baseScratchNodesOffset, currentNodeIndex) + SCRATCH_NODE_PARENT_OFFSET, 0xffffffff);
+            WriteScratchNodeData(args.baseScratchNodesOffset, currentNodeIndex, SCRATCH_NODE_PARENT_OFFSET, 0xffffffff);
             // Store the index of the root node
             WriteRootNodeIndex(args.rootNodeIndexOffset, currentNodeIndex);
             // Do not write the parent node since it's invalid.
@@ -404,22 +398,20 @@ void SplitInternalNodeLbvh(
     const uint splitIdx2 = noCopySortedNodes  ? LEAFIDX(FetchSortedPrimIndex(sortedPrimIndicesOffset, split + 1)) : LEAFIDX(split + 1);
     const uint c1idx = (split == range.x)     ? splitIdx1 : NODEIDX(split);
     const uint c2idx = (split + 1 == range.y) ? splitIdx2 : NODEIDX(split + 1);
-    const uint c1ScratchNodeOffset = CalcScratchNodeOffset(scratchNodesOffset, c1idx);
-    const uint c2ScratchNodeOffset = CalcScratchNodeOffset(scratchNodesOffset, c2idx);
 
     // update the parent pointer of each child
-    ScratchBuffer.Store(c1ScratchNodeOffset + SCRATCH_NODE_PARENT_OFFSET, NODEIDX(nodeIndex));
-    ScratchBuffer.Store(c2ScratchNodeOffset + SCRATCH_NODE_PARENT_OFFSET, NODEIDX(nodeIndex));
+    WriteScratchNodeData(scratchNodesOffset, c1idx, SCRATCH_NODE_PARENT_OFFSET, NODEIDX(nodeIndex));
+    WriteScratchNodeData(scratchNodesOffset, c2idx, SCRATCH_NODE_PARENT_OFFSET, NODEIDX(nodeIndex));
 
     // calculate the byte offset of the current node
     const uint scratchNodeOffset = CalcScratchNodeOffset(scratchNodesOffset, NODEIDX(nodeIndex));
 
-    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_LEFT_OFFSET,  c1idx);
-    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_RIGHT_OFFSET, c2idx);
-    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, 0);
+    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_LEFT_OFFSET,  c1idx);
+    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_RIGHT_OFFSET, c2idx);
+    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, 0);
 
     const uint nodeType = GetInternalNodeType();
-    ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_TYPE_OFFSET, nodeType);
+    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_TYPE_OFFSET, nodeType);
 }
 
 //======================================================================================================================
@@ -441,16 +433,16 @@ void FastBuildBVH(
             const uint targetNodeOffset = CalcScratchNodeOffset(bvhNodesOffset, LEAFIDX(WavePrefixCountBits(active)));
             const ScratchNode node      = FetchScratchNode(leafNodesOffset, globalId);
 
-            ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_V0_OFFSET,             node.bbox_min_or_v0);
-            ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_PRIMITIVE_ID_OFFSET,   node.left_or_primIndex_or_instIndex);
-            ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_V1_OFFSET,             node.bbox_max_or_v1);
-            ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_GEOMETRY_INDEX_OFFSET, node.right_or_geometryIndex);
-            ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_V2_OFFSET,             node.sah_or_v2_or_instBasePtr);
+            WriteScratchNodeDataAtOffset(targetNodeOffset, SCRATCH_NODE_V0_OFFSET,             node.bbox_min_or_v0);
+            WriteScratchNodeDataAtOffset(targetNodeOffset, SCRATCH_NODE_PRIMITIVE_ID_OFFSET,   node.left_or_primIndex_or_instIndex);
+            WriteScratchNodeDataAtOffset(targetNodeOffset, SCRATCH_NODE_V1_OFFSET,             node.bbox_max_or_v1);
+            WriteScratchNodeDataAtOffset(targetNodeOffset, SCRATCH_NODE_GEOMETRY_INDEX_OFFSET, node.right_or_geometryIndex);
+            WriteScratchNodeDataAtOffset(targetNodeOffset, SCRATCH_NODE_V2_OFFSET,             node.sah_or_v2_or_instBasePtr);
 
-            ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_TYPE_OFFSET,            node.type);
-            ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, node.flags_and_instanceMask);
-            ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, node.splitBox_or_nodePointer);
-            ScratchBuffer.Store(targetNodeOffset + SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET, node.numPrimitivesAndDoCollapse);
+            WriteScratchNodeDataAtOffset(targetNodeOffset, SCRATCH_NODE_TYPE_OFFSET,            node.type);
+            WriteScratchNodeDataAtOffset(targetNodeOffset, SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, node.flags_and_instanceMask);
+            WriteScratchNodeDataAtOffset(targetNodeOffset, SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, node.splitBox_or_nodePointer);
+            WriteScratchNodeDataAtOffset(targetNodeOffset, SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET, node.numPrimitivesAndDoCollapse);
         }
 
         // Compute internal nodes and construct the BVH topology
@@ -462,18 +454,15 @@ void FastBuildBVH(
 
             const uint nodeOffset = CalcScratchNodeOffset(bvhNodesOffset, globalId);
 
-            ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_LEFT_OFFSET,  childLeft);
-            ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_RIGHT_OFFSET, childRight);
-            ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, 0);
+            WriteScratchNodeDataAtOffset(nodeOffset, SCRATCH_NODE_LEFT_OFFSET,  childLeft);
+            WriteScratchNodeDataAtOffset(nodeOffset, SCRATCH_NODE_RIGHT_OFFSET, childRight);
+            WriteScratchNodeDataAtOffset(nodeOffset, SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, 0);
 
             const uint nodeType = GetInternalNodeType();
-            ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_TYPE_OFFSET, nodeType);
+            WriteScratchNodeDataAtOffset(nodeOffset, SCRATCH_NODE_TYPE_OFFSET, nodeType);
 
-            const uint childLeftNodeOffset  = CalcScratchNodeOffset(bvhNodesOffset, childLeft);
-            const uint childRightNodeOffset = CalcScratchNodeOffset(bvhNodesOffset, childRight);
-
-            ScratchBuffer.Store(childLeftNodeOffset + SCRATCH_NODE_PARENT_OFFSET,  globalId);
-            ScratchBuffer.Store(childRightNodeOffset + SCRATCH_NODE_PARENT_OFFSET, globalId);
+            WriteScratchNodeData(bvhNodesOffset, childLeft, SCRATCH_NODE_PARENT_OFFSET,  globalId);
+            WriteScratchNodeData(bvhNodesOffset, childRight, SCRATCH_NODE_PARENT_OFFSET, globalId);
         }
 
         if (globalId == 0)
@@ -504,12 +493,7 @@ void BuildBVH(
                 numActivePrims,
                 ShaderConstants.offsets.primIndicesSorted,
                 ShaderConstants.offsets.bvhLeafNodeData,
-                ShaderConstants.offsets.bvhNodeData,
-                0,
-                0,
-                0,
-                false,
-                0);
+                ShaderConstants.offsets.bvhNodeData);
         }
 
 #if USE_BUILD_LBVH == 1

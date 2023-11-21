@@ -28,6 +28,8 @@
 #include "gpurt/gpurtLib.h"
 #include "gpurt/gpurtCounter.h"
 #include "gpurtInternalShaderBindings.h"
+#include "gpurt/gpurtBackend.h"
+#include "gpurt/gpurtInlineFuncs.h"
 
 #include "palCmdBuffer.h"
 #include "palInlineFuncs.h"
@@ -35,15 +37,6 @@
 #include "palMemTrackerImpl.h"
 #include "palHashSetImpl.h"
 #include "palVectorImpl.h"
-
-// __declspec(dllexport) has limitations. "No name decoration is applied to exported C functions or C++ extern "C"
-// functions using the __cdecl calling convention." In order to export a unmangled symbol for a function that uses a
-// different calling convention you must invoke the linker directly on MSVC. NOTE: Name mangling doesn't occur for
-// exported C functions on 64-bit platforms.
-//
-// Place this inside the function body you want to export. And ensure the name of the function is the symbol name
-// you want to export
-#define GPURT_EXPORT_UNMANGLED_SYMBOL_MSVC
 
 #if GPURT_DEVELOPER
 #if defined(__GNUC__)
@@ -105,7 +98,6 @@ constexpr const char* FunctionTableRTIP1_1[] =
     "\01?GetRayQuery64BitInstanceNodePtr@@YA_K_KI@Z",
 };
 
-#if GPURT_BUILD_RTIP2
 //=====================================================================================================================
 // Function table for ray tracing IP2.0
 constexpr const char* FunctionTableRTIP2_0[] =
@@ -125,7 +117,6 @@ constexpr const char* FunctionTableRTIP2_0[] =
     "\01?FetchTrianglePositionFromRayQuery@@YA?AUTriangleData@@URayQueryInternal@@_N@Z",
     "\01?GetRayQuery64BitInstanceNodePtr@@YA_K_KI@Z",
 };
-#endif
 
 //=====================================================================================================================
 // Maps Pal::RayTracingIpLevel to the appropriate function table.
@@ -142,11 +133,9 @@ static Pal::Result QueryRayTracingEntryFunctionTableInternal(
         case Pal::RayTracingIpLevel::RtIp1_1:
             ppFuncTable = FunctionTableRTIP1_1;
             break;
-#if GPURT_BUILD_RTIP2
         case Pal::RayTracingIpLevel::RtIp2_0:
             ppFuncTable = FunctionTableRTIP2_0;
             break;
-#endif
         case Pal::RayTracingIpLevel::None:
         default:
             result = Pal::Result::ErrorInvalidValue;
@@ -190,12 +179,15 @@ static Pal::Result QueryRayTracingEntryFunctionTableInternal(
     return result;
 }
 
+namespace Internal {
+
 // =====================================================================================================================
 // Create GPURT device
 //
 Pal::Result GPURT_API_ENTRY CreateDevice(
     const DeviceInitInfo&  info,
     const ClientCallbacks& callbacks,
+    const IBackend*        pBackend,
     void*            const pMemory,
     IDevice**        const ppDevice)
 {
@@ -204,7 +196,7 @@ Pal::Result GPURT_API_ENTRY CreateDevice(
     Pal::Result result = Pal::Result::ErrorInvalidValue;
     if ((ppDevice != nullptr) && (pMemory != nullptr))
     {
-        Internal::Device* pDevice = PAL_PLACEMENT_NEW(pMemory) Internal::Device(info, callbacks);
+        Internal::Device* pDevice = PAL_PLACEMENT_NEW(pMemory) Internal::Device(info, callbacks, pBackend);
         result = pDevice->Init();
 
         if (result != Pal::Result::Success)
@@ -277,10 +269,10 @@ Pal::Result GPURT_API_ENTRY QueryRayTracingEntryFunctionTable(
     const Pal::RayTracingIpLevel   rayTracingIpLevel,
     EntryFunctionTable* const      pEntryFunctionTable)
 {
+    GPURT_EXPORT_UNMANGLED_SYMBOL_MSVC
+
     return QueryRayTracingEntryFunctionTableInternal(rayTracingIpLevel, pEntryFunctionTable);
 }
-
-namespace Internal {
 
 //=====================================================================================================================
 uint32 Device::GetStaticPipelineFlags(
@@ -351,6 +343,7 @@ void Device::GetAccelStructPrebuildInfo(
     deviceSettings = m_info.deviceSettings;
 
     BvhBuilder builder(nullptr,
+                       *m_pBackend,
                        this,
                        *m_info.pDeviceProperties,
                        clientCb,
@@ -362,11 +355,11 @@ void Device::GetAccelStructPrebuildInfo(
 // =====================================================================================================================
 Device::Device(
     const DeviceInitInfo&  info,
-    const ClientCallbacks& clientCb)
+    const ClientCallbacks& clientCb,
+    const IBackend*        pBackend)
     :
     m_info(info),
     m_clientCb(clientCb),
-    m_pipelineMap(64, &m_allocator),
     m_tlasCaptureList(this),
     m_isTraceActive(false),
     m_accelStructTraceSource(this),
@@ -374,16 +367,17 @@ Device::Device(
 #if GPURT_ENABLE_GPU_DEBUG
     m_debugMonitor(this),
 #endif
-    m_rayHistoryTraceList(this)
+    m_rayHistoryTraceList(this),
+    m_pBackend(pBackend)
 {
 }
 
 // =====================================================================================================================
 Device::~Device()
 {
-    for (InternalPipelineMap::Iterator itr = m_pipelineMap.Begin(); itr.Get(); itr.Next())
+    for (const std::pair<InternalPipelineKey, InternalPipelineMemoryPair>& kv : m_pipelineMap)
     {
-        m_clientCb.pfnDestroyInternalComputePipeline(m_info, itr.Get()->value.pPipeline, itr.Get()->value.pMemory);
+        m_clientCb.pfnDestroyInternalComputePipeline(m_info, kv.second.pPipeline, kv.second.pMemory);
     }
 }
 
@@ -398,7 +392,6 @@ void Device::Destroy()
 Pal::Result Device::Init()
 {
     Pal::Result result = Pal::Result::Success;
-    result = m_pipelineMap.Init();
     *m_info.pAccelStructTracker = {};
 
     Pal::DeviceProperties props = {};
@@ -428,13 +421,11 @@ Pal::Result Device::Init()
         m_info.deviceSettings.enableMergedEncodeBuild = false;
     }
 
-#if GPURT_BUILD_RTIP2
     // Fused instance node is currently only supported on RTIP2.0
     if (m_rtIpLevel != Pal::RayTracingIpLevel::RtIp2_0)
     {
         m_info.deviceSettings.enableFusedInstanceNode = false;
     }
-#endif
 
     return result;
 }
@@ -467,35 +458,31 @@ void Device::Free(
 
 // =====================================================================================================================
 // Returns a specific internal pipeline or initialize specified internal pipeline
-Pal::IPipeline* Device::GetInternalPipeline(
+ClientPipelineHandle Device::GetInternalPipeline(
     InternalRayTracingCsType        shaderType,
     const CompileTimeBuildSettings& buildSettings,
-    uint32                          buildSettingsHash
-    ) const
+    uint32                          buildSettingsHash)
 {
-    Util::RWLock* pPipelineLock = const_cast<Util::RWLock*>(&m_internalPipelineLock);
-
     InternalPipelineKey key = {};
     key.shaderType   = shaderType;
     key.settingsHash = buildSettingsHash;
 
-    InternalPipelineMemoryPair* pPipelinePair = nullptr;
+    ClientPipelineHandle pPipeline = nullptr;
 
     {
-        Util::RWLockAuto<Util::RWLock::LockType::ReadOnly> lock(pPipelineLock);
-        pPipelinePair = m_pipelineMap.FindKey(key);
-    }
+        Util::RWLockAuto<Util::RWLock::LockType::ReadWrite> lock(&m_internalPipelineLock);
+        auto it = m_pipelineMap.find(key);
 
-    if (pPipelinePair == nullptr)
-    {
-        Util::RWLockAuto<Util::RWLock::LockType::ReadWrite> lock(pPipelineLock);
-
-        bool existed = false;
-        Pal::Result result = const_cast<InternalPipelineMap&>(m_pipelineMap).FindAllocate(key, &existed, &pPipelinePair);
-
-        if ((existed == false) && (result == Pal::Result::Success) && (pPipelinePair != nullptr))
+        if (it != m_pipelineMap.end())
         {
-            const PipelineBuildInfo* pPipelineBuildInfo = &InternalPipelineBuildInfo[static_cast<uint32>(shaderType)];
+            pPipeline = it->second.pPipeline;
+        }
+        else
+        {
+            Pal::Result result = Pal::Result::Success;
+
+            InternalPipelineMemoryPair pipelinePair = {};
+            const PipelineBuildInfo& pipelineBuildInfo = GetPipelineBuildInfo(shaderType);
 
             NodeMapping nodes[MaxInternalPipelineNodes];
 
@@ -505,13 +492,13 @@ Pal::IPipeline* Device::GetInternalPipeline(
             uint32 cbvCount         = 0;
             uint32 cbvBindingCount  = 0;
 
-            for (uint32 nodeIndex = 0; nodeIndex < pPipelineBuildInfo->nodeCount; ++nodeIndex)
+            for (uint32 nodeIndex = 0; nodeIndex < pipelineBuildInfo.nodeCount; ++nodeIndex)
             {
                 // Make sure we haven't exceeded our maximum number of nodes.
                 PAL_ASSERT(nodeIndex < MaxInternalPipelineNodes);
-                nodes[nodeIndex] = pPipelineBuildInfo->pNodes[nodeIndex];
+                nodes[nodeIndex] = pipelineBuildInfo.pNodes[nodeIndex];
                 // These must be defined:
-                const NodeType nodeType = pPipelineBuildInfo->pNodes[nodeIndex].type;
+                const NodeType nodeType = pipelineBuildInfo.pNodes[nodeIndex].type;
                 const uint32 nodeSize = nodes[nodeIndex].dwSize;
                 PAL_ASSERT(nodeSize > 0);
                 // These are calculated dynamically below into a tightly-packed top-level resource representation
@@ -566,24 +553,24 @@ Pal::IPipeline* Device::GetInternalPipeline(
                 nodeOffset += nodeSize;
             }
 
-            PipelineBuildInfo buildInfo = *pPipelineBuildInfo;
+            PipelineBuildInfo newBuildInfo = pipelineBuildInfo;
 
-            buildInfo.pNodes = nodes;
-            buildInfo.apiPsoHash = GetInternalPsoHash(buildInfo.shaderType, buildSettings);
+            newBuildInfo.pNodes = nodes;
+            newBuildInfo.apiPsoHash = GetInternalPsoHash(newBuildInfo.shaderType, buildSettings);
             PipelineCompilerOption wave64Option[1] = {
                 {PipelineOptionName::waveSize, PipelineOptionName::Wave64} };
 
-            switch (buildInfo.shaderType)
+            switch (pipelineBuildInfo.shaderType)
             {
                 case InternalRayTracingCsType::BuildBVHTD:
                 case InternalRayTracingCsType::BuildBVHTDTR:
                 case InternalRayTracingCsType::BuildParallel:
-                    buildInfo.hashedCompilerOptionCount = 1;
-                    buildInfo.pHashedCompilerOptions = wave64Option;
+                    newBuildInfo.hashedCompilerOptionCount = 1;
+                    newBuildInfo.pHashedCompilerOptions = wave64Option;
                     break;
                 default:
-                    buildInfo.hashedCompilerOptionCount = 0;
-                    buildInfo.pHashedCompilerOptions = nullptr;
+                    newBuildInfo.hashedCompilerOptionCount = 0;
+                    newBuildInfo.pHashedCompilerOptions = nullptr;
                     break;
             }
 
@@ -594,7 +581,7 @@ Pal::IPipeline* Device::GetInternalPipeline(
             char pipelineName[MaxStrLength];
 #endif
 
-            const uint32 lastNodeIndex = pPipelineBuildInfo->nodeCount;
+            const uint32 lastNodeIndex = pipelineBuildInfo.nodeCount;
 
             static constexpr uint32 ReservedBuildSettingsCBVIndex = 255;
             nodes[lastNodeIndex].type          = NodeType::ConstantBuffer;
@@ -608,7 +595,7 @@ Pal::IPipeline* Device::GetInternalPipeline(
             nodes[lastNodeIndex].binding       = ~0u;
             nodes[lastNodeIndex].descSet       = ~0u;
 
-            buildInfo.nodeCount++;
+            newBuildInfo.nodeCount++;
 
             compileConstants.pConstants          = reinterpret_cast<const uint32*>(&buildSettings);
             compileConstants.numConstants        = sizeof(CompileTimeBuildSettings) / sizeof(uint32);
@@ -617,7 +604,7 @@ Pal::IPipeline* Device::GetInternalPipeline(
 
 #if GPURT_DEVELOPER
             // Append appropriate strings based on build settings
-            if (buildInfo.pPipelineName != nullptr)
+            if (newBuildInfo.pPipelineName != nullptr)
             {
                 constexpr const char* BuildModeStr[] =
                 {
@@ -642,93 +629,77 @@ Pal::IPipeline* Device::GetInternalPipeline(
                 };
 
                 char radixSortLevelStr[MaxStrLength];
-                Util::Snprintf(radixSortLevelStr, MaxStrLength, "_RadixSortLevel_%d", buildSettings.radixSortScanLevel);
+                Util::Snprintf(radixSortLevelStr,
+                                MaxStrLength,
+                                "_RadixSortLevel_%d",
+                                buildSettings.radixSortScanLevel);
 
                 Util::Snprintf(pipelineName, MaxStrLength, "%s%s%s_%s%s%s%s%s",
-                                buildInfo.pPipelineName,
+                                newBuildInfo.pPipelineName,
                                 buildSettings.topLevelBuild ? "_TLAS" : "_BLAS",
                                 buildSettings.topLevelBuild ? "" : GeometryTypeStr[buildSettings.geometryType],
-                                buildSettings.enableTopDownBuild ? "TopDown" : BuildModeStr[buildSettings.buildMode],
+                                buildSettings.enableTopDownBuild ?
+                                    "TopDown" : BuildModeStr[buildSettings.buildMode],
                                 buildSettings.doTriangleSplitting ? "_TriSplit" : "",
                                 buildSettings.triangleCompressionMode ? "_TriCompr" : "",
                                 RebraidTypeStr[buildSettings.rebraidType],
                                 buildSettings.enableMergeSort ? "_MergeSort" : radixSortLevelStr);
 
-                buildInfo.pPipelineName = &pipelineName[0];
+                newBuildInfo.pPipelineName = &pipelineName[0];
             }
 #endif
 
             result = m_clientCb.pfnCreateInternalComputePipeline(m_info,
-                                                                 buildInfo,
+                                                                 newBuildInfo,
                                                                  compileConstants,
-                                                                 &pPipelinePair->pPipeline,
-                                                                 &pPipelinePair->pMemory);
-
+                                                                 &pipelinePair.pPipeline,
+                                                                 &pipelinePair.pMemory);
             PAL_ASSERT(result == Pal::Result::Success);
+
+            m_pipelineMap.insert({ key, pipelinePair });
+            pPipeline = pipelinePair.pPipeline;
         }
     }
 
-    return (pPipelinePair != nullptr) ? pPipelinePair->pPipeline : nullptr;
+    PAL_ASSERT(pPipeline != nullptr);
+    return pPipeline;
 }
 
 // =====================================================================================================================
 // Binds the pipeline that corresponds with the provided internal shader type
 void Device::BindPipeline(
-    Pal::ICmdBuffer*                pCmdBuffer,
+    ClientCmdBufferHandle           cmdBuffer,
     InternalRayTracingCsType        type,
     const CompileTimeBuildSettings& buildSettings,
-    uint32                          buildSettingsHash) const
+    uint32                          buildSettingsHash)
 {
-    const Pal::IPipeline* pPipeline = GetInternalPipeline(type, buildSettings, buildSettingsHash);
-
-    Pal::PipelineBindParams bindParam = {};
-    bindParam.pipelineBindPoint       = Pal::PipelineBindPoint::Compute;
-    bindParam.pPipeline               = pPipeline;
-    bindParam.apiPsoHash              = GetInternalPsoHash(type, buildSettings);
-
-#if GPURT_DEVELOPER
-    OutputPipelineName(pCmdBuffer, type);
-#endif
-
-    pCmdBuffer->CmdBindPipeline(bindParam);
+    m_pBackend->BindPipeline(cmdBuffer,
+                             GetInternalPipeline(type, buildSettings, buildSettingsHash),
+                             GetInternalPsoHash(type, buildSettings));
 }
 
 // =====================================================================================================================
 // Setup the SRD tables for the provided buffer views
 uint32 Device::WriteBufferSrdTable(
-    Pal::ICmdBuffer*           pCmdBuffer,
-    const Pal::BufferViewInfo* pBufferViews,
-    uint32                     count,
-    bool                       typedBuffer,
-    uint32                     entryOffset) const
+    ClientCmdBufferHandle cmdBuffer,
+    const BufferViewInfo* pBufferViews,
+    uint32                count,
+    bool                  typedBuffer,
+    uint32                entryOffset) const
 {
-    const uint32  bufferSrdSizeDw = GetBufferSrdSizeDw();
-    Pal::IDevice* pPalDevice      = GetPalDevice();
-    const void*   pNullBuffer     = GetInitInfo().pDeviceProperties->gfxipProperties.nullSrds.pNullBufferView;
-
     gpusize tableVa;
-    void* pTable = pCmdBuffer->CmdAllocateEmbeddedData(bufferSrdSizeDw * count, bufferSrdSizeDw, &tableVa);
+    uint32 srdSize;
+    void* pTable = m_pBackend->AllocateDescriptorTable(cmdBuffer, count, &tableVa, &srdSize);
 
     for (uint32 i = 0; i < count; i++)
     {
-        const Pal::BufferViewInfo* pCurrentBufInfo = &pBufferViews[i];
+        const BufferViewInfo& currentBufInfo = pBufferViews[i];
 
-        if (pCurrentBufInfo->gpuAddr == 0)
-        {
-            memcpy(pTable, pNullBuffer, bufferSrdSizeDw * sizeof(uint32));
-        }
-        else if (typedBuffer)
-        {
-            pPalDevice->CreateTypedBufferViewSrds(1, pCurrentBufInfo, pTable);
-        }
-        else
-        {
-            pPalDevice->CreateUntypedBufferViewSrds(1, pCurrentBufInfo, pTable);
-        }
-        pTable = Util::VoidPtrInc(pTable, bufferSrdSizeDw * sizeof(uint32));
+        m_pBackend->CreateBufferViewSrds(1, currentBufInfo, pTable, typedBuffer);
+        pTable = Util::VoidPtrInc(pTable, srdSize);
     }
 
-    entryOffset = WriteUserDataEntries(pCmdBuffer, &tableVa, 1, entryOffset);
+    entryOffset = WriteUserDataEntries(cmdBuffer, &tableVa, 1, entryOffset);
 
     return entryOffset;
 }
@@ -821,9 +792,9 @@ void Device::WriteCapturedBvh(
 
                     // Decode on GPU
                     ClientCmdContextHandle context = nullptr;
-                    Pal::ICmdBuffer* pCmdBuffer = nullptr;
 
-                    result = m_clientCb.pfnAcquireCmdContext(m_info, &context, &pCmdBuffer);
+                    ClientCmdBufferHandle cmdBuffer = nullptr;
+                    result = m_clientCb.pfnAcquireCmdContext(m_info, &context, &cmdBuffer);
 
                     if (result != Pal::Result::Success)
                     {
@@ -831,7 +802,7 @@ void Device::WriteCapturedBvh(
                         break;
                     }
 
-                    CopyAccelStruct(pCmdBuffer, copyInfo);
+                    CopyAccelStruct(cmdBuffer, copyInfo);
 
                     result = m_clientCb.pfnFlushCmdContext(context);
 
@@ -900,9 +871,8 @@ void Device::WriteCapturedBvh(
                             PAL_ASSERT(sizeInBytes < UINT32_MAX);
 
                             ClientCmdContextHandle context = nullptr;
-                            Pal::ICmdBuffer* pCmdBuffer = nullptr;
-
-                            result = m_clientCb.pfnAcquireCmdContext(m_info, &context, &pCmdBuffer);
+                            ClientCmdBufferHandle cmdBuffer = nullptr;
+                            result = m_clientCb.pfnAcquireCmdContext(m_info, &context, &cmdBuffer);
 
                             if (result != Pal::Result::Success)
                             {
@@ -919,7 +889,7 @@ void Device::WriteCapturedBvh(
                             }
                             const uint32 sizeInDwords = static_cast<uint32>(sizeInBytes) >> 2;
 
-                            CopyBufferRaw(pCmdBuffer, destGpuVa, gpuVa, sizeInDwords);
+                            CopyBufferRaw(cmdBuffer, destGpuVa, gpuVa, sizeInDwords);
 
                             result = m_clientCb.pfnFlushCmdContext(context);
 
@@ -1028,7 +998,7 @@ uint32 Device::GetRayHistoryLightCounterMask() const
 
 // =====================================================================================================================
 void Device::TraceRtDispatch(
-    Pal::ICmdBuffer*                pCmdBuffer,
+    ClientCmdBufferHandle           cmdBuffer,
     RtPipelineType                  pipelineType,
     RtDispatchInfo                  dispatchInfo,
     DispatchRaysConstants*          pConstants)
@@ -1099,7 +1069,7 @@ void Device::TraceRtDispatch(
         traceListInfo.shaderTableRayGenOffset = traceSizeInBytes;
         runningOffsetGpuVa = traceSizeInBytes + sizeof(ShaderTableInfo);
 
-        WriteShaderTableData(pCmdBuffer,
+        WriteShaderTableData(cmdBuffer,
                              runningOffsetGpuVa,
                              destGpuVa,
                              traceListInfo.shaderTableRayGenOffset,
@@ -1113,7 +1083,7 @@ void Device::TraceRtDispatch(
 
         runningOffsetGpuVa += dispatchInfo.raygenShaderTable.size + sizeof(ShaderTableInfo);
 
-        WriteShaderTableData(pCmdBuffer,
+        WriteShaderTableData(cmdBuffer,
                              runningOffsetGpuVa,
                              destGpuVa,
                              traceListInfo.shaderTableMissOffset,
@@ -1127,7 +1097,7 @@ void Device::TraceRtDispatch(
 
         runningOffsetGpuVa += dispatchInfo.missShaderTable.size + sizeof(ShaderTableInfo);
 
-        WriteShaderTableData(pCmdBuffer,
+        WriteShaderTableData(cmdBuffer,
                              runningOffsetGpuVa,
                              destGpuVa,
                              traceListInfo.shaderTableHitGroupOffset,
@@ -1141,7 +1111,7 @@ void Device::TraceRtDispatch(
 
         runningOffsetGpuVa += dispatchInfo.hitGroupTable.size + sizeof(ShaderTableInfo);
 
-        WriteShaderTableData(pCmdBuffer,
+        WriteShaderTableData(cmdBuffer,
                              runningOffsetGpuVa,
                              destGpuVa,
                              traceListInfo.shaderTableCallableOffset,
@@ -1205,7 +1175,7 @@ void Device::AddMetadataToList(
 
 // =====================================================================================================================
 void Device::WriteShaderTableData(
-    Pal::ICmdBuffer*       pCmdBuffer,
+    ClientCmdBufferHandle  cmdBuffer,
     uint64                 runningOffsetGpuVa,
     gpusize                destGpuVa,
     uint64                 runningOffset,
@@ -1226,15 +1196,12 @@ void Device::WriteShaderTableData(
     pOutShaderTableInfo->stride = shaderTable.stride;
     pOutShaderTableInfo->sizeInBytes = shaderTable.size;
 
-    Pal::MemoryCopyRegion region = {};
-    region.srcOffset = 0;
-    region.copySize  = shaderTable.size;
-
-    pCmdBuffer->CmdCopyMemoryByGpuVa(
-        shaderTable.addr,
-        destGpuVa + runningOffsetGpuVa,
-        1,
-        &region);
+    m_pBackend->CopyGpuMemoryRegion(cmdBuffer,
+                                    shaderTable.addr,
+                                    0,
+                                    destGpuVa + runningOffsetGpuVa,
+                                    0,
+                                    shaderTable.size);
 }
 
 // =====================================================================================================================
@@ -1706,13 +1673,13 @@ Pal::Result Device::GetAccelStructPostBuildSize(
         postBuildInfo.pSrcAccelStructGpuAddrs = pGpuVas;
 
         ClientCmdContextHandle context = nullptr;
-        Pal::ICmdBuffer* pCmdBuffer = nullptr;
 
-        result = m_clientCb.pfnAcquireCmdContext(m_info, &context, &pCmdBuffer);
+        ClientCmdBufferHandle cmdBuffer = nullptr;
+        result = m_clientCb.pfnAcquireCmdContext(m_info, &context, &cmdBuffer);
 
         if (result == Pal::Result::Success)
         {
-            EmitAccelStructPostBuildInfo(pCmdBuffer, postBuildInfo);
+            EmitAccelStructPostBuildInfo(cmdBuffer, postBuildInfo);
 
             result = m_clientCb.pfnFlushCmdContext(context);
 
@@ -1745,11 +1712,11 @@ Pal::Result Device::GetAccelStructPostBuildSize(
 
 // =====================================================================================================================
 void Device::BuildAccelStruct(
-    Pal::ICmdBuffer*              pCmdBuffer,
+    ClientCmdBufferHandle         cmdBuffer,
     const AccelStructBuildInfo&   buildInfo
 )
 {
-    PAL_ASSERT(pCmdBuffer != nullptr);
+    PAL_ASSERT(cmdBuffer != nullptr);
 
     DeviceSettings deviceSettings;
     ClientCallbacks clientCb = {};
@@ -1758,9 +1725,10 @@ void Device::BuildAccelStruct(
 
     deviceSettings = m_info.deviceSettings;
 
-    pCmdBuffer->CmdSaveComputeState(Pal::ComputeStateAll);
+    m_pBackend->SaveComputeState(cmdBuffer);
 
-    BvhBuilder builder(pCmdBuffer,
+    BvhBuilder builder(cmdBuffer,
+                       *m_pBackend,
                        this,
                        *m_info.pDeviceProperties,
                        clientCb,
@@ -1769,22 +1737,23 @@ void Device::BuildAccelStruct(
 
     builder.BuildRaytracingAccelerationStructure();
 
-    pCmdBuffer->CmdRestoreComputeState(Pal::ComputeStateAll);
+    m_pBackend->RestoreComputeState(cmdBuffer);
 }
 
 // =====================================================================================================================
 void Device::BuildAccelStructs(
-    Pal::ICmdBuffer*                       pCmdBuffer,
+    ClientCmdBufferHandle                  cmdBuffer,
     Util::Span<const AccelStructBuildInfo> buildInfo)
 {
-    PAL_ASSERT(pCmdBuffer != nullptr);
+    PAL_ASSERT(cmdBuffer != nullptr);
 
     ClientCallbacks clientCb = {};
     SetUpClientCallbacks(&clientCb);
 
-    pCmdBuffer->CmdSaveComputeState(Pal::ComputeStateAll);
+    m_pBackend->SaveComputeState(cmdBuffer);
 
-    BvhBatcher batcher(pCmdBuffer,
+    BvhBatcher batcher(cmdBuffer,
+                       *m_pBackend,
                        this,
                        *m_info.pDeviceProperties,
                        clientCb,
@@ -1792,16 +1761,16 @@ void Device::BuildAccelStructs(
 
     batcher.BuildAccelerationStructureBatch(buildInfo);
 
-    pCmdBuffer->CmdRestoreComputeState(Pal::ComputeStateAll);
+    m_pBackend->RestoreComputeState(cmdBuffer);
 }
 
 // =====================================================================================================================
 void Device::EmitAccelStructPostBuildInfo(
-    Pal::ICmdBuffer*                pCmdBuffer,
+    ClientCmdBufferHandle           cmdBuffer,
     const AccelStructPostBuildInfo& postBuildInfo
 )
 {
-    PAL_ASSERT(pCmdBuffer != nullptr);
+    PAL_ASSERT(cmdBuffer != nullptr);
 
     DeviceSettings deviceSettings;
     ClientCallbacks clientCb = {};
@@ -1810,9 +1779,10 @@ void Device::EmitAccelStructPostBuildInfo(
 
     deviceSettings = m_info.deviceSettings;
 
-    pCmdBuffer->CmdSaveComputeState(Pal::ComputeStateAll);
+    m_pBackend->SaveComputeState(cmdBuffer);
 
-    BvhBuilder builder(pCmdBuffer,
+    BvhBuilder builder(cmdBuffer,
+                       *m_pBackend,
                        this,
                        *m_info.pDeviceProperties,
                        clientCb,
@@ -1820,16 +1790,16 @@ void Device::EmitAccelStructPostBuildInfo(
 
     builder.EmitAccelerationStructurePostBuildInfo(postBuildInfo);
 
-    pCmdBuffer->CmdRestoreComputeState(Pal::ComputeStateAll);
+    m_pBackend->RestoreComputeState(cmdBuffer);
 }
 
 // =====================================================================================================================
 void Device::CopyAccelStruct(
-    Pal::ICmdBuffer*              pCmdBuffer,
+    ClientCmdBufferHandle         cmdBuffer,
     const AccelStructCopyInfo&    copyInfo
 )
 {
-    PAL_ASSERT(pCmdBuffer != nullptr);
+    PAL_ASSERT(cmdBuffer != nullptr);
 
     DeviceSettings deviceSettings;
     ClientCallbacks clientCb = {};
@@ -1838,9 +1808,10 @@ void Device::CopyAccelStruct(
 
     deviceSettings = m_info.deviceSettings;
 
-    pCmdBuffer->CmdSaveComputeState(Pal::ComputeStateAll);
+    m_pBackend->SaveComputeState(cmdBuffer);
 
-    BvhBuilder builder(pCmdBuffer,
+    BvhBuilder builder(cmdBuffer,
+                       *m_pBackend,
                        this,
                        *m_info.pDeviceProperties,
                        clientCb,
@@ -1848,63 +1819,71 @@ void Device::CopyAccelStruct(
 
     builder.CopyAccelerationStructure(copyInfo);
 
-    pCmdBuffer->CmdRestoreComputeState(Pal::ComputeStateAll);
+    m_pBackend->RestoreComputeState(cmdBuffer);
+}
+
+// =====================================================================================================================
+void Device::BindPipeline(
+    ClientCmdBufferHandle           cmdBuffer,
+    InternalRayTracingCsType        shaderType,
+    const CompileTimeBuildSettings& buildSettings,
+    uint32                          buildSettingsHash,
+    uint32                          apiPsoHash)
+{
+    m_pBackend->BindPipeline(cmdBuffer,
+                             GetInternalPipeline(shaderType, buildSettings, buildSettingsHash),
+                             apiPsoHash);
 }
 
 // =====================================================================================================================
 void Device::InitExecuteIndirect(
-    Pal::ICmdBuffer*                   pCmdBuffer,
+    ClientCmdBufferHandle              cmdBuffer,
     const InitExecuteIndirectUserData& userData,
     uint32                             maxDispatchCount,
-    uint32                             pipelineCount
-    ) const
+    uint32                             pipelineCount)
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 40
+    const
+#endif
 {
-    pCmdBuffer->CmdSaveComputeState(Pal::ComputeStateAll);
 
-    pCmdBuffer->CmdSetUserData(Pal::PipelineBindPoint::Compute,
-                               0,
-                               sizeof(userData) / sizeof(uint32),
-                               reinterpret_cast<const uint32*>(&userData));
+    m_pBackend->SaveComputeState(cmdBuffer);
 
-    Pal::PipelineBindParams bindParams = {};
-    bindParams.pipelineBindPoint = Pal::PipelineBindPoint::Compute;
-    bindParams.pPipeline = GetInternalPipeline(InternalRayTracingCsType::InitExecuteIndirect, {}, 0);
-    bindParams.apiPsoHash = GetInternalPsoHash(InternalRayTracingCsType::InitExecuteIndirect, {});
+    m_pBackend->SetUserData(cmdBuffer,
+                            0,
+                            sizeof(userData) / sizeof(uint32),
+                            reinterpret_cast<const uint32*>(&userData));
 
-    pCmdBuffer->CmdBindPipeline(bindParams);
+    m_pBackend->BindPipeline(cmdBuffer,
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 40
+                             const_cast<Device*>(this)->
+#endif
+                             GetInternalPipeline(InternalRayTracingCsType::InitExecuteIndirect, {}, 0),
+                             GetInternalPsoHash(InternalRayTracingCsType::InitExecuteIndirect, {}));
 
     const uint32 threadGroupDim = 8;
-#if PAL_CLIENT_INTERFACE_MAJOR_VERSION < 771
-    pCmdBuffer->CmdDispatch(Util::RoundUpQuotient(maxDispatchCount, threadGroupDim),
-                            Util::RoundUpQuotient(pipelineCount, threadGroupDim),
-                            1);
-#else
-    pCmdBuffer->CmdDispatch({ Util::RoundUpQuotient(maxDispatchCount, threadGroupDim),
-                              Util::RoundUpQuotient(pipelineCount, threadGroupDim),
-                              1});
-#endif
+    m_pBackend->Dispatch(cmdBuffer,
+                         Util::RoundUpQuotient(maxDispatchCount, threadGroupDim),
+                         Util::RoundUpQuotient(pipelineCount, threadGroupDim),
+                         1);
 
-    pCmdBuffer->CmdRestoreComputeState(Pal::ComputeStateAll);
+    m_pBackend->RestoreComputeState(cmdBuffer);
 }
 
 // =====================================================================================================================
 // Executes the copy buffer shader
 void Device::CopyBufferRaw(
-    Pal::ICmdBuffer* pCmdBuffer,
-    gpusize          dstBufferVa,    // Destination buffer GPU VA
-    gpusize          srcBufferVa,    // Source buffer GPU VA
-    uint32           numDwords)      // Number of Dwords to copy
+    ClientCmdBufferHandle       cmdBuffer,      // Command buffer handle
+    gpusize                     dstBufferVa,    // Destination buffer GPU VA
+    gpusize                     srcBufferVa,    // Source buffer GPU VA
+    uint32                      numDwords)      // Number of Dwords to copy
 {
 #if GPURT_DEVELOPER
-    OutputPipelineName(pCmdBuffer, InternalRayTracingCsType::CopyBufferRaw);
+    OutputPipelineName(cmdBuffer, InternalRayTracingCsType::CopyBufferRaw);
 #endif
 
-    Pal::PipelineBindParams bindParams = {};
-    bindParams.pipelineBindPoint = Pal::PipelineBindPoint::Compute;
-    bindParams.pPipeline = GetInternalPipeline(InternalRayTracingCsType::CopyBufferRaw, {}, 0);
-    bindParams.apiPsoHash = GetInternalPsoHash(InternalRayTracingCsType::CopyBufferRaw, {});
-
-    pCmdBuffer->CmdBindPipeline(bindParams);
+    m_pBackend->BindPipeline(cmdBuffer,
+                             GetInternalPipeline(InternalRayTracingCsType::CopyBufferRaw, {}, 0),
+                             GetInternalPsoHash(InternalRayTracingCsType::CopyBufferRaw, {}));
 
     uint32 entryOffset = 0;
 
@@ -1914,57 +1893,40 @@ void Device::CopyBufferRaw(
     };
 
     // Set shader constants
-    entryOffset = WriteUserDataEntries(pCmdBuffer , &shaderConstants, CopyBufferRaw::NumEntries, entryOffset);
+    entryOffset = WriteUserDataEntries(cmdBuffer, &shaderConstants, CopyBufferRaw::NumEntries, entryOffset);
 
     // Set buffer addresses
-    entryOffset = WriteBufferVa(pCmdBuffer, srcBufferVa, entryOffset);
-    entryOffset = WriteBufferVa(pCmdBuffer, dstBufferVa, entryOffset);
+    entryOffset = WriteBufferVa(cmdBuffer, srcBufferVa, entryOffset);
+    entryOffset = WriteBufferVa(cmdBuffer, dstBufferVa, entryOffset);
 
     // Calculates the correct dispatch size to use for Ray Tracing shaders
     uint32 dispatchSize = Util::RoundUpQuotient(numDwords, DefaultThreadGroupSize);
 
-    RGP_PUSH_MARKER(pCmdBuffer, "Copy Buffer");
-#if PAL_CLIENT_INTERFACE_MAJOR_VERSION < 771
-    pCmdBuffer->CmdDispatch(dispatchSize, 1, 1);
-#else
-    pCmdBuffer->CmdDispatch({ dispatchSize, 1, 1 });
-#endif
-
-    RGP_POP_MARKER(pCmdBuffer);
+    RGP_PUSH_MARKER(cmdBuffer, "Copy Buffer");
+    m_pBackend->Dispatch(cmdBuffer, dispatchSize, 1, 1);
+    RGP_POP_MARKER(cmdBuffer);
 }
 
 // =====================================================================================================================
 // Uploads CPU memory to a GPU buffer
 void Device::UploadCpuMemory(
-    Pal::ICmdBuffer* pCmdBuffer,
-    gpusize          dstBufferVa,
-    const void*      pSrcData,
-    uint32           sizeInBytes)
+    ClientCmdBufferHandle cmdBuffer,
+    gpusize               dstBufferVa,
+    const void*           pSrcData,
+    uint32                sizeInBytes)
 {
-    const uint32 embeddedDataLimitDwords = pCmdBuffer->GetEmbeddedDataLimit();
-    const uint32 uploadSizeDwords = Util::Pow2Align(sizeInBytes, 4);
-    PAL_ASSERT(uploadSizeDwords <= embeddedDataLimitDwords);
-
-    gpusize srcGpuVa = 0;
-    uint32* pMappedData = pCmdBuffer->CmdAllocateEmbeddedData(uploadSizeDwords, 1, &srcGpuVa);
-    std::memcpy(pMappedData, pSrcData, sizeInBytes);
-
-    Pal::MemoryCopyRegion region{};
-    region.srcOffset = 0;
-    region.dstOffset = 0;
-    region.copySize = sizeInBytes;
-    pCmdBuffer->CmdCopyMemoryByGpuVa(srcGpuVa, dstBufferVa, 1, &region);
+    m_pBackend->UploadCpuMemory(cmdBuffer, dstBufferVa, pSrcData, sizeInBytes);
 }
 
 // =====================================================================================================================
 // Writes the provided entries into the compute shader user data slots
 uint32 Device::WriteUserDataEntries(
-    Pal::ICmdBuffer* pCmdBuffer,
-    const void*      pEntries,    // User data entries
-    uint32           numEntries,  // Number of entries
-    uint32           entryOffset) // Offset of the first entry
+    ClientCmdBufferHandle cmdBuffer,
+    const void*           pEntries,          // User data entries
+    uint32                numEntries,        // Number of entries
+    uint32                entryOffset) const // Offset of the first entry
 {
-    pCmdBuffer->CmdSetUserData(Pal::PipelineBindPoint::Compute,
+    m_pBackend->SetUserData(cmdBuffer,
         entryOffset,
         numEntries,
         static_cast<const uint32*>(pEntries));
@@ -1975,68 +1937,26 @@ uint32 Device::WriteUserDataEntries(
 // =====================================================================================================================
 // Writes a gpu virtual address for a buffer into the compute shader user data slots
 uint32 Device::WriteBufferVa(
-    Pal::ICmdBuffer* pCmdBuffer,
+    ClientCmdBufferHandle cmdBuffer,
     gpusize          virtualAddress, // GPUVA of the buffer
     uint32           entryOffset)    // Offset of the first entry
 {
     const uint32 entries[] = { Util::LowPart(virtualAddress), Util::HighPart(virtualAddress) };
-    return WriteUserDataEntries(pCmdBuffer, entries, GPURT_ARRAY_SIZE(entries), entryOffset);
-}
-
-// =====================================================================================================================
-// Creates one or more Typed Buffer View SRDs on the device.
-void Device::CreateTypedBufferViewSrds(
-    uint32                     count,
-    const Pal::BufferViewInfo* pBufferViewInfo,
-    void* pOut)
-{
-    const Pal::IDevice* pDevice = m_info.pPalDevice;
-    pDevice->CreateTypedBufferViewSrds(count, pBufferViewInfo, pOut);
+    return WriteUserDataEntries(cmdBuffer, entries, GPURT_ARRAY_SIZE(entries), entryOffset);
 }
 
 // =====================================================================================================================
 // Performs a generic barrier that's used to synchronize internal ray tracing shaders
 void Device::RaytracingBarrier(
-    Pal::ICmdBuffer* pCmdBuffer)
+    ClientCmdBufferHandle cmdBuffer)
 {
-    if (m_info.deviceSettings.enableAcquireReleaseInterface)
-    {
-        Pal::AcquireReleaseInfo acqRelInfo = {};
-        acqRelInfo.srcGlobalStageMask  = Pal::PipelineStageCs;
-        acqRelInfo.dstGlobalStageMask  = Pal::PipelineStageCs;
-        acqRelInfo.srcGlobalAccessMask = Pal::CoherShader;
-        acqRelInfo.dstGlobalAccessMask = Pal::CoherShader;
-
-        acqRelInfo.reason = m_info.deviceSettings.rgpBarrierReason;
-
-        pCmdBuffer->CmdReleaseThenAcquire(acqRelInfo);
-    }
-    else
-    {
-        Pal::BarrierInfo barrierInfo = {};
-        barrierInfo.waitPoint = Pal::HwPipePreCs;
-
-        const Pal::HwPipePoint pipePoint = Pal::HwPipePostCs;
-        barrierInfo.pipePointWaitCount = 1;
-        barrierInfo.pPipePoints = &pipePoint;
-
-        Pal::BarrierTransition transition = {};
-        transition.srcCacheMask = Pal::CoherShader;
-        transition.dstCacheMask = Pal::CoherShader;
-
-        barrierInfo.transitionCount = 1;
-        barrierInfo.pTransitions = &transition;
-
-        barrierInfo.reason = m_info.deviceSettings.rgpBarrierReason;
-
-        pCmdBuffer->CmdBarrier(barrierInfo);
-    }
+    m_pBackend->InsertBarrier(cmdBuffer);
 }
 
 #if GPURT_DEVELOPER
 // =====================================================================================================================
 void Device::PushRGPMarker(
-    Pal::ICmdBuffer* pCmdBuffer,
+    ClientCmdBufferHandle cmdBuffer,
     const char* pFormat,
     ...)
 {
@@ -2048,19 +1968,19 @@ void Device::PushRGPMarker(
 
     va_end(args);
 
-    m_clientCb.pfnInsertRGPMarker(pCmdBuffer, strBuffer, true);
+    m_pBackend->PushRGPMarker(cmdBuffer, this, strBuffer);
 }
 
 // =====================================================================================================================
-void Device::PopRGPMarker(Pal::ICmdBuffer* pCmdBuffer)
+void Device::PopRGPMarker(ClientCmdBufferHandle cmdBuffer)
 {
-    m_clientCb.pfnInsertRGPMarker(pCmdBuffer, nullptr, false);
+    m_pBackend->PopRGPMarker(cmdBuffer, this);
 }
 
 // =====================================================================================================================
 // Driver generated RGP markers
 void Device::OutputPipelineName(
-    Pal::ICmdBuffer*         pCmdBuffer,
+    ClientCmdBufferHandle    cmdBuffer,
     InternalRayTracingCsType type) const
 {
     constexpr uint32 MaxStrLength = 256;
@@ -2068,7 +1988,7 @@ void Device::OutputPipelineName(
     const PipelineBuildInfo* pPipelineBuildInfo = &InternalPipelineBuildInfo[static_cast<uint32>(type)];
     Util::Snprintf(buildShaderInfo, MaxStrLength, "BVH Build Pipeline: %s", pPipelineBuildInfo->pPipelineName);
 
-    pCmdBuffer->CmdCommentString(buildShaderInfo);
+    m_pBackend->CommentString(cmdBuffer, buildShaderInfo);
 }
 #endif
 }   // namespace Internal

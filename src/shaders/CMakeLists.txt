@@ -23,7 +23,7 @@
  #
  #######################################################################################################################
 
-target_include_directories(gpurt PRIVATE .)
+target_include_directories(gpurt_internal PRIVATE .)
 
 set(gpurtHlsl
     RadixSort/BitHistogram.hlsl
@@ -41,14 +41,13 @@ set(gpurtHlsl
     BuildBVHTDTR.hlsl
     BuildCommon.hlsl
     BuildCommonScratch.hlsl
+    BuildCommonScratchGlobal.hlsl
     Debug.hlsl
     TaskQueueCounter.hlsl
     BuildSettings.hlsli
     BuildParallel.hlsl
     BuildQBVH.hlsl
-#if GPURT_BUILD_RTIP2
     bvh_stack_dxr_prototype.hlsl
-#endif
     ClearBuffer.hlsl
     Common.hlsl
     CompactAS.hlsl
@@ -78,9 +77,7 @@ set(gpurtHlsl
     PairCompression.hlsl
     RayQuery.hlsl
     RayQuery1_1.hlsl
-#if GPURT_BUILD_RTIP2
     RayQuery2_0.hlsl
-#endif
     Rebraid.hlsl
     RefitBounds.hlsl
     RefitBoundsImpl.hlsl
@@ -88,9 +85,7 @@ set(gpurtHlsl
     SerializeCommon.hlsl
     TraceRay.hlsl
     TraceRay1_1.hlsl
-#if GPURT_BUILD_RTIP2
     TraceRay2_0.hlsl
-#endif
     TraceRayCommon.hlsl
     TriangleSplitting.hlsl
     Update.hlsl

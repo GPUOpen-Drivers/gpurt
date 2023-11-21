@@ -162,7 +162,7 @@ void GenerateMortonCodes(
     {
         sizeMinMax = FetchSceneSize(ShaderConstants.offsets.sceneBounds);
 
-        if (sizeMinMax.x == sizeMinMax.y)
+        if (sizeMinMax.x >= sizeMinMax.y)
         {
             numSizeBits = 0;
         }
@@ -181,9 +181,7 @@ void GenerateMortonCodes(
             Settings.enableVariableBitsMortonCode,
             Settings.useMortonCode30,
             ShaderConstants.numMortonSizeBits,
-            sizeMinMax,
-            false,
-            0);
+            sizeMinMax);
     }
 }
 
@@ -193,7 +191,6 @@ void SortScratchLeaves(
     uint globalId,
     uint numActivePrims)
 {
-
     for (uint primIndex = globalId; primIndex < numActivePrims; primIndex += GetNumThreads())
     {
         CopyUnsortedScratchLeafNode(
@@ -201,12 +198,7 @@ void SortScratchLeaves(
             numActivePrims,
             ShaderConstants.offsets.primIndicesSorted,
             ShaderConstants.offsets.bvhLeafNodeData,
-            ShaderConstants.offsets.bvhNodeData,
-            0,
-            0,
-            false,
-            false,
-            0);
+            ShaderConstants.offsets.bvhNodeData);
     }
 }
 
@@ -236,7 +228,6 @@ void RefitBounds(
     uint globalId,
     uint numActivePrims)
 {
-
     for (uint primIndex = globalId; primIndex < numActivePrims; primIndex += GetNumThreads())
     {
         RefitBoundsImpl(
@@ -257,10 +248,6 @@ void RefitBounds(
             ShaderConstants.offsets.batchIndices,
             Settings.fp16BoxNodesMode,
             Settings.fp16BoxModeMixedSaThreshold,
-            0,
-            false,
-            false,
-            0,
             false,
             false,
             0,
@@ -387,6 +374,7 @@ void Rebraid(
     args.taskQueueCounterScratchOffset      = CurrentSplitTaskQueueCounter();
     args.atomicFlagsScratchOffset           = ShaderConstants.offsets.splitAtomicFlags;
     args.encodeArrayOfPointers              = ShaderConstants.encodeArrayOfPointers;
+    args.enableMortonSize                   = ShaderConstants.numMortonSizeBits > 0;
     args.enableSAHCost                      = Settings.enableSAHCost;
     RebraidImpl(globalId, localId, groupId, args);
 }
@@ -499,7 +487,7 @@ void writeDebugCounter(uint counterStageOffset)
 {
     if (Settings.enableBVHBuildDebugCounters)
     {
-        ScratchBuffer.InterlockedAdd(ShaderConstants.offsets.debugCounters + counterStageOffset, 1);
+        IncreaseDebugCounters(ShaderConstants.offsets.debugCounters, counterStageOffset);
     }
 }
 
@@ -518,15 +506,6 @@ void MergeSort(inout uint numTasksWait, inout uint waveId, uint localId, uint gr
                   Settings.useMortonCode30);
 }
 
-//======================================================================================================================
-// Set a scratch buffer counter to 0 if it has a valid index
-void InitScratchCounter(uint offset)
-{
-    if (offset != INVALID_IDX)
-    {
-        ScratchBuffer.Store(offset, 0);
-    }
-}
 //======================================================================================================================
 // Initialize headers and task counters
 void InitAccelerationStructure()
@@ -550,7 +529,7 @@ void InitAccelerationStructure()
     InitScratchCounter(ShaderConstants.offsets.plocTaskQueueCounter);
     InitScratchCounter(ShaderConstants.offsets.tdTaskQueueCounter);
     InitScratchCounter(CurrentSplitTaskQueueCounter());
-    InitScratchCounter(ShaderConstants.offsets.numBatches);
+    ClearNumBatches(ShaderConstants.offsets.numBatches);
 
     // Initialize scene bounds
     const uint maxVal = FloatToUint(FLT_MAX);
@@ -807,7 +786,7 @@ void BuildBvh(
 
             if (EnableLatePairCompression() && (geometryType == GEOMETRY_TYPE_TRIANGLES))
             {
-                const uint numBatches = ScratchBuffer.Load(ShaderConstants.offsets.numBatches);
+                const uint numBatches = FetchNumBatches(ShaderConstants.offsets.numBatches);
 
                 BEGIN_TASK(RoundUpQuotient(numBatches, BUILD_THREADGROUP_SIZE));
 
@@ -856,7 +835,9 @@ void BuildBvh(
         BuildQbvh(globalId, localId, numLeafNodes, numActivePrims);
 
         END_TASK(RoundUpQuotient(GetNumInternalNodeCount(numLeafNodes), BUILD_THREADGROUP_SIZE));
+
         writeDebugCounter(COUNTER_BUILDQBVH_OFFSET);
+
     }
 
     BEGIN_TASK(1);

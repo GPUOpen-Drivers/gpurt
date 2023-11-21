@@ -43,23 +43,23 @@ void WriteScratchCompressedTriangleNode(
     uint geometryIndex   = geometryArgs.GeometryIndex;
     uint flags           = geometryArgs.GeometryFlags;
 
-    uint offset = (primitiveIndex * ByteStrideScratchNode) +
-        (primitiveOffset * ByteStrideScratchNode) +
-        geometryArgs.LeafNodeDataByteOffset;
+    uint offset = CalcScratchNodeOffset(
+        geometryArgs.LeafNodeDataByteOffset,
+        primitiveOffset + primitiveIndex);
 
     uint4 data;
 
     // LeafNode.bbox_min_or_v0, primitiveIndex (globalIndex)
     data = uint4(asuint(tri.v0), primitiveIndex);
-    ScratchBuffer.Store4(offset + SCRATCH_NODE_V0_OFFSET, data);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V0_OFFSET, data);
 
     // LeafNode.bbox_max_or_v1, geometryIndex
     data = uint4(asuint(tri.v1), geometryIndex);
-    ScratchBuffer.Store4(offset + SCRATCH_NODE_V1_OFFSET, data);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V1_OFFSET, data);
 
     // LeafNode.v2, parent
     data = uint4(asuint(tri.v2), INVALID_IDX);
-    ScratchBuffer.Store4(offset + SCRATCH_NODE_V2_OFFSET, data);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V2_OFFSET, data);
 
     const BoundingBox box = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
     const float cost = SAH_COST_TRIANGLE_INTERSECTION * ComputeBoxSurfaceArea(box);
@@ -82,7 +82,7 @@ void WriteScratchCompressedTriangleNode(
 
     const uint triangleTypeAndId = (triangleId << 3) | nodeType;
     data = uint4(triangleTypeAndId, packedFlags, pairedId, asuint(cost));
-    ScratchBuffer.Store4(offset + SCRATCH_NODE_TYPE_OFFSET, data);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_TYPE_OFFSET, data);
 }
 
 //=====================================================================================================================
@@ -93,13 +93,15 @@ void WriteScratchInactiveTriangleNode(
 {
     if (IsUpdate() == false)
     {
-        const uint scratchLeafNodeOffset =
-            geometryArgs.LeafNodeDataByteOffset + (flattenedPrimitiveIndex * ByteStrideScratchNode);
+        WriteScratchNodeData(
+            geometryArgs.LeafNodeDataByteOffset,
+            flattenedPrimitiveIndex,
+            0,
+            NaN);
 
-        ScratchBuffer.Store(scratchLeafNodeOffset, NaN);
         DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
     }
-    else if (geometryArgs.isUpdateInPlace == false)
+    else if (Settings.isUpdateInPlace == false)
     {
         DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
     }
@@ -551,17 +553,14 @@ void EncodePairedTriangleNodeImpl(
 
         if (IsActive(tri))
         {
-            if (geometryArgs.SceneBoundsCalculationType == SceneBoundsBasedOnGeometry)
+            if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometry)
             {
                 UpdateSceneBounds(geometryArgs.SceneBoundsByteOffset, boundingBox);
             }
-            else if (geometryArgs.SceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
+            else if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
             {
+                // TODO: with tri splitting, need to not update "size" here
                 UpdateSceneBoundsWithSize(geometryArgs.SceneBoundsByteOffset, boundingBox);
-            }
-            else
-            {
-                UpdateCentroidSceneBoundsWithSize(geometryArgs.SceneBoundsByteOffset, boundingBox);
             }
         }
         else

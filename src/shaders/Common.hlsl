@@ -375,13 +375,11 @@ static uint WriteTriangleIdField(uint triangleId, uint nodeType, uint rotation, 
     triangleId |= ((rotation + 1) % 3) << (triangleShift + TRIANGLE_ID_I_SRC_SHIFT);
     triangleId |= ((rotation + 2) % 3) << (triangleShift + TRIANGLE_ID_J_SRC_SHIFT);
 
-#if GPURT_BUILD_RTIP2
     // Add in the flags stored in triangle_id for RT IP 2.0
     if (geometryFlags & D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE)
     {
         triangleId |= 1u << (triangleShift + TRIANGLE_ID_OPAQUE_SHIFT);
     }
-#endif
 
     return triangleId;
 }
@@ -526,11 +524,17 @@ static BoundingBox UncompressBBoxFromUint3(in uint3 box)
 }
 
 //=====================================================================================================================
+static bool IsInvalidBoundingBox(BoundingBox box)
+{
+    return box.min.x > box.max.x;
+}
+
+//=====================================================================================================================
 static float ComputeBoxSurfaceArea(BoundingBox aabb)
 {
     // check for degenerate
     float3 dim = aabb.max - aabb.min;
-    return (aabb.min.x > aabb.max.x) ? 0 : 2.0f * (dim.x * dim.y + dim.x * dim.z + dim.y * dim.z);
+    return IsInvalidBoundingBox(aabb) ? 0 : 2.0f * (dim.x * dim.y + dim.x * dim.z + dim.y * dim.z);
 }
 
 //=====================================================================================================================

@@ -25,11 +25,7 @@
 #pragma once
 
 #include "gpurt/gpurt.h"
-
-namespace Pal
-{
-class ICmdBuffer;
-}
+#include "gpurt/gpurtBackend.h"
 
 namespace GpuRt
 {
@@ -41,7 +37,8 @@ class BvhBatcher
 {
 public:
     explicit BvhBatcher(
-        Pal::ICmdBuffer*             pCmdBuf,
+        ClientCmdBufferHandle        cmdBuffer,
+        const IBackend&              backend,
         Internal::Device*      const pDevice,
         const Pal::DeviceProperties& deviceProps,
         ClientCallbacks              clientCb,
@@ -62,6 +59,7 @@ private:
         Util::Span<BvhBuilder> builders,
         Util::Span<BvhBuilder> updaters);
 
+    template<bool IsUpdate>
     void DispatchInitAccelerationStructure(
         Util::Span<BvhBuilder> builders);
 
@@ -95,7 +93,8 @@ private:
 #endif
 
     Internal::Device*           const m_pDevice;             // GPURT device
-    Pal::ICmdBuffer*                  m_pPalCmdBuffer;       // The associated PAL cmdbuffer
+    ClientCmdBufferHandle             m_cmdBuffer;           // The associated PAL cmdbuffer
+    const IBackend&                   m_backend;
     const Pal::DeviceProperties&      m_deviceProps;
     ClientCallbacks                   m_clientCb;
     const DeviceSettings&             m_deviceSettings;      // Device settings

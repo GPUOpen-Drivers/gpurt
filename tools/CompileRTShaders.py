@@ -61,7 +61,6 @@ FILE_FOOTER_STRING = "\n};\n"
 
 SHADER_PROFILE = "cs_6_2"
 SHADER_PROFILE_LIB = "lib_6_3"
-DEFAULT_SHADER_CONFIG = "RTShaders.xml"
 DEFAULT_INTERNAL_SHADERS_HEADER_NAME = "g_internal_shaders"
 DEFAULT_OUTPUT_DIR = "CompiledShaders"
 SPIRV_WHITELIST = "strip_whitelist.txt"
@@ -70,17 +69,14 @@ DXC_EXECUTABLE = "dxc"
 GLSLANG_EXECUTABLE = "glslangValidator"
 
 class ShaderConfig:
-    def __init__(self, inPath, inEntryPoint, inOutputName, inBaseLogicalId, inRootSignaturePath, inDefines, inGroupTag):
-        self.path = inPath
-        self.entryPoint = inEntryPoint
-        self.outputName = inOutputName
-        self.baseLogicalId = inBaseLogicalId
-        self.rootSignaturePath = inRootSignaturePath
-        self.defines = inDefines
-        self.groupTag = inGroupTag
+    def __init__(self, path, entryPoint=None, outputName=None, defines=None):
+        self.path = path
+        self.entryPoint = entryPoint
+        self.outputName = outputName
+        self.defines = defines
 
     def __str__(self):
-        return "ShaderConfig< Path: %s, EntryPoint: %s, OutputName: %s, BaseLogicalId: %s, RootSignaturePath: %s, Defines: %s, GroupTag: %s >" % (self.path, self.entryPoint, self.outputName, self.baseLogicalId, self.rootSignaturePath, self.defines, self.groupTag)
+        return f"ShaderConfig< Path: {self.path}, EntryPoint: {self.entryPoint}, OutputName: {self.outputName}, Defines: {self.defines}, isBVH: {self.isBVH()} >"
 
     def isLibrary(self):
         return self.entryPoint is None
@@ -93,27 +89,59 @@ class ShaderConfig:
     def isBVH(self):
         return not self.isLibrary()
 
+traceShaderConfigs = [
+    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibrarySw"),
+    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibrarySwDev", defines="DEVELOPER=1"),
+    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibrary", defines="USE_HW_INTRINSIC=1"),
+    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibraryDev", defines="USE_HW_INTRINSIC=1,DEVELOPER=1"),
+]
+
+bvhShaderConfigs = [
+    ShaderConfig(path="Update.hlsl", entryPoint="Update"),
+    ShaderConfig(path="EncodeNodes.hlsl", entryPoint="EncodeTriangleNodes"),
+    ShaderConfig(path="EncodeNodes.hlsl", entryPoint="EncodeTriangleNodes", outputName="EncodeTriangleNodesIndirect", defines="INDIRECT_BUILD=1"),
+    ShaderConfig(path="EncodeNodes.hlsl", entryPoint="EncodeAABBNodes"),
+    ShaderConfig(path="EncodeTopLevel.hlsl", entryPoint="EncodeInstances"),
+    ShaderConfig(path="BuildParallel.hlsl", entryPoint="BuildBvh", outputName="BuildParallel"),
+    ShaderConfig(path="UpdateParallel.hlsl", entryPoint="UpdateParallel"),
+    ShaderConfig(path="BuildBVHTDTR.hlsl", entryPoint="BuildBVHTD"),
+    ShaderConfig(path="BuildBVHTDTR.hlsl", entryPoint="BuildBVHTD", outputName="BuildBVHTDTR", defines="USE_BVH_REBRAID=1"),
+    ShaderConfig(path="GenerateMortonCodes.hlsl", entryPoint="GenerateMortonCodes"),
+    ShaderConfig(path="Rebraid.hlsl", entryPoint="Rebraid"),
+    ShaderConfig(path="BuildBVH.hlsl", entryPoint="BuildBVH", outputName="BuildBVHSortLeaves"),
+    ShaderConfig(path="BuildBVH.hlsl", entryPoint="BuildBVH", defines="USE_BUILD_LBVH=1"),
+    ShaderConfig(path="BuildBVHPLOC.hlsl", entryPoint="BuildBVHPLOC"),
+    ShaderConfig(path="UpdateQBVH.hlsl", entryPoint="UpdateQBVH"),
+    ShaderConfig(path="RefitBounds.hlsl", entryPoint="RefitBounds"),
+    ShaderConfig(path="ClearBuffer.hlsl", entryPoint="ClearBuffer"),
+    ShaderConfig(path="CopyBufferRaw.hlsl", entryPoint="CopyBufferRaw"),
+    ShaderConfig(path="BuildQBVH.hlsl", entryPoint="InitBuildQBVH"),
+    ShaderConfig(path="BuildQBVH.hlsl", entryPoint="BuildQBVH"),
+    ShaderConfig(path="RadixSort/BitHistogram.hlsl", entryPoint="BitHistogram"),
+    ShaderConfig(path="RadixSort/ScatterKeysAndValues.hlsl", entryPoint="ScatterKeysAndValues"),
+    ShaderConfig(path="RadixSort/ScanExclusiveInt4.hlsl", entryPoint="ScanExclusiveInt4"),
+    ShaderConfig(path="RadixSort/ScanExclusivePartInt4.hlsl", entryPoint="ScanExclusivePartInt4"),
+    ShaderConfig(path="RadixSort/ScanExclusiveInt4DLB.hlsl", entryPoint="ScanExclusiveInt4DLB"),
+    ShaderConfig(path="RadixSort/ScanExclusiveInt4DLB.hlsl", entryPoint="InitScanExclusiveInt4DLB"),
+    ShaderConfig(path="RadixSort/DistributePartSumInt4.hlsl", entryPoint="DistributePartSumInt4"),
+    ShaderConfig(path="EmitAS.hlsl", entryPoint="EmitCurrentSize"),
+    ShaderConfig(path="EmitAS.hlsl", entryPoint="EmitCompactSize"),
+    ShaderConfig(path="EmitAS.hlsl", entryPoint="EmitSerializeDesc"),
+    ShaderConfig(path="EmitAS.hlsl", entryPoint="EmitToolVisDesc"),
+    ShaderConfig(path="CopyAS.hlsl", entryPoint="CopyAS"),
+    ShaderConfig(path="CompactAS.hlsl", entryPoint="CompactAS"),
+    ShaderConfig(path="DecodeAS.hlsl", entryPoint="DecodeAS"),
+    ShaderConfig(path="SerializeAS.hlsl", entryPoint="SerializeAS"),
+    ShaderConfig(path="DeserializeAS.hlsl", entryPoint="DeserializeAS"),
+    ShaderConfig(path="InitExecuteIndirect.hlsl", entryPoint="InitExecuteIndirect", outputName="InitExecuteIndirect"),
+    ShaderConfig(path="PairCompression.hlsl", entryPoint="PairCompression"),
+    ShaderConfig(path="MergeSort.hlsl", entryPoint="MergeSort"),
+    ShaderConfig(path="InitAccelerationStructure.hlsl", entryPoint="InitAccelerationStructure"),
+    ShaderConfig(path="InitAccelerationStructure.hlsl", entryPoint="InitAccelerationStructure", defines="IS_UPDATE=1", outputName="InitUpdateAccelerationStructure"),
+]
+
 def isSpirvShader(shaderConfig, args):
     return args.vulkan and (shaderConfig.isLibrary() or (shaderConfig.isBVH() and args.spirv))
-
-def ParseShaderConfig(args, inFilename):
-    root = ElementTree().parse(inFilename)
-
-    shaders = []
-
-    for group in root.iter():
-        if (group.tag == "Trace" and not args.skip_trace) or (group.tag == "BVH" and not args.skip_bvh):
-            for shader in group.iter('Shader'):
-                path = shader.get('path').replace('\\', '/')
-                entryPoint = shader.get('entryPoint')
-                outputName = shader.get('outputName')
-                baseLogicalId = shader.get('baseLogicalId')
-                rootSignaturePath = shader.get('rootSignaturePath')
-                defines = shader.get('defines')
-
-                shaders.append(ShaderConfig(path, entryPoint, outputName, baseLogicalId, rootSignaturePath, defines, group.tag))
-
-    return shaders
 
 class CompilationType(enum.Enum):
     Dxil = 0
@@ -292,9 +320,7 @@ def RunSpirv(outputDir, compilerPath, inShaderConfig, inShaderBasePath, inDXC, i
         commandArgs += ['--keep-uncalled']
         commandArgs += ['-Od']
         commandArgs += ['-DDEFINE_RAYDESC=1', '-DAMD_VULKAN', '-DAMD_VULKAN_GLSLANG', '-DAMD_VULKAN_SPV']
-#if GPURT_BUILD_RTIP2
-        commandArgs += ['-DGPURT_BUILD_RTIP2']
-#endif
+
         commandArgs += shaderDefines
 
     compileResult = InvokeSubprocess(commandArgs, outputDir, threadOutput, linuxLibraryPath=(compilerPath if inDXC else ''))
@@ -401,7 +427,6 @@ def FixInputPath(path) -> str:
     return os.path.abspath(path).replace('\\\\', '\\').replace('\\', '/')
 
 def CompileShaders(args, internalShadersHeader, compileType) -> int:
-    shaderConfigPath = FixInputPath(args.shaderConfig)
     shadersBasePath = FixInputPath(args.basepath)
     shadersOutputDir = FixInputPath(args.outputDir)
 
@@ -419,7 +444,12 @@ def CompileShaders(args, internalShadersHeader, compileType) -> int:
     whiteListPath = FixInputPath(args.whiteListPath)
 
     # Parse the shader config file
-    shadersConfigs = ParseShaderConfig(args, shaderConfigPath)
+    shadersConfigs = []
+
+    if not args.skip_bvh:
+        shadersConfigs.extend(bvhShaderConfigs)
+    if not args.skip_trace:
+        shadersConfigs.extend(traceShaderConfigs)
 
     # Make sure the output directory exists
     if not os.path.exists(shadersOutputDir):
@@ -476,7 +506,6 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description='RT Shader Compilation Script')
     parser.add_argument('basepath', help='base path of the directory that contains the raytracing shaders')
-    parser.add_argument('--shaderConfig', help='XML file that contains information about the shaders that need to be compiled', default=DEFAULT_SHADER_CONFIG)
     parser.add_argument('--outputDir', help='Output directory for compiled shaders', default=DEFAULT_OUTPUT_DIR)
     parser.add_argument('--vulkan', action='store_const', const=True, help='Output Vulkan shaders', default=False)
     parser.add_argument('--glslang', action='store_const', const=True, help='Use glslangValidator (experimental) for Vulkan SPIRV generation instead of DXC', default=False)

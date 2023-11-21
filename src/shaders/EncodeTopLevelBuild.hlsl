@@ -96,25 +96,16 @@ void EncodeInstancesBuild(
         if (numActivePrims != 0)
         {
             // Update scene bounding box
-            if (ShaderConstants.sceneBoundsCalculationType == SceneBoundsBasedOnCentroidWithSize)
+            if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
             {
                 if (IsRebraidEnabled() == false)
                 {
-                    UpdateCentroidSceneBoundsWithSize(ShaderConstants.sceneBoundsByteOffset, boundingBox);
+                    UpdateSceneBoundsWithSize(ShaderConstants.sceneBoundsByteOffset, boundingBox);
                 }
-                else // remove size as rebraid will set the size
+                else
                 {
-                    const float3 centroidPoint = (0.5 * (boundingBox.max + boundingBox.min));
-
-                    const uint rebraidSceneOffset = sizeof(BoundingBox) + 2 * sizeof(float);
-
-                    UpdateSceneBoundsUsingCentroid(ShaderConstants.sceneBoundsByteOffset + rebraidSceneOffset,
-                                                   centroidPoint);
+                    UpdateSceneBounds(ShaderConstants.sceneBoundsByteOffset, boundingBox);
                 }
-            }
-            else if (ShaderConstants.sceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
-            {
-                UpdateSceneBoundsWithSize(ShaderConstants.sceneBoundsByteOffset, boundingBox);
             }
             else
             {

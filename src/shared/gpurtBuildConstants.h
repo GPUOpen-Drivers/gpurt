@@ -94,6 +94,10 @@ struct RayTracingScratchDataOffsets
     uint32 qbvhGlobalStack;
     uint32 qbvhGlobalStackPtrs;
     uint32 reserved7;
+    uint32 reserved8;
+    uint32 reserved9;
+    uint32 reserved10;
+    uint32 reserved11;
     uint32 debugCounters;
 };
 

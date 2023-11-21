@@ -44,6 +44,7 @@ struct BuildQbvhArgs
     uint unsortedBvhLeafNodesOffset;
     uint reservedUint0;
     uint reservedUint1;
+    uint reservedUint2;
 };
 
 #if NO_SHADER_ENTRYPOINT == 0
@@ -385,7 +386,7 @@ static void InitBuildQbvhImpl(
 
     if (globalId == 0)
     {
-        StackPtrs stackPtrs;
+        StackPtrs stackPtrs = (StackPtrs)0;
         // Source node index in linear memory
         stackPtrs.stackPtrSrcNodeId = 1;
         // Node destination in linear memory. Counts in 64B chunks.

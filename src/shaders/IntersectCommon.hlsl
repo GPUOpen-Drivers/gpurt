@@ -30,10 +30,7 @@
 #define SORT(childA,childB,distA,distB) if((childB!=INVALID_NODE&&distB<distA)||childA==INVALID_NODE){  float t0 = distA; uint t1 = childA;  childA = childB; distA = distB;  childB=t1; distB=t0; }
 
 #define INTERSECT_RAY_VERSION_1 1
-
-#if GPURT_BUILD_RTIP2
 #define INTERSECT_RAY_VERSION_2 2
-#endif
 
 //=====================================================================================================================
 // Avoid tracing NaN rays or null acceleration structures.
@@ -403,20 +400,16 @@ static uint GetBoxSortingHeuristicFromRayFlags(
             // The intention is to benefit ShadowRay with BvhNodeSort
             heuristic = BoxSortHeuristic::Disabled;
         }
-#if GPURT_BUILD_RTIP2
         else
         {
             // good for shadow rays with terminate on first hit
             heuristic = BoxSortHeuristic::Largest;
         }
-#endif
     }
-#if GPURT_BUILD_RTIP2
     else if (mode == BoxSortHeuristic::LargestFirstOrClosestMidPoint)
     {
         heuristic = BoxSortHeuristic::MidPoint;
     }
-#endif
     else
     {
         heuristic = BoxSortHeuristic::Closest;
@@ -513,7 +506,6 @@ static uint4 IntersectNodeBvh4(
     float sort_key2 = s2.x;
     float sort_key3 = s3.x;
 
-#if GPURT_BUILD_RTIP2
     // Setup box sort keys for largest interval first traversal.
     // Note: this computation causes the sort keys to be the negative size of the
     // interval. This is because the sorting network sorts from smallest to largest key
@@ -537,7 +529,6 @@ static uint4 IntersectNodeBvh4(
         sort_key2 = s2.z+s2.w; //min_of_intervals_t2+max_of_intervals_t2
         sort_key3 = s3.z+s3.w; //min_of_intervals_t3+max_of_intervals_t3
     }
-#endif
 
     //Mark out the nodes that didn't hit by setting them to the
     //INVALID_NODE.
@@ -644,7 +635,6 @@ static void SwizzleBarycentrics(
     result.w = asuint(baryc[(triangleId >> (triangleShift + TRIANGLE_ID_J_SRC_SHIFT)) % 4]);
 }
 
-#if GPURT_BUILD_RTIP2
 //=====================================================================================================================
 static void PerformTriangleCulling(
     in uint32_t        intersectRayVersion,
@@ -739,7 +729,6 @@ static void PerformEarlyBoxCulling(inout_param(Float32BoxNode) node, uint64_t hw
     }
 }
 #endif
-#endif
 
 //=====================================================================================================================
 static uint4 image_bvh64_intersect_ray_base(
@@ -758,12 +747,10 @@ static uint4 image_bvh64_intersect_ray_base(
 #if USE_HW_INTRINSIC
     uint2 address = CalculateRawBvh64NodePointer(bvhAddress, nodePointer);
 
-#if GPURT_BUILD_RTIP2
     if (intersectRayVersion >= INTERSECT_RAY_VERSION_2)
     {
         address.y |= pointerFlags;
     }
-#endif
 
     result = AmdExtD3DShaderIntrinsics_IntersectInternal(address,
                                                          rayExtent,
@@ -776,13 +763,11 @@ static uint4 image_bvh64_intersect_ray_base(
 #else
     uint64_t hwNodePtr = (bvhAddress >> 3) + nodePointer;
 
-#if GPURT_BUILD_RTIP2
     if (intersectRayVersion >= INTERSECT_RAY_VERSION_2)
     {
         const uint64_t pointerFlagsU64 = pointerFlags;
         hwNodePtr |= pointerFlagsU64 << 32;
     }
-#endif
 
     if (IsBoxNode1_1(nodePointer))
     {
@@ -798,12 +783,10 @@ static uint4 image_bvh64_intersect_ray_base(
         {
             node = FetchFloat32BoxNode(bvhAddress,
                                        nodePointer);
-#if GPURT_BUILD_RTIP2
             if (intersectRayVersion >= INTERSECT_RAY_VERSION_2)
             {
                 PerformEarlyBoxCulling(node, hwNodePtr);
             }
-#endif
         }
 
         // Intersect ray with qbvh node
@@ -821,13 +804,11 @@ static uint4 image_bvh64_intersect_ray_base(
 
         uint triangleId = FetchTriangleId(bvhAddress, nodePointer);
 
-#if GPURT_BUILD_RTIP2
         if (intersectRayVersion >= INTERSECT_RAY_VERSION_2)
         {
             hwTriFlags = triangleId >> (GetNodeType(nodePointer) * TRIANGLE_ID_BIT_STRIDE);
 
         }
-#endif
 
         {
             TriangleData tri = FetchTriangleFromNode(bvhAddress, nodePointer);
@@ -840,7 +821,6 @@ static uint4 image_bvh64_intersect_ray_base(
             SwizzleBarycentrics(result, nodePointer, triangleId);
         }
 
-#if GPURT_BUILD_RTIP2
         if (intersectRayVersion >= INTERSECT_RAY_VERSION_2)
         {
 
@@ -850,7 +830,6 @@ static uint4 image_bvh64_intersect_ray_base(
                                    opaque,
                                    result);
         }
-#endif
     }
     else
     {
@@ -877,7 +856,6 @@ static uint4 image_bvh64_intersect_ray(
         INTERSECT_RAY_VERSION_1);
 }
 
-#if GPURT_BUILD_RTIP2
 //=====================================================================================================================
 static uint4 image_bvh64_intersect_ray_2_0(
     GpuVirtualAddress bvhAddress,
@@ -893,6 +871,5 @@ static uint4 image_bvh64_intersect_ray_2_0(
         bvhAddress, nodePointer, pointerFlags, boxSortHeuristic, rayExtent, rayOrigin, rayDirection, rayDirectionInverse,
         INTERSECT_RAY_VERSION_2);
 }
-#endif
 
 #endif

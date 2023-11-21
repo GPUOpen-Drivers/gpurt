@@ -56,6 +56,9 @@
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_INSTANCE_REBRAID_ID)]]                uint enableInstanceRebraid         = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_GPU_DEBUG_FLAGS_ID)]]                        uint gpuDebugFlags                 = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_IS_UPDATE_ID)]]                              uint isUpdate                      = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_IS_UPDATE_IN_PLACE_ID)]]                     uint isUpdateInPlace               = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_ENCODE_ARRAY_OF_POINTERS_ID)]]               uint encodeArrayOfPointers         = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_SCENE_BOUNDS_CALCULATION_TYPE_ID)]]          uint sceneBoundsCalculationType    = 0;
 
 static const BuildSettingsData Settings = {
     topLevelBuild,
@@ -97,6 +100,9 @@ static const BuildSettingsData Settings = {
     enableInstanceRebraid,
     gpuDebugFlags,
     isUpdate,
+    isUpdateInPlace,
+    encodeArrayOfPointers,
+    sceneBoundsCalculationType,
 };
 
 #endif

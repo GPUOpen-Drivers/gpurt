@@ -43,10 +43,6 @@ void RefitBoundsImpl(
     uint                baseBatchIndicesOffset,
     uint                fp16BoxNodeMode,
     float               fp16BoxModeMixedSaThreshold,
-    uint                reservedUint1,
-    uint                reservedUint2,
-    uint                reservedUint3,
-    int4                reservedUint4,
     uint                enableInstancePrimCount,
     uint                reservedUint5,
     uint                reservedUint6,
@@ -110,8 +106,6 @@ void RefitBoundsImpl(
             BoundingBox bboxRightChild;
             BoundingBox bboxLeftChild;
 
-            uint numMortonCells = 0;
-
             // Right child
             {
                 const bool isLeafNode = IsLeafNode(rc, numActivePrims);
@@ -122,8 +116,6 @@ void RefitBoundsImpl(
                                                              splitBoxesOffset,
                                                              enableEarlyPairCompression,
                                                              unsortedNodesBaseOffset);
-
-                numMortonCells += isLeafNode ? 1 : rightNode.splitBox_or_nodePointer;
             }
 
             // Left child
@@ -136,8 +128,6 @@ void RefitBoundsImpl(
                                                             splitBoxesOffset,
                                                             enableEarlyPairCompression,
                                                             unsortedNodesBaseOffset);
-
-                numMortonCells += isLeafNode ? 1 : leftNode.splitBox_or_nodePointer;
             }
 
             // Merge bounding boxes up to parent
@@ -153,6 +143,8 @@ void RefitBoundsImpl(
                                         mergedBox.min,
                                         mergedBox.max);
 
+            const float largestLength = 0;
+
             MergeScratchNodes(
                 baseScratchNodesOffset,
                 numBatchesOffset,
@@ -163,7 +155,8 @@ void RefitBoundsImpl(
                 leftNode,
                 rc,
                 rightNode,
-                mergedBoxSurfaceArea);
+                mergedBoxSurfaceArea,
+                largestLength);
 
             if (enableInstancePrimCount)
             {

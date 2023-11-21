@@ -28,19 +28,19 @@
 //=====================================================================================================================
 bool IsUpdateInPlace()
 {
-    return (ShaderConstants.internalFlags & ENCODE_FLAG_UPDATE_IN_PLACE);
+    return Settings.isUpdateInPlace;
 }
 
 //=====================================================================================================================
 bool IsRebraidEnabled()
 {
-    return (ShaderConstants.internalFlags & ENCODE_FLAG_REBRAID_ENABLED);
+    return (Settings.rebraidType != RebraidType::Off);
 }
 
 //=====================================================================================================================
 bool IsFusedInstanceNode()
 {
-    return (ShaderConstants.internalFlags & ENCODE_FLAG_ENABLE_FUSED_INSTANCE_NODE);
+    return Settings.enableFusedInstanceNode;
 }
 
 //=====================================================================================================================
@@ -59,15 +59,15 @@ void WriteScratchInstanceNode(
 
     // LeafNode.bbox_min_or_v0, instanceIndex
     data = uint4(asuint(bbox.min), instanceIndex);
-    ScratchBuffer.Store4(offset + SCRATCH_NODE_V0_OFFSET, data);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V0_OFFSET, data);
 
     // LeafNode.bbox_max_or_v1, padding
     data = uint4(asuint(bbox.max), 0);
-    ScratchBuffer.Store4(offset + SCRATCH_NODE_V1_OFFSET, data);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V1_OFFSET, data);
 
     // LeafNode.instanceNodeBasePointerLo, instanceNodeBasePointerHi, numActivePrims, parent
     data = uint4(instanceBasePointerLo, instanceBasePointerHi, numActivePrims, 0xffffffff);
-    ScratchBuffer.Store4(offset + SCRATCH_NODE_INSTANCE_BASE_PTR_OFFSET, data);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_INSTANCE_BASE_PTR_OFFSET, data);
 
     // When rebraid might occur, the traversal shader will read the root node pointer of the bottom level from the
     // instance extra data. If we actually perform rebraid during the build, the node pointer must be set to 0 to
@@ -79,7 +79,7 @@ void WriteScratchInstanceNode(
 
     // type, flags, nodePointer, numPrimitivesAndDoCollapse
     data = uint4(NODE_TYPE_USER_NODE_INSTANCE, packedFlags, rootNodePointer, asuint(cost));
-    ScratchBuffer.Store4(offset + SCRATCH_NODE_TYPE_OFFSET, data);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_TYPE_OFFSET, data);
 }
 
 //=====================================================================================================================

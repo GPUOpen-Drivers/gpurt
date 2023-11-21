@@ -49,7 +49,6 @@ namespace EncodeNodes
         uint32 baseGeometryInfoOffset;        // Base offset of the geometry info
         uint32 basePrimNodePtrOffset;         // Base offset for the prim node ptrs
         uint32 buildFlags;                    // Acceleration structure build flags
-        uint32 isUpdateInPlace;               // Is update in place
         uint32 geometryFlags;                 // Geometry flags (GpuRt::GeometryFlags)
         uint32 vertexComponentCount;          // Valid components in vertex buffer format
         uint32 vertexCount;                   // Vertex count
@@ -80,7 +79,6 @@ namespace UpdateQBVH
 {
     struct Constants
     {
-        uint32 isInPlace;     // Non-zero if updates are performed in-place
         uint32 addressLo;
         uint32 addressHi;
         uint32 propagationFlagsScratchOffset;
@@ -97,7 +95,6 @@ namespace UpdateParallel
 {
     struct Constants
     {
-        uint32 isInPlace;                        // Non-zero if updates are performed in-place
         uint32 addressLo;
         uint32 addressHi;
         uint32 propagationFlagsScratchOffset;
@@ -161,10 +158,8 @@ namespace EncodeInstances
         uint32 sceneBoundsByteOffset;         // Scene bounds byte offset
         uint32 propagationFlagsScratchOffset; // Flags byte offset
         uint32 baseUpdateStackScratchOffset;  // Update stack byte offset
-        uint32 internalFlags;                 // Flags
         uint32 buildFlags;                    // Build flags
         uint32 leafNodeExpansionFactor;       // Number of leaf nodes per primitive
-        uint32 sceneBoundsCalculationType;
         uint32 enableFastLBVH;
     };
 
@@ -410,16 +405,16 @@ namespace InitAccelerationStructure
 
     struct Constants
     {
-        uint32 rebraidType;
-        uint32 triangleCompressionMode;
+        uint32 numLeafNodes;
         uint32 debugCountersScratchOffset;
         uint32 sceneBoundsScratchOffset;
-
-        // Add padding for 16-byte alignment rules
         uint32 numBatchesScratchOffset;
-        uint32 numLeafNodes;
+
+        uint32 rebraidTaskQueueCounterScratchOffset;
+        uint32 tdTaskQueueCounterScratchOffset;
+        uint32 plocTaskQueueCounterScratchOffset;
+        // Add padding for 16-byte alignment rules
         uint32 pad0;
-        uint32 pad1;
 
         AccelStructHeader header;
         AccelStructMetadataHeader metadataHeader;
@@ -742,6 +737,13 @@ constexpr NodeMapping InitAccelerationStructureMapping[] =
 {
     { NodeType::Constant, InitAccelerationStructure::NumRootEntries },
     { NodeType::ConstantBufferTable, 1 },
+    { NodeType::UavTable, 1 },
+    { NodeType::UavTable, 1 },
+};
+
+constexpr NodeMapping InitUpdateAccelerationStructureMapping[] =
+{
+    { NodeType::Constant, InitAccelerationStructure::NumRootEntries },
     { NodeType::UavTable, 1 },
     { NodeType::UavTable, 1 },
 };

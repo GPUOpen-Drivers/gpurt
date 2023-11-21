@@ -430,6 +430,41 @@ static uint32_t GetNumInternalNodeCount(
 }
 
 //=====================================================================================================================
+// Ballot returning a uint64
+uint64_t WaveActiveBallot64(
+    bool flag)
+{
+    const uint4 mask4 = WaveActiveBallot(flag);
+
+    return (uint64_t(mask4.y) << 32) | mask4.x;
+}
+
+//=====================================================================================================================
+// Read the value in the previous lane (or the last lane if this is the first lane)
+#define WAVE_READ_PREV_LANE(val) WaveReadLaneAt((val), (WaveGetLaneIndex() - 1) & (WaveGetLaneCount() - 1))
+
+static const uint4 FullMaskUint4 = uint4(0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
+
+//=====================================================================================================================
+// OR specified value with all previous lanes and the current lane
+[[vk::ext_capability(/* GroupNonUniform */ 61)]]
+[[vk::ext_capability(/* GroupNonUniformArithmetic */ 63)]]
+[[vk::ext_instruction(360)]]
+uint spirv_OpGroupNonUniformBitwiseOr(uint scope, [[vk::ext_literal]] uint op, uint value);
+
+[[vk::ext_capability(/* GroupNonUniform */ 61)]]
+[[vk::ext_capability(/* GroupNonUniformArithmetic */ 63)]]
+[[vk::ext_instruction(360)]]
+uint64_t spirv_OpGroupNonUniformBitwiseOr(uint scope, [[vk::ext_literal]] uint op, uint64_t value);
+
+[[vk::ext_capability(/* GroupNonUniform */ 61)]]
+[[vk::ext_capability(/* GroupNonUniformArithmetic */ 63)]]
+[[vk::ext_instruction(360)]]
+uint3 spirv_OpGroupNonUniformBitwiseOr(uint scope, [[vk::ext_literal]] uint op, uint3 value);
+
+#define WAVE_POSTFIX_OR(val) spirv_OpGroupNonUniformBitwiseOr(/* Subgroup */ 3, /* InclusiveScan */ 1, (val))
+
+//=====================================================================================================================
 TriangleData FetchTriangleFromNode(
     RWByteAddressBuffer DstBuffer,
     uint                metadataSize,

@@ -49,42 +49,7 @@
 
 #include "../shared/scratchNode.h"
 #include "BuildCommon.hlsl"
-
-//=====================================================================================================================
-void WriteGridPosAtIndex(uint offset, uint index, uint4 gridPos)
-{
-    ScratchBuffer.Store<uint4>(offset + index * sizeof(uint4), gridPos);
-}
-
-//=====================================================================================================================
-uint4 FetchGridPosAtIndex(uint offset, uint index)
-{
-    return ScratchBuffer.Load<uint4>(offset + index * sizeof(uint4));
-}
-
-//=====================================================================================================================
-void WriteSplitBoxAtIndex(uint offset, uint index, BoundingBox box)
-{
-    ScratchBuffer.Store<BoundingBox>(offset + index * sizeof(BoundingBox), box);
-}
-
-//=====================================================================================================================
-BoundingBox FetchSplitBoxAtIndex(uint offset, uint index)
-{
-    return ScratchBuffer.Load<BoundingBox>(offset + index * sizeof(BoundingBox));
-}
-
-//=====================================================================================================================
-void WriteRootNodeIndex(uint offset, uint index)
-{
-    ScratchBuffer.Store(offset, index);
-}
-
-//=====================================================================================================================
-uint FetchRootNodeIndex(uint enableFastLBVH, uint offset)
-{
-    return enableFastLBVH ? ScratchBuffer.Load(offset) : 0;
-}
+#include "BuildCommonScratchGlobal.hlsl"
 
 //=====================================================================================================================
 void WriteScratchBatchIndex(
@@ -92,20 +57,9 @@ void WriteScratchBatchIndex(
     uint baseBatchIndicesOffset,
     uint index)
 {
-    uint numBatches;
-    ScratchBuffer.InterlockedAdd(numBatchesOffset, 1, numBatches);
+    uint numBatches = AllocateBatchIndex(numBatchesOffset);
 
     ScratchBuffer.Store(baseBatchIndicesOffset + (numBatches * sizeof(uint)), index);
-}
-
-//=====================================================================================================================
-ScratchNode FetchScratchNode(
-    uint baseScratchNodesOffset,
-    uint nodeIndex)
-{
-    const uint offset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    return ScratchBuffer.Load<ScratchNode>(offset);
 }
 
 //=====================================================================================================================
@@ -197,8 +151,11 @@ void WriteScratchNodeFlags(
     uint nodeIndex,
     uint nodeFlags)
 {
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-    ScratchBuffer.Store<uint>(nodeOffset + SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, nodeFlags);
+    WriteScratchNodeData(
+        baseScratchNodesOffset,
+        nodeIndex,
+        SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET,
+        nodeFlags);
 }
 
 //=====================================================================================================================
@@ -214,31 +171,22 @@ void WriteScratchNodeFlagsFromNodes(
 }
 
 //=====================================================================================================================
-// Update node flags from child in parent scratch node
-void UpdateParentScratchNodeFlags(
-    uint baseScratchNodesOffset,
-    uint nodeIndex,
-    uint flagsAndInstanceMask)
-{
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-    ScratchBuffer.InterlockedAnd(nodeOffset + SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, flagsAndInstanceMask);
-}
-
-//=====================================================================================================================
 uint FetchScratchNodeNumPrimitives(
     uint baseScratchNodesOffset,
     uint nodeIndex,
     bool isLeaf)
 {
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
     if (isLeaf)
     {
         return 1;
     }
     else
     {
-        return ScratchBuffer.Load(nodeOffset + SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET) >> 1;
+        return (FETCH_SCRATCH_NODE_DATA(
+            uint,
+            baseScratchNodesOffset,
+            nodeIndex,
+            SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET) >> 1);
     }
 }
 
@@ -249,9 +197,11 @@ void WriteScratchNodeNumPrimitives(
     uint numPrimitives,
     bool doCollapse)
 {
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET, numPrimitives << 1 | doCollapse);
+    WriteScratchNodeData(
+        baseScratchNodesOffset,
+        nodeIndex,
+        SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET,
+        (numPrimitives << 1 | doCollapse));
 }
 
 //=====================================================================================================================
@@ -261,12 +211,13 @@ void WriteScratchNodeCost(
     float cost,
     bool  isLeaf)
 {
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
+    const uint dataOffset = (isLeaf ? SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET : SCRATCH_NODE_COST_OFFSET);
 
-    const uint offset = nodeOffset + (isLeaf ? SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET
-                                             : SCRATCH_NODE_COST_OFFSET);
-
-    ScratchBuffer.Store<float>(offset, cost);
+    WriteScratchNodeData(
+        baseScratchNodesOffset,
+        nodeIndex,
+        dataOffset,
+        cost);
 }
 
 //=====================================================================================================================
@@ -275,12 +226,9 @@ float FetchScratchNodeCost(
     uint nodeIndex,
     bool isLeaf)
 {
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
+    const uint dataOffset = (isLeaf ? SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET : SCRATCH_NODE_COST_OFFSET);
 
-    const uint offset = nodeOffset + (isLeaf ? SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET
-                                             : SCRATCH_NODE_COST_OFFSET);
-
-    return ScratchBuffer.Load<float>(offset);
+    return FETCH_SCRATCH_NODE_DATA(float, baseScratchNodesOffset, nodeIndex, dataOffset);
 }
 
 //=====================================================================================================================
@@ -294,17 +242,6 @@ uint FetchSortedPrimIndex(
 }
 
 //=====================================================================================================================
-void WriteScratchNode(
-    uint        baseScratchNodesOffset,
-    uint        nodeIndex,
-    ScratchNode node)
-{
-    const uint offset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    ScratchBuffer.Store<ScratchNode>(offset, node);
-}
-
-//=====================================================================================================================
 void WriteScratchNodeBoundingBox(
     uint   baseScratchNodesOffset,
     uint   nodeIndex,
@@ -313,8 +250,8 @@ void WriteScratchNodeBoundingBox(
 {
     const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
 
-    ScratchBuffer.Store<float3>(nodeOffset + SCRATCH_NODE_BBOX_MIN_OFFSET, bboxMin);
-    ScratchBuffer.Store<float3>(nodeOffset + SCRATCH_NODE_BBOX_MAX_OFFSET, bboxMax);
+    WriteScratchNodeDataAtOffset(nodeOffset, SCRATCH_NODE_BBOX_MIN_OFFSET, bboxMin);
+    WriteScratchNodeDataAtOffset(nodeOffset, SCRATCH_NODE_BBOX_MAX_OFFSET, bboxMax);
 }
 
 //=====================================================================================================================
@@ -323,20 +260,16 @@ void WriteScratchNodeInstanceNumPrims(
     uint nodeIndex,
     uint value)
 {
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_INSTANCE_NUM_PRIMS_OFFSET, value);
+    WriteScratchNodeData(baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_INSTANCE_NUM_PRIMS_OFFSET, value);
 }
 
 //=====================================================================================================================
-void WriteScratchNodeNumMortonCells(
+void WriteScratchNodeLargestLength(
     uint baseScratchNodesOffset,
     uint nodeIndex,
-    uint value)
+    float value)
 {
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_NUM_MORTON_CELLS_OFFSET, value);
+    WriteScratchNodeData(baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_NUM_LARGEST_LENGTH_OFFSET, value);
 }
 
 //=====================================================================================================================
@@ -345,8 +278,15 @@ void WriteScratchNodeType(
     uint nodeIndex,
     uint nodeType)
 {
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-    ScratchBuffer.Store<uint>(nodeOffset + SCRATCH_NODE_TYPE_OFFSET, nodeType);
+    WriteScratchNodeData(baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_TYPE_OFFSET, nodeType);
+}
+
+//=====================================================================================================================
+uint FetchScratchNodeType(
+    uint baseScratchNodesOffset,
+    uint nodeIndex)
+{
+    return FETCH_SCRATCH_NODE_DATA(uint, baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_TYPE_OFFSET);
 }
 
 //=====================================================================================================================
@@ -355,9 +295,7 @@ void WriteScratchNodeSurfaceArea(
     uint  nodeIndex,
     float surfaceArea)
 {
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    ScratchBuffer.Store<float>(nodeOffset + SCRATCH_NODE_SA_OFFSET, surfaceArea);
+    WriteScratchNodeData(baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_SA_OFFSET, surfaceArea);
 }
 
 //=====================================================================================================================
@@ -365,9 +303,7 @@ float FetchScratchNodeSurfaceArea(
     uint baseScratchNodesOffset,
     uint nodeIndex)
 {
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    return ScratchBuffer.Load<float>(nodeOffset + SCRATCH_NODE_SA_OFFSET);
+    return FETCH_SCRATCH_NODE_DATA(float, baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_SA_OFFSET);
 }
 
 //=====================================================================================================================
@@ -377,11 +313,9 @@ void WriteScratchNodeChild(
     uint child,
     bool isLeft)
 {
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
+    const uint dataOffset = isLeft ? SCRATCH_NODE_LEFT_OFFSET : SCRATCH_NODE_RIGHT_OFFSET;
 
-    const uint childOffset = isLeft ? SCRATCH_NODE_LEFT_OFFSET : SCRATCH_NODE_RIGHT_OFFSET;
-
-    ScratchBuffer.Store(nodeOffset + childOffset, child);
+    WriteScratchNodeData(baseScratchNodesOffset, nodeIndex, dataOffset, child);
 }
 
 //=====================================================================================================================
@@ -390,9 +324,7 @@ void WriteScratchNodeParent(
     uint nodeIndex,
     uint parent)
 {
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_PARENT_OFFSET, parent);
+    WriteScratchNodeData(baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_PARENT_OFFSET, parent);
 }
 
 //=====================================================================================================================
@@ -400,9 +332,7 @@ uint FetchScratchNodeParent(
     uint baseScratchNodesOffset,
     uint nodeIndex)
 {
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    return ScratchBuffer.Load<uint>(nodeOffset + SCRATCH_NODE_PARENT_OFFSET);
+    return FETCH_SCRATCH_NODE_DATA(uint, baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_PARENT_OFFSET);
 }
 
 //=====================================================================================================================
@@ -442,6 +372,14 @@ void WriteMortonCode64(uint mortonCodesOffset, uint primitiveIndex, uint64_t cod
 {
     const uint offset = mortonCodesOffset + (primitiveIndex << 3);
     ScratchBuffer.Store<uint64_t>(offset, code);
+}
+
+//=====================================================================================================================
+float FetchScratchNodeLargestLength(
+    uint baseScratchNodesOffset,
+    uint nodeIndex)
+{
+    return FETCH_SCRATCH_NODE_DATA(float, baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_NUM_LARGEST_LENGTH_OFFSET);
 }
 
 //=====================================================================================================================
@@ -598,16 +536,6 @@ void UpdateSceneBoundsUsingCentroid(uint byteOffset, float3 centroidPoint)
 }
 
 //=====================================================================================================================
-void UpdateCentroidSceneBoundsWithSize(uint byteOffset, BoundingBox boundingBox)
-{
-    const float3 centroidPoint = (0.5 * (boundingBox.max + boundingBox.min));
-
-    UpdateSceneBoundsUsingCentroid( byteOffset, centroidPoint);
-
-    UpdateSceneSize( byteOffset + 24, ComputeBoxSurfaceArea(boundingBox));
-}
-
-//=====================================================================================================================
 void UpdateSceneBoundsWithSize(uint byteOffset, BoundingBox boundingBox)
 {
     UpdateSceneBounds( byteOffset, boundingBox);
@@ -663,7 +591,7 @@ uint GetBvhNodesOffset(
         // The FastLBVH does not need to do this, because it provides the root's index
         // in ShaderConstants.offsets.fastLBVHRootNodeIndex.
         const uint nodeIndex = FetchSortedPrimIndex(primIndicesSortedOffset, 0);
-        return bvhLeafNodeDataOffset + nodeIndex * SCRATCH_NODE_SIZE;
+        return CalcScratchNodeOffset(bvhLeafNodeDataOffset, nodeIndex);
     }
     else
     {
@@ -686,7 +614,8 @@ void MergeScratchNodes(
     ScratchNode leftNode,
     uint        rightNodeIndex,
     ScratchNode rightNode,
-    float       mergedBoxSurfaceArea)
+    float       mergedBoxSurfaceArea,
+    float       largestLength)
 {
     const uint numLeft  = FetchScratchNodeNumPrimitives(leftNode, IsLeafNode(leftNodeIndex, numActivePrims));
     const uint numRight = FetchScratchNodeNumPrimitives(rightNode, IsLeafNode(rightNodeIndex, numActivePrims));
@@ -759,6 +688,7 @@ void MergeScratchNodes(
     WriteScratchNodeSurfaceArea(scratchNodesOffset,
                                 mergedNodeIndex,
                                 mergedBoxSurfaceArea);
+    WriteScratchNodeLargestLength(scratchNodesOffset, mergedNodeIndex, largestLength);
     WriteScratchNodeCost(scratchNodesOffset, mergedNodeIndex, bestCost, false);
     WriteScratchNodeNumPrimitives(scratchNodesOffset, mergedNodeIndex, numTris, isCollapsed);
 
@@ -841,6 +771,8 @@ void RefitNode(
                                 mergedBox.min,
                                 mergedBox.max);
 
+    const float largestLength = 0;
+
     MergeScratchNodes(
         args.baseScratchNodesOffset,
         args.numBatchesOffset,
@@ -851,7 +783,8 @@ void RefitNode(
         leftNode,
         rc,
         rightNode,
-        mergedBoxSurfaceArea);
+        mergedBoxSurfaceArea,
+        largestLength);
 
     if (args.enableInstancePrimCount)
     {
@@ -863,4 +796,5 @@ void RefitNode(
                                          instancePrimCount);
     }
 }
+
 #endif

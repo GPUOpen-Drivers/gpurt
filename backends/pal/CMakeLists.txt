@@ -1,7 +1,7 @@
 ##
  #######################################################################################################################
  #
- #  Copyright (c) 2020-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ #  Copyright (c) 2023 Advanced Micro Devices, Inc. All Rights Reserved.
  #
  #  Permission is hereby granted, free of charge, to any person obtaining a copy
  #  of this software and associated documentation files (the "Software"), to deal
@@ -23,34 +23,11 @@
  #
  #######################################################################################################################
 
-add_subdirectory(shaders)
-
-if (CMAKE_HOST_SYSTEM_NAME MATCHES "Linux" AND GPURT_CLIENT_API STREQUAL "VULKAN")
-    find_program(DXC_PATH dxc)
-    if ("${DXC_PATH}" STREQUAL "DXC_PATH-NOTFOUND")
-        message(WARNING "Could not find dxc.")
-        if (EXISTS ${GPU_RAY_TRACING_SOURCE_DIR}/tools/lnx)
-            include(GpuRtGenerateShaders)
-        else()
-            message(FATAL_ERROR "Could not find shader compiler tool dxc.")
-        endif()
-    else()
-        include(GpuRtGenerateShaders)
-    endif()
-else()
-    include(GpuRtGenerateShaders)
-endif()
-
 target_include_directories(gpurt PRIVATE .)
-target_include_directories(gpurt_internal PRIVATE .)
 
-target_sources(gpurt_internal PRIVATE
+target_sources(gpurt PRIVATE
     CMakeLists.txt
-    gpurtBvhBatcher.cpp
-    gpurtBvhBuilder.cpp
-    gpurtDebugMonitor.cpp
-    gpurtDevice.cpp
-    gpurtInternalShaders.cpp
-    gpurtTraceSource.cpp
+    gpurtPalBackend.cpp
+    gpurtPalBridge.cpp
 )
 

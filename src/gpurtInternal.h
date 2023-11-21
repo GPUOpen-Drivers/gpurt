@@ -25,6 +25,7 @@
 #pragma once
 #include "gpurt/gpurt.h"
 #include "gpurt/gpurtAccelStruct.h"
+#include "gpurt/gpurtBackend.h"
 #include "gpurt/gpurtBuildSettings.h"
 #include "gpurt/gpurtCounter.h"
 #include "shared/gpurtBuildConstants.h"
@@ -32,6 +33,17 @@
 
 #include "palInlineFuncs.h"
 #include "palHashLiteralString.h"
+
+#include <unordered_map>
+
+// __declspec(dllexport) has limitations. "No name decoration is applied to exported C functions or C++ extern "C"
+// functions using the __cdecl calling convention." In order to export a unmangled symbol for a function that uses a
+// different calling convention you must invoke the linker directly on MSVC. NOTE: Name mangling doesn't occur for
+// exported C functions on 64-bit platforms.
+//
+// Place this inside the function body you want to export. And ensure the name of the function is the symbol name
+// you want to export
+#define GPURT_EXPORT_UNMANGLED_SYMBOL_MSVC
 
 namespace GpuRt
 {
@@ -43,7 +55,7 @@ namespace GpuRt
 
 static constexpr size_t RayTracingQBVHLeafSize          = 64;
 static constexpr size_t RayTracingScratchNodeSize       = 64;
-static constexpr size_t RayTracingQBVHStackPtrsSize     = 12;
+static constexpr size_t RayTracingQBVHStackPtrsSize     = 16;
 static constexpr size_t RayTracingStatePLOCSize         = 16;   // PLOCState size without ploc task counters
                                                                 // taskCounter size is tracked by
                                                                 // RayTracingTaskQueueCounterSize
@@ -192,66 +204,86 @@ const uint32 ReservedLogicalIdCount = 1;
 // Array of internal pipeline source code
 extern const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsType::Count)];
 
-// Layout used for build shader PSO hashes.
-union BuildShaderPsoHash
+// Map key for map of internal pipelines
+struct InternalPipelineKey
 {
-    struct
-    {
-        uint64 shaderType              : 18;
-        uint64 topLevelBuild           : 1;
-        uint64 buildMode               : 2;
-        uint64 reserved                : 1;
-        uint64 triangleCompressionMode : 2;
-        uint64 doTriangleSplitting     : 1;
-        uint64 doCollapse              : 1;
-        uint64 fp16BoxNodesMode        : 2;
-        uint64 radixSortScanLevel      : 2;
-        uint64 rebraidType             : 2;
-        uint64 hashPrefix              : 32;
-    };
+    InternalRayTracingCsType shaderType;
+    uint32                   settingsHash;
 
-    uint64 u64All;
+    bool operator==(const InternalPipelineKey& other) const
+    {
+        return (shaderType   == other.shaderType)
+            && (settingsHash == other.settingsHash);
+    }
 };
 
-//=====================================================================================================================
-// Generate 64-bit PSO hash for internal build shader type
-static uint64 GetInternalPsoHash(
-    InternalRayTracingCsType        type,
-    const CompileTimeBuildSettings& buildSettings)
+struct InternalPipelineKeyHasher
 {
-    // Identifies ray-tracing-related dispatches for tools
-    constexpr uint64 RayTracingPsoHashPrefix = 0xEEE5FFF6;
+    std::size_t operator()(const InternalPipelineKey& key) const
+    {
+        return static_cast<std::size_t>((key.settingsHash << 5) + static_cast<uint32>(key.shaderType));
+    }
+};
 
-    BuildShaderPsoHash hash{};
-    hash.shaderType              = static_cast<uint64>(type);
-    hash.topLevelBuild           = buildSettings.topLevelBuild;
-    hash.buildMode               = buildSettings.buildMode;
-    hash.triangleCompressionMode = buildSettings.triangleCompressionMode;
-    hash.doTriangleSplitting     = buildSettings.doTriangleSplitting;
-    hash.doCollapse              = buildSettings.doCollapse;
-    hash.fp16BoxNodesMode        = buildSettings.fp16BoxNodesMode;
-    hash.radixSortScanLevel      = buildSettings.radixSortScanLevel;
-    hash.rebraidType             = buildSettings.rebraidType;
-    hash.hashPrefix              = RayTracingPsoHashPrefix;
+struct InternalPipelineMemoryPair
+{
+    ClientPipelineHandle pPipeline;
+    void*                pMemory;
+};
 
-    return hash.u64All;
-}
+using InternalPipelineMap = std::unordered_map<InternalPipelineKey,
+                                               InternalPipelineMemoryPair,
+                                               InternalPipelineKeyHasher>;
 
 //=====================================================================================================================
 // different ways to encode the scene bounds used to generate morton codes
 enum class SceneBoundsCalculation : uint32
 {
     BasedOnGeometry = 0,
-    BasedOnGeometryWithSize,
-    BasedOnCentroidWithSize
+    BasedOnGeometryWithSize
 };
 
 namespace Internal {
+
+// =====================================================================================================================
+// Create GPURT device
+//
+Pal::Result GPURT_API_ENTRY CreateDevice(
+    const DeviceInitInfo&  info,
+    const ClientCallbacks& callbacks,
+    const IBackend*        pBackend,
+    void*            const pMemory,
+    IDevice**        const ppDevice);
+
+// =====================================================================================================================
+size_t GPURT_API_ENTRY GetDeviceSize();
+
+// =====================================================================================================================
+// Get GPURT shader library data
+//
+// @param flags [in] Feature flags to enable in GPURT library
+//
+// @return Shader code for the shader library
+//
+PipelineShaderCode GPURT_API_ENTRY GetShaderLibraryCode(
+    ShaderLibraryFeatureFlags flags);
+
+// =====================================================================================================================
+// Returns GPURT shader library function table for input ray tracing IP level.
+//
+// @param rayTracingIpLevel   [in]  Pal IP level
+// @param pEntryFunctionTable [out] Requested function table, if found
+//
+// @return whether the function table was found successfully
+Pal::Result GPURT_API_ENTRY QueryRayTracingEntryFunctionTable(
+    const Pal::RayTracingIpLevel   rayTracingIpLevel,
+    EntryFunctionTable* const      pEntryFunctionTable);
+
 // =====================================================================================================================
 class Device : public IDevice
 {
 public:
-    Device(const DeviceInitInfo& info, const ClientCallbacks& clientCb);
+    Device(const DeviceInitInfo& info, const ClientCallbacks& clientCb, const IBackend* pBackend);
 
     // Destroy device
     //
@@ -307,51 +339,55 @@ public:
 
     // Writes commands into a command buffer to build an acceleration structure
     //
-    // @param pCmdBuffer           [in] Command buffer where commands will be written
+    // @param cmdBuffer            [in] Opaque handle to command buffer where commands will be written
     // @param buildInfo            [in] Acceleration structure build info
     virtual void BuildAccelStruct(
-        Pal::ICmdBuffer*              pCmdBuffer,
+        ClientCmdBufferHandle         cmdBuffer,
         const AccelStructBuildInfo&   buildInfo
     ) override;
 
     // Writes commands into a command buffer to build multiple acceleration structures
     //
-    // @param pCmdBuffer           [in] Command buffer where commands will be written
+    // @param cmdBuffer            [in] Opaque handle to command buffer where commands will be written
     // @param buildInfo            [in] Acceleration structure build info
     virtual void BuildAccelStructs(
-        Pal::ICmdBuffer*                       pCmdBuffer,
+        ClientCmdBufferHandle                  cmdBuffer,
         Util::Span<const AccelStructBuildInfo> buildInfo
     ) override;
 
     // Writes commands into a command buffer to emit post-build information about an acceleration structure
     //
-    // @param pCmdBuffer           [in] Command buffer where commands will be written
+    // @param cmdBuffer            [in] Opaque handle to command buffer where commands will be written
     // @param postBuildInfo        [in] Post-build event info
     virtual void EmitAccelStructPostBuildInfo(
-        Pal::ICmdBuffer*                pCmdBuffer,
+        ClientCmdBufferHandle           cmdBuffer,
         const AccelStructPostBuildInfo& postBuildInfo
     ) override;
 
     // Writes commands into a command buffer to execute an acceleration structure copy/update/compress operation
     //
-    // @param pCmdBuffer           [in] Command buffer where commands will be written
+    // @param cmdBuffer            [in] Opaque handle to command buffer where commands will be written
     // @param copyInfo             [in] Copy operation info
     virtual void CopyAccelStruct(
-        Pal::ICmdBuffer*              pCmdBuffer,
+        ClientCmdBufferHandle         cmdBuffer,
         const AccelStructCopyInfo&    copyInfo
     ) override;
 
     // Prepares the input buffer (indirect arguments, bindings, constants) for an indirect raytracing dispatch
     //
-    // @param pCmdBuffer           [in/out] Command buffer where commands will be written
+    // @param cmdBuffer            [in/out] Opaque handle to ommand buffer where commands will be written
     // @param userData             [in] Addresses of input/output buffers
     // @param maxDispatchCount     Max indirect dispatches
     // @param pipelineCount        Number of pipelines to dispatch
     virtual void InitExecuteIndirect(
-        Pal::ICmdBuffer*                   pCmdBuffer,
+        ClientCmdBufferHandle              cmdBuffer,
         const InitExecuteIndirectUserData& userData,
         uint32                             maxDispatchCount,
-        uint32                             pipelineCount) const override;
+        uint32                             pipelineCount)
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 40
+        const
+#endif
+        override;
 
     // Calculates and returns prebuild information about some given future acceleration structure.
     //
@@ -424,7 +460,7 @@ public:
     // Notifies GPURT about an RT dispatch, triggers a trace buffer allocation, and outputs a buffer view for the trace
     // buffer.
     virtual void TraceRtDispatch(
-        Pal::ICmdBuffer*                pCmdBuffer,
+        ClientCmdBufferHandle           cmdBuffer,
         RtPipelineType                  pipelineType,
         RtDispatchInfo                  dispatchInfo,
         DispatchRaysConstants*          pConstants) override;
@@ -443,6 +479,12 @@ public:
         gpusize*                      pCounterMetadataVa,
         void*                         pIndirectConstants) override;
 
+    virtual const PipelineBuildInfo& GetPipelineBuildInfo(
+        InternalRayTracingCsType shaderType) const override
+    {
+        return InternalPipelineBuildInfo[static_cast<uint32>(shaderType)];
+    }
+
     void AddMetadataToList(
         RtDispatchInfo              dispatchInfo,
         RtPipelineType              pipelineType,
@@ -450,7 +492,7 @@ public:
 
     // Fill shader table info and copy the application's shader table data
     //
-    // @param pCmdBuffer          [in]  Command buffer where commands will be written
+    // @param cmdBuffer           [in]  Opaque handle to command buffer
     // @param runningOffsetGpuVa  [in]  Offset GpuVa for shader table copy to
     // @param destGpuVa           [in]  Base GpuVa for shader table
     // @param runningOffset       [in]  Offset for read back shader table info
@@ -459,7 +501,7 @@ public:
     // @param shaderTable         [in]  Shader table from dispatch arguments
     // @param pOutShaderTableInfo [out] Output Shader table with user data filled in
     void WriteShaderTableData(
-        Pal::ICmdBuffer*       pCmdBuffer,
+        ClientCmdBufferHandle  cmdBuffer,
         uint64                 runningOffsetGpuVa,
         gpusize                destGpuVa,
         uint64                 runningOffset,
@@ -483,23 +525,23 @@ public:
 
     uint32 GetRayHistoryLightCounterMask() const;
 
-    Pal::IPipeline* GetInternalPipeline(
+    ClientPipelineHandle GetInternalPipeline(
         InternalRayTracingCsType        type,
         const CompileTimeBuildSettings& buildSettings,
-        uint32                          buildSettingsHash) const;
+        uint32                          buildSettingsHash);
 
     void BindPipeline(
-        Pal::ICmdBuffer*                pCmdBuffer,
+        ClientCmdBufferHandle           cmdBuffer,
         InternalRayTracingCsType        type,
         const CompileTimeBuildSettings& buildSettings,
-        uint32                          buildSettingsHash) const;
+        uint32                          buildSettingsHash);
 
     uint32 WriteBufferSrdTable(
-        Pal::ICmdBuffer*           pCmdBuffer,
-        const Pal::BufferViewInfo* pBufferViews,
-        uint32                     count,
-        bool                       typedBuffer,
-        uint32                     entryOffset) const;
+        ClientCmdBufferHandle cmdBuffer,
+        const BufferViewInfo* pBufferViews,
+        uint32                count,
+        bool                  typedBuffer,
+        uint32                entryOffset) const;
 
     // Computes size for decoded acceleration structure
     //
@@ -517,28 +559,28 @@ public:
 
     // Executes the copy buffer shader
     //
-    // @param pCmdBuffer     [in] Command buffer where commands will be written
+    // @param cmdBuffer      [in] Opaque handle to command buffer for command submission
     // @param dstBufferVa         Destination buffer GPU VA
     // @param srcBufferVa         Source buffer GPU VA
     // @param numDwords           Number of Dwords to copy
     void CopyBufferRaw(
-        Pal::ICmdBuffer* pCmdBuffer,
-        gpusize          dstBufferVa,
-        gpusize          srcBufferVa,
-        uint32           numDwords);
+        ClientCmdBufferHandle  cmdBuffer,
+        gpusize                dstBufferVa,
+        gpusize                srcBufferVa,
+        uint32                 numDwords);
 
     // Uploads CPU memory to a GPU buffer
     //
-    // @param pCmdBuffer     [in] Command buffer where commands will be written
+    // @param cmdBuffer      [in] Opaque handle to command buffer for command submission
     // @param dstBufferVa         Destination buffer GPU VA
     // @param pSrcData            Pointer to the CPU memory to upload
     // @param sizeInBytes         Size of the CPU memory to upload, in bytes. Must be less than or equal to
     //                            the size reported by pCmdBuffer->GetEmbeddedDataLimit();
     void UploadCpuMemory(
-        Pal::ICmdBuffer* pCmdBuffer,
-        gpusize          dstBufferVa,
-        const void*      pSrcData,
-        uint32           sizeInBytes);
+        ClientCmdBufferHandle  cmdBuffer,
+        gpusize                dstBufferVa,
+        const void*            pSrcData,
+        uint32                 sizeInBytes);
 
     // Writes the provided entries into the compute shader user data slots
     //
@@ -548,11 +590,11 @@ public:
     // @param entryOffset           Offset of the first entry
     //
     // @return Data entry
-    static uint32 WriteUserDataEntries(
-        Pal::ICmdBuffer* pCmdBuffer,
-        const void* pEntries,
-        uint32           numEntries,
-        uint32           entryOffset);
+    uint32 WriteUserDataEntries(
+        ClientCmdBufferHandle cmdBuffer,
+        const void*           pEntries,
+        uint32                numEntries,
+        uint32                entryOffset) const;
 
     // Writes a gpu virtual address for a buffer into the compute shader user data slots
     //
@@ -561,30 +603,35 @@ public:
     // @param entryOffset           Offset of the first entry
     //
     // @return Data entry
-    static uint32 WriteBufferVa(
-        Pal::ICmdBuffer* pCmdBuffer,
-        gpusize          virtualAddress,
-        uint32           entryOffset);
+    uint32 WriteBufferVa(
+        ClientCmdBufferHandle cmdBuffer,
+        gpusize               virtualAddress,
+        uint32                entryOffset);
 
-    // Creates one or more typed buffer view shader resource descriptors
+    // Binds an internal pipeline
     //
-    // @param [in]  count           Number of buffer view SRDs to create; size of the pBufferViewInfo array.
-    // @param [in]  pBufferViewInfo Array of buffer view descriptions directing SRD construction.
-    // @param [out] pOut            Client-provided space where opaque, hardware-specific SRD data is written.
-    void CreateTypedBufferViewSrds(
-        uint32                     count,
-        const Pal::BufferViewInfo* pBufferViewInfo,
-        void*                      pOut);
+    // @param cmdBuffer           Opaque handle to command buffer to use for the bind command
+    // @param shaderType          Type of internal shader to bind
+    // @param buildSettings       Current settings for BVH builds
+    // @param buildSettingsHash   Metro hash of current build settings
+    // @param apiPsoHash          Calculated internal API PSO hash
+    void BindPipeline(
+        ClientCmdBufferHandle           cmdBuffer,
+        InternalRayTracingCsType        shaderType,
+        const CompileTimeBuildSettings& buildSettings,
+        uint32                          buildSettingsHash,
+        uint32                          apiPsoHash);
 
     // Performs a generic barrier that's used to synchronize internal ray tracing shaders
     //
     // @param pCmdBuffer       [in] Command buffer where commands will be written
     void RaytracingBarrier(
-        Pal::ICmdBuffer* pCmdBuffer);
+        ClientCmdBufferHandle pCmdBuffer);
 
     Pal::IDevice* GetPalDevice() const { return m_info.pPalDevice; };
 
-    const DeviceInitInfo& GetInitInfo() const { return m_info; }
+    virtual const ClientCallbacks& GetClientCallbacks() const override { return m_clientCb; }
+    virtual const DeviceInitInfo& GetInitInfo() const override { return m_info; }
 
     // Returns size in DWORDs of a buffer view SRD
     uint32 GetBufferSrdSizeDw() const { return m_bufferSrdSizeDw; };
@@ -603,11 +650,11 @@ public:
 #if GPURT_DEVELOPER
     // Driver generated RGP markers are only added in internal builds because they expose details about the
     // construction of acceleration structure.
-    void PushRGPMarker(Pal::ICmdBuffer* pCmdBuffer, const char* pFormat, ...);
-    void PopRGPMarker(Pal::ICmdBuffer* pCmdBuffer);
+    void PushRGPMarker(ClientCmdBufferHandle cmdBuffer, const char* pFormat, ...);
+    void PopRGPMarker(ClientCmdBufferHandle cmdBuffer);
 
     void OutputPipelineName(
-        Pal::ICmdBuffer* pCmdBuffer,
+        ClientCmdBufferHandle cmdBuffer,
         InternalRayTracingCsType type) const;
 #endif
 
@@ -635,6 +682,7 @@ private:
     GpuRt::RayHistoryTraceSource             m_rayHistoryTraceSource;
     RayHistoryBufferList                     m_rayHistoryTraceList;
     Util::Mutex                              m_traceRayHistoryLock;
+    const IBackend*                          m_pBackend;
 
 #if GPURT_ENABLE_GPU_DEBUG
     GpuRt::DebugMonitor                      m_debugMonitor;

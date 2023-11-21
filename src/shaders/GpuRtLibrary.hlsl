@@ -119,7 +119,6 @@ export void TraceRayUsingHitToken1_1(
     );
 }
 
-#if GPURT_BUILD_RTIP2
 //=====================================================================================================================
 // TraceRay() entry point for ray tracing IP 2.0
 export void TraceRay2_0(
@@ -205,7 +204,6 @@ export void TraceRayUsingHitToken2_0(
         GPURT_RTIP2_0
     );
 }
-#endif
 
 //=====================================================================================================================
 // RayQuery::Proceed() entry point for ray tracing IP 1.1
@@ -222,7 +220,6 @@ export bool RayQueryProceed1_1(
     );
 }
 
-#if GPURT_BUILD_RTIP2
 //=====================================================================================================================
 // RayQuery::Proceed() entry point for ray tracing IP 2.0
 export bool RayQueryProceed2_0(
@@ -237,7 +234,6 @@ export bool RayQueryProceed2_0(
         GPURT_RTIP2_0
     );
 }
-#endif
 
 //=====================================================================================================================
 // TraceRayInline() entry point for ray tracing IP 1.1
@@ -262,7 +258,6 @@ export void TraceRayInline1_1(
                          GPURT_RTIP1_1);
 }
 
-#if GPURT_BUILD_RTIP2
 //=====================================================================================================================
 // TraceRayInline() entry point for ray tracing IP 2.0
 export void TraceRayInline2_0(
@@ -285,7 +280,6 @@ export void TraceRayInline2_0(
                          dispatchThreadId,
                          GPURT_RTIP2_0);
 }
-#endif
 
 //=====================================================================================================================
 // GPURT intrinsic for fetching instance ID from instance node

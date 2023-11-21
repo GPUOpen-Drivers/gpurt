@@ -575,13 +575,13 @@ void FindNearestNeighbour(
 
             // Decide on what type of interior box node the parent should be
             // and write the type into scratch
-            const ScratchNode leftNode  = ScratchBuffer.Load<ScratchNode>(leftNodeOffset);
-            const ScratchNode rightNode = ScratchBuffer.Load<ScratchNode>(rightNodeOffset);
+            const ScratchNode leftNode  = FetchScratchNodeAtOffset(leftNodeOffset);
+            const ScratchNode rightNode = FetchScratchNodeAtOffset(rightNodeOffset);
 
-            ScratchBuffer.Store(mergedNodeOffset + SCRATCH_NODE_BBOX_MIN_OFFSET, mergedBox.min);
-            ScratchBuffer.Store(mergedNodeOffset + SCRATCH_NODE_BBOX_MAX_OFFSET, mergedBox.max);
-            ScratchBuffer.Store(mergedNodeOffset + SCRATCH_NODE_LEFT_OFFSET, leftNodeIndex);
-            ScratchBuffer.Store(mergedNodeOffset + SCRATCH_NODE_RIGHT_OFFSET, rightNodeIndex);
+            WriteScratchNodeDataAtOffset(mergedNodeOffset, SCRATCH_NODE_BBOX_MIN_OFFSET, mergedBox.min);
+            WriteScratchNodeDataAtOffset(mergedNodeOffset, SCRATCH_NODE_BBOX_MAX_OFFSET, mergedBox.max);
+            WriteScratchNodeDataAtOffset(mergedNodeOffset, SCRATCH_NODE_LEFT_OFFSET, leftNodeIndex);
+            WriteScratchNodeDataAtOffset(mergedNodeOffset, SCRATCH_NODE_RIGHT_OFFSET, rightNodeIndex);
 
             MergeScratchNodes(
                 args.scratchNodesScratchOffset,
@@ -593,10 +593,11 @@ void FindNearestNeighbour(
                 leftNode,
                 rightNodeIndex,
                 rightNode,
-                mergedBoxSurfaceArea);
+                mergedBoxSurfaceArea,
+                0);
 
-            ScratchBuffer.Store(leftNodeOffset + SCRATCH_NODE_PARENT_OFFSET, mergedNodeIndex);
-            ScratchBuffer.Store(rightNodeOffset + SCRATCH_NODE_PARENT_OFFSET, mergedNodeIndex);
+            WriteScratchNodeDataAtOffset(leftNodeOffset, SCRATCH_NODE_PARENT_OFFSET, mergedNodeIndex);
+            WriteScratchNodeDataAtOffset(rightNodeOffset, SCRATCH_NODE_PARENT_OFFSET, mergedNodeIndex);
 
             // local write if needed
             // write locally for indices that include the left radius to (thread group size - radius)

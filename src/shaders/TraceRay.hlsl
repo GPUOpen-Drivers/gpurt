@@ -24,10 +24,7 @@
  **********************************************************************************************************************/
 
 #include "TraceRay1_1.hlsl"
-
-#if GPURT_BUILD_RTIP2
 #include "TraceRay2_0.hlsl"
-#endif
 
 //=====================================================================================================================
 static IntersectionResult TraceRayInternal(
@@ -40,6 +37,10 @@ static IntersectionResult TraceRayInternal(
 )
 // Default path
 {
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION  >= 41
+    rayFlags = (rayFlags & ~AmdTraceRayGetKnownUnsetRayFlags()) | AmdTraceRayGetKnownSetRayFlags();
+#endif
+
     switch (rtIpLevel)
     {
         case GPURT_RTIP1_1:
@@ -50,7 +51,6 @@ static IntersectionResult TraceRayInternal(
             rayDesc,
             rayId
         );
-#if GPURT_BUILD_RTIP2
         case GPURT_RTIP2_0:
         return TraceRayImpl2_0(
             topLevelBvh,
@@ -59,7 +59,6 @@ static IntersectionResult TraceRayInternal(
             rayDesc,
             rayId
         );
-#endif
         default: return (IntersectionResult) 0;
     }
 }
@@ -76,9 +75,7 @@ static IntersectionResult IntersectRay(
     switch (rtIpLevel)
     {
         case GPURT_RTIP1_1:  return IntersectRayImpl1_1(topLevelBvh, ray, blasPointer, tlasPointer, rayId);
-#if GPURT_BUILD_RTIP2
         case GPURT_RTIP2_0:  return IntersectRayImpl1_1(topLevelBvh, ray, blasPointer, tlasPointer, rayId);
-#endif
         default: return (IntersectionResult)0;
     }
 }

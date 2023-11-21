@@ -40,24 +40,37 @@ static BoundingBox CombineAABB(
 }
 
 //=====================================================================================================================
-// Helper function for extracting a single bit from a 32-bit field
+// Helper function for producing a 32 bit mask of one bit
 inline uint32_t bit(uint32_t index)
 {
     return 1u << index;
 }
 
 //=====================================================================================================================
+// Helper function for producing a 64 bit mask of one bit
+inline uint64_t bit64(uint32_t index)
+{
+    return 1ull << index;
+}
+
+//=====================================================================================================================
 // Helper function for generating a 32-bit bit mask
 inline uint32_t bits(uint32_t bitcount)
 {
-    return (1u << bitcount) - 1;
+    return (bitcount == 32) ? 0xFFFFFFFF : ((1u << bitcount) - 1);
 }
 
 //=====================================================================================================================
 // Helper function for generating a 32-bit bit mask
 inline uint64_t bits64(uint64_t bitcount)
 {
-    return (1ull << bitcount) - 1ull;
+    return (bitcount == 64) ? 0xFFFFFFFFFFFFFFFFull : ((1ull << bitcount) - 1ull);
+}
+
+//=====================================================================================================================
+inline uint countbits64(uint64_t val)
+{
+    return countbits(LowPart(val)) + countbits(HighPart(val));
 }
 
 //=====================================================================================================================

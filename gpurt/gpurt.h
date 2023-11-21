@@ -25,20 +25,28 @@
 
 #pragma once
 #include <stdint.h>
+#include <unordered_map>
 #include "pal.h"
 #include "palSysMemory.h"
 #include "palDevice.h"
 #include "palPipeline.h"
 #include "palMutex.h"
-#include "palHashMap.h"
 #include "palVector.h"
 #include "src/gpurtTraceSource.h"
 #include "gpurtDispatch.h"
+#include "gpurtBuildSettings.h"
 
 #define GPURT_API_ENTRY PAL_STDCALL
 
 using ClientCmdContextHandle = void*;
 using ClientGpuMemHandle = void*;
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 40
+using ClientCmdBufferHandle = Pal::ICmdBuffer*;
+using ClientPipelineHandle = Pal::IPipeline*;
+#else
+using ClientCmdBufferHandle = void*;
+using ClientPipelineHandle = void*;
+#endif
 
 namespace Pal
 {
@@ -67,6 +75,8 @@ using uint64 = uint64_t;
 
 namespace GpuRt
 {
+
+class IBackend;
 
 // Individual bit values for static traversal flags returned by AmdTraceRayGetStaticFlags(), in case
 // clients need to make decisions based on individual bits during code generation.
@@ -300,6 +310,7 @@ enum class InternalRayTracingCsType : uint32
     MergeSort,
     Update,
     InitAccelerationStructure,
+    InitUpdateAccelerationStructure,
     Count
 };
 
@@ -931,43 +942,17 @@ struct ShaderIdentifier
 
 static_assert(sizeof(ShaderIdentifier) == RayTraceShaderIdentifierByteSize, "");
 
-// Map key for map of internal pipelines
-struct InternalPipelineKey
-{
-    InternalRayTracingCsType shaderType;
-    uint32                   settingsHash;
-};
-
-struct InternalPipelineMemoryPair
-{
-    Pal::IPipeline* pPipeline;
-    void*           pMemory;
-};
-
 // Box sorting heuristic
 enum class BoxSortHeuristic : uint32
 {
     Closest = 0x0,
-#if GPURT_BUILD_RTIP2
     Largest = 0x1,
     MidPoint = 0x2,
-#endif
     Disabled = 0x3,
-#if GPURT_BUILD_RTIP2
     LargestFirstOrClosest = 0x4,
     LargestFirstOrClosestMidPoint = 0x5,
-#endif
     DisabledOnAcceptFirstHit = 0x6
 };
-
-using InternalPipelineMap = Util::HashMap<
-    InternalPipelineKey,
-    InternalPipelineMemoryPair,
-    Util::GenericAllocatorTracked,
-    Util::JenkinsHashFunc,
-    Util::DefaultEqualFunc,
-    Util::HashAllocator<Util::GenericAllocatorTracked>,
-    sizeof(InternalPipelineMemoryPair) * 16>;
 
 // Ray history trace
 enum class RtPipelineType
@@ -1011,13 +996,13 @@ struct RtDispatchInfo
 // Client-defined callback to push or pop an RGP marker through the given command buffer.  These are used to
 // annotate GPURT operations.
 //
-// @param pCmdBuffer [in] PAL command buffer passed to BVH operation
+// @param cmdBuffer  [in] Opaque handle to command buffer passed to BVH operation
 // @param pMarker    [in] Marker string when isPush is true, null otherwise
 // @param isPush     [in] Whether this is a marker push or a pop operation.
 extern void ClientInsertRGPMarker(
-    Pal::ICmdBuffer* pCmdBuffer,
-    const char*      pMarker,
-    bool             isPush);
+    ClientCmdBufferHandle  cmdBuffer,
+    const char*            pMarker,
+    bool                   isPush);
 #endif
 
 // Client-provided callback to convert some i-th bottom-level geometry description from client API-specific struct
@@ -1074,13 +1059,13 @@ extern AccelStructPostBuildInfo ClientConvertAccelStructPostBuildInfo(
 // if this function returns successfully.  The client can then retain this video memory and process the dump in
 // a way it sees fit.
 //
-// @param pCmdBuffer       [in] PAL command buffer that will contain the dump commands
+// @param cmdBuffer        [in] Opaque handle to command buffer that will contain the dump commands
 // @param info             [in] Information about the acceleration structure being dumped
 // @param pDumpGpuVirtAddr [out] GPU virtual address of memory allocated by this function to store the dumped BVH
 //
 // @returns Pal::Result::Success if allocation succeeded and the dump should be handled; any error otherwise.
 extern Pal::Result ClientAccelStructBuildDumpEvent(
-    Pal::ICmdBuffer*            pCmdBuffer,
+    ClientCmdBufferHandle       cmdBuffer,
     const AccelStructInfo&      info,
     const AccelStructBuildInfo& buildInfo,
     gpusize*                    pDumpGpuVirtAddr);
@@ -1092,7 +1077,7 @@ extern Pal::Result ClientAccelStructBuildDumpEvent(
 // if this function returns successfully.  The client can then retain this video memory and process the dump in
 // a way it sees fit.
 //
-// @param pCmdBuffer       [in] PAL command buffer that will contain the dump commands
+// @param cmdBuf           [in] Opaque pointer to command buffer that will contain the dump commands
 // @param info             [in] Information about the acceleration structure being dumped
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 39
 // @param gpuMem          [out] GPU memory allocated by this function to store the timestamps
@@ -1102,11 +1087,11 @@ extern Pal::Result ClientAccelStructBuildDumpEvent(
 // @returns Pal::Result::Success if allocation succeeded and the dump should be handled; any error otherwise.
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 39
 extern Pal::Result ClientAccelStatsBuildDumpEvent(
-    Pal::ICmdBuffer*        pCmdbuf, // PAL command buffer that will handle the dump
+    ClientCmdBufferHandle   cmdBuf,  // Opaque pointer to command buffer that will handle the dump
     GpuRt::AccelStructInfo* pInfo);  // Information about the accel struct being dumped
 #else
 extern Pal::Result ClientAccelStatsBuildDumpEvent(
-    Pal::ICmdBuffer*              pCmdbuf,               // PAL command buffer that will handle the dump
+    ClientCmdBufferHandle         cmdBuf,                // Opaque pointer to command buffer that will handle the dump
     const GpuRt::AccelStructInfo& info,                  // Information about the accel struct being dumped
     Pal::IGpuMemory**             ppGpuMem,              // Pointer time stamp memory
     uint64*                       pOffset);              // Offset into time stamp memory
@@ -1119,7 +1104,7 @@ extern Pal::Result ClientAccelStatsBuildDumpEvent(
 //
 // @param initInfo         [in]  Information about the host device
 // @param buildInfo        [in]  Information about the pipeline to be built
-// @param ppResultPipeline [out] Result PAL pipeline object pointer
+// @param ppResultPipeline [out] Result pipeline object handle
 // @param ppResultMemory   [out] Result PAL pipeline memory if different from pipeline pointer.  Optional.
 //
 // @returns Compilation success result.
@@ -1127,7 +1112,7 @@ extern Pal::Result ClientCreateInternalComputePipeline(
     const DeviceInitInfo&       initInfo,          // Information about the host device
     const PipelineBuildInfo&    buildInfo,         // Information about the pipeline to be built
     const CompileTimeConstants& constantInfo,      // Compile time constants
-    Pal::IPipeline**            ppResultPipeline,  // Result PAL pipeline object pointer
+    ClientPipelineHandle*       ppResultPipeline,  // Result pipeline object handle
     void**                      ppResultMemory);   // (Optional) Result PAL pipeline memory, if different from obj
 
 // Client-provided callback to destroy an internal compute pipeline.  This is called by gpurt during device destroy.
@@ -1139,7 +1124,7 @@ extern Pal::Result ClientCreateInternalComputePipeline(
 // @param pMemory   [in] Memory previously allocated to the pipeline (may be different based on client needs)
 extern void ClientDestroyInternalComputePipeline(
     const DeviceInitInfo& initInfo,
-    Pal::IPipeline*       pPipeline,
+    ClientPipelineHandle  pPipeline,
     void*                 pMemory);
 
 // Acquires a command context for use by GPURT. The same context may be returned on each call,
@@ -1147,7 +1132,7 @@ extern void ClientDestroyInternalComputePipeline(
 extern Pal::Result ClientAcquireCmdContext(
     const DeviceInitInfo&   initInfo,      // GpuRt device info
     ClientCmdContextHandle* pContext,      // (out) Opaque command context handle
-    Pal::ICmdBuffer**       ppCmdBuffer);  // (out) Command buffer for GPURT to fill
+    ClientCmdBufferHandle*  pCmdBuffer);   // (out) Opaque handle to command buffer for GPURT to fill
 
 // Client-provided function to submit the context's command buffer and wait for completion.
 extern Pal::Result ClientFlushCmdContext(
@@ -1170,13 +1155,13 @@ extern void ClientFreeGpuMem(
 // Client-defined callback to push or pop an RGP marker through the given command buffer.  These are used to
 // annotate GPURT operations.
 //
-// @param pCmdBuffer [in] PAL command buffer passed to BVH operation
+// @param cmdBuffer  [in] Opaque handle to command buffer passed to BVH operation
 // @param pMarker    [in] Marker string when isPush is true, null otherwise
 // @param isPush     [in] Whether this is a marker push or a pop operation.
 typedef void (*FnClientInsertRGPMarker)(
-    Pal::ICmdBuffer* pCmdBuffer,
-    const char*      pMarker,
-    bool             isPush);
+    ClientCmdBufferHandle  cmdBuffer,
+    const char*            pMarker,
+    bool                   isPush);
 #endif
 
 // Client-provided callback to convert some i-th bottom-level geometry description from client API-specific struct
@@ -1233,13 +1218,13 @@ typedef AccelStructPostBuildInfo (*FnClientConvertAccelStructPostBuildInfo)(
 // if this function returns successfully.  The client can then retain this video memory and process the dump in
 // a way it sees fit.
 //
-// @param pCmdBuffer       [in] PAL command buffer that will contain the dump commands
+// @param cmdBuffer        [in] Opaque handle to command buffer that will handle the dump
 // @param info             [in] Information about the acceleration structure being dumped
 // @param pDumpGpuVirtAddr [out] GPU virtual address of memory allocated by this function to store the dumped BVH
 //
 // @returns Pal::Result::Success if allocation succeeded and the dump should be handled; any error otherwise.
 typedef Pal::Result (*FnClientAccelStructBuildDumpEvent)(
-    Pal::ICmdBuffer*            pCmdBuffer,
+    ClientCmdBufferHandle       cmdBuffer,
     const AccelStructInfo&      info,
     const AccelStructBuildInfo& buildInfo,
     gpusize*                    pDumpGpuVirtAddr);
@@ -1261,11 +1246,11 @@ typedef Pal::Result (*FnClientAccelStructBuildDumpEvent)(
 // @returns Pal::Result::Success if allocation succeeded and the dump should be handled; any error otherwise.
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 39
 typedef Pal::Result (*FnClientAccelStatsBuildDumpEvent)(
-    Pal::ICmdBuffer*        pCmdbuf, // PAL command buffer that will handle the dump
+    ClientCmdBufferHandle   cmdBuf,  // Opaque handle to command buffer that will handle the dump
     GpuRt::AccelStructInfo* pInfo);  // Information about the accel struct being dumped
 #else
 typedef Pal::Result (*FnClientAccelStatsBuildDumpEvent)(
-    Pal::ICmdBuffer*              pCmdbuf,               // PAL command buffer that will handle the dump
+    ClientCmdBufferHandle         cmdBuf,                // Opaque handle to command buffer that will handle the dump
     const GpuRt::AccelStructInfo& info,                  // Information about the accel struct being dumped
     Pal::IGpuMemory**             ppGpuMem,              // Pointer time stamp memory
     uint64*                       pOffset);              // Offset into time stamp memory
@@ -1286,7 +1271,7 @@ typedef Pal::Result (*FnClientCreateInternalComputePipeline)(
     const DeviceInitInfo&       initInfo,          // Information about the host device
     const PipelineBuildInfo&    buildInfo,         // Information about the pipeline to be built
     const CompileTimeConstants& constantInfo,      // Compile time constants
-    Pal::IPipeline**            ppResultPipeline,  // Result PAL pipeline object pointer
+    ClientPipelineHandle*       ppResultPipeline,  // Result pipeline object handle
     void**                      ppResultMemory);   // (Optional) Result PAL pipeline memory, if different from obj
 
 // Client-provided callback to destroy an internal compute pipeline.  This is called by gpurt during device destroy.
@@ -1298,7 +1283,7 @@ typedef Pal::Result (*FnClientCreateInternalComputePipeline)(
 // @param pMemory   [in] Memory previously allocated to the pipeline (may be different based on client needs)
 typedef void (*FnClientDestroyInternalComputePipeline)(
     const DeviceInitInfo& initInfo,
-    Pal::IPipeline*       pPipeline,
+    ClientPipelineHandle  pPipeline,
     void*                 pMemory);
 
 // Acquires a command context for use by GPURT. The same context may be returned on each call,
@@ -1306,7 +1291,7 @@ typedef void (*FnClientDestroyInternalComputePipeline)(
 typedef Pal::Result (*FnClientAcquireCmdContext)(
     const DeviceInitInfo&   initInfo,      // GpuRt device info
     ClientCmdContextHandle* pContext,      // (out) Opaque command context handle
-    Pal::ICmdBuffer**       ppCmdBuffer);  // (out) Command buffer for GPURT to fill
+    ClientCmdBufferHandle*  pCmdBuffer);   // (out) Opaque handle to command buffer for GPURT to fill
 
 // Client-provided function to submit the context's command buffer and wait for completion.
 typedef Pal::Result (*FnClientFlushCmdContext)(
@@ -1432,51 +1417,55 @@ public:
 
     // Writes commands into a command buffer to build an acceleration structure
     //
-    // @param pCmdBuffer           [in] Command buffer where commands will be written
+    // @param cmdBuffer            [in] Opaque handle to command buffer where commands will be written
     // @param buildInfo            [in] Acceleration structure build info
     virtual void BuildAccelStruct(
-        Pal::ICmdBuffer*              pCmdBuffer,
+        ClientCmdBufferHandle         cmdBuffer,
         const AccelStructBuildInfo&   buildInfo
     )= 0;
 
     // Writes commands into a command buffer to build multiple acceleration structures
     //
-    // @param pCmdBuffer           [in] Command buffer where commands will be written
+    // @param cmdBuffer            [in] Opaque handle to command buffer where commands will be written
     // @param buildInfo            [in] Acceleration structure build info
     virtual void BuildAccelStructs(
-        Pal::ICmdBuffer*                       pCmdBuffer,
+        ClientCmdBufferHandle                  cmdBuffer,
         Util::Span<const AccelStructBuildInfo> buildInfo
     )= 0;
 
     // Writes commands into a command buffer to emit post-build information about an acceleration structure
     //
-    // @param pCmdBuffer           [in] Command buffer where commands will be written
+    // @param cmdBuffer            [in] Opaque handle to command buffer where commands will be written
     // @param postBuildInfo        [in] Post-build event info
     virtual void EmitAccelStructPostBuildInfo(
-        Pal::ICmdBuffer*                pCmdBuffer,
+        ClientCmdBufferHandle           cmdBuffer,
         const AccelStructPostBuildInfo& postBuildInfo
     ) = 0;
 
     // Writes commands into a command buffer to execute an acceleration structure copy/update/compress operation
     //
-    // @param pCmdBuffer           [in] Command buffer where commands will be written
+    // @param cmdBuffer            [in] Opaque handle to command buffer where commands will be written
     // @param copyInfo             [in] Copy operation info
     virtual void CopyAccelStruct(
-        Pal::ICmdBuffer*              pCmdBuffer,
+        ClientCmdBufferHandle         cmdBuffer,
         const AccelStructCopyInfo&    copyInfo
     ) = 0;
 
     // Prepares the input buffer (indirect arguments, bindings, constants) for an indirect raytracing dispatch
     //
-    // @param pCmdBuffer           [in/out] Command buffer where commands will be written
+    // @param cmdBuffer            [in/out] Opaque handle to command buffer where commands will be written
     // @param userData             [in] Addresses of input/output buffers
     // @param maxDispatchCount     Max indirect dispatches
     // @param pipelineCount        Number of pipelines to dispatch
     virtual void InitExecuteIndirect(
-        Pal::ICmdBuffer*                   pCmdBuffer,
+        ClientCmdBufferHandle              cmdBuffer,
         const InitExecuteIndirectUserData& userData,
         uint32                             maxDispatchCount,
-        uint32                             pipelineCount) const = 0;
+        uint32                             pipelineCount)
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 40
+        const
+#endif
+         = 0;
 
     // Calculates and returns prebuild information about some given future acceleration structure.
     //
@@ -1519,7 +1508,7 @@ public:
     // Notifies GPURT about an RT dispatch, triggers a trace buffer allocation, and outputs a buffer view for the trace
     // buffer.
     virtual void TraceRtDispatch(
-        Pal::ICmdBuffer*       pCmdBuffer,
+        ClientCmdBufferHandle  cmdBuffer,
         RtPipelineType         pipelineType,
         RtDispatchInfo         dispatchInfo,
         DispatchRaysConstants* pConstants) = 0;
@@ -1537,6 +1526,12 @@ public:
         uint32                        maxDispatchCount,
         gpusize*                      pCounterMetadataVa,
         void*                         pIndirectConstants) = 0;
+
+    virtual const PipelineBuildInfo& GetPipelineBuildInfo(
+        InternalRayTracingCsType shaderType) const = 0;
+
+    virtual const ClientCallbacks& GetClientCallbacks() const = 0;
+    virtual const DeviceInitInfo& GetInitInfo() const = 0;
 
 protected:
 

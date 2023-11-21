@@ -462,9 +462,11 @@ void WriteScratchNodeSplitBoxIndex(uint baseScratchNodesOffset,
                                    uint nodeIndex,
                                    uint splitBoxIndex)
 {
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-
-    ScratchBuffer.Store(nodeOffset + SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, splitBoxIndex);
+    WriteScratchNodeData(
+        baseScratchNodesOffset,
+        nodeIndex,
+        SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET,
+        splitBoxIndex);
 }
 
 //=====================================================================================================================

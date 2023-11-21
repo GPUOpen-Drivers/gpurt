@@ -43,13 +43,15 @@ namespace GpuRt
 // =====================================================================================================================
 // Explicit ray tracing bvh batcher constructor
 BvhBatcher::BvhBatcher(
-    Pal::ICmdBuffer*             pCmdBuf,         // The associated PAL cmdbuffer
+    ClientCmdBufferHandle        cmdBuffer,       // The associated cmdbuffer handle
+    const IBackend&              backend,         // Backend interface
     Internal::Device*      const pDevice,         // GPURT device pointer
     const Pal::DeviceProperties& deviceProps,     // PAL device properties
     ClientCallbacks              clientCb,        // Client cb table
     const DeviceSettings&        deviceSettings)  // Device settings
     :
-    m_pPalCmdBuffer(pCmdBuf),
+    m_cmdBuffer(cmdBuffer),
+    m_backend(backend),
     m_pDevice(pDevice),
     m_deviceProps(deviceProps),
     m_clientCb(clientCb),
@@ -72,7 +74,8 @@ void BvhBatcher::BuildAccelerationStructureBatch(
 
     for (const AccelStructBuildInfo& info : buildInfos)
     {
-        BvhBuilder builder(m_pPalCmdBuffer,
+        BvhBuilder builder(m_cmdBuffer,
+                           m_backend,
                            m_pDevice,
                            m_deviceProps,
                            m_clientCb,
@@ -135,6 +138,22 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
         return;
     }
 
+    RGP_PUSH_MARKER("InitAccelerationStructure");
+    if (updaters.IsEmpty() == false)
+    {
+        RGP_PUSH_MARKER("Updates");
+        DispatchInitAccelerationStructure<true>(updaters);
+        RGP_POP_MARKER();
+    }
+    if (builders.IsEmpty() == false)
+    {
+        RGP_PUSH_MARKER("Builds");
+        DispatchInitAccelerationStructure<false>(builders);
+        RGP_POP_MARKER();
+    }
+    Barrier();
+    RGP_POP_MARKER();
+
     if (updaters.IsEmpty() == false)
     {
         RGP_PUSH_MARKER("Updates");
@@ -149,10 +168,6 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
     if (builders.IsEmpty() == false)
     {
         RGP_PUSH_MARKER("Builds");
-
-        DispatchInitAccelerationStructure(builders);
-
-        Barrier();
 
         // TODO: Disable per-bvh timestamp events for batched builds
         BuildPhase(builders, &BvhBuilder::PreBuildDumpEvents);
@@ -268,10 +283,12 @@ void BvhBatcher::BuildMultiDispatch(Util::Span<BvhBuilder> builders)
     Barrier();
 
     BuildPhase("BuildQBVH", builders, &BvhBuilder::BuildQBVH);
+
 }
 
 // =====================================================================================================================
 // Initialize the builders' acceleration structure data into a valid begin state using a compute shader
+template<bool IsUpdate>
 void BvhBatcher::DispatchInitAccelerationStructure(
     Util::Span<BvhBuilder> builders)
 {
@@ -279,7 +296,7 @@ void BvhBatcher::DispatchInitAccelerationStructure(
 
     const CompileTimeBuildSettings initAsBuildSettings
     {
-        .enableBVHBuildDebugCounters = m_deviceSettings.enableBVHBuildDebugCounters
+        .enableBVHBuildDebugCounters = m_deviceSettings.enableBVHBuildDebugCounters,
     };
 
     Util::MetroHash::Hash hash = {};
@@ -289,8 +306,11 @@ void BvhBatcher::DispatchInitAccelerationStructure(
 
     const uint32 buildSettingsHash = Util::MetroHash::Compact32(&hash);
 
-    m_pDevice->BindPipeline(m_pPalCmdBuffer,
-                            InternalRayTracingCsType::InitAccelerationStructure,
+    const InternalRayTracingCsType initAsPipeline = IsUpdate ? InternalRayTracingCsType::InitUpdateAccelerationStructure :
+                                                               InternalRayTracingCsType::InitAccelerationStructure;
+
+    m_pDevice->BindPipeline(m_cmdBuffer,
+                            initAsPipeline,
                             initAsBuildSettings,
                             buildSettingsHash);
 
@@ -302,13 +322,9 @@ void BvhBatcher::DispatchInitAccelerationStructure(
                                                                            builders.size() - offset));
         const Util::Span<BvhBuilder> buildersToDispatch(builders.Data() + offset, numBuildersToDispatch);
 
-        Util::Vector<Pal::BufferViewInfo, 64, Internal::Device> constants(m_pDevice);
-        Util::Vector<Pal::BufferViewInfo, 64, Internal::Device> headerBuffers(m_pDevice);
-        Util::Vector<Pal::BufferViewInfo, 64, Internal::Device> scratchBuffers(m_pDevice);
-
-        constants.Reserve(numBuildersToDispatch);
-        headerBuffers.Reserve(numBuildersToDispatch);
-        scratchBuffers.Reserve(numBuildersToDispatch);
+        Util::Vector<BufferViewInfo, MaxNumBuildersPerDispatch, Internal::Device> constants(m_pDevice);
+        Util::Vector<BufferViewInfo, MaxNumBuildersPerDispatch, Internal::Device> headerBuffers(m_pDevice);
+        Util::Vector<BufferViewInfo, MaxNumBuildersPerDispatch, Internal::Device> scratchBuffers(m_pDevice);
 
         const InitAccelerationStructure::RootConstants rootConstants
         {
@@ -316,61 +332,61 @@ void BvhBatcher::DispatchInitAccelerationStructure(
         };
 
         uint32 entryOffset = 0;
-        entryOffset = m_pDevice->WriteUserDataEntries(m_pPalCmdBuffer,
+        entryOffset = m_pDevice->WriteUserDataEntries(m_cmdBuffer,
                                                       &rootConstants,
                                                       InitAccelerationStructure::NumRootEntries,
                                                       entryOffset);
         for (auto& builder : buildersToDispatch)
         {
-            // These values may differ between builders, so pass them in as constants
-            const uint32 rebraidType = static_cast<uint32>(builder.m_buildConfig.rebraidType);
-            const uint32 triCompMode = builder.m_buildSettings.enableEarlyPairCompression ? 0u :
-                static_cast<uint32>(builder.m_buildConfig.triangleCompressionMode);
-
-            const InitAccelerationStructure::Constants shaderConstants =
-            {
-                .rebraidType = rebraidType,
-                .triangleCompressionMode = triCompMode,
-                .debugCountersScratchOffset = builder.m_scratchOffsets.debugCounters,
-                .sceneBoundsScratchOffset = builder.m_scratchOffsets.sceneBounds,
-                .numBatchesScratchOffset = builder.m_scratchOffsets.numBatches,
-                .numLeafNodes = builder.m_buildConfig.numLeafNodes,
-                .header = builder.InitAccelStructHeader(),
-                .metadataHeader = builder.InitAccelStructMetadataHeader(),
-            };
-            // Set constants CBV table
-            constexpr uint32 AlignedSizeDw = Util::Pow2Align(InitAccelerationStructure::NumEntries, 4);
-
-            gpusize constantsVa;
-            void* pConstants = m_pPalCmdBuffer->CmdAllocateEmbeddedData(AlignedSizeDw, 1, &constantsVa);
-
-            memcpy(pConstants, &shaderConstants, sizeof(shaderConstants));
-
-            constants.EmplaceBack(Pal::BufferViewInfo
-            {
-                .gpuAddr = constantsVa,
-                .range = AlignedSizeDw * sizeof(uint32),
-                .stride = 16,
-            });
-            headerBuffers.EmplaceBack(Pal::BufferViewInfo
+            headerBuffers.EmplaceBack(BufferViewInfo
             {
                 .gpuAddr = builder.HeaderBufferBaseVa(),
                 .range = 0xFFFFFFFF,
             });
-            scratchBuffers.EmplaceBack(Pal::BufferViewInfo
+            scratchBuffers.EmplaceBack(BufferViewInfo
             {
                 .gpuAddr = builder.ScratchBufferBaseVa(),
                 .range = 0xFFFFFFFF,
             });
+
+            if constexpr (IsUpdate == false)
+            {
+                const InitAccelerationStructure::Constants shaderConstants =
+                {
+                    .numLeafNodes                         = builder.m_buildConfig.numLeafNodes,
+                    .debugCountersScratchOffset           = builder.m_scratchOffsets.debugCounters,
+                    .sceneBoundsScratchOffset             = builder.m_scratchOffsets.sceneBounds,
+                    .numBatchesScratchOffset              = builder.m_scratchOffsets.numBatches,
+                    .rebraidTaskQueueCounterScratchOffset = builder.m_scratchOffsets.rebraidTaskQueueCounter,
+                    .tdTaskQueueCounterScratchOffset      = builder.m_scratchOffsets.tdTaskQueueCounter,
+                    .plocTaskQueueCounterScratchOffset    = builder.m_scratchOffsets.plocTaskQueueCounter,
+                    .header                               = builder.InitAccelStructHeader(),
+                    .metadataHeader                       = builder.InitAccelStructMetadataHeader(),
+                };
+                // Set constants CBV table
+                constexpr uint32 AlignedSizeDw = Util::Pow2Align(InitAccelerationStructure::NumEntries, 4);
+
+                gpusize constantsVa;
+                void* pConstants = m_backend.AllocateEmbeddedData(m_cmdBuffer, AlignedSizeDw, 1, &constantsVa);
+
+                memcpy(pConstants, &shaderConstants, sizeof(shaderConstants));
+
+                constants.EmplaceBack(BufferViewInfo
+                {
+                    .gpuAddr = constantsVa,
+                    .range = AlignedSizeDw * sizeof(uint32),
+                    .stride = 16,
+                });
+            }
         }
+        if constexpr (IsUpdate == false)
+        {
+            entryOffset = m_pDevice->WriteBufferSrdTable(m_cmdBuffer, constants.Data(), numBuildersToDispatch, false, entryOffset);
+        }
+        entryOffset = m_pDevice->WriteBufferSrdTable(m_cmdBuffer, headerBuffers.Data(), numBuildersToDispatch, false, entryOffset);
+        entryOffset = m_pDevice->WriteBufferSrdTable(m_cmdBuffer, scratchBuffers.Data(), numBuildersToDispatch, false, entryOffset);
 
-        entryOffset = m_pDevice->WriteBufferSrdTable(m_pPalCmdBuffer, constants.Data(), numBuildersToDispatch, false, entryOffset);
-        entryOffset = m_pDevice->WriteBufferSrdTable(m_pPalCmdBuffer, headerBuffers.Data(), numBuildersToDispatch, false, entryOffset);
-        entryOffset = m_pDevice->WriteBufferSrdTable(m_pPalCmdBuffer, scratchBuffers.Data(), numBuildersToDispatch, false, entryOffset);
-
-        const uint32 numGroups = Util::RoundUpQuotient(numBuildersToDispatch, DefaultThreadGroupSize);
-
-        m_pPalCmdBuffer->CmdDispatch({ numGroups, 1, 1 });
+        m_backend.Dispatch(m_cmdBuffer, numBuildersToDispatch, 1, 1);
     }
 
     RGP_POP_MARKER();
@@ -423,7 +439,7 @@ void BvhBatcher::RadixSort(Util::Span<BvhBuilder> builders)
 // Performs a generic barrier that's used to synchronize internal ray tracing shaders
 void BvhBatcher::Barrier()
 {
-    m_pDevice->RaytracingBarrier(m_pPalCmdBuffer);
+    m_pDevice->RaytracingBarrier(m_cmdBuffer);
 }
 
 // =====================================================================================================================
@@ -486,19 +502,19 @@ void BvhBatcher::PushRGPMarker(
     const char* pFormat,
     Args&&...   args)
 {
-    m_pDevice->PushRGPMarker(m_pPalCmdBuffer, pFormat, std::forward<Args>(args)...);
+    m_pDevice->PushRGPMarker(m_cmdBuffer, pFormat, std::forward<Args>(args)...);
 }
 
 // =====================================================================================================================
 void BvhBatcher::PopRGPMarker()
 {
-    m_pDevice->PopRGPMarker(m_pPalCmdBuffer);
+    m_pDevice->PopRGPMarker(m_cmdBuffer);
 }
 
 // =====================================================================================================================
 void BvhBatcher::OutputPipelineName(InternalRayTracingCsType type)
 {
-    m_pDevice->OutputPipelineName(m_pPalCmdBuffer, type);
+    m_pDevice->OutputPipelineName(m_cmdBuffer, type);
 }
 #endif
 

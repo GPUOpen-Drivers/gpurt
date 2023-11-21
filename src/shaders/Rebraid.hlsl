@@ -81,7 +81,7 @@ struct RebraidArgs
     uint taskQueueCounterScratchOffset;
     uint atomicFlagsScratchOffset;
     uint encodeArrayOfPointers;
-    uint enableCentroidSceneBoundsWithSize;
+    uint enableMortonSize;
     uint enableSAHCost;
 };
 
@@ -273,42 +273,17 @@ void RebraidImpl(
             // calculates the priorities based on surface of all instances and also the sum of all priorities
             case REBRAID_PHASE_CALC_SUM:
             {
-                BoundingBox initialSceneBounds;
-                float3 initSceneExtent;
-
-                if (args.enableCentroidSceneBoundsWithSize)
-                {
-                    const uint rebraidSceneOffset = sizeof(BoundingBox) + 2 * sizeof(float);
-                    initialSceneBounds = FetchSceneBounds(args.sceneBoundsOffset + rebraidSceneOffset);
-
-                    initSceneExtent = initialSceneBounds.max - initialSceneBounds.min;
-                }
-
                 for (uint i = globalId; i < args.numPrimitives; i += numThreads)
                 {
-                    const ScratchNode leaf = ScratchBuffer.Load<ScratchNode>(args.bvhLeafNodeDataScratchOffset +
-                                                                             i * sizeof(ScratchNode));
+                    const ScratchNode leaf = FetchScratchNode(args.bvhLeafNodeDataScratchOffset, i);
 
                     if (IsNodeActive(leaf))
                     {
                         const BoundingBox aabb = GetScratchNodeBoundingBox(leaf);
 
-                        // check to skip if too large
-                        if (args.enableCentroidSceneBoundsWithSize)
+                        if (IsInvalidBoundingBox(aabb))
                         {
-                            bool dontOpen = false;
-
-                            [unroll]
-                            for (uint a = 0; a < 3; a++)
-                            {
-                                dontOpen |= aabb.min[a] < (initialSceneBounds.min[a] - (initSceneExtent[a] * openFactor));
-                                dontOpen |= aabb.max[a] > (initialSceneBounds.max[a] + (initSceneExtent[a] * openFactor));
-                            }
-
-                            if (dontOpen)
-                            {
-                                continue;
-                            }
+                            continue;
                         }
 
 #if ENABLE_HIGHER_QUALITY
@@ -362,21 +337,9 @@ void RebraidImpl(
 
                 uint keyIndex = 0;
 
-                BoundingBox initialSceneBounds;
-                float3 initSceneExtent;
-
-                if (args.enableCentroidSceneBoundsWithSize)
-                {
-                    const uint rebraidSceneOffset = sizeof(BoundingBox) + 2 * sizeof(float);
-                    initialSceneBounds = FetchSceneBounds(args.sceneBoundsOffset + rebraidSceneOffset);
-
-                    initSceneExtent = initialSceneBounds.max - initialSceneBounds.min;
-                }
-
                 for (uint i = start; i < end; i++)
                 {
-                    const ScratchNode leaf = ScratchBuffer.Load<ScratchNode>(args.bvhLeafNodeDataScratchOffset +
-                                                                             i * sizeof(ScratchNode));
+                    const ScratchNode leaf = FetchScratchNode(args.bvhLeafNodeDataScratchOffset, i);
 
                     if (IsNodeActive(leaf))
                     {
@@ -384,15 +347,9 @@ void RebraidImpl(
 
                         bool dontOpen = false;
 
-                         // check to skip if too large
-                        if (args.enableCentroidSceneBoundsWithSize)
+                        if (IsInvalidBoundingBox(aabb))
                         {
-                            [unroll]
-                            for (uint a = 0; a < 3; a++)
-                            {
-                                dontOpen |= aabb.min[a] < (initialSceneBounds.min[a] - (initSceneExtent[a] * openFactor));
-                                dontOpen |= aabb.max[a] > (initialSceneBounds.max[a] + (initSceneExtent[a] * openFactor));
-                            }
+                            dontOpen = true;
                         }
 
                         uint numOpenings = 0;
@@ -422,9 +379,9 @@ void RebraidImpl(
                         }
                         else
                         {
-                            if (args.enableCentroidSceneBoundsWithSize)
+                            if (args.enableMortonSize)
                             {
-                                UpdateCentroidSceneBoundsWithSize(args.sceneBoundsOffset, aabb);
+                                UpdateSceneSize(args.sceneBoundsOffset + 24, ComputeBoxSurfaceArea(aabb));
                             }
 
                             localKeys[keyIndex] = 0;
@@ -506,9 +463,9 @@ void RebraidImpl(
 
                 for (uint i = start; i < end; i++)
                 {
-                    const uint scratchNodeOffset = args.bvhLeafNodeDataScratchOffset + i * sizeof(ScratchNode);
+                    const uint scratchNodeOffset = CalcScratchNodeOffset(args.bvhLeafNodeDataScratchOffset, i);
 
-                    ScratchNode leaf = ScratchBuffer.Load<ScratchNode>(scratchNodeOffset);
+                    ScratchNode leaf = FetchScratchNodeAtOffset(scratchNodeOffset);
 
                     if (IsNodeActive(leaf))
                     {
@@ -545,24 +502,33 @@ void RebraidImpl(
 
                             BoundingBox temp = TransformBoundingBox(bbox[0], desc.Transform);
 
+                            if (any(isinf(temp.min)) || any(isinf(temp.max)))
+                            {
+                                temp = InvalidBoundingBox;
+                            }
+                            else
+                            {
+                                if (args.enableMortonSize)
+                                {
+                                    UpdateSceneSize(args.sceneBoundsOffset + 24, ComputeBoxSurfaceArea(temp));
+                                }
+                            }
+
                             // update a new leaf
-                            ScratchBuffer.Store<float3>(scratchNodeOffset + SCRATCH_NODE_BBOX_MIN_OFFSET, temp.min);
-                            ScratchBuffer.Store<float3>(scratchNodeOffset + SCRATCH_NODE_BBOX_MAX_OFFSET, temp.max);
-                            ScratchBuffer.Store<uint>(scratchNodeOffset + SCRATCH_NODE_NODE_POINTER_OFFSET, child[0]);
+                            WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_BBOX_MIN_OFFSET, temp.min);
+                            WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_BBOX_MAX_OFFSET, temp.max);
+                            WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_NODE_POINTER_OFFSET, child[0]);
 
                             if (args.enableSAHCost == false)
                             {
-                                ScratchBuffer.Store(scratchNodeOffset + SCRATCH_NODE_INSTANCE_NUM_PRIMS_OFFSET,
-                                                    costOrNumChildPrims[0]);
+                                WriteScratchNodeDataAtOffset(
+                                    scratchNodeOffset,
+                                    SCRATCH_NODE_INSTANCE_NUM_PRIMS_OFFSET,
+                                    costOrNumChildPrims[0]);
                             }
                             else
                             {
                                 WriteScratchNodeCost(args.bvhLeafNodeDataScratchOffset, i, cost[0], true);
-                            }
-
-                            if (args.enableCentroidSceneBoundsWithSize)
-                            {
-                                UpdateCentroidSceneBoundsWithSize(args.sceneBoundsOffset, temp);
                             }
 
                             // update leaf and siblings
@@ -571,6 +537,18 @@ void RebraidImpl(
                             if (child[1] != INVALID_IDX)
                             {
                                 temp = TransformBoundingBox(bbox[1], desc.Transform);
+
+                                if (any(isinf(temp.min)) || any(isinf(temp.max)))
+                                {
+                                    temp = InvalidBoundingBox;
+                                }
+                                else
+                                {
+                                    if (args.enableMortonSize)
+                                    {
+                                        UpdateSceneSize(args.sceneBoundsOffset + 24, ComputeBoxSurfaceArea(temp));
+                                    }
+                                }
 
                                 leaf.bbox_min_or_v0 = temp.min;
                                 leaf.bbox_max_or_v1 = temp.max;
@@ -588,13 +566,7 @@ void RebraidImpl(
                                     leaf.numPrimitivesAndDoCollapse = asuint(cost[1]);
                                 }
 
-                                ScratchBuffer.Store<ScratchNode>(
-                                    args.bvhLeafNodeDataScratchOffset + writeIndex * sizeof(ScratchNode), leaf);
-
-                                if (args.enableCentroidSceneBoundsWithSize)
-                                {
-                                    UpdateCentroidSceneBoundsWithSize(args.sceneBoundsOffset, temp);
-                                }
+                                WriteScratchNode(args.bvhLeafNodeDataScratchOffset, writeIndex, leaf);
 
                                 numSiblings++;
                             }
@@ -602,6 +574,18 @@ void RebraidImpl(
                             if (child[2] != INVALID_IDX)
                             {
                                 temp = TransformBoundingBox(bbox[2], desc.Transform);
+
+                                if (any(isinf(temp.min)) || any(isinf(temp.max)))
+                                {
+                                    temp = InvalidBoundingBox;
+                                }
+                                else
+                                {
+                                    if (args.enableMortonSize)
+                                    {
+                                        UpdateSceneSize(args.sceneBoundsOffset + 24, ComputeBoxSurfaceArea(temp));
+                                    }
+                                }
 
                                 leaf.bbox_min_or_v0 = temp.min;
                                 leaf.bbox_max_or_v1 = temp.max;
@@ -619,13 +603,7 @@ void RebraidImpl(
                                     leaf.numPrimitivesAndDoCollapse = asuint(cost[2]);
                                 }
 
-                                ScratchBuffer.Store<ScratchNode>(args.bvhLeafNodeDataScratchOffset
-                                                                 + writeIndex * sizeof(ScratchNode), leaf);
-
-                                if (args.enableCentroidSceneBoundsWithSize)
-                                {
-                                    UpdateCentroidSceneBoundsWithSize(args.sceneBoundsOffset, temp);
-                                }
+                                WriteScratchNode(args.bvhLeafNodeDataScratchOffset, writeIndex, leaf);
 
                                 numSiblings++;
                             }
@@ -633,6 +611,18 @@ void RebraidImpl(
                             if (child[3] != INVALID_IDX)
                             {
                                 temp = TransformBoundingBox(bbox[3], desc.Transform);
+
+                                if (any(isinf(temp.min)) || any(isinf(temp.max)))
+                                {
+                                    temp = InvalidBoundingBox;
+                                }
+                                else
+                                {
+                                    if (args.enableMortonSize)
+                                    {
+                                        UpdateSceneSize(args.sceneBoundsOffset + 24, ComputeBoxSurfaceArea(temp));
+                                    }
+                                }
 
                                 leaf.bbox_min_or_v0 = temp.min;
                                 leaf.bbox_max_or_v1 = temp.max;
@@ -650,13 +640,7 @@ void RebraidImpl(
                                     leaf.numPrimitivesAndDoCollapse = asuint(cost[3]);
                                 }
 
-                                ScratchBuffer.Store<ScratchNode>(args.bvhLeafNodeDataScratchOffset
-                                                                 + writeIndex * sizeof(ScratchNode), leaf);
-
-                                if (args.enableCentroidSceneBoundsWithSize)
-                                {
-                                    UpdateCentroidSceneBoundsWithSize(args.sceneBoundsOffset, temp);
-                                }
+                                WriteScratchNode(args.bvhLeafNodeDataScratchOffset, writeIndex, leaf);
 
                                 numSiblings++;
                             }
@@ -664,8 +648,10 @@ void RebraidImpl(
                         else // no openings
                         {
                             // point instance to the root
-                            ScratchBuffer.Store<uint>(scratchNodeOffset + SCRATCH_NODE_NODE_POINTER_OFFSET,
-                                                      CreateRootNodePointer());
+                            WriteScratchNodeDataAtOffset(
+                                scratchNodeOffset,
+                                SCRATCH_NODE_NODE_POINTER_OFFSET,
+                                CreateRootNodePointer());
 
                             if (args.enableSAHCost)
                             {

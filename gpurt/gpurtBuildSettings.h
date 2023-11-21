@@ -91,6 +91,9 @@ struct CompileTimeBuildSettings
     uint32 enableInstanceRebraid;
     uint32 gpuDebugFlags;
     uint32 isUpdate;
+    uint32 isUpdateInPlace;
+    uint32 encodeArrayOfPointers;
+    uint32 sceneBoundsCalculationType;
 };
 
 #define BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_ID                        0
@@ -123,6 +126,9 @@ struct CompileTimeBuildSettings
 #define BUILD_SETTINGS_DATA_ENABLE_INSTANCE_REBRAID_ID                36
 #define BUILD_SETTINGS_DATA_GPU_DEBUG_FLAGS_ID                        37
 #define BUILD_SETTINGS_DATA_IS_UPDATE_ID                              38
+#define BUILD_SETTINGS_DATA_IS_UPDATE_IN_PLACE_ID                     39
+#define BUILD_SETTINGS_DATA_ENCODE_ARRAY_OF_POINTERS_ID               40
+#define BUILD_SETTINGS_DATA_SCENE_BOUNDS_CALCULATION_TYPE_ID          41
 
 #ifdef __cplusplus
 } // namespace GpuRt

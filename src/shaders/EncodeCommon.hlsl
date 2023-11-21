@@ -50,7 +50,6 @@ struct GeometryArgs
     uint BaseGeometryInfoOffset;        // Base offset for the geometry info
     uint BasePrimNodePtrOffset;         // Base offset for the prim nodes
     uint BuildFlags;                    // DDI acceleration structure build flags
-    uint isUpdateInPlace;               // Is update in place
     uint GeometryFlags;                 // Geometry flags (D3D12_RAYTRACING_GEOMETRY_FLAGS)
     uint VertexComponentCount;          // Components in vertex buffer format
     uint vertexCount;                   // Vertex count
@@ -59,7 +58,6 @@ struct GeometryArgs
     uint IndexBufferInfoScratchOffset;
     uint IndexBufferVaLo;
     uint IndexBufferVaHi;
-    uint SceneBoundsCalculationType;
     uint trianglePairingSearchRadius;   // The search radius for paired triangle, used by EarlyCompression
 };
 
@@ -228,23 +226,23 @@ void WriteScratchTriangleNode(
     in BoundingBox      bbox,
     in TriangleData     tri)
 {
-    uint offset = (primitiveIndex  * ByteStrideScratchNode) +
-                  (primitiveOffset * ByteStrideScratchNode) +
-                  geometryArgs.LeafNodeDataByteOffset;
+    uint offset = CalcScratchNodeOffset(
+        geometryArgs.LeafNodeDataByteOffset,
+        primitiveOffset + primitiveIndex);
 
     uint4 data;
 
     // LeafNode.bbox_min_or_v0, primitiveIndex
     data = uint4(asuint(tri.v0), primitiveIndex);
-    ScratchBuffer.Store4(offset + SCRATCH_NODE_V0_OFFSET, data);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V0_OFFSET, data);
 
     // LeafNode.bbox_max_or_v1, geometryIndex
     data = uint4(asuint(tri.v1), geometryIndex);
-    ScratchBuffer.Store4(offset + SCRATCH_NODE_V1_OFFSET, data);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V1_OFFSET, data);
 
     // LeafNode.v2, parent
     data = uint4(asuint(tri.v2), 0);
-    ScratchBuffer.Store4(offset + SCRATCH_NODE_V2_OFFSET, data);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V2_OFFSET, data);
 
     const float cost = SAH_COST_TRIANGLE_INTERSECTION * ComputeBoxSurfaceArea(bbox);
 
@@ -263,7 +261,7 @@ void WriteScratchTriangleNode(
     const uint packedFlags = PackInstanceMaskAndNodeFlags(instanceMask, flags);
 
     data = uint4(triangleTypeAndId, packedFlags, INVALID_IDX, asuint(cost));
-    ScratchBuffer.Store4(offset + SCRATCH_NODE_TYPE_OFFSET, data);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_TYPE_OFFSET, data);
 }
 
 //=====================================================================================================================
@@ -308,7 +306,7 @@ void WriteGeometryInfo(
 {
     // For builds and not-in-place updates, write the geometry info.
     if ((IsUpdate() == false) ||
-        (IsUpdate() && (geometryArgs.isUpdateInPlace == false)))
+        (IsUpdate() && (Settings.isUpdateInPlace == false)))
     {
         const uint metadataSize = IsUpdate() ?
             SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : geometryArgs.metadataSizeInBytes;
@@ -701,7 +699,7 @@ void EncodeTriangleNode(
                     DstMetadata.Store3(nodeOffset + vertexOffsets.y, asuint(tri.v1));
                     DstMetadata.Store3(nodeOffset + vertexOffsets.z, asuint(tri.v2));
 
-                    if (geometryArgs.isUpdateInPlace == false)
+                    if (Settings.isUpdateInPlace == false)
                     {
                         const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(geometryArgs.GeometryIndex,
                             geometryArgs.GeometryFlags);
@@ -722,7 +720,7 @@ void EncodeTriangleNode(
                 }
             }
 
-            if (geometryArgs.isUpdateInPlace == false)
+            if (Settings.isUpdateInPlace == false)
             {
                 DstMetadata.Store(primNodePointerOffset, nodePointer);
             }
@@ -740,7 +738,7 @@ void EncodeTriangleNode(
                                   metadataSize,
                                   geometryArgs.BaseUpdateStackScratchOffset,
                                   Settings.triangleCompressionMode,
-                                  geometryArgs.isUpdateInPlace,
+                                  Settings.isUpdateInPlace,
                                   nodePointer,
                                   triangleId,
                                   vertexOffset,
@@ -751,7 +749,8 @@ void EncodeTriangleNode(
         }
         else
         {
-            if (Settings.triangleCompressionMode != PAIR_TRIANGLE_COMPRESSION)
+            if ((Settings.triangleCompressionMode != PAIR_TRIANGLE_COMPRESSION)
+                )
             {
                 const uint numLeafNodesOffset = metadataSize + ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET;
                 DstMetadata.InterlockedAdd(numLeafNodesOffset, 1);
@@ -759,17 +758,14 @@ void EncodeTriangleNode(
 
             if (IsActive(tri))
             {
-                if (geometryArgs.SceneBoundsCalculationType == SceneBoundsBasedOnGeometry)
+                if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometry)
                 {
                     UpdateSceneBounds(geometryArgs.SceneBoundsByteOffset, boundingBox);
                 }
-                else if (geometryArgs.SceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
+                else if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
                 {
+                    // TODO: with tri splitting, need to not update "size" here
                     UpdateSceneBoundsWithSize(geometryArgs.SceneBoundsByteOffset, boundingBox);
-                }
-                else
-                {
-                    UpdateCentroidSceneBoundsWithSize(geometryArgs.SceneBoundsByteOffset, boundingBox);
                 }
             }
             else
@@ -797,14 +793,15 @@ void EncodeTriangleNode(
         if (IsUpdate() == false)
         {
             // Deactivate primitive by setting bbox_min_or_v0.x to NaN
-            const uint scratchLeafNodeOffset =
-                geometryArgs.LeafNodeDataByteOffset + (flattenedPrimitiveIndex * ByteStrideScratchNode);
-
-            ScratchBuffer.Store(scratchLeafNodeOffset, NaN);
+            WriteScratchNodeData(
+                geometryArgs.LeafNodeDataByteOffset,
+                flattenedPrimitiveIndex,
+                0,
+                NaN);
 
             DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
         }
-        else if (geometryArgs.isUpdateInPlace == false)
+        else if (Settings.isUpdateInPlace == false)
         {
             DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
         }

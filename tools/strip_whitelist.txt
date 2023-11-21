@@ -13,13 +13,11 @@ GetInstanceID
 GetInstanceIndex
 GetObjectToWorldTransform
 GetWorldToObjectTransform
-#if GPURT_BUILD_RTIP2
 TraceRayInline2_0
 RayQueryProceed2_0
 TraceRay2_0
 TraceRayUsingRayQuery2_0
 TraceRayUsingHitToken2_0
-#endif
 RayQueryInternal
 FetchTrianglePositionFromNodePointer
 FetchTrianglePositionFromRayQuery
@@ -58,14 +56,13 @@ AmdTraceRayGetStaticFlags
 AmdTraceRayGetParentId
 AmdTraceRaySetParentId
 AmdTraceRayGetStaticId
+AmdExtDispatchThreadIdFlat
 AmdTraceRayGetLdsUsage
 AmdTraceRaySetLdsUsage
 AmdTraceRayGetRayQueryCount
-#if GPURT_BUILD_RTIP2
 AmdTraceRayGetBoxSortHeuristicMode
 AmdTraceRayLdsStackStore
 AmdTraceRayLdsStackInit
-#endif
 RayQueryProceedAmdInternal
 TraceRayInlineAmdInternal
 rayQueryTerminateEXT

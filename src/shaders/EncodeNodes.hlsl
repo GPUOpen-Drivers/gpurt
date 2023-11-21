@@ -22,7 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#define RootSig "RootConstants(num32BitConstants=26, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=25, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 1)),"\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
@@ -175,22 +175,23 @@ void WriteScratchProceduralNode(
     uint                instanceMask,
     in BoundingBox      bbox)
 {
-    uint offset = (primitiveIndex * ByteStrideScratchNode) +
-                  (primitiveOffset * ByteStrideScratchNode)  +
-                  ShaderConstants.LeafNodeDataByteOffset;
+    uint offset = CalcScratchNodeOffset(
+        ShaderConstants.LeafNodeDataByteOffset,
+        primitiveOffset + primitiveIndex);
+
     uint4 data;
 
     // LeafNode.bbox_min_or_v0, primitiveIndex
     data = uint4(asuint(bbox.min), primitiveIndex);
-    ScratchBuffer.Store4(offset + SCRATCH_NODE_BBOX_MIN_OFFSET, data);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_BBOX_MIN_OFFSET, data);
 
     // LeafNode.bbox_max_or_v1, geometryIndex
     data = uint4(asuint(bbox.max), geometryIndex);
-    ScratchBuffer.Store4(offset + SCRATCH_NODE_BBOX_MAX_OFFSET, data);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_BBOX_MAX_OFFSET, data);
 
     // LeafNode.v2, parent
     data = uint4(0xffffffff, 0xffffffff, 0xffffffff, 0);
-    ScratchBuffer.Store4(offset + SCRATCH_NODE_V2_OFFSET, data);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V2_OFFSET, data);
 
     // type, flags, splitBox, numPrimitivesAndDoCollapse
     uint typeAndId = NODE_TYPE_USER_NODE_PROCEDURAL;
@@ -203,7 +204,7 @@ void WriteScratchProceduralNode(
     const uint packedFlags = PackInstanceMaskAndNodeFlags(instanceMask, flags);
 
     data = uint4(typeAndId, packedFlags, INVALID_IDX, asuint(cost));
-    ScratchBuffer.Store4(offset + SCRATCH_NODE_TYPE_OFFSET, data);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_TYPE_OFFSET, data);
 }
 
 //=====================================================================================================================
@@ -296,7 +297,7 @@ void EncodeAABBNodes(
 
                     WriteProceduralNodeBoundingBox(metadataSize, nodePointer, boundingBox);
 
-                    if (ShaderConstants.isUpdateInPlace == false)
+                    if (Settings.isUpdateInPlace == false)
                     {
                         WriteProceduralNodePrimitiveData(metadataSize,
                                                          nodePointer,
@@ -304,7 +305,7 @@ void EncodeAABBNodes(
                     }
                 }
 
-                if (ShaderConstants.isUpdateInPlace == false)
+                if (Settings.isUpdateInPlace == false)
                 {
                     DstMetadata.Store(primNodePointerOffset, nodePointer);
                 }
@@ -316,7 +317,7 @@ void EncodeAABBNodes(
                                   metadataSize,
                                   ShaderConstants.BaseUpdateStackScratchOffset,
                                   Settings.triangleCompressionMode,
-                                  ShaderConstants.isUpdateInPlace,
+                                  Settings.isUpdateInPlace,
                                   nodePointer,
                                   0,
                                   0,
@@ -325,7 +326,7 @@ void EncodeAABBNodes(
                                   true);
 
             }
-            else if (ShaderConstants.isUpdateInPlace == false)
+            else if (Settings.isUpdateInPlace == false)
             {
                 // For inactive primitives, just copy over the primitive node pointer.
                 DstMetadata.Store(primNodePointerOffset, nodePointer);
@@ -333,17 +334,13 @@ void EncodeAABBNodes(
         }
         else
         {
-            if (ShaderConstants.SceneBoundsCalculationType == SceneBoundsBasedOnGeometry)
+            if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometry)
             {
                 UpdateSceneBounds(ShaderConstants.SceneBoundsByteOffset, boundingBox);
             }
-            else if (ShaderConstants.SceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
+            else if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
             {
                 UpdateSceneBoundsWithSize(ShaderConstants.SceneBoundsByteOffset, boundingBox);
-            }
-            else
-            {
-                UpdateCentroidSceneBoundsWithSize(ShaderConstants.SceneBoundsByteOffset, boundingBox);
             }
 
             WriteScratchProceduralNode(primitiveOffset,

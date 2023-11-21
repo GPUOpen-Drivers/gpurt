@@ -207,6 +207,8 @@ __decl uint AmdTraceRayGetHwSeId() DUMMY_UINT_FUNC
 __decl uint AmdTraceRayGetTriangleCompressionMode() DUMMY_UINT_FUNC
 __decl uint AmdTraceRayGetBoxSortHeuristicMode() DUMMY_UINT_FUNC
 __decl uint2 AmdTraceRayMakePC(uint pcVaLow) DUMMY_UINT2_FUNC
+__decl uint AmdTraceRayGetKnownSetRayFlags() DUMMY_UINT_FUNC
+__decl uint AmdTraceRayGetKnownUnsetRayFlags() DUMMY_UINT_FUNC
 
 //=====================================================================================================================
 // Ref: GpuRt::Device::GetStaticPipelineFlags
@@ -223,6 +225,10 @@ __decl void AmdTraceRaySetParentId(uint rayId) DUMMY_VOID_FUNC
 //=====================================================================================================================
 // Client drivers must generate a unique 32-bit identifier for unique TraceRay/TraceRayInline call site in the API shaders.
 __decl uint AmdTraceRayGetStaticId() DUMMY_UINT_FUNC;
+
+//=====================================================================================================================
+// Loads from reserved register the dispath thread id as a single value computed from the dispatch dimensions.
+__decl uint AmdExtDispatchThreadIdFlat() DUMMY_UINT_FUNC;
 
 #if USE_TEMP_ARRAY_STACK
 //=====================================================================================================================

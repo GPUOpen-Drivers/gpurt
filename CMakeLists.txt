@@ -31,18 +31,41 @@ project(GPU_RAY_TRACING LANGUAGES "CXX")
 
 add_library(gpurt STATIC)
 
+add_library(gpurt_internal STATIC)
+
+target_link_libraries(gpurt PUBLIC gpurt_internal)
+
 add_library(AMD::gpurt ALIAS gpurt)
 
-set_target_properties(gpurt PROPERTIES
+function(gpurt_add_compile_definitions)
+    target_compile_definitions(gpurt          PUBLIC ${ARGV})
+    target_compile_definitions(gpurt_internal PUBLIC ${ARGV})
+endfunction()
+
+function(gpurt_add_compile_options)
+    target_compile_options(gpurt          PRIVATE ${ARGV})
+    target_compile_options(gpurt_internal PRIVATE ${ARGV})
+endfunction()
+
+function(gpurt_set_properties)
+    set_target_properties(gpurt          PROPERTIES ${ARGV})
+    set_target_properties(gpurt_internal PROPERTIES ${ARGV})
+endfunction()
+
+gpurt_set_properties(
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED YES
     CXX_EXTENSIONS NO
 )
 
+# Set output filenames for targets, i.e. gpurt_backend.lib, gpurt_backend.pdb, gpurt.lib, ...
+set_target_properties(gpurt          PROPERTIES OUTPUT_NAME "gpurt_backend")
+set_target_properties(gpurt_internal PROPERTIES OUTPUT_NAME "gpurt")
+
 option(GPURT_ENABLE_GPU_DEBUG "Enable GPU debugging features (assert, debug prints)." OFF)
 
 if (GPURT_ENABLE_GPU_DEBUG)
-    target_compile_definitions(gpurt PRIVATE GPURT_ENABLE_GPU_DEBUG=1)
+    gpurt_add_compile_definitions(GPURT_ENABLE_GPU_DEBUG=1)
 endif()
 
 # Force client to specify developer mode
@@ -57,38 +80,36 @@ endif()
 
 # GPU Ray Tracing requires PAL as a dependency
 target_link_libraries(gpurt PUBLIC pal)
-
-#if GPURT_BUILD_RTIP2
-# Enable GpuRT defines for Gfx11 builds
-target_compile_definitions(gpurt PUBLIC GPURT_BUILD_RTIP2=1)
-#endif
+target_link_libraries(gpurt_internal PUBLIC pal)
 
 # Enable gpu developer mode if the client wants it.
 if (GPURT_DEVELOPER_MODE)
-    target_compile_definitions(gpurt PUBLIC GPURT_DEVELOPER=1)
+    gpurt_add_compile_definitions(GPURT_DEVELOPER=1)
 endif()
 
 # Set the client API, error checking done via static_asserts.
-target_compile_definitions(gpurt PUBLIC GPURT_CLIENT_API_${GPURT_CLIENT_API}=1)
+gpurt_add_compile_definitions(GPURT_CLIENT_API_${GPURT_CLIENT_API}=1)
 
 # Disable run time type information
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(gpurt PRIVATE -fno-rtti)
+    gpurt_add_compile_options(-fno-rtti)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-    target_compile_options(gpurt PRIVATE
+    gpurt_add_compile_options(
         # Disable run time type information
         /GR-
     )
 endif()
 
 if (DEFINED GPURT_CLIENT_INTERFACE_MAJOR_VERSION)
-    target_compile_definitions(gpurt PUBLIC GPURT_CLIENT_INTERFACE_MAJOR_VERSION=${GPURT_CLIENT_INTERFACE_MAJOR_VERSION})
+    gpurt_add_compile_definitions(GPURT_CLIENT_INTERFACE_MAJOR_VERSION=${GPURT_CLIENT_INTERFACE_MAJOR_VERSION})
 endif()
 
 ### Add Source Directories
 target_include_directories(gpurt PUBLIC .)
+target_include_directories(gpurt_internal PUBLIC .)
 add_subdirectory(gpurt)
 add_subdirectory(src)
 add_subdirectory(tools)
 add_subdirectory(cmake)
+add_subdirectory(backends/pal)
 
