@@ -590,7 +590,7 @@ void WriteParentPointer(
 }
 
 //=====================================================================================================================
-uint GetBlasInternalNodeChildCount(
+uint GetBlasRebraidChildCount(
     uint64_t blasBasePtr,
     uint     nodePointer)
 {
@@ -681,7 +681,6 @@ void WriteInstanceDescriptor(
     in uint               instNodePtr,
     in uint               blasMetadataSize,
     in uint               blasRootNodePointer,
-    in uint               boxNodeFlags,
     in bool               isFusedInstanceNode)
 {
     const uint instanceNodeOffset = ExtractNodePointerOffset(instNodePtr);
@@ -908,9 +907,19 @@ bool EnableLatePairCompression()
 // BEGIN_TASK is used at the start of a pass that needs to be completed before the next pass
 // END_TASK is used at the end of of a pass that makes sure the task is completed before moving onto the next pass
 //=====================================================================================================================
+#ifndef TASK_COUNTER_BUFFER
+#define TASK_COUNTER_BUFFER DstMetadata
+#endif
+#ifndef TASK_COUNTER_OFFSET
+#define TASK_COUNTER_OFFSET ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET
+#endif
+#ifndef NUM_TASKS_DONE_OFFSET
+#define NUM_TASKS_DONE_OFFSET ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET
+#endif
+
 #define INIT_TASK           if(localId == 0)\
                             {\
-                                DstMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 1, SharedMem[0]);\
+                                TASK_COUNTER_BUFFER.InterlockedAdd(TASK_COUNTER_OFFSET, 1, SharedMem[0]);\
                             }\
                             GroupMemoryBarrierWithGroupSync();\
                             waveId = SharedMem[0];
@@ -923,8 +932,8 @@ bool EnableLatePairCompression()
 #define END_TASK(n)             DeviceMemoryBarrierWithGroupSync();\
                                 if(localId == 0)\
                                 {\
-                                    DstMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 1, SharedMem[0]);\
-                                    DstMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET, 1);\
+                                    TASK_COUNTER_BUFFER.InterlockedAdd(TASK_COUNTER_OFFSET, 1, SharedMem[0]);\
+                                    TASK_COUNTER_BUFFER.InterlockedAdd(NUM_TASKS_DONE_OFFSET, 1);\
                                 }\
                                 GroupMemoryBarrierWithGroupSync();\
                                 waveId = SharedMem[0];\
@@ -933,6 +942,6 @@ bool EnableLatePairCompression()
                             do\
                             {\
                                 DeviceMemoryBarrier();\
-                            } while (DstMetadata.Load(ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET) < numTasksWait);
+                            } while (TASK_COUNTER_BUFFER.Load(NUM_TASKS_DONE_OFFSET) < numTasksWait);
 
 #endif

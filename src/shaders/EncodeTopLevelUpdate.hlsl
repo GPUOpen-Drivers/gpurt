@@ -152,7 +152,6 @@ void EncodeInstancesUpdate(
                                     nodePointer,
                                     blasMetadataSize,
                                     CreateRootNodePointer(),
-                                    boxNodeFlags,
                                     IsFusedInstanceNode());
         }
     }

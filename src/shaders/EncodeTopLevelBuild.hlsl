@@ -56,9 +56,7 @@ void EncodeInstancesBuild(
         if (numActivePrims != 0)
         {
             // Fetch root bounds from BLAS header
-            const uint64_t instanceBaseAddr = GetInstanceAddr(LowPart(instanceBasePointer),
-                                                              HighPart(instanceBasePointer));
-            const BoundingBox rootBbox = FetchHeaderRootBoundingBox(instanceBaseAddr);
+            const BoundingBox rootBbox = FetchHeaderRootBoundingBox(baseAddrAccelStructHeader);
 
             boundingBox = GenerateInstanceBoundingBox(desc.Transform, rootBbox);
 

@@ -44,6 +44,10 @@
 [[vk::binding(3, 0)]] RWByteAddressBuffer SrcBuffer                      : register(u3);
 [[vk::binding(4, 0)]] RWByteAddressBuffer EmitBuffer                     : register(u4);
 
+#define TASK_COUNTER_BUFFER   ScratchBuffer
+#define TASK_COUNTER_OFFSET   (ShaderConstants.offsets.taskLoopCounters + TASK_LOOP_MERGE_SORT_COUNTER_OFFSET)
+#define NUM_TASKS_DONE_OFFSET (ShaderConstants.offsets.taskLoopCounters + TASK_LOOP_MERGE_SORT_TASKS_DONE_OFFSET)
+
 #include "Common.hlsl"
 #include "BuildCommonScratch.hlsl"
 

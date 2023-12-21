@@ -1108,7 +1108,7 @@ void BuildBVHTDImpl(
                                     ref.primitiveIndex,
                                     SCRATCH_NODE_INSTANCE_BASE_PTR_OFFSET);
 
-                            const uint count = GetBlasInternalNodeChildCount(instanceBasePointer, ref.nodePointer);
+                            const uint count = GetBlasRebraidChildCount(instanceBasePointer, ref.nodePointer);
 
                             AllocTDRefScratch(count - 1, args);
                         }
@@ -1203,7 +1203,7 @@ void BuildBVHTDImpl(
                                 ref.primitiveIndex,
                                 SCRATCH_NODE_INSTANCE_BASE_PTR_OFFSET);
 
-                        const uint count = GetBlasInternalNodeChildCount(instanceBasePointer, ref.nodePointer);
+                        const uint count = GetBlasRebraidChildCount(instanceBasePointer, ref.nodePointer);
 
                         uint startIndex = AllocTDRefScratch(count - 1, args);
 

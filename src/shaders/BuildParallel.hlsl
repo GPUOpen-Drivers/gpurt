@@ -42,6 +42,10 @@
 
 #include "../shared/rayTracingDefs.h"
 
+#define TASK_COUNTER_BUFFER   ScratchBuffer
+#define TASK_COUNTER_OFFSET   (ShaderConstants.offsets.taskLoopCounters + TASK_LOOP_BUILD_PARALLEL_COUNTER_OFFSET)
+#define NUM_TASKS_DONE_OFFSET (ShaderConstants.offsets.taskLoopCounters + TASK_LOOP_BUILD_PARALLEL_TASKS_DONE_OFFSET)
+
 struct RootConstants
 {
     uint numThreadGroups;
@@ -91,13 +95,13 @@ uint GetNumThreads()
 
 //======================================================================================================================
 // Wait for the task counter to reach the specified value
-void WaitForTasksToFinish(
+void WaitForEncodeTasksToFinish(
     uint numTasksWait)
 {
     do
     {
         DeviceMemoryBarrier();
-    } while (DstMetadata.Load(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET) < numTasksWait);
+    } while (ScratchBuffer.Load(ShaderConstants.offsets.encodeTaskCounter) < numTasksWait);
 }
 
 // Include implementations for each pass without shader entry points and resource declarations
@@ -526,6 +530,7 @@ void InitAccelerationStructure()
     DstBuffer.Store(0, ShaderConstants.header);
 
     // Initialize valid scratch buffer counters to 0
+    InitScratchCounter(ShaderConstants.offsets.encodeTaskCounter);
     InitScratchCounter(ShaderConstants.offsets.plocTaskQueueCounter);
     InitScratchCounter(ShaderConstants.offsets.tdTaskQueueCounter);
     InitScratchCounter(CurrentSplitTaskQueueCounter());
@@ -622,10 +627,7 @@ void BuildBvh(
 
     if (Settings.doEncode == false)
     {
-        numTasksWait = ShaderConstants.numPrimitives;
-
-        // Wait for encode to finish
-        WaitForTasksToFinish(numTasksWait);
+        WaitForEncodeTasksToFinish(ShaderConstants.numPrimitives);
     }
 
     INIT_TASK;
@@ -648,15 +650,7 @@ void BuildBvh(
 
         END_TASK(ShaderRootConstants.numThreadGroups);
     }
-    else
 #endif
-    {
-        // Take into account the encode tasks that are done
-        if ((waveId == numTasksWait) && (localId == 0))
-        {
-            DstMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET, numTasksWait);
-        }
-    }
 
     DeviceMemoryBarrierWithGroupSync();
 

@@ -271,8 +271,12 @@ static bool TraceRayCommon(
                                         false,
                                         result.geometryIndex);
             // Set hit triangle information
-            const InstanceDesc      desc = FetchInstanceDesc(accelStruct, result.instNodePtr);
-            const GpuVirtualAddress blas = GetInstanceAddr(desc);
+            GpuVirtualAddress blas;
+            {
+                InstanceDesc desc = FetchInstanceDesc(accelStruct, result.instNodePtr);
+                blas = GetInstanceAddr(desc);
+            }
+
             AmdTraceRaySetHitTriangleNodePointer(blas, result.nodeIndex);
 
             AmdTraceRayCallClosestHitShader(hitInfo.closestHitId, hitInfo.tableIndex);

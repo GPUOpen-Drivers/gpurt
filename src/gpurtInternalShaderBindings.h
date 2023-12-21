@@ -59,6 +59,7 @@ namespace EncodeNodes
         uint32 indexBufferGpuVaHi;
         uint32 sceneBoundsCalculationType;
         uint32 trianglePairingSearchRadius;    // Search radius for triangles that could be paired together
+        uint32 encodeTaskCounterScratchOffset;
     };
     // Add 4 DWORD padding to avoid page faults when the compiler uses a multi-DWORD load straddling the end of the
     // constant buffer
@@ -161,6 +162,7 @@ namespace EncodeInstances
         uint32 buildFlags;                    // Build flags
         uint32 leafNodeExpansionFactor;       // Number of leaf nodes per primitive
         uint32 enableFastLBVH;
+        uint32 encodeTaskCounterScratchOffset;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
@@ -413,8 +415,12 @@ namespace InitAccelerationStructure
         uint32 rebraidTaskQueueCounterScratchOffset;
         uint32 tdTaskQueueCounterScratchOffset;
         uint32 plocTaskQueueCounterScratchOffset;
-        // Add padding for 16-byte alignment rules
-        uint32 pad0;
+        uint32 encodeTaskCounterScratchOffset;
+
+        uint32 taskLoopCountersOffset;
+        uint32 padding0;
+        uint32 padding1;
+        uint32 padding2;
 
         AccelStructHeader header;
         AccelStructMetadataHeader metadataHeader;
@@ -744,7 +750,6 @@ constexpr NodeMapping InitAccelerationStructureMapping[] =
 constexpr NodeMapping InitUpdateAccelerationStructureMapping[] =
 {
     { NodeType::Constant, InitAccelerationStructure::NumRootEntries },
-    { NodeType::UavTable, 1 },
     { NodeType::UavTable, 1 },
 };
 

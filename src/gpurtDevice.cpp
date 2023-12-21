@@ -470,9 +470,21 @@ ClientPipelineHandle Device::GetInternalPipeline(
     ClientPipelineHandle pPipeline = nullptr;
 
     {
-        Util::RWLockAuto<Util::RWLock::LockType::ReadWrite> lock(&m_internalPipelineLock);
+        Util::RWLockAuto<Util::RWLock::LockType::ReadOnly> lock(&m_internalPipelineLock);
         auto it = m_pipelineMap.find(key);
 
+        if (it != m_pipelineMap.end())
+        {
+            pPipeline = it->second.pPipeline;
+        }
+    }
+
+    if (pPipeline == nullptr)
+    {
+        Util::RWLockAuto<Util::RWLock::LockType::ReadWrite> lock(&m_internalPipelineLock);
+
+        // Check again if the pipeline was inserted between this lock and the one above.
+        auto it = m_pipelineMap.find(key);
         if (it != m_pipelineMap.end())
         {
             pPipeline = it->second.pPipeline;
@@ -630,20 +642,20 @@ ClientPipelineHandle Device::GetInternalPipeline(
 
                 char radixSortLevelStr[MaxStrLength];
                 Util::Snprintf(radixSortLevelStr,
-                                MaxStrLength,
-                                "_RadixSortLevel_%d",
-                                buildSettings.radixSortScanLevel);
+                               MaxStrLength,
+                               "_RadixSortLevel_%d",
+                               buildSettings.radixSortScanLevel);
 
                 Util::Snprintf(pipelineName, MaxStrLength, "%s%s%s_%s%s%s%s%s",
-                                newBuildInfo.pPipelineName,
-                                buildSettings.topLevelBuild ? "_TLAS" : "_BLAS",
-                                buildSettings.topLevelBuild ? "" : GeometryTypeStr[buildSettings.geometryType],
-                                buildSettings.enableTopDownBuild ?
-                                    "TopDown" : BuildModeStr[buildSettings.buildMode],
-                                buildSettings.doTriangleSplitting ? "_TriSplit" : "",
-                                buildSettings.triangleCompressionMode ? "_TriCompr" : "",
-                                RebraidTypeStr[buildSettings.rebraidType],
-                                buildSettings.enableMergeSort ? "_MergeSort" : radixSortLevelStr);
+                               newBuildInfo.pPipelineName,
+                               buildSettings.topLevelBuild ? "_TLAS" : "_BLAS",
+                               buildSettings.topLevelBuild ? "" : GeometryTypeStr[buildSettings.geometryType],
+                               buildSettings.enableTopDownBuild ?
+                                   "TopDown" : BuildModeStr[buildSettings.buildMode],
+                               buildSettings.doTriangleSplitting ? "_TriSplit" : "",
+                               buildSettings.triangleCompressionMode ? "_TriCompr" : "",
+                               RebraidTypeStr[buildSettings.rebraidType],
+                               buildSettings.enableMergeSort ? "_MergeSort" : radixSortLevelStr);
 
                 newBuildInfo.pPipelineName = &pipelineName[0];
             }
@@ -1159,13 +1171,6 @@ void Device::AddMetadataToList(
     }
     pTraceListInfo->counterInfo = counterInfo;
 
-    DispatchDimensions dispatchDims = {};
-    dispatchDims.dimX = dispatchInfo.dimX;
-    dispatchDims.dimY = dispatchInfo.dimY;
-    dispatchDims.dimZ = dispatchInfo.dimZ;
-
-    pTraceListInfo->dispatchDims = dispatchDims;
-
     RayHistoryTraversalFlags traversalFlags = {};
     traversalFlags.boxSortMode      = dispatchInfo.boxSortMode;
     traversalFlags.usesNodePtrFlags = dispatchInfo.usesNodePtrFlags;
@@ -1370,10 +1375,6 @@ void Device::WriteRayHistoryChunks(
             m_rayHistoryTraceList.At(i).counterInfo.dispatchRayDimensionX = dispatchSizeX;
             m_rayHistoryTraceList.At(i).counterInfo.dispatchRayDimensionY = dispatchSizeY;
             m_rayHistoryTraceList.At(i).counterInfo.dispatchRayDimensionZ = dispatchSizeZ;
-
-            m_rayHistoryTraceList.At(i).dispatchDims.dimX = dispatchSizeX;
-            m_rayHistoryTraceList.At(i).dispatchDims.dimY = dispatchSizeY;
-            m_rayHistoryTraceList.At(i).dispatchDims.dimZ = dispatchSizeZ;
         }
 
         CounterInfo counterInfo = m_rayHistoryTraceList.At(i).counterInfo;
@@ -1473,10 +1474,6 @@ void Device::WriteRayHistoryMetaDataChunks(
     rayHistoryMetadata.counterInfo.kind              = RayHistoryMetadataKind::CounterInfo;
     rayHistoryMetadata.counterInfo.sizeInByte        = sizeof(CounterInfo);
     rayHistoryMetadata.counter                       = traceListInfo.counterInfo;
-
-    rayHistoryMetadata.dispatchDimsInfo.kind         = RayHistoryMetadataKind::DispatchDimensions;
-    rayHistoryMetadata.dispatchDimsInfo.sizeInByte   = sizeof(DispatchDimensions);
-    rayHistoryMetadata.dispatchDims                  = traceListInfo.dispatchDims;
 
     rayHistoryMetadata.traversalFlagsInfo.kind       = RayHistoryMetadataKind::TraversalFlags;
     rayHistoryMetadata.traversalFlagsInfo.sizeInByte = sizeof(RayHistoryTraversalFlags);

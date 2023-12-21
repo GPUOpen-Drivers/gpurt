@@ -22,7 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#define RootSig "RootConstants(num32BitConstants=10, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=11, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
@@ -46,6 +46,7 @@ struct Constants
     uint buildFlags;                    // Build flags
     uint leafNodeExpansionFactor;       // Leaf node expansion factor (> 1 for rebraid)
     uint enableFastLBVH;
+    uint encodeTaskCounterScratchOffset;
 };
 
 [[vk::push_constant]] ConstantBuffer<Constants> ShaderConstants : register(b0);
@@ -140,6 +141,6 @@ void EncodeInstances(
         }
 
         DeviceMemoryBarrier();
-        DstMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 1);
+        ScratchBuffer.InterlockedAdd(ShaderConstants.encodeTaskCounterScratchOffset, 1);
     }
 }

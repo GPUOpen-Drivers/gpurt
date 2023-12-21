@@ -36,8 +36,8 @@
 // Reserved fields are zeroed by GPURT until they have a purpose. If a structure is smaller than the size of the most
 // recent version, tools may assume the non-present fields are zero.
 
-#define GPURT_COUNTER_MAJOR_VERSION 1
-#define GPURT_COUNTER_MINOR_VERSION 1
+#define GPURT_COUNTER_MAJOR_VERSION 2
+#define GPURT_COUNTER_MINOR_VERSION 0
 #define GPURT_COUNTER_VERSION       ((GPURT_COUNTER_MAJOR_VERSION << 16) | GPURT_COUNTER_MINOR_VERSION)
 
 #include "gpurtAccelStruct.h"
@@ -431,6 +431,9 @@ union RayHistoryControlToken
     uint32 u32;
 };
 
+#ifdef __cplusplus
+#pragma pack(push, 4)
+#endif
 // ====================================================================================================================
 // Ray history trace header format
 struct RayHistoryRdfChunkHeader
@@ -443,7 +446,7 @@ struct RayHistoryRdfChunkHeader
 enum class RayHistoryMetadataKind : uint32
 {
     CounterInfo        = 1,
-    DispatchDimensions = 2,
+    Unused             = 2,
     TraversalFlags     = 3,
 };
 
@@ -452,6 +455,8 @@ enum class RayHistoryMetadataKind : uint32
 struct RayHistoryMetadataInfo
 {
     RayHistoryMetadataKind kind;
+    // Older versions of this struct had padding between kind and sizeOfBytes keep a reserved value for compatibility.
+    uint32                 reserved;
     uint64                 sizeInByte;
 };
 
@@ -474,6 +479,10 @@ struct ShaderTableInfo
     uint64          stride;
     uint64          sizeInBytes;
 };
+#ifdef __cplusplus
+#pragma pack(pop)
+#endif
+
 } // namespace GpuRt
 #endif
 #endif

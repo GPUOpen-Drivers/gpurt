@@ -32,6 +32,9 @@
 #include "../../gpurt/gpurtDispatch.h"
 #include "accelStruct.h"
 #include "gpurtBuildConstants.h"
+#ifdef __cplusplus
+#include "hlslTypes.h"
+#endif
 
 // Due to lack of enum support in HLSL, we have these defines which should match Pal::RayTracingIpLevel in palDevice.h.
 #define GPURT_RTIP1_0 1
@@ -39,10 +42,18 @@
 #define GPURT_RTIP2_0 3
 
 #ifdef __cplusplus
-static_assert(GPURT_RTIP1_0 == Pal::RayTracingIpLevel::RtIp1_0, "GPURT_HLSL_RTIP mismatch.");
-static_assert(GPURT_RTIP1_1 == Pal::RayTracingIpLevel::RtIp1_1, "GPURT_HLSL_RTIP mismatch.");
-static_assert(GPURT_RTIP2_0 == Pal::RayTracingIpLevel::RtIp2_0, "GPURT_HLSL_RTIP mismatch.");
+static_assert(GPURT_RTIP1_0 == uint32_t(Pal::RayTracingIpLevel::RtIp1_0), "GPURT_HLSL_RTIP mismatch.");
+static_assert(GPURT_RTIP1_1 == uint32_t(Pal::RayTracingIpLevel::RtIp1_1), "GPURT_HLSL_RTIP mismatch.");
+static_assert(GPURT_RTIP2_0 == uint32_t(Pal::RayTracingIpLevel::RtIp2_0), "GPURT_HLSL_RTIP mismatch.");
 #endif
+
+// Decimal encoding of rtip levels.
+enum class RayTracingIpLevel : uint32_t
+{
+    _None = 0,
+    RtIp1_1 = 11,
+    RtIp2_0 = 20,
+};
 
 //=====================================================================================================================
 ///@note Enum is a reserved keyword in glslang. To workaround this limitation, define static constants to replace the
@@ -236,10 +247,6 @@ struct PackedUintBoundingBox4
     uint64_t min;
     uint64_t max;
 };
-
-//=====================================================================================================================
-// Acceleration structure result data offsets
-typedef AccelStructDataOffsets AccelStructOffsets;
 
 //=====================================================================================================================
 // Hardware 32-bit box node format and offsets
@@ -972,7 +979,7 @@ static uint GetBvhNodeSizeProcedural()
 
 //=====================================================================================================================
 // Get leaf instance node size in bytes
-static uint GetBvhNodeSizeInstance(in uint enableFusedInstanceNode)
+static uint GetBvhNodeSizeInstance(uint enableFusedInstanceNode)
 {
     return (enableFusedInstanceNode == 0) ? INSTANCE_NODE_SIZE : FUSED_INSTANCE_NODE_SIZE;
 }
@@ -1062,6 +1069,34 @@ struct StateTaskQueueCounter
 #define STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET     8
 #define STATE_TASK_QUEUE_TASK_COUNTER_OFFSET        12
 #define STATE_TASK_QUEUE_NUM_TASKS_DONE_OFFSET      16
+
+//=====================================================================================================================
+struct TaskLoopCounters
+{
+    uint buildParallelTaskCounter;
+    uint buildParallelTasksDone;
+    uint mergeSortTaskCounter;
+    uint mergeSortTasksDone;
+    uint qbvhTaskCounter;
+    uint qbvhTasksDone;
+};
+
+#define TASK_LOOP_BUILD_PARALLEL_COUNTER_OFFSET    0
+#define TASK_LOOP_BUILD_PARALLEL_TASKS_DONE_OFFSET 4
+#define TASK_LOOP_MERGE_SORT_COUNTER_OFFSET        8
+#define TASK_LOOP_MERGE_SORT_TASKS_DONE_OFFSET     12
+#define TASK_LOOP_QBVH_COUNTER_OFFSET              16
+#define TASK_LOOP_QBVH_TASKS_DONE_OFFSET           20
+#define TASK_LOOP_COUNTERS_NUM_DWORDS              (sizeof(TaskLoopCounters) / sizeof(uint))
+
+#ifdef __cplusplus
+static_assert(TASK_LOOP_BUILD_PARALLEL_COUNTER_OFFSET    == offsetof(TaskLoopCounters, buildParallelTaskCounter));
+static_assert(TASK_LOOP_BUILD_PARALLEL_TASKS_DONE_OFFSET == offsetof(TaskLoopCounters, buildParallelTasksDone));
+static_assert(TASK_LOOP_MERGE_SORT_COUNTER_OFFSET        == offsetof(TaskLoopCounters, mergeSortTaskCounter));
+static_assert(TASK_LOOP_MERGE_SORT_TASKS_DONE_OFFSET     == offsetof(TaskLoopCounters, mergeSortTasksDone));
+static_assert(TASK_LOOP_QBVH_COUNTER_OFFSET              == offsetof(TaskLoopCounters, qbvhTaskCounter));
+static_assert(TASK_LOOP_QBVH_TASKS_DONE_OFFSET           == offsetof(TaskLoopCounters, qbvhTasksDone));
+#endif
 
 //=====================================================================================================================
 #define REF_SCRATCH_SIDE_LEFT       0
@@ -1296,6 +1331,7 @@ struct IndexBufferInfo
 // Update scratch memory fields
 #define UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET 0
 #define UPDATE_SCRATCH_TASK_COUNT_OFFSET        4
+#define UPDATE_SCRATCH_ENCODE_TASK_COUNT_OFFSET 8
 
 //=====================================================================================================================
 #ifdef AMD_VULKAN
@@ -1317,8 +1353,6 @@ enum RebraidType : uint
     V2  = 2, // Second version of Rebraid
 };
 #endif
-
-typedef CompileTimeBuildSettings BuildSettingsData;
 
 #define BUILD_MODE_LINEAR   0
 // BUILD_MODE_AC was 1, but it has been removed.
@@ -1397,7 +1431,7 @@ struct RaySystemData
 };
 
 //=====================================================================================================================
-#if DEFINE_RAYDESC
+#if DEFINE_RAYDESC || __cplusplus
 // Ray description matching the D3D12 HLSL header
 struct RayDesc
 {
@@ -1405,6 +1439,20 @@ struct RayDesc
     float TMin;
     float3 Direction;
     float TMax;
+#if __cplusplus
+    RayDesc()
+        :
+        Origin(float3(0, 0, 0)),
+        TMin(0.f),
+        Direction(float3(0, 0, 0)),
+        TMax(0.f)
+    {}
+
+    RayDesc(uint val)
+    {
+        memset(this, val, sizeof(RayDesc));
+    }
+#endif
 };
 #endif
 

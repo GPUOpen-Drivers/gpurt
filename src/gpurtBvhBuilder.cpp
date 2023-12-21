@@ -39,6 +39,7 @@
 #include "gpurtBvhBuilder.h"
 #include "gpurtBvhBuilderCommon.h"
 #include "shared/accelStruct.h"
+#include "shared/rayTracingDefs.h"
 
 #include <vector>
 
@@ -598,6 +599,11 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfo(
    uint32 numBatches = 0xFFFFFFFF;
 
     //--------------------------------------------
+    // Task Loop Counters
+    uint32 encodeTaskCounter = 0xFFFFFFFF;
+    uint32 taskLoopCounters = 0xFFFFFFFF;
+
+    //--------------------------------------------
     // TaskQueueCounter
     uint32 triangleSplitTaskQueueCounter = 0xFFFFFFFF;
     uint32 rebraidTaskQueueCounter = 0xFFFFFFFF;
@@ -658,6 +664,15 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfo(
     // QBVH
     uint32 qbvhGlobalStack = 0;
     uint32 qbvhGlobalStackPtrs = 0;
+
+    // ============ TaskLoopCounters ============
+    {
+        encodeTaskCounter = runningOffset;
+        runningOffset += sizeof(uint32);
+
+        taskLoopCounters = runningOffset;
+        runningOffset += sizeof(TaskLoopCounters);
+    }
 
     // ============ TaskQueueCounter ============
     {
@@ -998,7 +1013,7 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfo(
         runningOffset += maxStackEntry * stackEntrySize * sizeof(uint32);
 
         qbvhGlobalStackPtrs = runningOffset;
-        runningOffset += RayTracingQBVHStackPtrsSize;
+        runningOffset += sizeof(StackPtrs);
 
     }
     qbvhSize = runningOffset - baseOffset0;
@@ -1012,6 +1027,8 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfo(
         pOffsets->triangleSplitRefs1 = triangleSplitRefs1;
         pOffsets->splitPriorities = splitPriorities;
         pOffsets->triangleSplitState = triangleSplitState;
+        pOffsets->encodeTaskCounter = encodeTaskCounter;
+        pOffsets->taskLoopCounters = taskLoopCounters;
         pOffsets->triangleSplitTaskQueueCounter = triangleSplitTaskQueueCounter;
         pOffsets->rebraidState = rebraidState;
         pOffsets->rebraidTaskQueueCounter = rebraidTaskQueueCounter;
@@ -1080,6 +1097,10 @@ uint32 BvhBuilder::CalculateUpdateScratchBufferInfo(
     runningOffset += sizeof(uint32);
 
     // Done count
+    runningOffset += sizeof(uint32);
+
+    // Task loop counter
+    offsets.encodeTaskCounter = runningOffset;
     runningOffset += sizeof(uint32);
 
     // Allocate space for the node flags
@@ -1533,6 +1554,7 @@ void BvhBuilder::EncodeTriangleNodes(
         Util::LowPart(indexBufferGpuVa),
         Util::HighPart(indexBufferGpuVa),
         m_deviceSettings.trianglePairingSearchRadius,
+        m_scratchOffsets.encodeTaskCounter,
     };
 
     InternalRayTracingCsType encodePipeline = (indirectGpuVa > 0) ?
@@ -1633,30 +1655,23 @@ void BvhBuilder::EncodeAABBNodes(
 {
     EncodeNodes::Constants shaderConstants =
     {
-        m_metadataSizeInBytes,
-        primitiveCount,
-        m_scratchOffsets.bvhLeafNodeData,
-        primitiveOffset,
-        m_scratchOffsets.sceneBounds,
-        m_scratchOffsets.propagationFlags,
-        m_scratchOffsets.updateStack,
-        0,
-        0,
-        static_cast<uint32>(IndexFormat::Unknown),
-        0,
-        geometryIndex,
-        m_resultOffsets.geometryInfo,
-        m_resultOffsets.primNodePtrs,
-        static_cast<uint32>(m_buildArgs.inputs.flags),
-        static_cast<uint32>(geometryFlags),
-        static_cast<uint32>(VertexFormat::Invalid),
-        0,
-        static_cast<uint32>(resultLeafOffset),
-        m_buildConfig.numLeafNodes,
-        m_scratchOffsets.indexBufferInfo,
-        0,
-        0,
-        0,
+        .metadataSizeInBytes            = m_metadataSizeInBytes,
+        .numPrimitives                  = primitiveCount,
+        .leafNodeDataByteOffset         = m_scratchOffsets.bvhLeafNodeData,
+        .primitiveDataByteOffset        = primitiveOffset,
+        .sceneBoundsByteOffset          = m_scratchOffsets.sceneBounds,
+        .propagationFlagsScratchOffset  = m_scratchOffsets.propagationFlags,
+        .baseUpdateStackScratchOffset   = m_scratchOffsets.updateStack,
+        .geometryIndex                  = geometryIndex,
+        .baseGeometryInfoOffset         = m_resultOffsets.geometryInfo,
+        .basePrimNodePtrOffset          = m_resultOffsets.primNodePtrs,
+        .buildFlags                     = static_cast<uint32>(m_buildArgs.inputs.flags),
+        .geometryFlags                  = static_cast<uint32>(geometryFlags),
+        .vertexComponentCount           = static_cast<uint32>(VertexFormat::Invalid),
+        .destLeafNodeOffset             = static_cast<uint32>(resultLeafOffset),
+        .leafNodeExpansionFactor        = m_buildConfig.numLeafNodes,
+        .indexBufferInfoScratchOffset   = m_scratchOffsets.indexBufferInfo,
+        .encodeTaskCounterScratchOffset = m_scratchOffsets.encodeTaskCounter,
     };
 
     BindPipeline(InternalRayTracingCsType::EncodeAABBNodes);
@@ -1714,7 +1729,8 @@ void BvhBuilder::EncodeInstances(
         m_scratchOffsets.updateStack,
         m_buildArgs.inputs.flags,
         GetLeafNodeExpansion(),
-        m_buildConfig.enableFastLBVH
+        m_buildConfig.enableFastLBVH,
+        m_scratchOffsets.encodeTaskCounter,
     };
 
     BindPipeline(InternalRayTracingCsType::EncodeInstances);
@@ -1890,6 +1906,10 @@ void BvhBuilder::InitAccelerationStructure()
         const gpusize counterPtrVa = ScratchBufferBaseVa() + m_scratchOffsets.debugCounters;
         ZeroDataImmediate(counterPtrVa, RayTracingBuildDebugCounters);
     }
+
+    ZeroDataImmediate(ScratchBufferBaseVa() + m_scratchOffsets.encodeTaskCounter, 1);
+    const gpusize taskLoopCountersOffset = ScratchBufferBaseVa() + m_scratchOffsets.taskLoopCounters;
+    ZeroDataImmediate(taskLoopCountersOffset, TASK_LOOP_COUNTERS_NUM_DWORDS);
 
     ResetTaskQueueCounters(m_scratchOffsets.rebraidTaskQueueCounter);
     ResetTaskQueueCounters(m_scratchOffsets.triangleSplitTaskQueueCounter);
@@ -2311,11 +2331,8 @@ void BvhBuilder::BuildRaytracingAccelerationStructure()
 
     if (IsUpdate())
     {
-        // Reset the task counter for update parallel.
-        ResetTaskCounter(HeaderBufferBaseVa());
-
-        // Reset update stack pointer and update task counter.
-        ZeroDataImmediate(ScratchBufferBaseVa(), 2);
+        // Reset update stack pointer and update task counters.
+        ZeroDataImmediate(ScratchBufferBaseVa(), 3);
     }
     else
     {
@@ -3113,8 +3130,6 @@ void BvhBuilder::MergeSort()
 {
     BindPipeline(InternalRayTracingCsType::MergeSort);
 
-    ResetTaskCounter(HeaderBufferBaseVa());
-
     // Set shader constants
     uint32 entryOffset = 0;
     entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
@@ -3628,8 +3643,6 @@ void BvhBuilder::BuildQBVH()
     {
         numThreadGroups * DefaultThreadGroupSize,
     };
-
-    ResetTaskCounter(HeaderBufferBaseVa());
 
     uint32 entryOffset = 0;
 

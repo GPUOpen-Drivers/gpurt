@@ -119,17 +119,20 @@ static HitGroupInfo GetHitGroupInfo(
     const GpuVirtualAddress tableVa =
         PackUint64(DispatchRaysConstBuf.hitGroupTableBaseAddressLo, DispatchRaysConstBuf.hitGroupTableBaseAddressHi);
 
-    const uint4 d0 = LoadDwordAtAddrx4(tableVa + offset);
-#ifdef AMD_VULKAN
-    const uint2 d1 = LoadDwordAtAddrx4(tableVa + offset + 0x10).xy;
-#else
-    const uint2 d1 = LoadDwordAtAddrx2(tableVa + offset + 0x10);
-#endif
+    HitGroupInfo hitInfo = (HitGroupInfo)0;
 
-    HitGroupInfo hitInfo;
-    hitInfo.closestHitId   = d0.xy;
-    hitInfo.anyHitId       = d0.zw;
-    hitInfo.intersectionId = d1.xy;
+    if (tableVa != 0)
+    {
+        const uint4 d0 = LoadDwordAtAddrx4(tableVa + offset);
+#ifdef AMD_VULKAN
+        const uint2 d1 = LoadDwordAtAddrx4(tableVa + offset + 0x10).xy;
+#else
+        const uint2 d1 = LoadDwordAtAddrx2(tableVa + offset + 0x10);
+#endif
+        hitInfo.closestHitId   = d0.xy;
+        hitInfo.anyHitId       = d0.zw;
+        hitInfo.intersectionId = d1.xy;
+    }
     hitInfo.tableIndex     = hitGroupRecordIndex;
 #endif
 

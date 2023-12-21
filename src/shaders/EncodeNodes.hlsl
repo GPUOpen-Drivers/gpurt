@@ -22,7 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#define RootSig "RootConstants(num32BitConstants=25, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=26, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 1)),"\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
@@ -63,7 +63,7 @@
 void IncrementTaskCounter()
 {
     DeviceMemoryBarrier();
-    DstMetadata.InterlockedAdd(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 1);
+    ScratchBuffer.InterlockedAdd(ShaderConstants.encodeTaskCounterScratchOffset, 1);
 }
 
 //=====================================================================================================================

@@ -64,13 +64,13 @@ struct InputArgs
 #include "UpdateQBVHImpl.hlsl"
 
 //=====================================================================================================================
-void WaitForTasksToFinish(uint numTasksWait)
+void WaitForEncodeTasksToFinish(uint numTasksWait)
 {
     // Wait until numTasksWait tasks are done
     do
     {
         DeviceMemoryBarrier();
-    } while (DstMetadata.Load(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET) < numTasksWait);
+    } while (ScratchBuffer.Load(UPDATE_SCRATCH_ENCODE_TASK_COUNT_OFFSET) < numTasksWait);
 }
 
 //=====================================================================================================================
@@ -82,7 +82,7 @@ void UpdateParallel(
     in uint globalThreadId : SV_DispatchThreadID)
 {
     // Waiting for EncodeNodes/EncodeTopLevel to finish encoding the leaves/primitives
-    WaitForTasksToFinish(ShaderConstants.numPrimitives);
+    WaitForEncodeTasksToFinish(ShaderConstants.numPrimitives);
 
     // Fetch number of nodes to process
     uint numWorkItems = ScratchBuffer.Load(UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET);

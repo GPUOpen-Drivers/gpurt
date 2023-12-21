@@ -55,7 +55,6 @@ namespace GpuRt
 
 static constexpr size_t RayTracingQBVHLeafSize          = 64;
 static constexpr size_t RayTracingScratchNodeSize       = 64;
-static constexpr size_t RayTracingQBVHStackPtrsSize     = 16;
 static constexpr size_t RayTracingStatePLOCSize         = 16;   // PLOCState size without ploc task counters
                                                                 // taskCounter size is tracked by
                                                                 // RayTracingTaskQueueCounterSize
@@ -153,22 +152,15 @@ static RadixSortConfig GetRadixSortConfig(
     return config;
 }
 
-struct DispatchDimensions
-{
-    uint32 dimX;
-    uint32 dimY;
-    uint32 dimZ;
-};
-
+#pragma pack(push, 4)
 struct RayHistoryMetadata
 {
     RayHistoryMetadataInfo   counterInfo;
     CounterInfo              counter;
-    RayHistoryMetadataInfo   dispatchDimsInfo;
-    DispatchDimensions       dispatchDims;
     RayHistoryMetadataInfo   traversalFlagsInfo;
     RayHistoryTraversalFlags traversalFlags;
 };
+#pragma pack(pop)
 
 struct RayHistoryTraceListInfo
 {
@@ -190,7 +182,6 @@ struct RayHistoryTraceListInfo
     ClientGpuMemHandle          traceBufferGpuMem;
 
     CounterInfo                 counterInfo;
-    DispatchDimensions          dispatchDims;
     RayHistoryTraversalFlags    traversalFlags;
 
     IndirectCounterMetadata*    pIndirectCounterMetadata;

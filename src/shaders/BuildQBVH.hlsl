@@ -78,6 +78,10 @@ struct RootConstants
 // unused buffer
 [[vk::binding(5, 0)]] RWByteAddressBuffer                   SrcBuffer          : register(u5);
 
+#define TASK_COUNTER_BUFFER   ScratchBuffer
+#define TASK_COUNTER_OFFSET   (ShaderConstants.offsets.taskLoopCounters + TASK_LOOP_QBVH_COUNTER_OFFSET)
+#define NUM_TASKS_DONE_OFFSET (ShaderConstants.offsets.taskLoopCounters + TASK_LOOP_QBVH_TASKS_DONE_OFFSET)
+
 #include "Common.hlsl"
 #include "IntersectCommon.hlsl"
 #include "BuildCommonScratch.hlsl"
@@ -197,7 +201,6 @@ uint WriteInstanceNode(
                             nodePointer,
                             blasMetadataSize,
                             scratchNode.splitBox_or_nodePointer,
-                            ExtractScratchNodeFlags(scratchNode.flags_and_instanceMask),
                             args.enableFusedInstanceNode);
 
     DstBuffer.Store(offsets.primNodePtrs + (destIndex * sizeof(uint)), nodePointer);

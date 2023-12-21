@@ -59,6 +59,7 @@ struct GeometryArgs
     uint IndexBufferVaLo;
     uint IndexBufferVaHi;
     uint trianglePairingSearchRadius;   // The search radius for paired triangle, used by EarlyCompression
+    uint encodeTaskCounterScratchOffset;
 };
 
 //======================================================================================================================

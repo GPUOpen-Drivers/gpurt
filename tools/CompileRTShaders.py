@@ -336,7 +336,7 @@ def RunSpirv(outputDir, compilerPath, inShaderConfig, inShaderBasePath, inDXC, i
 
 # returns true if compiled successfully, false if failed.
 def CompileShaderConfig(shaderConfig, args, shadersOutputDir,
-    dxcompilerLibPath, spirvCompilerPath, spvRemap, whiteListPath, internalShadersHeader, shadersBasePath):
+    dxcompilerLibPath, spirvCompilerPath, spvRemap, whiteListPath, shadersBasePath):
     # Output for this thread if we need to report errors
     threadOutput = []
 
@@ -463,7 +463,7 @@ def CompileShaders(args, internalShadersHeader, compileType) -> int:
     with ThreadPoolExecutor(max_workers=int(args.jobs)) as exe:
         for idx, shaderConfig in enumerate(shadersConfigs):
             compileResults[idx] = exe.submit(CompileShaderConfig, shaderConfig, args, shadersOutputDir,
-                dxcompilerLibPath, spirvCompilerPath, spvRemap, whiteListPath, internalShadersHeader, shadersBasePath)
+                dxcompilerLibPath, spirvCompilerPath, spvRemap, whiteListPath, shadersBasePath)
 
     successfulCompilation = True
     for idx, future in enumerate(compileResults):

@@ -69,8 +69,12 @@ void BvhBatcher::BuildAccelerationStructureBatch(
     Util::Vector<BvhBuilder, 1, Internal::Device> tlasBuilders(m_pDevice);
     Util::Vector<BvhBuilder, 1, Internal::Device> tlasUpdaters(m_pDevice);
 
+    Util::Vector<BvhBuilder, 1, Internal::Device> emptyBuilders(m_pDevice);
+
     blasBuilders.Reserve(static_cast<uint32>(buildInfos.size()));
     blasUpdaters.Reserve(static_cast<uint32>(buildInfos.size()));
+
+    RGP_PUSH_MARKER("Batched BVH Builds");
 
     for (const AccelStructBuildInfo& info : buildInfos)
     {
@@ -84,7 +88,20 @@ void BvhBatcher::BuildAccelerationStructureBatch(
 
         const bool isUpdate = Util::TestAnyFlagSet(info.inputs.flags, AccelStructBuildFlagPerformUpdate);
         const bool isTlas = info.inputs.type == AccelStructType::TopLevel;
-        if (isUpdate)
+        if (builder.m_buildConfig.numPrimitives == 0)
+        {
+            // Empty BVH builds need to initialize their headers and may emit post build information,
+            // but otherwise do not participate in the rest of the build.
+            if (isUpdate)
+            {
+                builder.EmitPostBuildInfo();
+            }
+            else
+            {
+                emptyBuilders.EmplaceBack(std::move(builder));
+            }
+        }
+        else if (isUpdate)
         {
             if (isTlas)
             {
@@ -108,7 +125,13 @@ void BvhBatcher::BuildAccelerationStructureBatch(
         }
     }
 
-    RGP_PUSH_MARKER("Batched BVH Builds");
+    if (emptyBuilders.IsEmpty() == false)
+    {
+        RGP_PUSH_MARKER("Process Empty BVH builds");
+        DispatchInitAccelerationStructure<false>(emptyBuilders);
+        BuildPhase(emptyBuilders, &BvhBuilder::EmitPostBuildInfo);
+        RGP_POP_MARKER();
+    }
 
     if ((blasBuilders.IsEmpty() == false) || (blasUpdaters.IsEmpty() == false))
     {
@@ -154,17 +177,6 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
     Barrier();
     RGP_POP_MARKER();
 
-    if (updaters.IsEmpty() == false)
-    {
-        RGP_PUSH_MARKER("Updates");
-
-        BuildPhase("EncodePrimitives", updaters, &BvhBuilder::EncodePrimitives);
-
-        BuildPhase("UpdateAccelerationStructure", updaters, &BvhBuilder::UpdateAccelerationStructure);
-
-        RGP_POP_MARKER();
-    }
-
     if (builders.IsEmpty() == false)
     {
         RGP_PUSH_MARKER("Builds");
@@ -202,6 +214,18 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
 
         RGP_POP_MARKER();
     }
+
+    if (updaters.IsEmpty() == false)
+    {
+        RGP_PUSH_MARKER("Updates");
+
+        BuildPhase("EncodePrimitives", updaters, &BvhBuilder::EncodePrimitives);
+
+        BuildPhase("UpdateAccelerationStructure", updaters, &BvhBuilder::UpdateAccelerationStructure);
+
+        RGP_POP_MARKER();
+    }
+
     {
         RGP_PUSH_MARKER("EmitPostBuildInfo");
 
@@ -338,11 +362,6 @@ void BvhBatcher::DispatchInitAccelerationStructure(
                                                       entryOffset);
         for (auto& builder : buildersToDispatch)
         {
-            headerBuffers.EmplaceBack(BufferViewInfo
-            {
-                .gpuAddr = builder.HeaderBufferBaseVa(),
-                .range = 0xFFFFFFFF,
-            });
             scratchBuffers.EmplaceBack(BufferViewInfo
             {
                 .gpuAddr = builder.ScratchBufferBaseVa(),
@@ -351,6 +370,11 @@ void BvhBatcher::DispatchInitAccelerationStructure(
 
             if constexpr (IsUpdate == false)
             {
+                headerBuffers.EmplaceBack(BufferViewInfo
+                {
+                    .gpuAddr = builder.HeaderBufferBaseVa(),
+                    .range = 0xFFFFFFFF,
+                });
                 const InitAccelerationStructure::Constants shaderConstants =
                 {
                     .numLeafNodes                         = builder.m_buildConfig.numLeafNodes,
@@ -360,6 +384,8 @@ void BvhBatcher::DispatchInitAccelerationStructure(
                     .rebraidTaskQueueCounterScratchOffset = builder.m_scratchOffsets.rebraidTaskQueueCounter,
                     .tdTaskQueueCounterScratchOffset      = builder.m_scratchOffsets.tdTaskQueueCounter,
                     .plocTaskQueueCounterScratchOffset    = builder.m_scratchOffsets.plocTaskQueueCounter,
+                    .encodeTaskCounterScratchOffset       = builder.m_scratchOffsets.encodeTaskCounter,
+                    .taskLoopCountersOffset               = builder.m_scratchOffsets.taskLoopCounters,
                     .header                               = builder.InitAccelStructHeader(),
                     .metadataHeader                       = builder.InitAccelStructMetadataHeader(),
                 };
@@ -382,8 +408,8 @@ void BvhBatcher::DispatchInitAccelerationStructure(
         if constexpr (IsUpdate == false)
         {
             entryOffset = m_pDevice->WriteBufferSrdTable(m_cmdBuffer, constants.Data(), numBuildersToDispatch, false, entryOffset);
+            entryOffset = m_pDevice->WriteBufferSrdTable(m_cmdBuffer, headerBuffers.Data(), numBuildersToDispatch, false, entryOffset);
         }
-        entryOffset = m_pDevice->WriteBufferSrdTable(m_cmdBuffer, headerBuffers.Data(), numBuildersToDispatch, false, entryOffset);
         entryOffset = m_pDevice->WriteBufferSrdTable(m_cmdBuffer, scratchBuffers.Data(), numBuildersToDispatch, false, entryOffset);
 
         m_backend.Dispatch(m_cmdBuffer, numBuildersToDispatch, 1, 1);

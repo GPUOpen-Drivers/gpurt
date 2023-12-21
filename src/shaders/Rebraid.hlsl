@@ -372,7 +372,7 @@ void RebraidImpl(
                                 PackUint64(asuint(leaf.sah_or_v2_or_instBasePtr.x), asuint(leaf.sah_or_v2_or_instBasePtr.y));
 
                             const uint childCount =
-                                GetBlasInternalNodeChildCount(instanceBasePointer, rootNodePointer);
+                                GetBlasRebraidChildCount(instanceBasePointer, rootNodePointer);
 
                             localKeys[keyIndex] = childCount - 1; // Additional children
                             open[keyIndex] = true;

@@ -119,7 +119,7 @@ static void TraceRayInlineImpl2_0(
     if (EnableTraversalCounter())
     {
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 42
-        const uint rayId = GetRayId(AmdExtDispatchThreadIdFlat());
+        const uint rayId = AmdExtDispatchThreadIdFlat();
 #else
         const uint rayId = GetRayId(dispatchThreadId);
 #endif
@@ -150,7 +150,7 @@ static bool RayQueryProceedImpl2_0(
     if (EnableTraversalCounter())
     {
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 42
-        rayId = GetRayId(AmdExtDispatchThreadIdFlat());
+        rayId = AmdExtDispatchThreadIdFlat();
 #else
         rayId = GetRayId(dispatchThreadId);
 #endif

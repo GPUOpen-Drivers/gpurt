@@ -37,6 +37,9 @@
 #include "../shared/rayTracingDefs.h"
 #include "../shared/scratchNode.h"
 
+typedef AccelStructDataOffsets AccelStructOffsets;
+typedef CompileTimeBuildSettings BuildSettingsData;
+
 #if !defined(__cplusplus)
 #define out_param(x) out x
 #define inout_param(x) inout x

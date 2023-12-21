@@ -102,6 +102,7 @@ set(otherDeps
     ../shared/accelStruct.h
     ../shared/debugBuffer.h
     ../shared/gpurtBuildConstants.h
+    ../shared/hlslTypes.h
     ../shared/math.h
     ../shared/rayTracingDefs.h
     ../shared/scratchNode.h

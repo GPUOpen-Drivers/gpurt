@@ -24,7 +24,6 @@
  **********************************************************************************************************************/
 #ifdef IS_UPDATE
 #define RootSig "RootConstants(num32BitConstants=1, b0, visibility=SHADER_VISIBILITY_ALL), "\
-                "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 2)),"
 #else
 #define RootSig "RootConstants(num32BitConstants=1, b0, visibility=SHADER_VISIBILITY_ALL), "\
@@ -56,17 +55,20 @@ struct Constants
     uint rebraidTaskQueueCounterScratchOffset;
     uint tdTaskQueueCounterScratchOffset;
     uint plocTaskQueueCounterScratchOffset;
-    // Add padding for 16-byte alignment rules
-    uint pad0;
+    uint encodeTaskCounterScratchOffset;
+
+    uint taskLoopCountersOffset;
+    uint padding0;
+    uint padding1;
+    uint padding2;
 
     AccelStructHeader header;
     AccelStructMetadataHeader metadataHeader;
 };
 
 [[vk::binding(0, 1)]] ConstantBuffer<Constants> BatchBuilderConstants[] : register(b0, space1);
-#endif
-
 [[vk::binding(0, 0)]] RWByteAddressBuffer       BatchHeaderBuffers[]    : register(u0, space1);
+#endif
 [[vk::binding(1, 0)]] RWByteAddressBuffer       BatchScratchBuffers[]   : register(u0, space2);
 
 // =====================================================================================================================
@@ -91,20 +93,16 @@ void InitAccelerationStructure(
     uint globalId : SV_DispatchThreadID,
     uint groupId  : SV_GroupId)
 {
-    const RWByteAddressBuffer HeaderBuffer  = BatchHeaderBuffers[groupId];
     const RWByteAddressBuffer ScratchBuffer = BatchScratchBuffers[groupId];
 
 #ifdef IS_UPDATE
 
-    // Reset the task counters for update parallel.
-    HeaderBuffer.Store(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET, 0u);
-    HeaderBuffer.Store(ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET, 0u);
-
-    // Reset update stack pointer and update task counter.
-    ScratchBuffer.Store<uint2>(0, uint2(0u, 0u));
+    // Reset update stack pointer and update task counters.
+    ScratchBuffer.Store<uint3>(0, uint3(0u, 0u, 0u));
 
 #else
 
+    const RWByteAddressBuffer       HeaderBuffer     = BatchHeaderBuffers[groupId];
     const ConstantBuffer<Constants> BuilderConstants = BatchBuilderConstants[groupId];
 
     if (Settings.enableBVHBuildDebugCounters)
@@ -156,16 +154,22 @@ void InitAccelerationStructure(
         {
             ScratchBuffer.Store(BuilderConstants.numBatchesScratchOffset, 0);
         }
-    }
 
-    const bool isTopDownBuild = BuilderConstants.tdTaskQueueCounterScratchOffset != INVALID_SCRATCH_OFFSET;
-    if (isTopDownBuild)
-    {
-        ResetTaskQueueCounters(ScratchBuffer, BuilderConstants.tdTaskQueueCounterScratchOffset);
-    }
-    else if (BuilderConstants.plocTaskQueueCounterScratchOffset != INVALID_SCRATCH_OFFSET)
-    {
-        ResetTaskQueueCounters(ScratchBuffer, BuilderConstants.plocTaskQueueCounterScratchOffset);
+        const bool isTopDownBuild = BuilderConstants.tdTaskQueueCounterScratchOffset != INVALID_SCRATCH_OFFSET;
+        if (isTopDownBuild)
+        {
+            ResetTaskQueueCounters(ScratchBuffer, BuilderConstants.tdTaskQueueCounterScratchOffset);
+        }
+        else if (BuilderConstants.plocTaskQueueCounterScratchOffset != INVALID_SCRATCH_OFFSET)
+        {
+            ResetTaskQueueCounters(ScratchBuffer, BuilderConstants.plocTaskQueueCounterScratchOffset);
+        }
+
+        ScratchBuffer.Store(BuilderConstants.encodeTaskCounterScratchOffset, 0);
+        for (uint i = 0; i < TASK_LOOP_COUNTERS_NUM_DWORDS; ++i)
+        {
+            ScratchBuffer.Store(BuilderConstants.taskLoopCountersOffset + (i * sizeof(uint)), 0);
+        }
     }
 
     HeaderBuffer.Store<AccelStructMetadataHeader>(0, BuilderConstants.metadataHeader);
