@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -47,14 +47,6 @@ static_assert(GPURT_RTIP1_1 == uint32_t(Pal::RayTracingIpLevel::RtIp1_1), "GPURT
 static_assert(GPURT_RTIP2_0 == uint32_t(Pal::RayTracingIpLevel::RtIp2_0), "GPURT_HLSL_RTIP mismatch.");
 #endif
 
-// Decimal encoding of rtip levels.
-enum class RayTracingIpLevel : uint32_t
-{
-    _None = 0,
-    RtIp1_1 = 11,
-    RtIp2_0 = 20,
-};
-
 //=====================================================================================================================
 ///@note Enum is a reserved keyword in glslang. To workaround this limitation, define static constants to replace the
 ///      HLSL enums that follow for compatibility.
@@ -78,7 +70,6 @@ namespace PrimitiveType
 #define DUMMY_FLOAT_FUNC  { return 0; }
 #define DUMMY_FLOAT2_FUNC { return float2(0, 0); }
 #define DUMMY_FLOAT3_FUNC { return float3(0, 0, 0); }
-#define DUMMY_GENERIC_FUNC(value) { return value; }
 #else
 #define DUMMY_BOOL_FUNC   ;
 #define DUMMY_VOID_FUNC   ;
@@ -89,7 +80,6 @@ namespace PrimitiveType
 #define DUMMY_FLOAT_FUNC  ;
 #define DUMMY_FLOAT2_FUNC ;
 #define DUMMY_FLOAT3_FUNC ;
-#define DUMMY_GENERIC_FUNC(value) ;
 #endif
 
 #if defined(__cplusplus)
@@ -118,6 +108,8 @@ namespace PrimitiveType
 #define RESERVED                       1
 #define PAIR_TRIANGLE_COMPRESSION      2
 #define AUTO_TRIANGLE_COMPRESSION      3
+
+#define LATE_PAIR_COMP_BATCH_SIZE 8
 
 //=====================================================================================================================
 // Amount of ULPs(Unit in Last Place) added to Box node when using hardware intersection instruction
@@ -203,6 +195,12 @@ static const uint ByteStrideU32         = 12;
 static const uint IndexFormatInvalid    = 0;
 static const uint IndexFormatU32        = 1;
 static const uint IndexFormatU16        = 2;
+
+// To be used by the ray sorting algorithm which uses bins to sort rays:
+// the size of a bin to store rays that are related
+static const uint RegroupingBinSize               = 64;
+// The count of the bins used in the ray sorting algorithm.
+static const uint RegroupingBinCount              = 64;
 
 const static uint TILE_WIDTH = 256;
 const static uint TILE_SIZE  = TILE_WIDTH * TILE_WIDTH;
@@ -618,14 +616,6 @@ static uint PackNodePointer(uint type, uint address)
 }
 
 //=====================================================================================================================
-// Function assumes the type passed in is a valid node type
-//
-static uint PackLeafNodePointer(uint type, uint address, uint numPrimitives)
-{
-    return PackNodePointer(type, address) | ((numPrimitives - 1) << 29);
-}
-
-//=====================================================================================================================
 static uint GetNodeType(uint nodePointer)
 {
     // From the HW raytracing spec:
@@ -1024,24 +1014,6 @@ static uint CalcParentPtrOffset(uint nodePtr)
 }
 
 //=====================================================================================================================
-#define QBVH_COLLAPSE_STACK_ENTRY_SIZE 24
-
-//=====================================================================================================================
-struct QBVHTaskCollapse
-{
-    uint nodeIndex;
-    uint leafIndex;
-    uint numPrimitives;
-    uint lastNodeIndex;
-    uint parentOfCollapseNodeIndex;
-    uint nodeDestIndex;
-};
-
-#ifdef __cplusplus
-static_assert((QBVH_COLLAPSE_STACK_ENTRY_SIZE == sizeof(QBVHTaskCollapse)), "QBVHTaskCollapse structure mismatch");
-#endif
-
-//=====================================================================================================================
 static uint CalcBottomGeometryInfoSize(uint numGeometries)
 {
     return numGeometries * GEOMETRY_INFO_SIZE;
@@ -1246,6 +1218,13 @@ struct Flags
 #define FLAGS_DATA_VALID_OFFSET          0
 #define FLAGS_PREFIX_SUM_OFFSET          4
 
+#define DLB_KEYS_PER_THREAD     4
+#define DLB_KEYS_PER_GROUP      (BUILD_THREADGROUP_SIZE * DLB_KEYS_PER_THREAD)
+
+#define DLB_VALID_SUM           0
+#define DLB_VALID_PREFIX_SUM    1
+#define NUM_DLB_VALID_TYPES     2
+
 //=====================================================================================================================
 
 #define PLOC_PHASE_INIT                     0
@@ -1267,19 +1246,25 @@ struct StatePLOC
 #define STATE_PLOC_NUM_CLUSTERS_ALLOC_OFFSET                12
 
 //=====================================================================================================================
-#define REBRAID_PHASE_INIT                     0
-#define REBRAID_PHASE_CALC_SUM                 1
-#define REBRAID_PHASE_OPEN                     2
-#define REBRAID_PHASE_DONE                     3
+#define REBRAID_PHASE_CALC_SUM                 0
+#define REBRAID_PHASE_OPEN                     1
+#define REBRAID_PHASE_DONE                     2
 
 struct RebraidState
 {
-    float                   sumValue;
+    float                   sumValue[2];
     uint                    mutex;
+    uint                    numLeafIndices;
+    uint                    iterationCount;
 };
 
-#define STATE_REBRAID_SUM_VALUE_OFFSET                                0
-#define STATE_REBRAID_MUTEX_OFFSET                                    STATE_REBRAID_SUM_VALUE_OFFSET + 4
+#define STATE_REBRAID_SUM_VALUE_OFFSET          0
+#define STATE_REBRAID_MUTEX_OFFSET              (STATE_REBRAID_SUM_VALUE_OFFSET + 8)
+#define STATE_REBRAID_NUM_LEAF_INDICES_OFFSET   (STATE_REBRAID_MUTEX_OFFSET + 4)
+#define STATE_REBRAID_ITERATION_COUNT_OFFSET    (STATE_REBRAID_NUM_LEAF_INDICES_OFFSET + 4)
+
+#define REBRAID_KEYS_PER_THREAD                 4
+#define REBRAID_KEYS_PER_GROUP                  (BUILD_THREADGROUP_SIZE * REBRAID_KEYS_PER_THREAD)
 
 //=====================================================================================================================
 #define TS_PHASE_INIT                 0
@@ -1332,6 +1317,7 @@ struct IndexBufferInfo
 #define UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET 0
 #define UPDATE_SCRATCH_TASK_COUNT_OFFSET        4
 #define UPDATE_SCRATCH_ENCODE_TASK_COUNT_OFFSET 8
+#define UPDATE_SCRATCH_ENCODE_TASKS_DONE_OFFSET 12
 
 //=====================================================================================================================
 #ifdef AMD_VULKAN

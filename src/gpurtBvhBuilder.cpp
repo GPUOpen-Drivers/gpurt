@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2019-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2019-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -174,6 +174,14 @@ void BvhBuilder::Dispatch(
 }
 
 // =====================================================================================================================
+// Indirect dispatch using dimensions at the specified address
+void BvhBuilder::DispatchIndirect(
+    gpusize indirectArgumentAddr)
+{
+    m_backend.DispatchIndirect(m_cmdBuffer, indirectArgumentAddr);
+}
+
+// =====================================================================================================================
 // Helper function that check if we need to force fp16 mode off
 // Returns True if need to force the setting off, false otherwise.
 static bool ForceDisableFp16BoxNodes(
@@ -281,7 +289,7 @@ uint32 BvhBuilder::GetLeafNodeSize(
 // =====================================================================================================================
 uint32 BvhBuilder::GetNumInternalNodeCount() const
 {
-    return CalcAccelStructInternalNodeCount(m_buildConfig.numLeafNodes, 4u);
+    return CalcAccelStructInternalNodeCount(m_buildConfig.numLeafNodes, 4, 2);
 }
 
 // =====================================================================================================================
@@ -477,13 +485,46 @@ BvhBuildMode BvhBuilder::OverrideBuildMode(
 }
 
 // =====================================================================================================================
+// Remapped scratch buffer base address
+bool BvhBuilder::AllowRemappingScratchBuffer() const
+{
+    return
+        (m_deviceSettings.enableRemapScratchBuffer == true) &&
+        (IsUpdate() == false) &&
+        (m_deviceSettings.enableBuildAccelStructScratchDumping == false) &&
+        (m_deviceSettings.enableParallelBuild && (m_buildConfig.rebraidType != GpuRt::RebraidType::V1));
+}
+
+// =====================================================================================================================
+// Remapped scratch buffer base address
+gpusize BvhBuilder::RemappedScratchBufferBaseVa() const
+{
+    gpusize addr;
+    if ((AllowRemappingScratchBuffer() == false) || (m_scratchBufferInfo.bvh2PhaseSize > m_resultBufferInfo.nodeSize))
+    {
+        addr = ScratchBufferBaseVa() + m_scratchBufferInfo.baseOffset;
+    }
+    else
+    {
+        addr = ResultBufferBaseVa() + m_resultBufferInfo.baseOffset;
+    }
+    return addr;
+}
+
+// =====================================================================================================================
 // Calculates the actual scratch buffer size
 uint32 BvhBuilder::CalculateScratchBufferSize(
     const ResultBufferInfo& resultBufferInfo,
     const ScratchBufferInfo& scratchBufferInfo)
 {
-    return scratchBufferInfo.baseOffset +
-           Util::Max(scratchBufferInfo.bvh2Size, scratchBufferInfo.qbvhSize);
+    uint32 size = scratchBufferInfo.qbvhPhaseSize;
+
+    if ((AllowRemappingScratchBuffer() == false) || (scratchBufferInfo.bvh2PhaseSize > resultBufferInfo.nodeSize))
+    {
+        size = Util::Max(size, scratchBufferInfo.baseOffset + scratchBufferInfo.bvh2PhaseSize);
+    }
+
+    return size;
 }
 
 // =====================================================================================================================
@@ -574,17 +615,21 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfo(
     // Counter | BVH2 & QBVH | State | BVH2 | Sort
     // Counter | BVH2 & QBVH | State | BVH2 | PLOC/LTD
     // Counter | BVH2 & QBVH | QBVH
+    // Counter | PostProc Kdops
 
     const bool willDumpScratchOffsets = m_deviceSettings.enableBuildAccelStructScratchDumping;
-    // Reserve the beginning of the scratch buffer for the offsets data if dumping.
-    uint32 runningOffset = willDumpScratchOffsets ? sizeof(RayTracingScratchDataOffsets) : 0;
 
-    uint32 baseOffset0 = 0; // [0] end of Counter section
+    // Reserve the beginning of the scratch buffer for the offsets data if dumping.
+    uint32 runningOffset = (willDumpScratchOffsets ? sizeof(RayTracingScratchDataOffsets) : 0);
+
+    // The offsets of bvh2 data are relative to the baseOffset of ScratchBuffer or ResultBuffer.
+    // If remapScratchBuffer is enabled, the baseOffset is baseOffset0; otherwise, the baseOffset is 0.
+    uint32 baseOffset0 = 0; // [0] end of BVH2 & QBVH section
     uint32 baseOffset1 = 0; // [1] end of State section
     uint32 baseOffset2 = 0; // [2] end of BVH2 section
-    uint32 bvh2Size = 0; // bvh2 only data
-    uint32 qbvhSize = 0; // qbvh only data
-    uint32 maxSize = 0;
+
+    uint32 bvh2PhaseMaxSize = 0; // max bvh2 data size from baseOffset
+    uint32 qbvhPhaseMaxSize = 0; // max qbvh data size from 0
 
     // The scratch acceleration structure is built as a BVH2.
     const uint32 aabbCount = m_buildConfig.numLeafNodes;
@@ -742,8 +787,46 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfo(
             numBatches = runningOffset;
             runningOffset += sizeof(uint32);
         }
+
     }
     baseOffset0 = runningOffset;
+
+    // ============ QBVH ============
+    {
+        // The 2 DWORD stack must be 8 byte aligned to atomically store both DWORDs
+        runningOffset = Util::Pow2Align(runningOffset, 8);
+
+        // ..and QBVH global stack
+        qbvhGlobalStack = runningOffset;
+
+        const uint32 maxStackEntry = GetNumInternalNodeCount();
+
+        // Stack pointers require 2 entries per node when fp16 and fp32 box nodes intermix in BLAS
+        const Fp16BoxNodesInBlasMode intNodeTypes = m_buildConfig.fp16BoxNodesInBlasMode;
+        const bool intNodeTypesMix = (intNodeTypes != Fp16BoxNodesInBlasMode::NoNodes) &&
+            (intNodeTypes != Fp16BoxNodesInBlasMode::AllNodes);
+        const bool intNodeTypesMixInBlas = intNodeTypesMix &&
+            (m_buildArgs.inputs.type == AccelStructType::BottomLevel);
+
+        bool stackHasTwoEntries = intNodeTypesMixInBlas;
+
+        const uint32 stackEntrySize = stackHasTwoEntries ? 2u : 1u;
+        runningOffset += maxStackEntry * stackEntrySize * sizeof(uint32);
+
+        qbvhGlobalStackPtrs = runningOffset;
+        runningOffset += sizeof(StackPtrs);
+
+    }
+    qbvhPhaseMaxSize = runningOffset;
+
+    if (AllowRemappingScratchBuffer())
+    {
+        runningOffset = 0;
+    }
+    else if (willDumpScratchOffsets == false)
+    {
+        runningOffset = baseOffset0;
+    }
 
     // ============ State ============
     {
@@ -837,10 +920,11 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfo(
     }
     else if (m_buildConfig.rebraidType == GpuRt::RebraidType::V2)
     {
-        atomicFlagsTS = runningOffset;  // TODO: calculate number of blocks based on KEYS_PER_THREAD
-        runningOffset += aabbCount * RayTracingAtomicFlags;
+        atomicFlagsTS = runningOffset;
+        runningOffset += Util::RoundUpToMultiple(aabbCount, uint32(REBRAID_KEYS_PER_THREAD))
+                         * RayTracingScanDLBFlagsSize;
     }
-    maxSize = Util::Max(maxSize, runningOffset);
+    bvh2PhaseMaxSize = Util::Max(bvh2PhaseMaxSize, runningOffset);
 
     // ============ TD ============
     if (willDumpScratchOffsets == false)
@@ -875,7 +959,7 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfo(
             runningOffset += RayTracingTDNodeSize * (aabbCount - 1);
         }
     }
-    maxSize = Util::Max(maxSize, runningOffset);
+    bvh2PhaseMaxSize = Util::Max(bvh2PhaseMaxSize, runningOffset);
 
     // ============ Sort ============
     if (willDumpScratchOffsets == false)
@@ -956,7 +1040,7 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfo(
             }
         }
     }
-    maxSize = Util::Max(maxSize, runningOffset);
+    bvh2PhaseMaxSize = Util::Max(bvh2PhaseMaxSize, runningOffset);
 
     // ============ PLOC/LTD ============
     if (willDumpScratchOffsets == false)
@@ -983,40 +1067,7 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfo(
             runningOffset += aabbCount * sizeof(uint32);
         }
     }
-    maxSize = Util::Max(maxSize, runningOffset);
-    bvh2Size = maxSize - baseOffset0;
-
-    // ============ QBVH ============
-    if (willDumpScratchOffsets == false)
-    {
-        runningOffset = baseOffset0;
-    }
-    {
-        // The 2 DWORD stack must be 8 byte aligned to atomically store both DWORDs
-        runningOffset = Util::Pow2Align(runningOffset, 8);
-
-        // ..and QBVH global stack
-        qbvhGlobalStack = runningOffset;
-
-        const uint32 maxStackEntry = GetNumInternalNodeCount();
-
-        // Stack pointers require 2 entries per node when fp16 and fp32 box nodes intermix in BLAS
-        const Fp16BoxNodesInBlasMode intNodeTypes = m_buildConfig.fp16BoxNodesInBlasMode;
-        const bool intNodeTypesMix = (intNodeTypes != Fp16BoxNodesInBlasMode::NoNodes) &&
-            (intNodeTypes != Fp16BoxNodesInBlasMode::AllNodes);
-        const bool intNodeTypesMixInBlas = intNodeTypesMix &&
-            (m_buildArgs.inputs.type == AccelStructType::BottomLevel);
-
-        bool stackHasTwoEntries = intNodeTypesMixInBlas;
-
-        const uint32 stackEntrySize = stackHasTwoEntries ? 2u : 1u;
-        runningOffset += maxStackEntry * stackEntrySize * sizeof(uint32);
-
-        qbvhGlobalStackPtrs = runningOffset;
-        runningOffset += sizeof(StackPtrs);
-
-    }
-    qbvhSize = runningOffset - baseOffset0;
+    bvh2PhaseMaxSize = Util::Max(bvh2PhaseMaxSize, runningOffset);
 
     // If the caller requested offsets, return them.
     if (pOffsets != nullptr)
@@ -1070,9 +1121,9 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfo(
     }
 
     ScratchBufferInfo info;
-    info.baseOffset = baseOffset0;
-    info.bvh2Size = bvh2Size;
-    info.qbvhSize = qbvhSize;
+    info.baseOffset = (AllowRemappingScratchBuffer() ? baseOffset0 : 0);
+    info.bvh2PhaseSize = bvh2PhaseMaxSize;
+    info.qbvhPhaseSize = qbvhPhaseMaxSize;
     return info;
 }
 
@@ -1088,6 +1139,8 @@ uint32 BvhBuilder::CalculateUpdateScratchBufferInfo(
     //-------------- Type: All ----------------------------------------------------------------------------------//
     // UpdateStackPointer      uint32
     // UpdateTaskCount         uint32
+    // UpdateEncodeTaskCount   uint32
+    // UpdateEncodeTasksDone   uint32
     // PropagationFlags        (uint32 PropagationFlags[NumPrimitives])
     // UpdateStackElements     uint32[NumPrimitives]
     //-----------------------------------------------------------------------------------------------------------//
@@ -1099,8 +1152,11 @@ uint32 BvhBuilder::CalculateUpdateScratchBufferInfo(
     // Done count
     runningOffset += sizeof(uint32);
 
-    // Task loop counter
+    // Encode task loop counter
     offsets.encodeTaskCounter = runningOffset;
+    runningOffset += sizeof(uint32);
+
+    // Encode tasks done count
     runningOffset += sizeof(uint32);
 
     // Allocate space for the node flags
@@ -1236,12 +1292,15 @@ void BvhBuilder::InitBuildConfig(
                                                              m_deviceSettings.triangleSplittingFactor);
     }
 
-    // Merge sort outperforms Radix sort for small BVH builds
-    // TODO: Enable the heuristic in MultiDispatch builds
-    static constexpr uint32 MergeSortThreshold = 50000u;
-    const bool forceMergeSort                  = m_deviceSettings.enableParallelBuild &&
-                                                 (m_buildConfig.numPrimitives <= MergeSortThreshold);
-    m_buildConfig.enableMergeSort              = forceMergeSort ? true : m_deviceSettings.enableMergeSort;
+    // Merge sort outperforms Radix sort in most cases in the batched builder
+    bool forceMergeSort = m_deviceSettings.enableParallelBuild == false;
+    if (m_deviceSettings.enableParallelBuild)
+    {
+        // Merge sort outperforms Radix sort for small BVH builds in the parallel builder
+        static constexpr uint32 MergeSortThreshold = 50000u;
+        forceMergeSort = m_buildConfig.numPrimitives <= MergeSortThreshold;
+    }
+    m_buildConfig.enableMergeSort = forceMergeSort ? true : m_deviceSettings.enableMergeSort;
 
     m_buildConfig.radixSortScanLevel = 0;
     m_buildConfig.numHistogramElements = GetNumHistogramElements(m_radixSortConfig, m_buildConfig.numLeafNodes);
@@ -1270,7 +1329,7 @@ void BvhBuilder::InitBuildConfig(
     // Todo: fix NoCopySortedNodes for TopDown builder, for now disable it for TopDown
     m_buildConfig.noCopySortedNodes  = m_buildConfig.topDownBuild ? 0 : m_deviceSettings.noCopySortedNodes;
     m_buildConfig.enableFastLBVH     = (m_buildConfig.topDownBuild == false) && (m_deviceSettings.enableFastLBVH == true) &&
-        (m_buildConfig.buildMode == BvhBuildMode::Linear
+        ((m_buildConfig.buildMode == BvhBuildMode::Linear)
         );
 
     m_buildConfig.sceneCalcType = SceneBoundsCalculation::BasedOnGeometry;
@@ -1359,7 +1418,6 @@ AccelStructMetadataHeader BvhBuilder::InitAccelStructMetadataHeader()
 // =====================================================================================================================
 AccelStructHeader BvhBuilder::InitAccelStructHeader()
 {
-    m_resultBufferInfo = CalculateResultBufferInfo(&m_resultOffsets, &m_metadataSizeInBytes);
     const uint32 accelStructSize = m_resultBufferInfo.dataSize;
 
     AccelStructHeader      header = {};
@@ -1854,6 +1912,7 @@ void BvhBuilder::InitAccelerationStructure()
         const uint32 InitialMax = FloatToUintForCompare(-FLT_MAX);
         const uint32 InitialMin = FloatToUintForCompare(FLT_MAX);
 
+        const GpuRt::gpusize sceneBoundVa = RemappedScratchBufferBaseVa() + m_scratchOffsets.sceneBounds;
         if (m_buildConfig.rebraidType == RebraidType::V2)
         {
             uint32 sceneBounds[] =
@@ -1866,7 +1925,7 @@ void BvhBuilder::InitAccelerationStructure()
                 InitialMax, InitialMax, InitialMax,
             };
 
-            WriteImmediateData(ScratchBufferBaseVa() + m_scratchOffsets.sceneBounds, sceneBounds);
+            WriteImmediateData(sceneBoundVa, sceneBounds);
         }
         else
         {
@@ -1877,7 +1936,7 @@ void BvhBuilder::InitAccelerationStructure()
                 InitialMin, InitialMax, // size
             };
 
-            WriteImmediateData(ScratchBufferBaseVa() + m_scratchOffsets.sceneBounds, sceneBounds);
+            WriteImmediateData(sceneBoundVa, sceneBounds);
         }
 
         if ((m_buildConfig.triangleCompressionMode == TriangleCompressionMode::Pair) &&
@@ -2097,11 +2156,6 @@ void BvhBuilder::OutputBuildInfo()
         Util::Strncat(buildShaderInfo, MaxInfoStrLength, infoString);
     }
 
-    if (m_buildSettings.doCollapse > 0)
-    {
-        Util::Strncat(buildShaderInfo, MaxInfoStrLength, ", Collapse");
-    }
-
     if (m_buildConfig.enableMergeSort)
     {
         Util::Strncat(buildShaderInfo, MaxInfoStrLength, ", MergeSort");
@@ -2145,7 +2199,6 @@ void BvhBuilder::InitBuildSettings()
     m_buildSettings.topLevelBuild                = (m_buildArgs.inputs.type == AccelStructType::TopLevel);
     m_buildSettings.buildMode                    = static_cast<uint32>(buildMode);
     m_buildSettings.triangleCompressionMode      = static_cast<uint32>(m_buildConfig.triangleCompressionMode);
-    m_buildSettings.doCollapse                   = m_buildConfig.collapse;
     m_buildSettings.doTriangleSplitting          = m_buildConfig.triangleSplitting;
     m_buildSettings.fp16BoxNodesMode             = (m_buildSettings.topLevelBuild) ?
                                                    static_cast<uint32>(Fp16BoxNodesInBlasMode::NoNodes) :
@@ -2179,9 +2232,10 @@ void BvhBuilder::InitBuildSettings()
         m_buildSettings.tsPriority = 1.0f;
     }
 
-    m_buildSettings.noCopySortedNodes   = m_buildConfig.noCopySortedNodes;
-    m_buildSettings.enableSAHCost       = m_deviceSettings.enableSAHCost;
-    m_buildSettings.radixSortScanLevel  = m_buildConfig.radixSortScanLevel;
+    m_buildSettings.noCopySortedNodes       = m_buildConfig.noCopySortedNodes;
+    m_buildSettings.numRebraidIterations    = Util::Max(1u, m_deviceSettings.numRebraidIterations);
+    m_buildSettings.rebraidQualityHeuristic = m_deviceSettings.rebraidQualityHeuristic;
+    m_buildSettings.radixSortScanLevel      = m_buildConfig.radixSortScanLevel;
 
     m_buildSettings.enableEarlyPairCompression = m_buildConfig.enableEarlyPairCompression;
     m_buildSettings.enableFastLBVH      = m_buildConfig.enableFastLBVH;
@@ -2303,7 +2357,6 @@ void BvhBuilder::BuildRaytracingAccelerationStructure()
         Barrier();
     }
 
-    m_resultBufferInfo = CalculateResultBufferInfo(&m_resultOffsets, &m_metadataSizeInBytes);
     const uint32 resultDataSize = m_resultBufferInfo.dataSize;
 
     if (IsUpdate())
@@ -2332,7 +2385,7 @@ void BvhBuilder::BuildRaytracingAccelerationStructure()
     if (IsUpdate())
     {
         // Reset update stack pointer and update task counters.
-        ZeroDataImmediate(ScratchBufferBaseVa(), 3);
+        ZeroDataImmediate(ScratchBufferBaseVa(), 4);
     }
     else
     {
@@ -2363,6 +2416,12 @@ void BvhBuilder::BuildRaytracingAccelerationStructure()
 
     if (m_buildArgs.postBuildInfoDescCount > 0)
     {
+        if (NeedsPostBuildEmitPass())
+        {
+            // Make sure build is complete before emitting
+            Barrier();
+        }
+
         EmitPostBuildInfo();
     }
 
@@ -2512,6 +2571,7 @@ void BvhBuilder::InitializeBuildConfigs()
 
     m_resultBufferInfo = CalculateResultBufferInfo(&m_resultOffsets, &m_metadataSizeInBytes);
 
+    m_scratchBufferInfo = {};
     if (IsUpdate() == false)
     {
         // Compute the offsets into the scratch buffer for all of our scratch resources.
@@ -2635,18 +2695,10 @@ void BvhBuilder::EmitPostBuildInfo()
         return;
     }
 
-    m_resultBufferInfo = CalculateResultBufferInfo(&m_resultOffsets, &m_metadataSizeInBytes);
     const uint32 resultDataSize = m_resultBufferInfo.dataSize;
 
     const bool isBottomLevel = (m_buildArgs.inputs.type == AccelStructType::BottomLevel);
-    // We only need a barrier if there are more than one compacted size emits in this batch
-    const bool useSeparateEmitPass = (m_emitCompactDstGpuVa != 0) && (m_buildSettings.emitCompactSize == 0);
-    if (useSeparateEmitPass)
-    {
-        // Make sure build is complete before emitting
-        Barrier();
-    }
-
+    const bool useSeparateEmitPass = NeedsPostBuildEmitPass();
     for (uint32 i = 0; i < m_buildArgs.postBuildInfoDescCount; i++)
     {
         const AccelStructPostBuildInfo args = m_clientCb.pfnConvertAccelStructPostBuildInfo(m_buildArgs, i);
@@ -3075,6 +3127,79 @@ void BvhBuilder::CopyASToolsVisualizationMode(
 }
 
 // =====================================================================================================================
+// Returns BuildPhaseFlags with all phases executing for this builder enabled
+BuildPhaseFlags BvhBuilder::EnabledPhases() const
+{
+    BuildPhaseFlags flags{};
+
+    if (NeedsPostBuildEmitPass())
+    {
+        flags |= BuildPhaseFlags::SeparateEmitPostBuildInfoPass;
+    }
+
+    if (IsUpdate())
+    {
+        // Updates do not execute any other build phases
+        return flags;
+    }
+
+    if (m_deviceSettings.enableParallelBuild)
+    {
+        // BuildParallel does not execute any other build phases
+        flags |= BuildPhaseFlags::BuildParallel;
+        return flags;
+    }
+
+    if (AllowRebraid())
+    {
+        flags |= BuildPhaseFlags::Rebraid;
+    }
+
+    if (m_buildConfig.topDownBuild)
+    {
+        flags |= BuildPhaseFlags::BuildBVHTD;
+        flags |= BuildPhaseFlags::BuildQBVH;
+        // Top Down Builds do not execute any other build phases
+        return flags;
+    }
+
+    flags |= BuildPhaseFlags::GenerateMortonCodes;
+
+    if (m_buildConfig.enableMergeSort)
+    {
+        flags |= BuildPhaseFlags::MergeSort;
+    }
+    else
+    {
+        flags |= BuildPhaseFlags::RadixSort;
+    }
+
+    if ((m_buildConfig.buildMode == BvhBuildMode::Linear)
+        )
+    {
+        flags |= BuildPhaseFlags::BuildBVH;
+        flags |= BuildPhaseFlags::RefitBounds;
+    }
+    else if (m_buildSettings.noCopySortedNodes == false)
+    {
+        flags |= BuildPhaseFlags::SortScratchLeaves;
+    }
+
+    if (m_buildConfig.buildMode == BvhBuildMode::PLOC)
+    {
+        flags |= BuildPhaseFlags::BuildBVHPLOC;
+    }
+    if (AllowLatePairCompression())
+    {
+        flags |= BuildPhaseFlags::PairCompression;
+    }
+
+    flags |= BuildPhaseFlags::BuildQBVH;
+
+    return flags;
+}
+
+// =====================================================================================================================
 // Builds an acceleration structure by executing several shaders
 void BvhBuilder::BuildAccelerationStructure()
 {
@@ -3088,6 +3213,7 @@ void BvhBuilder::BuildAccelerationStructure()
     {
         Util::Span<BvhBuilder> builder(this, 1);
         BvhBatcher batcher(m_cmdBuffer, m_backend, m_pDevice, m_deviceProps, m_clientCb, m_deviceSettings);
+        batcher.UpdateEnabledPhaseFlags(EnabledPhases());
         batcher.BuildMultiDispatch(builder);
     }
 }
@@ -3121,12 +3247,13 @@ void BvhBuilder::UpdateAccelerationStructure()
 // Performs a generic barrier that's used to synchronize internal ray tracing shaders
 void BvhBuilder::Barrier()
 {
-    m_pDevice->RaytracingBarrier(m_cmdBuffer);
+    m_pDevice->RaytracingBarrier(m_cmdBuffer, 0);
 }
 
 // =====================================================================================================================
 // Executes merge sort shader to sort the input keys and values
-void BvhBuilder::MergeSort()
+void BvhBuilder::MergeSort(
+    uint32 wavesPerSimd)
 {
     BindPipeline(InternalRayTracingCsType::MergeSort);
 
@@ -3139,10 +3266,39 @@ void BvhBuilder::MergeSort()
 
     RGP_PUSH_MARKER("Merge Sort (numLeafNodes %u)", m_buildConfig.numLeafNodes);
 
-    const uint32 numThreadGroups = Util::RoundUpQuotient(m_buildConfig.numLeafNodes, DefaultThreadGroupSize);
+    const uint32 tgSize          = DefaultThreadGroupSize;
+    const uint32 numThreadGroups = GetNumPersistentThreadGroups(m_buildConfig.numLeafNodes, tgSize, wavesPerSimd);
     Dispatch(numThreadGroups);
 
     RGP_POP_MARKER();
+}
+
+// =====================================================================================================================
+// Returns true when the builder uses the Rebraid phase
+bool BvhBuilder::AllowRebraid() const
+{
+    const bool enableRebraid = (m_buildConfig.topLevelBuild) &&
+                               (m_buildConfig.rebraidType == GpuRt::RebraidType::V2) &&
+                               (m_buildConfig.numPrimitives > 0);
+    return enableRebraid;
+}
+
+// =====================================================================================================================
+// Returns true when the builder uses the Late Pair Compression phase
+bool BvhBuilder::AllowLatePairCompression() const
+{
+    const bool enableLatePairCompression = (m_buildConfig.triangleCompressionMode == TriangleCompressionMode::Pair) &&
+                                           (m_buildConfig.enableEarlyPairCompression == false);
+    return enableLatePairCompression;
+}
+
+// =====================================================================================================================
+// Returns true when the builder will require a separate dispatch for emitting build info
+bool BvhBuilder::NeedsPostBuildEmitPass() const
+{
+    const bool usesSeparateEmitPass = (m_buildArgs.postBuildInfoDescCount == 0) &&
+                                      (m_emitCompactDstGpuVa != 0) && (m_buildSettings.emitCompactSize == 0);
+    return usesSeparateEmitPass;
 }
 
 // =====================================================================================================================
@@ -3150,9 +3306,7 @@ void BvhBuilder::MergeSort()
 // Preconditions: Rebraid can only be called on TLAS builds.
 void BvhBuilder::Rebraid()
 {
-    const bool enableRebraid = (m_buildConfig.topLevelBuild) && (m_buildConfig.rebraidType == GpuRt::RebraidType::V2) &&
-                               (m_buildConfig.numPrimitives > 0);
-    if (enableRebraid == false)
+    if (AllowRebraid() == false)
     {
         return;
     }
@@ -3239,39 +3393,13 @@ void BvhBuilder::SortScratchLeaves()
 }
 
 // =====================================================================================================================
-// Executes the first phase of BVH building based on the respective device settings
-// TODO: Better name and logic
-void BvhBuilder::BuildLbvhOrSortLeaves()
-{
-    if (m_buildConfig.buildMode == BvhBuildMode::Linear)
-    {
-        BuildBVH();
-    }
-    else if (m_buildSettings.noCopySortedNodes == false)
-    {
-        SortScratchLeaves();
-    }
-}
-
-// =====================================================================================================================
-// Executes the second phase of BVH building based on the respective device settings
-// TODO: Better name, this may include LTD as well
-void BvhBuilder::BuildBvhPlocOrRefit()
-{
-    if (m_buildConfig.buildMode == BvhBuildMode::PLOC)
-    {
-        BuildBVHPLOC();
-    }
-    else if (m_buildConfig.buildMode == BvhBuildMode::Linear)
-    {
-        RefitBounds();
-    }
-}
-
-// =====================================================================================================================
 // Executes the build BVH shader
 void BvhBuilder::BuildBVHTD()
 {
+    if (m_buildConfig.topDownBuild == false)
+    {
+        return;
+    }
     const uint32 threadGroupSize = DefaultThreadGroupSize;
     const uint32 numThreadGroups = GetNumPersistentThreadGroups(m_buildConfig.numLeafNodes, threadGroupSize);
 
@@ -3309,9 +3437,11 @@ void BvhBuilder::BuildBVHTD()
 
 // =====================================================================================================================
 // Executes the build BVH PLOC shader
-void BvhBuilder::BuildBVHPLOC()
+void BvhBuilder::BuildBVHPLOC(
+    uint32 wavesPerSimd)
 {
-    const uint32 numThreadGroups = GetNumPersistentThreadGroups(m_buildConfig.numLeafNodes);
+    const uint32 tgSize = DefaultThreadGroupSize;
+    const uint32 numThreadGroups = GetNumPersistentThreadGroups(m_buildConfig.numLeafNodes, tgSize, wavesPerSimd);
 
     uint32 entryOffset = 0;
 
@@ -3693,9 +3823,7 @@ void BvhBuilder::RefitBounds()
 // Executes the pair compression shader
 void BvhBuilder::PairCompression()
 {
-    const bool enablePairCompression = (m_buildConfig.triangleCompressionMode == TriangleCompressionMode::Pair) &&
-                                       (m_buildConfig.enableEarlyPairCompression == false);
-    if (enablePairCompression == false)
+    if (AllowLatePairCompression() == false)
     {
         return;
     }
@@ -4230,7 +4358,9 @@ void BvhBuilder::ScanExclusiveAddDLBInit()
 
 // =====================================================================================================================
 // Executes the DLB exclusive scan pass
-void BvhBuilder::ScanExclusiveAddDLBScan()
+void BvhBuilder::ScanExclusiveAddDLBScan(
+    uint32 passIdx
+)
 {
     const uint32 numElems = m_buildConfig.numHistogramElements;
 
@@ -4245,6 +4375,7 @@ void BvhBuilder::ScanExclusiveAddDLBScan()
     ScanExclusiveAddDLB::Constants shaderConstants =
     {
         numElems,
+        passIdx,
     };
 
     // Set number of elements
@@ -4308,7 +4439,10 @@ uint32 BvhBuilder::WriteDestBuffers(
     // Set header buffer
     entryOffset = WriteBufferVa(HeaderBufferBaseVa(), entryOffset);
 
-    // Set scratch buffer
+    // Set remapped scratch buffer
+    entryOffset = WriteBufferVa(RemappedScratchBufferBaseVa(), entryOffset);
+
+    // Set global scratch buffer
     entryOffset = WriteBufferVa(ScratchBufferBaseVa(), entryOffset);
 
     return entryOffset;
@@ -4321,7 +4455,10 @@ uint32 BvhBuilder::WriteEncodeBuffers(
     // Set output buffer
     entryOffset = WriteBufferVa(HeaderBufferBaseVa(), entryOffset);
 
-    // Set scratch buffer
+    // Set remapped scratch buffer
+    entryOffset = WriteBufferVa(RemappedScratchBufferBaseVa(), entryOffset);
+
+    // Set global scratch buffer
     entryOffset = WriteBufferVa(ScratchBufferBaseVa(), entryOffset);
 
     // Set source buffer

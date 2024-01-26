@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -29,6 +29,7 @@
 
 namespace GpuRt
 {
+enum class BuildPhaseFlags : uint32;
 
 namespace EncodeNodes
 {
@@ -103,9 +104,13 @@ public:
     struct ScratchBufferInfo
     {
         uint32 baseOffset;
-        uint32 bvh2Size;
-        uint32 qbvhSize;
+        uint32 bvh2PhaseSize;
+        uint32 qbvhPhaseSize;
     };
+
+    bool AllowRemappingScratchBuffer() const;
+
+    gpusize RemappedScratchBufferBaseVa() const;
 
     uint32 CalculateScratchBufferSize(
         const ResultBufferInfo& resultBufferInfo,
@@ -188,6 +193,8 @@ public:
     void CopyASToolsVisualizationMode(
         const AccelStructCopyInfo& copyArgs);
 
+    BuildPhaseFlags EnabledPhases() const;
+
 private:
 
     // Configs that change within build calls, private to the bvh builder.
@@ -214,7 +221,6 @@ private:
         SceneBoundsCalculation          sceneCalcType;
         bool                            topLevelBuild;
         bool                            triangleSplitting;            // Triangle Splitting Enabled
-        bool                            collapse;                     // Collapse Enabled
         bool                            allowTopDownBuild;            // Is accel structure top level
                                                                       // and has top down enabled or rebraid
         // Top down build in TLAS (topDownAllowed && prim count is not larger than max count)
@@ -338,12 +344,9 @@ private:
 
     void SortScratchLeaves();
 
-    void BuildLbvhOrSortLeaves();
-    void BuildBvhPlocOrRefit();
-
     void BuildBVHTD();
 
-    void BuildBVHPLOC();
+    void BuildBVHPLOC(uint32 wavesPerSimd);
 
     void UpdateQBVH();
 
@@ -373,7 +376,7 @@ private:
         uint32 bitShiftSize,
         uint32 numElems);
 
-    void MergeSort();
+    void MergeSort(uint32 wavesPerSimd);
     void SortRadixInt32();
 
     void ScanExclusiveAdd(
@@ -404,11 +407,19 @@ private:
         uint32 numElems);
 
     void ScanExclusiveAddDLBInit();
-    void ScanExclusiveAddDLBScan();
+    void ScanExclusiveAddDLBScan(uint32 passIdx);
+
+    // Optional phase checks
+    bool AllowRebraid() const;
+    bool AllowLatePairCompression() const;
+    bool NeedsPostBuildEmitPass() const;
 
     // Helper functions
     void Dispatch(
         uint32 numGroups);
+
+    void DispatchIndirect(
+        gpusize indirectArgumentAddr);
 
     void BindPipeline(InternalRayTracingCsType type);
 

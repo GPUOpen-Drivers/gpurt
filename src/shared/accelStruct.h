@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -30,13 +30,14 @@
 // =====================================================================================================================
 // Calculate acceleration structure internal node count for resulting BVH
 inline uint32_t CalcAccelStructInternalNodeCount(
-    uint32_t primitiveCount,    // Primitive node count (instances or triangle/aabb geometry)
-    uint32_t maxChildCount)     // Maximum child nodes per internal node
+    uint32_t primitiveCount,                // Primitive node count (instances or triangle/aabb geometry)
+    uint32_t maxChildCount,                 // Maximum child nodes per internal node
+    uint32_t minPrimsPerLastInternalNode)   // Minimum number of primitives under a last level internal node
 {
     const uint32_t n = primitiveCount;
     const uint32_t m = maxChildCount;
 
-    return ((n * m) / (2 * (m - 1u))) + 1u;
+    return ((n * m) / (minPrimsPerLastInternalNode * (m - 1u))) + 1u;
 }
 
 //=====================================================================================================================

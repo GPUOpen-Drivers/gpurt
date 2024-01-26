@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2021-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2021-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -32,26 +32,34 @@ namespace GpuRt
     using uint32 = uint32_t;
 };
 
-// Major interface version. This number must be incremented when GPURT's interface to the driver changes in an
-// incompatible way. An incompatible interface change requires updates in the driver to build or function correctly.
+// Major interface version.
+//
+// This number must be incremented when GPURT's interface to the driver changes in an incompatible way. An incompatible
+// interface change requires updates in the client driver to build or function correctly. GPURT assumes client drivers
+// zero initialize structures. New fields do not require major version changes if zero is a reasonable default.
+//
 // GPURT maintains source level compatibility with old interface versions for a period of time. Client drivers must
 // update their definition of GPURT_CLIENT_INTERFACE_MAJOR_VERSION to indicate that they have made the required changes
 // to support a new version. When the client version is updated, the old interface will be compiled out and only the
 // new one will remain.
-#define GPURT_INTERFACE_MAJOR_VERSION 42
+#define GPURT_INTERFACE_MAJOR_VERSION 45
 
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 44
 // Minor interface version. This number is incrememnted when a compatible interface change is made. Compatible changes
 // do not require client driver changes to maintain existing functionality. GPURT assumes all structures are zero
 // initialized by the client, therefore new fields may be added in minor versions as long as zero is an acceptable
 // default value.
 #define GPURT_INTERFACE_MINOR_VERSION 0
+#endif
 
 // Minimum major interface version. This is the minimum interface version GPURT supports in order to support backward
 // compatibility. When it is equal to GPURT_INTERFACE_MAJOR_VERSION, only the latest interface version is supported.
 #define GPURT_MINIMUM_INTERFACE_MAJOR_VERSION 33
 
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 44
 // Current GPURT interface version packed into a 32-bit unsigned integer
 #define GPURT_INTERFACE_VERSION ((GPURT_INTERFACE_MAJOR_VERSION << 16) | GPURT_INTERFACE_MINOR_VERSION)
+#endif
 
 // Static asserts to ensure clients have defined GPURT_CLIENT_INTERFACE_MAJOR_VERSION and that it falls in the supported
 // range.

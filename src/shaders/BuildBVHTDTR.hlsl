@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -56,10 +56,11 @@ struct TDArgs
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
                 "CBV(b255),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u6, visibility=SHADER_VISIBILITY_ALL)"
 
 #include "../shared/rayTracingDefs.h"
 
@@ -73,11 +74,12 @@ struct RootConstants
 [[vk::binding(0, 0)]]                  RWByteAddressBuffer DstBuffer          : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata        : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer      : register(u2);
-[[vk::binding(3, 0)]]                  RWByteAddressBuffer InstanceDescBuffer : register(u3);
+[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer ScratchGlobal      : register(u3);
+[[vk::binding(4, 0)]]                  RWByteAddressBuffer InstanceDescBuffer : register(u4);
 
 // unused buffer
-[[vk::binding(4, 0)]] RWByteAddressBuffer                  SrcBuffer          : register(u4);
-[[vk::binding(5, 0)]] RWByteAddressBuffer                  EmitBuffer         : register(u5);
+[[vk::binding(5, 0)]] RWByteAddressBuffer                  SrcBuffer          : register(u5);
+[[vk::binding(6, 0)]] RWByteAddressBuffer                  EmitBuffer         : register(u6);
 
 #include "IntersectCommon.hlsl"
 #include "BuildCommon.hlsl"
@@ -232,7 +234,7 @@ uint AllocScratchNode(uint parent, BoundingBox box, TDArgs args)
     internalNode.type = GetInternalNodeType();
 
     // Initialize box node flags to 1. These will be updated with the leaf node flags as the tree is constructed.
-    internalNode.flags_and_instanceMask = 0xffffffff;
+    internalNode.packedFlags = 0xffffffff;
     internalNode.splitBox_or_nodePointer = 0;
     internalNode.numPrimitivesAndDoCollapse = 0;
 
@@ -348,7 +350,7 @@ void UpdateScratchNodeFlags(uint scratchNodeIndex, uint leafScratchNodeIndex, TD
             uint,
             args.BvhLeafNodeDataScratchOffset,
             leafScratchNodeIndex,
-            SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET);
+            SCRATCH_NODE_FLAGS_OFFSET);
 
     UpdateParentScratchNodeFlags(args.BvhNodeDataScratchOffset,
                                  scratchNodeIndex,
@@ -803,7 +805,7 @@ void BuildRefList(uint globalIndex, TDArgs args)
 
             // calc centroid
             // in TDTR, no TriangleSplitting or TriangleCompression
-            const BoundingBox bounds = FetchScratchNodeBoundingBox(leafNode, false, false, false, 0, 0);
+            const BoundingBox bounds = GetScratchNodeBoundingBox(leafNode, false, false, 0, false, 0);
 
             ref.box = bounds;
 
@@ -1510,7 +1512,7 @@ void BuildBVHTDImpl(
                     BoundingBox rightBox;
 
                     // alloc new ScratchNodes and TDNodes
-                    if (bestSplit == INVALID_IDX) // todo: use collapse in this case
+                    if (bestSplit == INVALID_IDX)
                     {
 #if USE_LDS
                         const uint tempNumRefs = BuildSharedMem[localId].numPrimLeft[0] + BuildSharedMem[localId].numPrimRight[0];

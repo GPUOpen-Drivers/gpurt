@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2019-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2019-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -84,7 +84,7 @@ enum class StaticPipelineFlag : uint32
 {
     SkipTriangles                  = 0x100,        // Always skip triangle node intersections
     SkipProceduralPrims            = 0x200,        // Always skip procedural node intersections
-    BvhCollapse                    = (1u << 31),   // Enable BVH collapse
+    Unused                         = (1u << 31),   // Available for use
     UseTreeRebraid                 = (1u << 30),   // Use Tree Rebraid for TraceRays
     EnableAccelStructTracking      = (1u << 29),   // Enable logging of TLAS addresses using AccelStructTracker
     EnableTraversalCounter         = (1u << 28),   // Enable Traversal counters
@@ -287,7 +287,6 @@ enum class InternalRayTracingCsType : uint32
     CopyBufferRaw,
     InitBuildQBVH,
     BuildQBVH,
-    BuildQBVHCollapse,
     BitHistogram,
     ScatterKeysAndValues,
     ScanExclusiveInt4,
@@ -302,7 +301,6 @@ enum class InternalRayTracingCsType : uint32
     CopyAS,
     CompactAS,
     DecodeAS,
-    DecodeCollapse,
     SerializeAS,
     DeserializeAS,
     InitExecuteIndirect,
@@ -495,7 +493,9 @@ struct GeometryAabbs
     gpusize         aabbByteStride; // Stride in bytes between consecutive bounding boxes
 };
 
-// Bottom-level geometry node information (analogous to D3D12DDI_RAYTRACING_GEOMETRY_DESC)
+// Bottom-level geometry node information (analogous to D3D12DDI_RAYTRACING_GEOMETRY_DESC).
+// This API-independent structure does not match D3D12 or Vulkan. The client must convert the API version to the
+// GPURT version through ClientConvertAccelStructBuildGeometry().
 struct Geometry
 {
     GeometryType  type;                 // Geometry type
@@ -701,6 +701,9 @@ struct DeviceSettings
     RebraidType                 rebraidType;                          // Tree rebraid in TLAS
     uint32                      rebraidFactor;                        // Rebraid factor
     float                       rebraidLengthPercentage;              // Rebraid length percentage
+    uint32                      numRebraidIterations;
+    uint32                      rebraidQualityHeuristic;
+
     uint32                      plocRadius;                           // PLOC Radius
     uint32                      maxTopDownBuildInstances;             // Max instances allowed for top down build
     uint32                      parallelBuildWavesPerSimd;            // Waves per SIMD to launch for parallel build
@@ -730,17 +733,23 @@ struct DeviceSettings
         uint32 enableInsertBarriersInBuildAS : 1;
         uint32 enablePairCompressionCostCheck : 1;
         uint32 enableMergeSort : 1;
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 45
         uint32 bvhCollapse : 1;                             // Collapse individual geometry leaf nodes into multi-geometry leaves
+#endif
         uint32 topDownBuild : 1;                            // Top down build in TLAS
         uint32 allowFp16BoxNodesInUpdatableBvh : 1;         // Allow box node in updatable bvh.
         uint32 fp16BoxNodesRequireCompaction : 1;           // Compaction is set or not.
         uint32 noCopySortedNodes : 1;                       // Disable CopyUnsortedScratchLeafNode()
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 43
         uint32 enableSAHCost : 1;                           // Use more accurate SAH cost
+#endif
         uint32 enableMergedEncodeUpdate : 1;                // Combine encode and update in one dispatch
         uint32 enableMergedEncodeBuild : 1;                 // Combine encode and build in one dispatch
         uint32 enableEarlyPairCompression : 1;              // Enable pair triangle compression in early (Encode) phase
 
         uint32 enableFastLBVH : 1;                          // Enable the Fast LBVH path
+
+        uint32 enableRemapScratchBuffer : 1;                // Enable remapping bvh2 data from ScratchBuffer to ResultBuffer
     };
 
     uint64                      accelerationStructureUUID;  // Acceleration Structure UUID
@@ -1392,6 +1401,15 @@ public:
     virtual Pal::Result QueryRayTracingEntryFunctionTable(
         const Pal::RayTracingIpLevel   rayTracingIpLevel,
         EntryFunctionTable* const      pEntryFunctionTable) = 0;
+
+    // Determines required memory allocation size for use by ray continuation stacks
+    // and other memory needed for ray sorting
+    //
+    // @param cpsStackSize  (in) Maximum CPS stack size per thread, in bytes.
+    // @param numThreads    (in) Number of Threads.
+    //
+    // @return the required global memory allocation size in bytes
+    virtual gpusize QueryCpsScratchMemorySize(uint32 cpsStackSize, uint32 numThreads) = 0;
 
     // Returns the static pipeline mask shader constant values for a particular pipeline given a compatible
     // AS memory layout parameters.

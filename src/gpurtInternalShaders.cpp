@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2019-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2019-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -77,7 +77,6 @@ const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsTyp
     PIPELINE_BUILD_INFO(CopyBufferRaw),
     PIPELINE_BUILD_INFO(InitBuildQBVH),
     PIPELINE_BUILD_INFO(BuildQBVH),
-    PIPELINE_BUILD_INFO(BuildQBVH),
     PIPELINE_BUILD_INFO(BitHistogram),
     PIPELINE_BUILD_INFO(ScatterKeysAndValues),
     PIPELINE_BUILD_INFO(ScanExclusiveInt4),
@@ -92,7 +91,6 @@ const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsTyp
     PIPELINE_BUILD_INFO(CopyAS),
     PIPELINE_BUILD_INFO(CompactAS),
     PIPELINE_BUILD_INFO(DecodeAS),
-    PIPELINE_BUILD_INFO(DecodeAS),
     PIPELINE_BUILD_INFO(SerializeAS),
     PIPELINE_BUILD_INFO(DeserializeAS),
     PIPELINE_BUILD_INFO(InitExecuteIndirect),
@@ -101,6 +99,7 @@ const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsTyp
     PIPELINE_BUILD_INFO(Update),
     PIPELINE_BUILD_INFO(InitAccelerationStructure),
     PIPELINE_BUILD_INFO(InitUpdateAccelerationStructure),
+
 };
 
 #undef PIPELINE_BUILD_INFO

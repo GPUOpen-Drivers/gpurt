@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -31,7 +31,8 @@ void EncodeInstancesBuild(
     uint         primNodePointerOffset,
     uint         destScratchNodeOffset,
     uint64_t     baseAddrAccelStructHeader,
-    uint         numActivePrims)
+    uint         numActivePrims,
+    bool         allowUpdate)
 {
     // If the BLAS address is NULL, the instance is inactive. Inactive instances cannot be activated during updates
     // so we always exclude them from the build.
@@ -51,8 +52,6 @@ void EncodeInstancesBuild(
         // calc transformed AABB
         BoundingBox boundingBox;
 
-        float cost = 0;
-
         if (numActivePrims != 0)
         {
             // Fetch root bounds from BLAS header
@@ -60,7 +59,6 @@ void EncodeInstancesBuild(
 
             boundingBox = GenerateInstanceBoundingBox(desc.Transform, rootBbox);
 
-            cost = CalculateSAHCost(baseAddrAccelStructHeader, rootBbox, boundingBox);
         }
         else
         {
@@ -68,46 +66,49 @@ void EncodeInstancesBuild(
             boundingBox = InvalidBoundingBox;
         }
 
-        const uint packedFlags = FetchHeaderField(baseAddrAccelStructHeader, ACCEL_STRUCT_HEADER_PACKED_FLAGS_OFFSET);
-        const uint boxNodeFlags = CalcTopLevelBoxNodeFlags(geometryType,
-                                                           desc.InstanceContributionToHitGroupIndex_and_Flags >> 24,
-                                                           ExtractScratchNodeFlags(packedFlags));
-
-        // Propagate the instance mask from the BLAS by fetching it from the header.
-        // Note, the header contains the exlusion mask so we take its bitwise complement to get the inclusion mask.
-        // Set the instance inclusion mask to 0 for degenerate instances so that they are culled out.
-        const uint instanceMask = (boundingBox.min.x > boundingBox.max.x) ?
-                                  0 :
-                                  ((desc.InstanceID_and_Mask >> 24) & ExtractScratchNodeInstanceMask(packedFlags));
-
-        // Write scratch node
-        WriteScratchInstanceNode(destScratchNodeOffset,
-                                 index,
-                                 boundingBox,
-                                 boxNodeFlags,
-                                 desc.accelStructureAddressLo,
-                                 desc.accelStructureAddressHiAndFlags,
-                                 instanceMask,
-                                 numActivePrims,
-                                 cost);
-
-        if (numActivePrims != 0)
+        if ((allowUpdate == false) && (IsCorruptBox(boundingBox) || IsInvalidBoundingBox(boundingBox)))
         {
-            // Update scene bounding box
-            if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
+            // Deactivate instance permanently by setting bbox_min_or_v0.x to NaN
+            WriteScratchNodeDataAtOffset(destScratchNodeOffset, 0, asuint(NaN));
+        }
+        else
+        {
+            const uint packedFlags = FetchHeaderField(baseAddrAccelStructHeader, ACCEL_STRUCT_HEADER_PACKED_FLAGS_OFFSET);
+            const uint boxNodeFlags = CalcTopLevelBoxNodeFlags(geometryType,
+                                                               desc.InstanceContributionToHitGroupIndex_and_Flags >> 24,
+                                                               ExtractScratchNodeBoxFlags(packedFlags));
+
+            // Propagate the instance mask from the BLAS by fetching it from the header.
+            // Note, the header contains the exlusion mask so we take its bitwise complement to get the inclusion mask.
+            // Set the instance inclusion mask to 0 for degenerate instances so that they are culled out.
+            const uint instanceMask = (boundingBox.min.x > boundingBox.max.x) ?
+                                      0 :
+                                      ((desc.InstanceID_and_Mask >> 24) & ExtractScratchNodeInstanceMask(packedFlags));
+
+            // Write scratch node
+            WriteScratchInstanceNode(destScratchNodeOffset,
+                                     index,
+                                     boundingBox,
+                                     boxNodeFlags,
+                                     desc.accelStructureAddressLo,
+                                     desc.accelStructureAddressHiAndFlags,
+                                     instanceMask,
+                                     numActivePrims);
+
+            if (numActivePrims != 0)
             {
                 if (IsRebraidEnabled() == false)
                 {
-                    UpdateSceneBoundsWithSize(ShaderConstants.sceneBoundsByteOffset, boundingBox);
+                    // Update scene bounding box
+                    if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
+                    {
+                        UpdateSceneBoundsWithSize(ShaderConstants.sceneBoundsByteOffset, boundingBox);
+                    }
+                    else
+                    {
+                        UpdateSceneBounds(ShaderConstants.sceneBoundsByteOffset, boundingBox);
+                    }
                 }
-                else
-                {
-                    UpdateSceneBounds(ShaderConstants.sceneBoundsByteOffset, boundingBox);
-                }
-            }
-            else
-            {
-                UpdateSceneBounds(ShaderConstants.sceneBoundsByteOffset, boundingBox);
             }
         }
 
@@ -118,7 +119,7 @@ void EncodeInstancesBuild(
     else
     {
         // Deactivate instance permanently by setting bbox_min_or_v0.x to NaN
-        ScratchBuffer.Store(destScratchNodeOffset, asuint(NaN));
+        WriteScratchNodeDataAtOffset(destScratchNodeOffset, 0, asuint(NaN));
 
         DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
     }

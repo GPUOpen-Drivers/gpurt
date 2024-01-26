@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -64,7 +64,7 @@ void EncodeInstancesUpdate(
         const uint packedFlags = FetchHeaderField(baseAddrAccelStructHeader, ACCEL_STRUCT_HEADER_PACKED_FLAGS_OFFSET);
         const uint boxNodeFlags = CalcTopLevelBoxNodeFlags(geometryType,
                                                            desc.InstanceContributionToHitGroupIndex_and_Flags >> 24,
-                                                           ExtractScratchNodeFlags(packedFlags));
+                                                           ExtractScratchNodeBoxFlags(packedFlags));
 
         // Propagate the instance mask from the BLAS by fetching it from the header.
         // Note, the header contains the exlusion mask so we take its bitwise complement to get the inclusion mask.

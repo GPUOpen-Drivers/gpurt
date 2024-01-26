@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -303,7 +303,7 @@ static bool RayQueryProceedImpl2_0(
         // Backup last traversed node pointer
         rayQuery.prevNodePtr = rayQuery.currNodePtr;
 
-        uint nodePointer = ExtractNodePointer(rayQuery.currNodePtr);
+        uint nodePointer = rayQuery.currNodePtr;
 
         // pre-calculate node address
         const GpuVirtualAddress nodeAddr64 = bvhAddress + ExtractNodePointerOffset(nodePointer);
@@ -411,23 +411,8 @@ static bool RayQueryProceedImpl2_0(
 #endif
             }
 
-            if (IsBvhCollapse())
-            {
-                if (ExtractPrimitiveCount(rayQuery.prevNodePtr) != 0)
-                {
-                    const uint nextNodePtr = IncrementNodePointer(rayQuery.prevNodePtr);
-
-                    // Manually update the next node pointer, and then set up so that it will pass through the
-                    // ds_store_stack instruction without modifying the stack (assumes lastNodePtr == INVALID_NODE).
-                    intersectionResult = uint4(nextNodePtr, INVALID_NODE, INVALID_NODE, INVALID_NODE);
-                }
-                else
-                {
-                    lastNodePtr = TERMINAL_NODE;
-                }
-            }
-            else if ((AmdTraceRayGetTriangleCompressionMode() == PAIR_TRIANGLE_COMPRESSION) ||
-                     (AmdTraceRayGetTriangleCompressionMode() == AUTO_TRIANGLE_COMPRESSION))
+            if ((AmdTraceRayGetTriangleCompressionMode() == PAIR_TRIANGLE_COMPRESSION) ||
+                (AmdTraceRayGetTriangleCompressionMode() == AUTO_TRIANGLE_COMPRESSION))
             {
                 // prevNodePtr is guaranteed to be NODE_TYPE_TRIANGLE_0 or NODE_TYPE_TRIANGLE_1
                 if (rayQuery.prevNodePtr & 0x1)

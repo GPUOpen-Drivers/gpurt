@@ -1,7 +1,7 @@
 ##
  #######################################################################################################################
  #
- #  Copyright (c) 2022-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ #  Copyright (c) 2022-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  #
  #  Permission is hereby granted, free of charge, to any person obtaining a copy
  #  of this software and associated documentation files (the "Software"), to deal
@@ -35,6 +35,16 @@ find_package(Python3
 
 get_target_property(COMPILE_DEFINITIONS gpurt COMPILE_DEFINITIONS)
 set(gpurtDefines "${COMPILE_DEFINITIONS}")
+set(gpurtIncludeDirectories "")
+
+if (TARGET llpc_version)
+    # Propagate include directories and defines from llpc_version into the HLSL code
+    get_target_property(LLPC_VERSION_INCLUDE_DIRS llpc_version INTERFACE_INCLUDE_DIRECTORIES)
+    get_target_property(LLPC_VERSION_DEFS llpc_version INTERFACE_COMPILE_DEFINITIONS)
+    set(gpurtDefines "${gpurtDefines},${LLPC_VERSION_DEFS}")
+    set(gpurtIncludeDirectories "${LLPC_VERSION_INCLUDE_DIRS}")
+    set(gpurtSharedDependencies llpc_version)
+endif()
 
 set(gpurtToolsDir "${GPU_RAY_TRACING_SOURCE_DIR}/tools")
 
@@ -82,6 +92,7 @@ else()
 endif()
 
 set(gpurtSharedDependencies
+    ${gpurtSharedDependencies}
     ${gpurtShaderSource}
     ${gpurtCompileScript}
 )
@@ -125,6 +136,7 @@ if(GPURT_CLIENT_API STREQUAL "VULKAN")
             ${SPIRV_COMPILER_ARGUMENT}
             ${SPIRV_REMAP_ARGUMENT}
             --defines "\"${gpurtDefines}\""
+            --includePaths "\"${gpurtIncludeDirectories}\""
             --whiteListPath "${gpurtStripWhitelist}"
             "${gpurtShadersSourceDir}"
             --strict

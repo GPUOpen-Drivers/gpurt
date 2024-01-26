@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -27,14 +27,14 @@ ScratchNode FetchScratchNode(
     uint nodeIndex)
 {
     const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-    return ScratchBuffer.Load<ScratchNode>(nodeOffset);
+    return ScratchGlobal.Load<ScratchNode>(nodeOffset);
 }
 
 //=====================================================================================================================
 ScratchNode FetchScratchNodeAtOffset(
     uint nodeOffset)
 {
-    return ScratchBuffer.Load<ScratchNode>(nodeOffset);
+    return ScratchGlobal.Load<ScratchNode>(nodeOffset);
 }
 
 //=====================================================================================================================
@@ -44,7 +44,7 @@ void WriteScratchNode(
     ScratchNode node)
 {
     const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
-    ScratchBuffer.Store<ScratchNode>(nodeOffset, node);
+    ScratchGlobal.Store<ScratchNode>(nodeOffset, node);
 }
 
 //=====================================================================================================================
@@ -52,12 +52,12 @@ void WriteScratchNodeAtOffset(
     uint nodeOffset,
     ScratchNode node)
 {
-    ScratchBuffer.Store<ScratchNode>(nodeOffset, node);
+    ScratchGlobal.Store<ScratchNode>(nodeOffset, node);
 }
 
 //=====================================================================================================================
 #define FETCH_SCRATCH_NODE_DATA(T, baseScratchNodesOffset, nodeIndex, dataOffset) \
-    (ScratchBuffer.Load<T>(CalcScratchNodeOffset((baseScratchNodesOffset), (nodeIndex)) + (dataOffset)))
+    (ScratchGlobal.Load<T>(CalcScratchNodeOffset((baseScratchNodesOffset), (nodeIndex)) + (dataOffset)))
 
 //=====================================================================================================================
 #define WRITE_SCRATCH_NODE_DATA_DEF(T) \
@@ -68,7 +68,7 @@ void WriteScratchNodeData( \
     T data) \
 { \
     const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex); \
-    ScratchBuffer.Store<T>(nodeOffset + dataOffset, data); \
+    ScratchGlobal.Store<T>(nodeOffset + dataOffset, data); \
 }
 
 //=====================================================================================================================
@@ -78,7 +78,7 @@ void WriteScratchNodeDataAtOffset( \
     uint dataOffset, \
     T data) \
 { \
-    ScratchBuffer.Store<T>(nodeOffset + dataOffset, data); \
+    ScratchGlobal.Store<T>(nodeOffset + dataOffset, data); \
 }
 
 //=====================================================================================================================
@@ -104,7 +104,7 @@ void UpdateParentScratchNodeFlags(
 {
     const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
 
-    ScratchBuffer.InterlockedAnd(nodeOffset + SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, flagsAndInstanceMask);
+    ScratchGlobal.InterlockedAnd(nodeOffset + SCRATCH_NODE_FLAGS_OFFSET, flagsAndInstanceMask);
 }
 
 //=====================================================================================================================
@@ -117,58 +117,52 @@ uint AllocateScratchNodePointer(
 
     // check if the pre allocated instance is used; if not, use it, if used, alloc a new instance
     uint original;
-    ScratchBuffer.InterlockedCompareExchange(nodeOffset + SCRATCH_NODE_NODE_POINTER_OFFSET, 0, nodePointer, original);
+    ScratchGlobal.InterlockedCompareExchange(nodeOffset + SCRATCH_NODE_NODE_POINTER_OFFSET, 0, nodePointer, original);
     return original;
-}
-
-//=====================================================================================================================
-void WriteGridPosAtIndex(uint offset, uint index, uint4 gridPos)
-{
-    ScratchBuffer.Store<uint4>(offset + index * sizeof(uint4), gridPos);
-}
-
-//=====================================================================================================================
-uint4 FetchGridPosAtIndex(uint offset, uint index)
-{
-    return ScratchBuffer.Load<uint4>(offset + index * sizeof(uint4));
 }
 
 //=====================================================================================================================
 void WriteSplitBoxAtIndex(uint offset, uint index, BoundingBox box)
 {
-    ScratchBuffer.Store<BoundingBox>(offset + index * sizeof(BoundingBox), box);
+    ScratchGlobal.Store<BoundingBox>(offset + index * sizeof(BoundingBox), box);
 }
 
 //=====================================================================================================================
 BoundingBox FetchSplitBoxAtIndex(uint offset, uint index)
 {
-    return ScratchBuffer.Load<BoundingBox>(offset + index * sizeof(BoundingBox));
+    return ScratchGlobal.Load<BoundingBox>(offset + index * sizeof(BoundingBox));
 }
 
 //=====================================================================================================================
 void WriteRootNodeIndex(uint offset, uint index)
 {
-    ScratchBuffer.Store(offset, index);
+    ScratchGlobal.Store(offset, index);
 }
 
 //=====================================================================================================================
 uint FetchRootNodeIndex(uint enableFastLBVH, uint offset)
 {
-    return enableFastLBVH ? ScratchBuffer.Load(offset) : 0;
+    return enableFastLBVH ? ScratchGlobal.Load(offset) : 0;
+}
+
+//=====================================================================================================================
+void IncreaseDebugCounters(uint countersOffset, uint counterStageOffset)
+{
+    ScratchGlobal.InterlockedAdd(countersOffset + counterStageOffset, 1);
 }
 
 //=====================================================================================================================
 uint AllocateBatchIndex(uint numBatchesOffset)
 {
     uint numBatches;
-    ScratchBuffer.InterlockedAdd(numBatchesOffset, 1, numBatches);
+    ScratchGlobal.InterlockedAdd(numBatchesOffset, 1, numBatches);
     return numBatches;
 }
 
 //=====================================================================================================================
 uint FetchNumBatches(uint numBatchesOffset)
 {
-    return ScratchBuffer.Load(numBatchesOffset);
+    return ScratchGlobal.Load(numBatchesOffset);
 }
 
 //=====================================================================================================================
@@ -176,12 +170,6 @@ void ClearNumBatches(uint numBatchesOffset)
 {
     if (numBatchesOffset != INVALID_IDX)
     {
-        ScratchBuffer.Store(numBatchesOffset, 0);
+        ScratchGlobal.Store(numBatchesOffset, 0);
     }
-}
-
-//=====================================================================================================================
-void IncreaseDebugCounters(uint countersOffset, uint counterStageOffset)
-{
-    ScratchBuffer.InterlockedAdd(countersOffset + counterStageOffset, 1);
 }

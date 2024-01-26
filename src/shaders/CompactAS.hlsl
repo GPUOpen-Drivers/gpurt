@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -86,17 +86,9 @@ void UpdateParentPointerAndChildPointer(
 
     for (uint childIndex = 0; childIndex < 4; childIndex++)
     {
-        if (srcNodePointer == ExtractNodePointerCollapse(parentChildPointers[childIndex]))
+        if (srcNodePointer == parentChildPointers[childIndex])
         {
-            // Increment primitive count to offset the decrement in PackLeafNodePointer
-            const uint collapsePrimCount = ExtractPrimitiveCount(parentChildPointers[childIndex]) + 1;
-
-            const uint dstPackedNodePointer = PackLeafNodePointer(GetNodeType(dstNodePointer),
-                                                                  ExtractNodePointerOffset(dstNodePointer),
-                                                                  collapsePrimCount);
-
-            DstMetadata.Store(parentNodeOffset + dstMetadataSizeInBytes + (childIndex * sizeof(uint)),
-                              dstPackedNodePointer);
+            DstMetadata.Store(parentNodeOffset + dstMetadataSizeInBytes + (childIndex * sizeof(uint)), dstNodePointer);
             break;
         }
     }
@@ -236,9 +228,7 @@ void CopyInteriorNodesTraversingUpwards(
             // fetch address of the child, excluding upper 3 bits and type
             if (parentChildPointers[cId] != INVALID_IDX)
             {
-                uint childPointer = ExtractNodePointerCollapse(parentChildPointers[cId]);
-                childPointer = ClearNodeType(childPointer);
-
+                const uint childPointer = ClearNodeType(parentChildPointers[cId]);
                 isFirstChild = (nodePointer == childPointer);
                 break;
             }
@@ -572,11 +562,9 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
             {
                 const uint srcNodeType = GetNodeType(srcNodePointer);
                 const uint srcNodeOffset = ExtractNodePointerOffset(srcNodePointer);
-                // Increment primitive count to offset the decrement in PackLeafNodePointer
-                const uint collapsePrimCount = ExtractPrimitiveCount(srcNodePointer) + 1;
                 const uint nodeOffset = (srcNodeOffset - srcOffsets.leafNodes);
 
-                dstNodePointer = PackLeafNodePointer(srcNodeType, dstOffsets.leafNodes + nodeOffset, collapsePrimCount);
+                dstNodePointer = PackNodePointer(srcNodeType, dstOffsets.leafNodes + nodeOffset);
             }
 
             DstMetadata.Store(dstNodePtrOffset, dstNodePointer);

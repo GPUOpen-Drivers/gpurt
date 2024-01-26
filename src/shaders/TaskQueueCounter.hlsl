@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -22,27 +22,25 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-
-//=====================================================================================================================
 void AllocTasks(const uint numTasks, const uint phase, uint taskQueueOffset)
 {
     // start = end
-    const uint end = ScratchBuffer.Load(taskQueueOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET);
+    const uint end = ScratchGlobal.Load(taskQueueOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET);
 
-    ScratchBuffer.Store(taskQueueOffset + STATE_TASK_QUEUE_START_PHASE_INDEX_OFFSET, end);
+    ScratchGlobal.Store(taskQueueOffset + STATE_TASK_QUEUE_START_PHASE_INDEX_OFFSET, end);
 
-    ScratchBuffer.Store(taskQueueOffset + STATE_TASK_QUEUE_PHASE_OFFSET, phase);
+    ScratchGlobal.Store(taskQueueOffset + STATE_TASK_QUEUE_PHASE_OFFSET, phase);
 
     DeviceMemoryBarrier();
 
-    ScratchBuffer.Store(taskQueueOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET, end + numTasks);
+    ScratchGlobal.Store(taskQueueOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET, end + numTasks);
 }
 
 //=====================================================================================================================
 uint2 BeginTask(const uint localId, uint taskQueueOffset)
 {
     if (localId == 0) {
-        ScratchBuffer.InterlockedAdd(taskQueueOffset + STATE_TASK_QUEUE_TASK_COUNTER_OFFSET, 1, SharedMem[0]);
+        ScratchGlobal.InterlockedAdd(taskQueueOffset + STATE_TASK_QUEUE_TASK_COUNTER_OFFSET, 1, SharedMem[0]);
     }
 
     GroupMemoryBarrierWithGroupSync();
@@ -53,11 +51,11 @@ uint2 BeginTask(const uint localId, uint taskQueueOffset)
     do
     {
         DeviceMemoryBarrier();
-    } while (index >= ScratchBuffer.Load(taskQueueOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET));
+    } while (index >= ScratchGlobal.Load(taskQueueOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET));
 
-    const uint phase = ScratchBuffer.Load(taskQueueOffset + STATE_TASK_QUEUE_PHASE_OFFSET);
+    const uint phase = ScratchGlobal.Load(taskQueueOffset + STATE_TASK_QUEUE_PHASE_OFFSET);
 
-    const uint startPhaseIndex = ScratchBuffer.Load(taskQueueOffset + STATE_TASK_QUEUE_START_PHASE_INDEX_OFFSET);
+    const uint startPhaseIndex = ScratchGlobal.Load(taskQueueOffset + STATE_TASK_QUEUE_START_PHASE_INDEX_OFFSET);
 
     return uint2(index - startPhaseIndex, phase);
 }
@@ -71,10 +69,10 @@ bool EndTask(const uint localId, uint taskQueueOffset)
 
     if (localId == 0)
     {
-        const uint endPhaseIndex = ScratchBuffer.Load(taskQueueOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET);
+        const uint endPhaseIndex = ScratchGlobal.Load(taskQueueOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET);
 
         uint orig;
-        ScratchBuffer.InterlockedAdd(taskQueueOffset + STATE_TASK_QUEUE_NUM_TASKS_DONE_OFFSET, 1, orig);
+        ScratchGlobal.InterlockedAdd(taskQueueOffset + STATE_TASK_QUEUE_NUM_TASKS_DONE_OFFSET, 1, orig);
 
         // current phase is done
         if (orig == (endPhaseIndex - 1))
@@ -92,6 +90,6 @@ void InitScratchCounter(uint offset)
 {
     if (offset != INVALID_IDX)
     {
-        ScratchBuffer.Store(offset, 0);
+        ScratchGlobal.Store(offset, 0);
     }
 }

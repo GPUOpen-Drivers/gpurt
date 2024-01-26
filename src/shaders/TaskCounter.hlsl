@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -22,26 +22,14 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#ifndef _SERIALIZECOMMON_HLSL
-#define _SERIALIZECOMMON_HLSL
+// Increment task counter to mark a task / primitive as done
+void IncrementTaskCounter(uint offset)
+{
+    DeviceMemoryBarrier();
+    ScratchGlobal.InterlockedAdd(offset, 1);
+}
 
-// D3D12DDI_SERIALIZED_DATA_DRIVER_MATCHING_IDENTIFIER AMD GUID
-#define GPURT_AMD_GUID_0    0x445D18EA
-#define GPURT_AMD_GUID_1    0xB42547D8
-#define GPURT_AMD_GUID_2    0x867BA9A4
-#define GPURT_AMD_GUID_3    0x496A1A2E
-
-// sizeof(D3D12DDI_GPU_VIRTUAL_ADDRESS)
-#define GPUVA_SIZE 8
-
-// sizeof(D3D12DDI_SERIALIZED_DATA_DRIVER_MATCHING_IDENTIFIER)
-#define GUID_SIZE 32
-
-// D3D12_SERIALIZED_ACCELERATION_STRUCTURE_HEADER
-#define SERIALIZED_AS_HEADER_SIZE (GUID_SIZE + (8 * 3))
-
-#define SERIALIZED_AS_HEADER_SERIALIZED_SIZE_OFFSET   (GUID_SIZE)
-#define SERIALIZED_AS_HEADER_DESERIALIZED_SIZE_OFFSET (GUID_SIZE + 8)
-#define SERIALIZED_AS_HEADER_NUM_BLAS_PTRS_OFFSET     (GUID_SIZE + 16)
-
-#endif
+uint FetchTaskCounter(uint offset)
+{
+    return ScratchGlobal.Load(offset);
+}

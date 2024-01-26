@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -90,6 +90,8 @@ struct DispatchRaysConstantData
     uint32 cpsGlobalMemoryAddressLo;    // Separate CPS stack memory base address low 32-bits
     uint32 cpsGlobalMemoryAddressHi;    // Separate CPS stack memory base address high 32-bits
     uint32 counterMask;                 // Mask for filtering ray history token
+    uint32 cpsSortingMemoryAddressLo;   // Continuations ray sorting memory base address low 32-bits
+    uint32 cpsSortingMemoryAddressHi;   // Continuations ray sorting memory base address high 32-bits
 };
 #pragma pack(pop)
 

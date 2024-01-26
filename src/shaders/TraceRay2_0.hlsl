@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -63,9 +63,9 @@ static IntersectionResult TraceRayImpl2_0(
 
     // Start from root node which follows acceleration structure header
     // BLAS root node is always fp32 regardless of mode for fp16 box nodes
-    const uint blasRootNodePtr   = CreateRootNodePointer1_1();
-    uint       packedNodePointer = blasRootNodePtr;
-    uint       tlasNodePtr       = INVALID_IDX;
+    const uint blasRootNodePtr = CreateRootNodePointer1_1();
+    uint       nodePtr         = blasRootNodePtr;
+    uint       tlasNodePtr     = INVALID_IDX;
 
     uint prevNodePtr   = INVALID_IDX;
     uint stackPtrTop   = 0;
@@ -110,16 +110,16 @@ static IntersectionResult TraceRayImpl2_0(
     uint pointerFlags = rayFlagsSetBits;
 
 #if DEVELOPER
-    while ((packedNodePointer < TERMINAL_NODE) && (intersection.numIterations < DispatchRaysConstBuf.profileMaxIterations))
+    while ((nodePtr < TERMINAL_NODE) && (intersection.numIterations < DispatchRaysConstBuf.profileMaxIterations))
 #else
-    while (packedNodePointer < TERMINAL_NODE)
+    while (nodePtr < TERMINAL_NODE)
 #endif
     {
 #if DEVELOPER
         if (EnableTraversalCounter())
         {
-            WriteRayHistoryTokenNodePtr(rayId, packedNodePointer);
-            UpdateWaveTraversalStatistics(GPURT_RTIP2_0, packedNodePointer);
+            WriteRayHistoryTokenNodePtr(rayId, nodePtr);
+            UpdateWaveTraversalStatistics(GPURT_RTIP2_0, nodePtr);
         }
 #endif
 
@@ -135,27 +135,25 @@ static IntersectionResult TraceRayImpl2_0(
                 (GetNodeType(prevNodePtr) == NODE_TYPE_TRIANGLE_1);
 
         // Backup last traversed node pointer
-        prevNodePtr = packedNodePointer;
-
-        uint nodePointer = ExtractNodePointer(packedNodePointer);
+        prevNodePtr = nodePtr;
 
         // pre-calculate node address
-        const GpuVirtualAddress nodeAddr64 = currentBvh + ExtractNodePointerOffset(nodePointer);
+        const GpuVirtualAddress nodeAddr64 = currentBvh + ExtractNodePointerOffset(nodePtr);
 
         // Convert fused instance node pointer to Float32BoxNode
         if (EnableFusedInstanceNodes())
         {
-            // The nodePointer consists of a packed 64-byte aligned offset and 3-bit node type. Adding 0xF
+            // The nodePtr consists of a packed 64-byte aligned offset and 3-bit node type. Adding 0xF
             // to the node pointer increments this aligned offset by 2 (i.e. 128 bytes); 1 from the 4th bit
             // from LSB and another 1 from the carry (0x6 + 0x7). The node type as a result is set to 0x5
             // i.e. NODE_TYPE_BOX_FLOAT32.
             const bool isUserNodeInstance = IsUserNodeInstance(prevNodePtr);
-            nodePointer += isUserNodeInstance ? 0xF : 0;
+            nodePtr += isUserNodeInstance ? 0xF : 0;
         }
 
         uint4 intersectionResult =
             image_bvh64_intersect_ray_2_0(currentBvh,
-                                          nodePointer,
+                                          nodePtr,
                                           pointerFlags,
                                           boxHeuristicMode,
                                           intersection.t,
@@ -257,7 +255,7 @@ static IntersectionResult TraceRayImpl2_0(
                 if (rayForceOpaque == false)
                 {
                     // load primitive data
-                    const PrimitiveData primitiveData = FetchPrimitiveDataAddr(nodePointer, nodeAddr64);
+                    const PrimitiveData primitiveData = FetchPrimitiveDataAddr(nodePtr, nodeAddr64);
 
                     const uint primitiveIndex = primitiveData.primitiveIndex;
                     const uint geometryIndex  = primitiveData.geometryIndex;
@@ -300,7 +298,7 @@ static IntersectionResult TraceRayImpl2_0(
                                                     geometryIndex);
 
                         // Set hit triangle information
-                        AmdTraceRaySetHitTriangleNodePointer(currentBvh, nodePointer);
+                        AmdTraceRaySetHitTriangleNodePointer(currentBvh, nodePtr);
 
                         // get barycentrics
                         float2 barycentrics;
@@ -328,7 +326,7 @@ static IntersectionResult TraceRayImpl2_0(
                     intersection.barycentrics.x    = asfloat(intersectionResult.z) / asfloat(intersectionResult.y);
                     intersection.barycentrics.y    = asfloat(intersectionResult.w) / asfloat(intersectionResult.y);
                     intersection.t                 = candidateT;
-                    intersection.nodeIndex         = nodePointer;
+                    intersection.nodeIndex         = nodePtr;
                     intersection.hitkind           = hitKind;
                     tlasNodePtr                    = instNodePtr;
 
@@ -340,33 +338,18 @@ static IntersectionResult TraceRayImpl2_0(
                 }
             }
 
-            if (IsBvhCollapse())
-            {
-                if (ExtractPrimitiveCount(prevNodePtr) != 0)
-                {
-                    packedNodePointer = IncrementNodePointer(prevNodePtr);
-
-                    // Manually update the next node pointer, and then set up so that it will pass through the
-                    // ds_store_stack instruction without modifying the stack (assumes lastNodePtr == INVALID_NODE).
-                    intersectionResult = uint4(packedNodePointer, INVALID_NODE, INVALID_NODE, INVALID_NODE);
-                }
-                else
-                {
-                    lastNodePtr = TERMINAL_NODE;
-                }
-            }
-            else if ((AmdTraceRayGetTriangleCompressionMode() == PAIR_TRIANGLE_COMPRESSION) ||
-                     (AmdTraceRayGetTriangleCompressionMode() == AUTO_TRIANGLE_COMPRESSION))
+            if ((AmdTraceRayGetTriangleCompressionMode() == PAIR_TRIANGLE_COMPRESSION) ||
+                (AmdTraceRayGetTriangleCompressionMode() == AUTO_TRIANGLE_COMPRESSION))
             {
                 // prevNodePtr is guaranteed to be NODE_TYPE_TRIANGLE_0 or NODE_TYPE_TRIANGLE_1
                 if (prevNodePtr & 0x1)
                 {
                     // Intersect with triangle 0 next
-                    packedNodePointer = ClearNodeType(prevNodePtr);
+                    nodePtr = ClearNodeType(prevNodePtr);
 
                     // Manually update the next node pointer, and then set up so that it will pass through the
                     // ds_store_stack instruction without modifying the stack (assumes lastNodePtr == INVALID_NODE).
-                    intersectionResult = uint4(packedNodePointer, INVALID_NODE, INVALID_NODE, INVALID_NODE);
+                    intersectionResult = uint4(nodePtr, INVALID_NODE, INVALID_NODE, INVALID_NODE);
                 }
                 else
                 {
@@ -389,7 +372,7 @@ static IntersectionResult TraceRayImpl2_0(
         if (CheckHandleProceduralUserNode(prevNodePtr))
         {
             // Load primitive data
-            const PrimitiveData primitiveData = FetchPrimitiveDataAddr(nodePointer, nodeAddr64);
+            const PrimitiveData primitiveData = FetchPrimitiveDataAddr(nodePtr, nodeAddr64);
 
             const uint primitiveIndex = primitiveData.primitiveIndex;
             const uint geometryIndex  = primitiveData.geometryIndex;
@@ -470,7 +453,7 @@ static IntersectionResult TraceRayImpl2_0(
                         intersection.numCandidateHits++;
                     }
 #endif
-                    intersection.nodeIndex = nodePointer;
+                    intersection.nodeIndex = nodePtr;
                     tlasNodePtr = instNodePtr;
 
                     if ((rayFlags & RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH) ||
@@ -485,10 +468,10 @@ static IntersectionResult TraceRayImpl2_0(
         }
 
 #if USE_HW_INTRINSIC
-        packedNodePointer = AmdTraceRayLdsStackStore(stackAddr, lastNodePtr, intersectionResult);
+        nodePtr = AmdTraceRayLdsStackStore(stackAddr, lastNodePtr, intersectionResult);
 #else
         // SW stack emulation
-        packedNodePointer = ds_store_stack(stackAddr, lastNodePtr, intersectionResult);
+        nodePtr = ds_store_stack(stackAddr, lastNodePtr, intersectionResult);
 #endif
 
         lastNodePtr = INVALID_NODE;
@@ -502,9 +485,9 @@ static IntersectionResult TraceRayImpl2_0(
             intersection.maxStackDepth = max(intersection.maxStackDepth, stackAddr & 0xffff);
         }
 #endif
-        if (resetRay || (packedNodePointer == INVALID_NODE))
+        if (resetRay || (nodePtr == INVALID_NODE))
         {
-            if (packedNodePointer == INVALID_NODE)
+            if (nodePtr == INVALID_NODE)
             {
                 // Add one to the stackAddr, to reset it back up from the stackless pop
                 stackAddr++;
@@ -528,8 +511,7 @@ static IntersectionResult TraceRayImpl2_0(
                     resetRay   = true;
                 }
 
-                packedNodePointer = FetchParentNodePointer(currentBvh,
-                                                           prevNodePtr);
+                nodePtr = FetchParentNodePointer(currentBvh, prevNodePtr);
 
                 lastNodePtr = trianglePairIntersected ? (prevNodePtr + 1) : prevNodePtr;
             }

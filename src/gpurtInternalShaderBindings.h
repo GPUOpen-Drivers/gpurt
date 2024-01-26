@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2020-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2020-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -270,7 +270,8 @@ namespace ScanExclusiveAddDLB
 {
     struct Constants
     {
-        uint32 numElements;  // Number of elements
+        uint32 numElements;
+        uint32 passIndex;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
@@ -357,6 +358,7 @@ constexpr NodeMapping EncodeTriangleNodesMapping[] =
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 }
 };
 
@@ -364,6 +366,7 @@ constexpr NodeMapping EncodeTriangleNodesIndirectMapping[] =
 {
     { NodeType::ConstantBuffer, 2 },
     { NodeType::TypedUavTable, 1 },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
@@ -384,12 +387,14 @@ constexpr NodeMapping EncodeAABBNodesMapping[] =
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 }
 };
 
 constexpr NodeMapping EncodeInstancesMapping[] =
 {
     { NodeType::Constant, EncodeInstances::NumEntries },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
@@ -439,6 +444,7 @@ constexpr NodeMapping BuildParallelMapping[] =
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
 #if GPURT_ENABLE_GPU_DEBUG
     { NodeType::Uav, 2 },
 #endif
@@ -456,11 +462,13 @@ constexpr NodeMapping RebraidMapping[] =
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
 };
 
 constexpr NodeMapping GenerateMortonCodesMapping[] =
 {
     { NodeType::ConstantBuffer, 2 },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 }
@@ -471,12 +479,14 @@ constexpr NodeMapping BuildBVHMapping[] =
     { NodeType::ConstantBuffer, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 }
 };
 
 constexpr NodeMapping BuildBVHSortLeavesMapping[] =
 {
     { NodeType::ConstantBuffer, 2 },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 }
@@ -486,6 +496,7 @@ constexpr NodeMapping BuildBVHTDMapping[] =
 {
     { NodeType::Constant, BuildBVHTD::NumEntries },
     { NodeType::ConstantBuffer, 2 },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
@@ -501,6 +512,7 @@ constexpr NodeMapping BuildBVHTDTRMapping[] =
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 }
 };
 
@@ -512,12 +524,14 @@ constexpr NodeMapping BuildBVHPLOCMapping[] =
     { NodeType::ConstantBuffer, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 }
 };
 
 constexpr NodeMapping RefitBoundsMapping[] =
 {
     { NodeType::ConstantBuffer, 2 },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 }
@@ -528,6 +542,7 @@ constexpr NodeMapping PairCompressionMapping[] =
     { NodeType::ConstantBuffer, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 }
 };
 
@@ -535,6 +550,7 @@ constexpr NodeMapping InitBuildQBVHMapping[] =
 {
     { NodeType::Constant, BuildQBVH::NumEntries },
     { NodeType::ConstantBuffer, 2 },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
@@ -549,12 +565,14 @@ constexpr NodeMapping BuildQBVHMapping[] =
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 }
 };
 
 constexpr NodeMapping MergeSortMapping[] =
 {
     { NodeType::ConstantBuffer, 2 },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 }
@@ -566,6 +584,7 @@ constexpr NodeMapping BitHistogramMapping[] =
     { NodeType::ConstantBuffer, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 }
 };
 
@@ -573,6 +592,7 @@ constexpr NodeMapping ScatterKeysAndValuesMapping[] =
 {
     { NodeType::Constant, RadixSort::NumEntries },
     { NodeType::ConstantBuffer, 2 },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 }
@@ -583,12 +603,14 @@ constexpr NodeMapping ScanExclusiveInt4Mapping[] =
     { NodeType::Constant, ScanExclusiveAddWG::NumEntries },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 }
 };
 
 constexpr NodeMapping ScanExclusivePartInt4Mapping[] =
 {
     { NodeType::Constant, ScanExclusivePartSum::NumEntries },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 }
@@ -600,6 +622,7 @@ constexpr NodeMapping ScanExclusiveInt4DLBMapping[] =
     { NodeType::ConstantBuffer, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 }
 };
 
@@ -609,12 +632,14 @@ constexpr NodeMapping InitScanExclusiveInt4DLBMapping[] =
     { NodeType::ConstantBuffer, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 }
 };
 
 constexpr NodeMapping DistributePartSumInt4Mapping[] =
 {
     { NodeType::Constant, DistributePartSum::NumEntries  },
+    { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 }

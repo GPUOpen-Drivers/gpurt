@@ -1,7 +1,7 @@
 ##
  #######################################################################################################################
  #
- #  Copyright (c) 2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ #  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
  #
  #  Permission is hereby granted, free of charge, to any person obtaining a copy
  #  of this software and associated documentation files (the "Software"), to deal
@@ -69,11 +69,12 @@ DXC_EXECUTABLE = "dxc"
 GLSLANG_EXECUTABLE = "glslangValidator"
 
 class ShaderConfig:
-    def __init__(self, path, entryPoint=None, outputName=None, defines=None):
+    def __init__(self, path, entryPoint=None, outputName=None, defines=None, includePaths=None):
         self.path = path
         self.entryPoint = entryPoint
         self.outputName = outputName
         self.defines = defines
+        self.includePaths = includePaths
 
     def __str__(self):
         return f"ShaderConfig< Path: {self.path}, EntryPoint: {self.entryPoint}, OutputName: {self.outputName}, Defines: {self.defines}, isBVH: {self.isBVH()} >"
@@ -290,6 +291,9 @@ def RunSpirv(outputDir, compilerPath, inShaderConfig, inShaderBasePath, inDXC, i
 
     commandArgs = [compilerPath]
 
+    for p in inShaderConfig.includePaths.split(','):
+        commandArgs += ['-I', p]
+
     if inDXC:
         isLibrary = inShaderConfig.isLibrary()
         shaderProfileString = SHADER_PROFILE_LIB if isLibrary else SHADER_PROFILE
@@ -354,6 +358,7 @@ def CompileShaderConfig(shaderConfig, args, shadersOutputDir,
 
     # Add Defines passed from CMAKE
     shaderConfig.defines = args.defines.replace(";",",") + ("" if shaderConfig.defines is None else str("," + shaderConfig.defines))
+    shaderConfig.includePaths = args.includePaths.replace(";",",") + ("" if shaderConfig.includePaths is None else str("," + shaderConfig.includePaths))
 
     if isBVH:
         shaderConfig.defines += ",GPURT_BVH_BUILD_SHADER=1"
@@ -514,7 +519,8 @@ def main() -> int:
     parser.add_argument('--skip-bvh', action='store_true', help='Skip updating BVH shaders', default=False)
     parser.add_argument('--skip-trace', action='store_true', help='Skip updating traversal shaders', default=False)
     parser.add_argument('--verbose', action='store_true', help='Output verbose inforation', default=False)
-    parser.add_argument('--defines', help='Defines for the shader compiler.', default="")
+    parser.add_argument('--defines', help='Defines for the shader compiler, separated by ; or ,.', default="")
+    parser.add_argument('--includePaths', help='Include paths for the shader compiler, separated by ; or ,.', default="")
     parser.add_argument('--spirvCompilerPath', help='Path to SPIR-V compiler (either dxc or glslangValidator).', default='./dxc.exe')
     parser.add_argument('--dxcompilerLibPath', help='Path to dxcompiler.dll/libdxcompiler.so', default='./dxcompiler.dll')
     parser.add_argument('--spirvRemapPath', help='Path to spirv-remap executable', default='./spirv-remap.exe')

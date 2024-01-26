@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -255,7 +255,10 @@ void AllocRefs(TriangleSplittingArgs args,
             {
                 ScratchNode node = FetchScratchNode(args.scratchLeafNodesScratchOffset, storeIndex);
 
-                const BoundingBox bbox = GetScratchNodeBoundingBox(node);
+                // TODO: Support early pairing with triangle splitting
+                const BoundingBox bbox = GenerateTriangleBoundingBox(node.bbox_min_or_v0,
+                                                                     node.bbox_max_or_v1,
+                                                                     node.sah_or_v2_or_instBasePtr);
 
                 const float priority = ScratchBuffer.Load<float>(args.splitPrioritiesScratchOffset
                                                                  + sizeof(float) * storeIndex);
@@ -541,9 +544,8 @@ void TriangleSplittingImpl(
 
                     ScratchNode node = FetchScratchNode(args.scratchLeafNodesScratchOffset, i);
 
-                    if ((node.flags_and_instanceMask & SCRATCH_NODE_FLAGS_DISABLE_TRIANGLE_SPLIT_MASK) ||
-                        (IsNodeActive(node) == false) ||
-                        (IsScratchTriangleNode(node) == false))
+                    if ((node.packedFlags & SCRATCH_NODE_FLAGS_DISABLE_TRIANGLE_SPLIT_MASK) ||
+                        (IsNodeActive(node) == false))
                     {
                         priority = 0;
                     }
@@ -558,6 +560,7 @@ void TriangleSplittingImpl(
                         // ideal surface area of the primitive
                         const float Aideal = abs(dir3.x) + abs(dir3.y) + abs(dir3.z);
 
+                        // TODO: Support early pairing with triangle splitting
                         const BoundingBox bbox = GenerateTriangleBoundingBox(node.bbox_min_or_v0,
                                                                              node.bbox_max_or_v1,
                                                                              node.sah_or_v2_or_instBasePtr);

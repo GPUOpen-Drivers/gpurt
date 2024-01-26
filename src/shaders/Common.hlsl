@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -120,7 +120,7 @@ static const BoundingBox InvalidBoundingBox =
 #define RAY_FLAG_SKIP_TRIANGLES                  0x100
 #define RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES      0x200
 
-#define PIPELINE_FLAG_BVH_COLLAPSE                   0x80000000
+#define PIPELINE_FLAG_UNUSED                         0x80000000
 #define PIPELINE_FLAG_USE_REBRAID                    0x40000000
 #define PIPELINE_FLAG_ENABLE_AS_TRACKING             0x20000000
 #define PIPELINE_FLAG_ENABLE_TRAVERSAL_CTR           0x10000000
@@ -161,10 +161,6 @@ static const BoundingBox InvalidBoundingBox =
 
 //=====================================================================================================================
 // The following functions depend on static flags
-static uint IsBvhCollapse()
-{
-    return (AmdTraceRayGetStaticFlags() & PIPELINE_FLAG_BVH_COLLAPSE);
-}
 static uint IsBvhRebraid()
 {
     return (AmdTraceRayGetStaticFlags() & PIPELINE_FLAG_USE_REBRAID);
@@ -184,6 +180,15 @@ static bool EnableTraversalCounter()
     return (AmdTraceRayGetStaticFlags() & PIPELINE_FLAG_ENABLE_TRAVERSAL_CTR);
 }
 #endif
+
+//=====================================================================================================================
+// Helper function to replace HLSL "all" intrinsic since it does not work well on SPIRV path in DXC
+static bool all_equal(
+    float3 v0,
+    float3 v1)
+{
+    return (v0.x == v1.x) && (v0.y == v1.y) && (v0.z == v1.z);
+}
 
 //=====================================================================================================================
 static uint FloatToUint(float v)
@@ -456,13 +461,7 @@ static BoundingBox GenerateTriangleBoundingBox(float3 v0, float3 v1, float3 v2)
     };
 
     // Generate degenerate bounding box for triangles that degenerate into line or point
-#ifdef AMD_VULKAN
-    if (((v0.x == v1.x) && (v0.y == v1.y) && (v0.z == v1.z)) ||
-        ((v0.x == v2.x) && (v0.y == v2.y) && (v0.z == v2.z)) ||
-        ((v1.x == v2.x) && (v1.y == v2.y) && (v1.z == v2.z)))
-#else
-    if (all(v0 == v1) || all(v0 == v2) || all(v1 == v2))
-#endif
+    if (all_equal(v0, v1) || all_equal(v0, v2) || all_equal(v1, v2))
     {
         bbox = InvalidBoundingBox;
     }
@@ -530,6 +529,17 @@ static BoundingBox UncompressBBoxFromUint3(in uint3 box)
 static bool IsInvalidBoundingBox(BoundingBox box)
 {
     return box.min.x > box.max.x;
+}
+
+//=====================================================================================================================
+static bool IsCorruptBox(BoundingBox box)
+{
+    if (any(isinf(box.min)) || any(isinf(box.max)) || any(isnan(box.min)) || any(isnan(box.max)))
+    {
+        return true;
+    }
+
+    return false;
 }
 
 //=====================================================================================================================
@@ -628,44 +638,11 @@ static void InstanceTransform(
 }
 
 //=====================================================================================================================
-// Mask Out Primitive Count for Collapse
-static uint ExtractNodePointerCollapse(uint nodePointer)
-{
-    return nodePointer & ((1 << 29) - 1); // mask out the triangle count
-}
-
-//=====================================================================================================================
-static uint ExtractNodePointer(uint nodePointer)
-{
-    if (IsBvhCollapse())
-    {
-        return ExtractNodePointerCollapse(nodePointer); // mask out the triangle count
-    }
-    else
-    {
-        return nodePointer;
-    }
-}
-
-//=====================================================================================================================
-// Get Num Primitives For Collapse
-static uint ExtractPrimitiveCount(uint nodePointer)
-{
-    return nodePointer >> 29;
-}
-
-//=====================================================================================================================
-// For BVH Collapse, need to compare this node Pointer which points to the start of the primitive list to the end which
-// is the lastNodePointer
+// For pair compression, ignore the triangle type during comparisons for stackless traversal
 static bool ComparePointers(uint nodePointer, uint lastNodePointer)
 {
-    if (IsBvhCollapse())
-    {
-        const uint NodeCountPtr = (1 << 3);
-        return ExtractNodePointer((nodePointer + ExtractPrimitiveCount(nodePointer) * NodeCountPtr)) == lastNodePointer;
-    }
-    else if ((AmdTraceRayGetTriangleCompressionMode() == PAIR_TRIANGLE_COMPRESSION) ||
-             (AmdTraceRayGetTriangleCompressionMode() == AUTO_TRIANGLE_COMPRESSION))
+    if ((AmdTraceRayGetTriangleCompressionMode() == PAIR_TRIANGLE_COMPRESSION) ||
+        (AmdTraceRayGetTriangleCompressionMode() == AUTO_TRIANGLE_COMPRESSION))
     {
         // Ignore the node type, as both triangles in a node share a parent, and all other types will always
         // have different offsets.
@@ -675,13 +652,6 @@ static bool ComparePointers(uint nodePointer, uint lastNodePointer)
     {
         return nodePointer == lastNodePointer;
     }
-}
-
-//=====================================================================================================================
-// For BVH Collapse, increment the node pointer to the next primitive and decrement the counter
-static uint IncrementNodePointer(uint nodePointer)
-{
-    return nodePointer - (1 << 29) + (1 << 3);
 }
 
 //=====================================================================================================================
@@ -744,26 +714,12 @@ static BoundingBox FetchHeaderRootBoundingBox(
 }
 
 //=====================================================================================================================
-static uint4 FetchHeaderCostOrNumChildPrims(
-    in uint64_t baseAddrAccelStruct)
-{
-    uint4 data = uint4(0, 0, 0, 0);
-    data.x = FetchHeaderField(baseAddrAccelStruct, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET);
-    data.y = FetchHeaderField(baseAddrAccelStruct, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 4);
-    data.z = FetchHeaderField(baseAddrAccelStruct, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 8);
-    data.w = FetchHeaderField(baseAddrAccelStruct, ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + 12);
-
-    return data;
-}
-
-//=====================================================================================================================
 static uint FetchParentNodePointer(
     in GpuVirtualAddress bvhAddress,
-    in uint              packedNodePtr)
+    in uint              nodePtr)
 {
     // Fetch parent pointer from metadata memory which is allocated before acceleration structure data.
     // bvhAddress points to the beginning of acceleration structure memory
-    const uint nodePtr = ExtractNodePointer(packedNodePtr);
     return LoadDwordAtAddr(bvhAddress - CalcParentPtrOffset(nodePtr));
 }
 

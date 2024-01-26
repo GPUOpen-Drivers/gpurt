@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -92,6 +92,7 @@ void ScanExclusiveAdd(
     uint        localId,
     uint        groupId,
     uint        numElements,
+    uint        passIdx,
     uint        radixSortScanLevel)
 {
     if (radixSortScanLevel == 0) // use DLB scan
@@ -101,20 +102,23 @@ void ScanExclusiveAdd(
         const uint numBlocks = RoundUpQuotient(numElements, elementsPerBlock);
         const uint numInitGroups = RoundUpQuotient(numBlocks, WorkGroupSize);
 
-        BEGIN_TASK(numInitGroups);
+        if (passIdx == 0)
+        {
+            BEGIN_TASK(numInitGroups);
 
-        InitScanExclusiveInt4DLBImpl(globalId,
-                                     numElements,
-                                     ShaderConstants.offsets.dynamicBlockIndex,
-                                     ShaderConstants.offsets.prefixSumAtomicFlags);
+            InitScanExclusiveInt4DLBImpl(globalId,
+                                         numElements,
+                                         ShaderConstants.offsets.dynamicBlockIndex,
+                                         ShaderConstants.offsets.prefixSumAtomicFlags);
 
-        END_TASK(numInitGroups);
-
+            END_TASK(numInitGroups);
+        }
         BEGIN_TASK(numBlocks);
 
         ScanExclusiveInt4DLBImpl(globalId,
                                  localId,
                                  numElements,
+                                 passIdx,
                                  ShaderConstants.offsets.dynamicBlockIndex,
                                  ShaderConstants.offsets.prefixSumAtomicFlags,
                                  ShaderConstants.offsets.histogram);
@@ -328,7 +332,7 @@ void RadixSort(
 
         END_TASK(ShaderRootConstants.numThreadGroups);
 
-        ScanExclusiveAdd(numTasksWait, waveId, globalId, localId, groupId, numHistogramElements, radixSortScanLevel);
+        ScanExclusiveAdd(numTasksWait, waveId, globalId, localId, groupId, numHistogramElements, passIdx, radixSortScanLevel);
 
         BEGIN_TASK(ShaderRootConstants.numThreadGroups);
 

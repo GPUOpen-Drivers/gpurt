@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2021-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2021-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -38,10 +38,11 @@ struct PairCompressionArgs
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
                 "CBV(b255),"\
-                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
 #include "../shared/rayTracingDefs.h"
@@ -51,10 +52,11 @@ struct PairCompressionArgs
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer  DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer  DstMetadata   : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer  ScratchBuffer : register(u2);
+[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer  ScratchGlobal : register(u3);
 
 // unused buffer
-[[vk::binding(3, 0)]] RWByteAddressBuffer                   SrcBuffer     : register(u3);
-[[vk::binding(4, 0)]] RWByteAddressBuffer                   EmitBuffer    : register(u4);
+[[vk::binding(4, 0)]] RWByteAddressBuffer                   SrcBuffer     : register(u4);
+[[vk::binding(5, 0)]] RWByteAddressBuffer                   EmitBuffer    : register(u5);
 
 #include "Common.hlsl"
 #include "BuildCommonScratch.hlsl"
@@ -62,26 +64,12 @@ struct PairCompressionArgs
 #define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
 groupshared uint SharedMem[MAX_LDS_ELEMENTS];
 
-//=====================================================================================================================
-static uint CalculateBvhNodesOffset(
-    uint numActivePrims)
-{
-    return GetBvhNodesOffset(
-               numActivePrims,
-               ShaderConstants.numLeafNodes,
-               ShaderConstants.offsets.bvhNodeData,
-               ShaderConstants.offsets.bvhLeafNodeData,
-               ShaderConstants.offsets.primIndicesSorted);
-}
-
 #endif
 
 //=====================================================================================================================
-#define PAIR_BATCH_SIZE MAX_COLLAPSED_TRIANGLES
-
 #define LDS_OFFSET_BATCH_INDICES 0
-#define LDS_OFFSET_STACK         PAIR_BATCH_SIZE
-#define LDS_STRIDE               (PAIR_BATCH_SIZE * 2)
+#define LDS_OFFSET_STACK         LATE_PAIR_COMP_BATCH_SIZE
+#define LDS_STRIDE               (LATE_PAIR_COMP_BATCH_SIZE * 2)
 
 //=====================================================================================================================
 // Quad is a symbolic representation of a pair of triangles compressed in a single node that share an edge.
@@ -92,7 +80,7 @@ struct Quad
 
 //=====================================================================================================================
 // This array is declared as a static global in order to avoid it being duplicated multiple times in scratch memory.
-static Quad quadArray[PAIR_BATCH_SIZE];
+static Quad quadArray[LATE_PAIR_COMP_BATCH_SIZE];
 
 //=====================================================================================================================
 void WriteBatchIndex(uint localId, uint index, uint data)
@@ -253,7 +241,7 @@ void WriteCompressedNodes(
             keptIndex = GetQuadScratchNodeIndex(quad.scratchNodeIndexAndOffset[1]);
         }
 
-        WriteBatchIndex(localId, PAIR_BATCH_SIZE - 1 - x, keptIndex);
+        WriteBatchIndex(localId, LATE_PAIR_COMP_BATCH_SIZE - 1 - x, keptIndex);
 
         // Initialise pair triangle ID from triangle 0
         const uint scratchIdxTri0 = GetQuadScratchNodeIndex(quad.scratchNodeIndexAndOffset[0]);
@@ -279,9 +267,9 @@ void WriteCompressedNodes(
 
             const uint scratchNodeOffset = CalcScratchNodeOffset(scratchNodesScratchOffset, keptIndex);
 
-            // Store triangle Id only. The triangle node type is determined at BuildQBVH
-            const uint triangleTypeAndId = (triangleId << 3);
-            WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_TYPE_OFFSET, triangleTypeAndId);
+            // Update triangle ID field in scratch node
+            const uint packedFlags = (triangleNode.packedFlags & 0x0000ffff) | (triangleId << 16);
+            WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_FLAGS_OFFSET, packedFlags);
 
             // Repurpose the node pointer for saving the index of the other node in the pair.
             WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_NODE_POINTER_OFFSET, scratchIdxTri0);
@@ -603,7 +591,7 @@ void PairCompressionImpl(
     }
 
     // Refit the batch subtree to reflect the new topology.
-    uint keepIndex = PAIR_BATCH_SIZE - 1;
+    uint keepIndex = LATE_PAIR_COMP_BATCH_SIZE - 1;
     uint nodeIndex = ReadBatchIndex(localId, keepIndex);
     keepIndex--;
 
@@ -644,19 +632,19 @@ void PairCompressionImpl(
             const ScratchNode rightNode = FetchScratchNode(args.scratchNodesScratchOffset, rc);
 
             // Fetch bounding children bounding boxes
-            BoundingBox bboxRightChild = FetchScratchNodeBoundingBox(rightNode,
-                                                                     IsLeafNode(rc, numActivePrims),
-                                                                     false,
-                                                                     0,
-                                                                     true,
-                                                                     args.scratchNodesScratchOffset);
+            BoundingBox bboxRightChild = GetScratchNodeBoundingBox(rightNode,
+                                                                   IsLeafNode(rc, numActivePrims),
+                                                                   false,
+                                                                   0,
+                                                                   true,
+                                                                   args.scratchNodesScratchOffset);
 
-            BoundingBox bboxLeftChild = FetchScratchNodeBoundingBox(leftNode,
-                                                                    IsLeafNode(lc, numActivePrims),
-                                                                    false,
-                                                                    0,
-                                                                    true,
-                                                                    args.scratchNodesScratchOffset);
+            BoundingBox bboxLeftChild = GetScratchNodeBoundingBox(leftNode,
+                                                                  IsLeafNode(lc, numActivePrims),
+                                                                  false,
+                                                                  0,
+                                                                  true,
+                                                                  args.scratchNodesScratchOffset);
 
             // Merge bounding boxes up to parent
             const float3 bboxMinParent = min(bboxLeftChild.min, bboxRightChild.min);
@@ -693,7 +681,7 @@ void PairCompression(
         args.indexBufferInfoScratchOffset = ShaderConstants.offsets.indexBufferInfo;
         args.flagsScratchOffset           = ShaderConstants.offsets.propagationFlags;
 
-        args.scratchNodesScratchOffset = CalculateBvhNodesOffset(numActivePrims);
+        args.scratchNodesScratchOffset = CalculateBvhNodesOffset(ShaderConstants, numActivePrims);
 
         const uint buildInfo = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_INFO_OFFSET);
         const uint buildFlags = (buildInfo >> ACCEL_STRUCT_HEADER_INFO_FLAGS_SHIFT) & ACCEL_STRUCT_HEADER_INFO_FLAGS_MASK;

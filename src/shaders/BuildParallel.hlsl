@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -24,6 +24,12 @@
  **********************************************************************************************************************/
 #define BUILD_PARALLEL 1
 
+#if GPURT_ENABLE_GPU_DEBUG
+#define DEBUG_BUFFER "UAV(u6),"
+#else
+#define DEBUG_BUFFER
+#endif
+
 #define RootSig "RootConstants(num32BitConstants=1, b0),"\
                 "CBV(b1),"\
                 "UAV(u0),"\
@@ -32,17 +38,17 @@
                 "UAV(u3),"\
                 "UAV(u4),"\
                 "UAV(u5),"\
+                 DEBUG_BUFFER \
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 2)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 3)),"\
                 "DescriptorTable(CBV(b0, numDescriptors = 4294967295, space = 1)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b255),"\
-                "UAV(u6)"
+                "CBV(b255)"\
 
 #include "../shared/rayTracingDefs.h"
 
-#define TASK_COUNTER_BUFFER   ScratchBuffer
+#define TASK_COUNTER_BUFFER   ScratchGlobal
 #define TASK_COUNTER_OFFSET   (ShaderConstants.offsets.taskLoopCounters + TASK_LOOP_BUILD_PARALLEL_COUNTER_OFFSET)
 #define NUM_TASKS_DONE_OFFSET (ShaderConstants.offsets.taskLoopCounters + TASK_LOOP_BUILD_PARALLEL_TASKS_DONE_OFFSET)
 
@@ -57,18 +63,19 @@ struct RootConstants
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstBuffer          : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata        : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer      : register(u2);
-[[vk::binding(3, 0)]] RWByteAddressBuffer                  InstanceDescBuffer : register(u3);
-[[vk::binding(4, 0)]] RWByteAddressBuffer                  EmitBuffer         : register(u4);
+[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer ScratchGlobal      : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer                  InstanceDescBuffer : register(u4);
+[[vk::binding(5, 0)]] RWByteAddressBuffer                  EmitBuffer         : register(u5);
 
-// unused buffer
-[[vk::binding(5, 0)]] RWByteAddressBuffer                  SrcBuffer          : register(u6);
-
+#define SrcBuffer InstanceDescBuffer
 #include "BuildCommonScratch.hlsl"
 #include "CompactCommon.hlsl"
+#undef SrcBuffer
 
 #define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
 groupshared uint SharedMem[MAX_LDS_ELEMENTS];
 
+#include "TaskCounter.hlsl"
 #include "TaskQueueCounter.hlsl"
 
 // The encode path uses SrcBuffer and DstBuffer as the true acceleration structure base.
@@ -101,7 +108,7 @@ void WaitForEncodeTasksToFinish(
     do
     {
         DeviceMemoryBarrier();
-    } while (ScratchBuffer.Load(ShaderConstants.offsets.encodeTaskCounter) < numTasksWait);
+    } while (FetchTaskCounter(ShaderConstants.offsets.encodeTaskCounter) < numTasksWait);
 }
 
 // Include implementations for each pass without shader entry points and resource declarations
@@ -119,18 +126,6 @@ void WaitForEncodeTasksToFinish(
 #include "PairCompression.hlsl"
 #include "Rebraid.hlsl"
 #include "MergeSort.hlsl"
-
-//=====================================================================================================================
-static uint CalculateBvhNodesOffset(
-    uint numActivePrims)
-{
-    return GetBvhNodesOffset(
-               numActivePrims,
-               ShaderConstants.numLeafNodes,
-               ShaderConstants.offsets.bvhNodeData,
-               ShaderConstants.offsets.bvhLeafNodeData,
-               ShaderConstants.offsets.primIndicesSorted);
-}
 
 //======================================================================================================================
 uint CurrentSplitState()
@@ -219,7 +214,7 @@ void BuildBvhLinear(
         SplitInternalNodeLbvh(
             nodeIndex,
             numActivePrims,
-            CalculateBvhNodesOffset(numActivePrims),
+            CalculateBvhNodesOffset(ShaderConstants, numActivePrims),
             ShaderConstants.offsets.primIndicesSorted,
             ShaderConstants.offsets.mortonCodesSorted,
             Settings.useMortonCode30,
@@ -238,10 +233,9 @@ void RefitBounds(
             primIndex,
             numActivePrims,
             ShaderConstants.offsets.propagationFlags,
-            CalculateBvhNodesOffset(numActivePrims),
+            CalculateBvhNodesOffset(ShaderConstants, numActivePrims),
             ShaderConstants.offsets.bvhLeafNodeData,
             ShaderConstants.offsets.primIndicesSorted,
-            Settings.doCollapse,
             Settings.doTriangleSplitting,
             Settings.noCopySortedNodes,
             Settings.enableEarlyPairCompression,
@@ -252,9 +246,7 @@ void RefitBounds(
             ShaderConstants.offsets.batchIndices,
             Settings.fp16BoxNodesMode,
             Settings.fp16BoxModeMixedSaThreshold,
-            false,
-            false,
-            0,
+            0xFFFFFFFF,
             0
         );
     }
@@ -271,10 +263,9 @@ void FastAgglomerativeLbvh(
     args.topLevelBuild               = Settings.topLevelBuild;
     args.numActivePrims              = numActivePrims;
     args.baseFlagsOffset             = ShaderConstants.offsets.propagationFlags;
-    args.baseScratchNodesOffset      = CalculateBvhNodesOffset(numActivePrims);
+    args.baseScratchNodesOffset      = CalculateBvhNodesOffset(ShaderConstants, numActivePrims);
     args.sortedMortonCodesOffset     = ShaderConstants.offsets.mortonCodesSorted;
     args.useMortonCode30             = Settings.useMortonCode30;
-    args.doCollapse                  = Settings.doCollapse;
     args.doTriangleSplitting         = Settings.doTriangleSplitting;
     args.splitBoxesOffset            = ShaderConstants.offsets.triangleSplitBoxes;
     args.numBatchesOffset            = ShaderConstants.offsets.numBatches;
@@ -292,7 +283,6 @@ void FastAgglomerativeLbvh(
     args.enableCentroidBoxes         = false;
     args.ltdPackCentroids            = false;
     args.numMortonBits               = 0;
-    args.enableInstancePrimCount     = false;
 
     for (uint primIndex = globalId; primIndex < numActivePrims; primIndex += GetNumThreads())
     {
@@ -339,7 +329,7 @@ void BuildBvhPloc(
     BuildPlocArgs plocArgs;
 
     plocArgs.numThreads                     = GetNumThreads();
-    plocArgs.scratchNodesScratchOffset      = CalculateBvhNodesOffset(numActivePrims);
+    plocArgs.scratchNodesScratchOffset      = CalculateBvhNodesOffset(ShaderConstants, numActivePrims);
     plocArgs.clusterList0ScratchOffset      = ShaderConstants.offsets.clusterList0;
     plocArgs.clusterList1ScratchOffset      = ShaderConstants.offsets.clusterList1;
     plocArgs.neighbourIndicesScratchOffset  = ShaderConstants.offsets.neighborIndices;
@@ -379,7 +369,9 @@ void Rebraid(
     args.atomicFlagsScratchOffset           = ShaderConstants.offsets.splitAtomicFlags;
     args.encodeArrayOfPointers              = ShaderConstants.encodeArrayOfPointers;
     args.enableMortonSize                   = ShaderConstants.numMortonSizeBits > 0;
-    args.enableSAHCost                      = Settings.enableSAHCost;
+    args.numIterations                      = Settings.numRebraidIterations;
+    args.qualityHeuristic                   = Settings.rebraidQualityHeuristic;
+
     RebraidImpl(globalId, localId, groupId, args);
 }
 
@@ -420,7 +412,7 @@ void PairCompression(
 
     PairCompressionArgs args;
 
-    args.scratchNodesScratchOffset    = CalculateBvhNodesOffset(numActivePrims);
+    args.scratchNodesScratchOffset    = CalculateBvhNodesOffset(ShaderConstants, numActivePrims);
     args.numBatchesScratchOffset      = ShaderConstants.offsets.numBatches;
     args.batchIndicesScratchOffset    = ShaderConstants.offsets.batchIndices;
     args.indexBufferInfoScratchOffset = ShaderConstants.offsets.indexBufferInfo;
@@ -443,7 +435,7 @@ BuildQbvhArgs GetBuildQbvhArgs(
     qbvhArgs.numPrimitives               = numLeafNodes;
     qbvhArgs.metadataSizeInBytes         = DstMetadata.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
     qbvhArgs.numThreads                  = GetNumThreads();
-    qbvhArgs.scratchNodesScratchOffset   = CalculateBvhNodesOffset(numActivePrims);
+    qbvhArgs.scratchNodesScratchOffset   = CalculateBvhNodesOffset(ShaderConstants, numActivePrims);
     qbvhArgs.qbvhStackScratchOffset      = ShaderConstants.offsets.qbvhGlobalStack;
     qbvhArgs.stackPtrsScratchOffset      = ShaderConstants.offsets.qbvhGlobalStackPtrs;
     qbvhArgs.splitBoxesByteOffset        = ShaderConstants.offsets.triangleSplitBoxes;
@@ -456,7 +448,6 @@ BuildQbvhArgs GetBuildQbvhArgs(
     qbvhArgs.fastLBVHRootNodeIndex       = rootNodeIndex;
     qbvhArgs.enableEarlyPairCompression  = Settings.enableEarlyPairCompression;
     qbvhArgs.unsortedBvhLeafNodesOffset  = ShaderConstants.offsets.bvhLeafNodeData;
-    qbvhArgs.enableSAHCost               = Settings.enableSAHCost;
 
     return qbvhArgs;
 
@@ -565,8 +556,8 @@ void EncodePrimitives(
 {
     for (uint geometryIndex = 0; geometryIndex < ShaderConstants.numDescs; geometryIndex++)
     {
-        const uint primCount = GeometryConstants[geometryIndex].NumPrimitives;
-        const uint geometryBasePrimOffset = GeometryConstants[geometryIndex].PrimitiveOffset;
+        const uint numPrimitives = GeometryConstants[geometryIndex].NumPrimitives;
+        const uint primitiveOffset = GeometryConstants[geometryIndex].PrimitiveOffset;
 
         GeometryArgs geometryArgs = GeometryConstants[geometryIndex];
         geometryArgs.BuildFlags = 0; // Indicate this is not an update
@@ -574,10 +565,10 @@ void EncodePrimitives(
         if (globalId == 0)
         {
             WriteGeometryInfo(
-                geometryArgs, geometryBasePrimOffset, geometryArgs.NumPrimitives, DECODE_PRIMITIVE_STRIDE_TRIANGLE);
+                geometryArgs, primitiveOffset, geometryArgs.NumPrimitives, DECODE_PRIMITIVE_STRIDE_TRIANGLE);
         }
 
-        for (uint primitiveIndex = globalId; primitiveIndex < primCount; primitiveIndex += GetNumThreads())
+        for (uint primitiveIndex = globalId; primitiveIndex < numPrimitives; primitiveIndex += GetNumThreads())
         {
             // not an update, just check the "enableEarlyPairCompression" and decide which Encode path to use
             if (Settings.enableEarlyPairCompression == true)
@@ -589,7 +580,7 @@ void EncodePrimitives(
                     geometryArgs,
                     primitiveIndex,
                     localId,
-                    geometryBasePrimOffset,
+                    primitiveOffset,
                     0,
                     false); // Don't write to the update stack
             }
@@ -601,7 +592,7 @@ void EncodePrimitives(
                     TransformBuffer[geometryIndex],
                     geometryArgs,
                     primitiveIndex,
-                    geometryBasePrimOffset,
+                    primitiveOffset,
                     0,
                     false); // Don't write to the update stack
             }
@@ -791,16 +782,6 @@ void BuildBvh(
         }
         else if (Settings.topLevelBuild)
         {
-            BEGIN_TASK(1);
-
-            if (globalId == 0)
-            {
-                // This is an empty TLAS, but we didn't know it yet when we were setting up the header writes in the
-                // command buffer. Overwrite the GPU VA to 0 to properly designate the TLAS as empty.
-                DstMetadata.Store<GpuVirtualAddress>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, 0);
-            }
-
-            END_TASK(1);
             writeDebugCounter(COUNTER_EMPTYPRIM_OFFSET);
         }
     }
@@ -836,11 +817,7 @@ void BuildBvh(
 
     BEGIN_TASK(1);
 
-    if (localId == 0)
-    {
-        WriteCompactedSize(Settings.emitCompactSize,
-                           Settings.topLevelBuild ? TOP_LEVEL : BOTTOM_LEVEL);
-    }
+    PostHwBvhBuild(localId, numActivePrims);
 
     END_TASK(1);
     writeDebugCounter(COUNTER_EMITCOMPACTSIZE_OFFSET);

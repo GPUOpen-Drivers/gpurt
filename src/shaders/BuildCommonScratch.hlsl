@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2022-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2022-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -63,15 +63,14 @@ void WriteScratchBatchIndex(
 }
 
 //=====================================================================================================================
-static bool IsScratchTriangleNode(
-    in ScratchNode node)
+static bool IsTrianglePrimitiveBuild()
 {
-    return (GetNodeType(node.type) <= NODE_TYPE_TRIANGLE_1);
+    return (Settings.topLevelBuild == 0) && (Settings.geometryType == GEOMETRY_TYPE_TRIANGLES);
 }
 
 //=====================================================================================================================
-// Calculate BBox for scratch node for BVH2 builder
-static BoundingBox FetchScratchNodeBoundingBox(
+// Compute bounding box for a BVH2 scratch node
+static BoundingBox GetScratchNodeBoundingBox(
     in ScratchNode node,
     in bool        isLeafNode,
     in bool        doTriangleSplit,
@@ -81,10 +80,10 @@ static BoundingBox FetchScratchNodeBoundingBox(
 {
     BoundingBox bbox;
 
-    // For triangle geometry we need to generate bounding box from split boxes
-    if (IsScratchTriangleNode(node))
+    if (isLeafNode && IsTrianglePrimitiveBuild())
     {
-        if (doTriangleSplit && isLeafNode)
+        // For triangle geometry we need to generate bounding box from split boxes
+        if (doTriangleSplit && (node.splitBox_or_nodePointer != INVALID_IDX))
         {
             bbox = FetchSplitBoxAtIndex(splitBoxesByteOffset, node.splitBox_or_nodePointer);
         }
@@ -97,7 +96,7 @@ static BoundingBox FetchScratchNodeBoundingBox(
 
             // if TriangleCompression is on, and this is a leaf node
             // need to fetch the "pairedNode" (if any) and update boundingbox
-            if (doTriangleCompression && isLeafNode && (node.splitBox_or_nodePointer != INVALID_IDX))
+            if (doTriangleCompression && (node.splitBox_or_nodePointer != INVALID_IDX))
             {
                 BoundingBox nodeBbox = bbox;
                 ScratchNode pairedNode = FetchScratchNode(baseScratchNodesOffset,
@@ -123,25 +122,13 @@ static BoundingBox FetchScratchNodeBoundingBox(
 }
 
 //=====================================================================================================================
-static BoundingBox GetScratchNodeBoundingBox(
+// Get instance node bound from scratch node. Caller must ensure the scratch node passed in is a TLAS leaf node
+static BoundingBox GetScratchNodeInstanceBounds(
     in ScratchNode node)
 {
     BoundingBox bbox;
-
-    // For triangle geometry we need to generate bounding box from triangle vertices
-    if (IsScratchTriangleNode(node))
-    {
-        bbox = GenerateTriangleBoundingBox(node.bbox_min_or_v0,
-                                           node.bbox_max_or_v1,
-                                           node.sah_or_v2_or_instBasePtr);
-    }
-    else
-    {
-        // Internal nodes and AABB geometry encodes bounding box in scratch node
-        bbox.min = node.bbox_min_or_v0;
-        bbox.max = node.bbox_max_or_v1;
-    }
-
+    bbox.min = node.bbox_min_or_v0;
+    bbox.max = node.bbox_max_or_v1;
     return bbox;
 }
 
@@ -154,7 +141,7 @@ void WriteScratchNodeFlags(
     WriteScratchNodeData(
         baseScratchNodesOffset,
         nodeIndex,
-        SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET,
+        SCRATCH_NODE_FLAGS_OFFSET,
         nodeFlags);
 }
 
@@ -166,7 +153,7 @@ void WriteScratchNodeFlagsFromNodes(
     in ScratchNode rightNode)
 {
     // Combine box node flags from child nodes and write to parent scratch node
-    const uint boxNodeFlags = leftNode.flags_and_instanceMask & rightNode.flags_and_instanceMask;
+    const uint boxNodeFlags = leftNode.packedFlags & rightNode.packedFlags;
     WriteScratchNodeFlags(baseScratchNodesOffset, nodeIndex, boxNodeFlags);
 }
 
@@ -252,15 +239,6 @@ void WriteScratchNodeBoundingBox(
 
     WriteScratchNodeDataAtOffset(nodeOffset, SCRATCH_NODE_BBOX_MIN_OFFSET, bboxMin);
     WriteScratchNodeDataAtOffset(nodeOffset, SCRATCH_NODE_BBOX_MAX_OFFSET, bboxMax);
-}
-
-//=====================================================================================================================
-void WriteScratchNodeInstanceNumPrims(
-    uint baseScratchNodesOffset,
-    uint nodeIndex,
-    uint value)
-{
-    WriteScratchNodeData(baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_INSTANCE_NUM_PRIMS_OFFSET, value);
 }
 
 //=====================================================================================================================
@@ -583,7 +561,10 @@ uint GetBvhNodesOffset(
     uint bvhLeafNodeDataOffset,
     uint primIndicesSortedOffset)
 {
-    if ((Settings.noCopySortedNodes == true) && (Settings.enableFastLBVH == false) && (numActivePrims == 1))
+    if ((Settings.noCopySortedNodes == true) &&
+        (Settings.enableFastLBVH == false) &&
+        (numActivePrims == 1) &&
+        (numLeafNodes > 1))
     {
         // If there is one active primitive among a number of inactive primitives and
         // NoCopySortedNodes is enabled, then we need to move the root to match the
@@ -601,6 +582,19 @@ uint GetBvhNodesOffset(
                    bvhNodeDataOffset,
                    Settings.noCopySortedNodes);
     }
+}
+
+//=====================================================================================================================
+static uint CalculateBvhNodesOffset(
+    BuildShaderConstants shaderConstants,
+    uint                 numActivePrims)
+{
+    return GetBvhNodesOffset(
+               numActivePrims,
+               shaderConstants.numLeafNodes,
+               shaderConstants.offsets.bvhNodeData,
+               shaderConstants.offsets.bvhLeafNodeData,
+               shaderConstants.offsets.primIndicesSorted);
 }
 
 //=====================================================================================================================
@@ -649,11 +643,10 @@ void MergeScratchNodes(
     if (EnableLatePairCompression()
     )
     {
-        const bool  useCostCheck = Settings.enablePairCostCheck;
+        const bool useCostCheck = Settings.enablePairCostCheck;
 
-        // Limit number of triangles collapsed in a single bounding box to MAX_COLLAPSED_TRIANGLES
         if ((useCostCheck && (collapseCost > splitCost)) ||
-            (numTris > MAX_COLLAPSED_TRIANGLES) ||
+            (numTris > LATE_PAIR_COMP_BATCH_SIZE) ||
             (collapseBothSides == false) ||
             (mergedNodeIndex == 0))
         {
@@ -736,12 +729,12 @@ void RefitNode(
     // need to fetch "other paired node" if earlyPairCompression is enabled
     {
         const bool isLeafNode = IsLeafNode(rc, args.numActivePrims);
-        bboxRightChild = FetchScratchNodeBoundingBox(rightNode,
-                                                     isLeafNode,
-                                                     args.doTriangleSplitting,
-                                                     args.splitBoxesOffset,
-                                                     args.enableEarlyPairCompression,
-                                                     args.unsortedNodesBaseOffset);
+        bboxRightChild = GetScratchNodeBoundingBox(rightNode,
+                                                   isLeafNode,
+                                                   args.doTriangleSplitting,
+                                                   args.splitBoxesOffset,
+                                                   args.enableEarlyPairCompression,
+                                                   args.unsortedNodesBaseOffset);
         numMortonCells += isLeafNode ? 1 : rightNode.splitBox_or_nodePointer;
     }
 
@@ -749,12 +742,12 @@ void RefitNode(
     // need to fetch "other paired node" if earlyPairCompression is enabled
     {
         const bool isLeafNode = IsLeafNode(lc, args.numActivePrims);
-        bboxLeftChild = FetchScratchNodeBoundingBox(leftNode,
-                                                    isLeafNode,
-                                                    args.doTriangleSplitting,
-                                                    args.splitBoxesOffset,
-                                                    args.enableEarlyPairCompression,
-                                                    args.unsortedNodesBaseOffset);
+        bboxLeftChild = GetScratchNodeBoundingBox(leftNode,
+                                                  isLeafNode,
+                                                  args.doTriangleSplitting,
+                                                  args.splitBoxesOffset,
+                                                  args.enableEarlyPairCompression,
+                                                  args.unsortedNodesBaseOffset);
         numMortonCells += isLeafNode ? 1 : leftNode.splitBox_or_nodePointer;
     }
 
@@ -785,16 +778,6 @@ void RefitNode(
         rightNode,
         mergedBoxSurfaceArea,
         largestLength);
-
-    if (args.enableInstancePrimCount)
-    {
-        const uint instancePrimCount = asuint(rightNode.sah_or_v2_or_instBasePtr[2]) +
-                                       asuint(leftNode.sah_or_v2_or_instBasePtr[2]);
-
-        WriteScratchNodeInstanceNumPrims(args.baseScratchNodesOffset,
-                                         nodeIndex,
-                                         instancePrimCount);
-    }
 }
 
 #endif

@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -88,30 +88,4 @@ uint CalcCompactedSize(
     return runningOffset + metadataSizeInBytes;
 }
 
-//=====================================================================================================================
-void WriteCompactedSize(
-    in uint              emitCompactSize,
-    in uint              accelStructType)
-{
-    const AccelStructHeader header = DstBuffer.Load<AccelStructHeader>(0);
-
-    // Unused
-    uint metadataSizeInBytes = 0;
-
-    // Unused
-    AccelStructOffsets offsets;
-
-    // Calculate compacted size
-    const uint compactedSize = CalcCompactedSize(header,
-                                                 accelStructType,
-                                                 offsets,
-                                                 metadataSizeInBytes);
-
-    WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_COMPACTED_BYTE_SIZE_OFFSET, compactedSize);
-
-    if (emitCompactSize != 0)
-    {
-        EmitBuffer.Store2(0, uint2(compactedSize, 0));
-    }
-}
 #endif

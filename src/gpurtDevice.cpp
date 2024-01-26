@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2019-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2019-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -294,11 +294,6 @@ uint32 Device::GetStaticPipelineFlags(
     if (skipProceduralPrims)
     {
         pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::SkipProceduralPrims);
-    }
-
-    if (m_info.deviceSettings.bvhCollapse)
-    {
-        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::BvhCollapse);
     }
 
     if (m_info.deviceSettings.rebraidType != RebraidType::Off)
@@ -1945,9 +1940,10 @@ uint32 Device::WriteBufferVa(
 // =====================================================================================================================
 // Performs a generic barrier that's used to synchronize internal ray tracing shaders
 void Device::RaytracingBarrier(
-    ClientCmdBufferHandle cmdBuffer)
+    ClientCmdBufferHandle cmdBuffer,
+    uint32                flags)
 {
-    m_pBackend->InsertBarrier(cmdBuffer);
+    m_pBackend->InsertBarrier(cmdBuffer, flags);
 }
 
 #if GPURT_DEVELOPER

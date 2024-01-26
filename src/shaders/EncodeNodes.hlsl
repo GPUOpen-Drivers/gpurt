@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -30,10 +30,11 @@
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u6, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
                 "CBV(b255),"\
-                "UAV(u6, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u7, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u7, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u8, visibility=SHADER_VISIBILITY_ALL)"
 
 [[vk::binding(0, 2)]] RWBuffer<float3>                     GeometryBuffer    : register(u0, space1);
 
@@ -43,12 +44,13 @@
 
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer DstMetadata       : register(u2);
 [[vk::binding(3, 0)]] RWByteAddressBuffer                  ScratchBuffer     : register(u3);
-[[vk::binding(4, 0)]] RWByteAddressBuffer                  SrcBuffer         : register(u4);
-[[vk::binding(5, 0)]] RWByteAddressBuffer                  IndirectArgBuffer : register(u5);
+[[vk::binding(4, 0)]] RWByteAddressBuffer                  ScratchGlobal     : register(u4);
+[[vk::binding(5, 0)]] RWByteAddressBuffer                  SrcBuffer         : register(u5);
+[[vk::binding(6, 0)]] RWByteAddressBuffer                  IndirectArgBuffer : register(u6);
 
 // unused buffer
-[[vk::binding(6, 0)]] globallycoherent RWByteAddressBuffer DstBuffer         : register(u6);
-[[vk::binding(7, 0)]] RWByteAddressBuffer                  EmitBuffer        : register(u7);
+[[vk::binding(7, 0)]] globallycoherent RWByteAddressBuffer DstBuffer         : register(u7);
+[[vk::binding(8, 0)]] RWByteAddressBuffer                  EmitBuffer        : register(u8);
 
 #include "Common.hlsl"
 #include "BuildCommon.hlsl"
@@ -56,15 +58,9 @@
 #include "EncodeCommon.hlsl"
 #include "EncodePairedTriangle.hlsl"
 
-[[vk::binding(0, 1)]] ConstantBuffer<GeometryArgs> ShaderConstants : register(b0);
+#include "TaskCounter.hlsl"
 
-//=====================================================================================================================
-// Increment task counter to mark a task / primitive as done
-void IncrementTaskCounter()
-{
-    DeviceMemoryBarrier();
-    ScratchBuffer.InterlockedAdd(ShaderConstants.encodeTaskCounterScratchOffset, 1);
-}
+[[vk::binding(0, 1)]] ConstantBuffer<GeometryArgs> ShaderConstants : register(b0);
 
 //=====================================================================================================================
 [RootSignature(RootSig)]
@@ -123,7 +119,7 @@ void EncodeTriangleNodes(
                                true);
         }
 
-        IncrementTaskCounter();
+        IncrementTaskCounter(ShaderConstants.encodeTaskCounterScratchOffset);
     }
 }
 
@@ -194,17 +190,17 @@ void WriteScratchProceduralNode(
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V2_OFFSET, data);
 
     // type, flags, splitBox, numPrimitivesAndDoCollapse
-    uint typeAndId = NODE_TYPE_USER_NODE_PROCEDURAL;
+    uint triangleId = 0;
 
     const float cost = SAH_COST_AABBB_INTERSECTION * ComputeBoxSurfaceArea(bbox);
 
     // Instance mask is assumed 0 in bottom level acceleration structures
     const uint flags = CalcProceduralBoxNodeFlags(geometryFlags);
 
-    const uint packedFlags = PackInstanceMaskAndNodeFlags(instanceMask, flags);
+    const uint packedFlags = PackScratchNodeFlags(instanceMask, flags, triangleId);
 
-    data = uint4(typeAndId, packedFlags, INVALID_IDX, asuint(cost));
-    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_TYPE_OFFSET, data);
+    data = uint4(packedFlags, INVALID_IDX, asuint(cost), NODE_TYPE_USER_NODE_PROCEDURAL);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_FLAGS_OFFSET, data);
 }
 
 //=====================================================================================================================
@@ -362,6 +358,6 @@ void EncodeAABBNodes(
         const uint flattenedPrimitiveIndex = primitiveOffset + primitiveIndex;
         ClearFlagsForRefitAndUpdate(ShaderConstants, flattenedPrimitiveIndex, true);
 
-        IncrementTaskCounter();
+        IncrementTaskCounter(ShaderConstants.encodeTaskCounterScratchOffset);
     }
 }

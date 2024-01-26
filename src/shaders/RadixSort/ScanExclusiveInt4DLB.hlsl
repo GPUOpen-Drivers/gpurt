@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -23,18 +23,20 @@
  *
  **********************************************************************************************************************/
 #if NO_SHADER_ENTRYPOINT == 0
-#define RootSig "RootConstants(num32BitConstants=1, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=2, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "CBV(b1),"\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
 struct RootConstants
 {
     uint NumElements;
+    uint passIndex;
 };
 #include "../../shared/rayTracingDefs.h"
 
@@ -44,10 +46,11 @@ struct RootConstants
 [[vk::binding(0, 0)]] RWByteAddressBuffer                  DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer                  DstMetadata   : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer : register(u2);
+[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer ScratchGlobal : register(u3);
 
 // unused buffer
-[[vk::binding(3, 0)]] RWByteAddressBuffer                  SrcBuffer     : register(u3);
-[[vk::binding(4, 0)]] RWByteAddressBuffer                  EmitBuffer    : register(u4);
+[[vk::binding(4, 0)]] RWByteAddressBuffer                  SrcBuffer     : register(u4);
+[[vk::binding(5, 0)]] RWByteAddressBuffer                  EmitBuffer    : register(u5);
 
 #include "ScanCommon.hlsli"
 #include "../BuildCommon.hlsl"
@@ -57,60 +60,6 @@ groupshared int SharedMem[GROUP_SIZE];
 
 #include "ScanExclusiveInt4DLBCommon.hlsl"
 #endif
-
-#define DLB_KEYS_PER_THREAD     4
-#define DLB_KEYS_PER_GROUP      (GROUP_SIZE * DLB_KEYS_PER_THREAD)
-
-#define DLB_VALID_SUM           0
-#define DLB_VALID_PREFIX_SUM    1
-#define NUM_DLB_VALID_TYPES     2
-
-//=====================================================================================================================
-uint CalcAtomicFlagsOffset(uint index, uint atomicFlagsScratchOffset, uint type)
-{
-    const uint idx = (index * NUM_DLB_VALID_TYPES) + type;
-    const uint offset = idx * sizeof(Flags);
-
-    return atomicFlagsScratchOffset + offset;
-}
-
-//=====================================================================================================================
-void WriteFlagsDLB(
-    uint    atomicFlagsScratchOffset,
-    uint    index,
-    uint    type,
-    Flags   flags)
-{
-    const uint offset = CalcAtomicFlagsOffset(index, atomicFlagsScratchOffset, type);
-
-    ScratchBuffer.Store(offset + FLAGS_PREFIX_SUM_OFFSET, flags.prefixSum);
-
-    DeviceMemoryBarrier();
-
-    ScratchBuffer.Store(offset + FLAGS_DATA_VALID_OFFSET, flags.dataValid);
-}
-
-//=====================================================================================================================
-uint ReadPrefixSumDLB(
-    uint atomicFlagsScratchOffset,
-    uint index,
-    uint type)
-{
-    const uint offset = CalcAtomicFlagsOffset(index, atomicFlagsScratchOffset, type);
-
-    return ScratchBuffer.Load(offset + FLAGS_PREFIX_SUM_OFFSET);
-}
-
-//=====================================================================================================================
-uint ReadValidDLB(
-    uint atomicFlagsScratchOffset,
-    uint index,
-    uint type)
-{
-    const uint offset = CalcAtomicFlagsOffset(index, atomicFlagsScratchOffset, type);
-
-    return ScratchBuffer.Load(offset + FLAGS_DATA_VALID_OFFSET);
-}
 
 //=====================================================================================================================
 void InitScanExclusiveInt4DLBImpl(
@@ -160,16 +109,24 @@ void ScanExclusiveInt4DLBImpl(
     uint globalId,
     uint localId,
     uint numElements,
+    uint iterationIndex,
     uint dynamicBlockIndexScratchOffset,
     uint atomicFlagsScratchOffset,
     uint inOutArrayScratchOffset)
 {
-    uint blockId;
+    const uint currIterationValidValue = iterationIndex + 1;
 
+    uint blockId;
     if (localId == 0)
     {
         ScratchBuffer.InterlockedAdd(dynamicBlockIndexScratchOffset, 1, blockId);
-        SharedMem[0] = blockId;
+
+        const uint blockSize = GROUP_SIZE;
+        const uint elementsPerBlock = blockSize * DLB_KEYS_PER_THREAD;
+        const uint numBlocks = RoundUpQuotient(numElements, elementsPerBlock);
+        const uint prevBlocksCompleted = iterationIndex * numBlocks;
+
+        SharedMem[0] = blockId - prevBlocksCompleted;
     }
 
     GroupMemoryBarrierWithGroupSync();
@@ -225,7 +182,7 @@ void ScanExclusiveInt4DLBImpl(
             // write out the sum
             Flags sum;
             sum.prefixSum = threadSumScanned + threadSum;
-            sum.dataValid = true;
+            sum.dataValid = currIterationValidValue;
 
             WriteFlagsDLB(atomicFlagsScratchOffset, blockId, DLB_VALID_SUM, sum);
 
@@ -236,18 +193,18 @@ void ScanExclusiveInt4DLBImpl(
             // if the prefix sum is NOT valid, then it fetches the SUM and continues to move backwards
             while (readBackIndex >= 0)
             {
-                if (ReadValidDLB(atomicFlagsScratchOffset, readBackIndex, DLB_VALID_PREFIX_SUM) != 0)
+                if (ReadValidDLB(atomicFlagsScratchOffset, readBackIndex, DLB_VALID_PREFIX_SUM) == currIterationValidValue)
                 {
                     prevSum += ReadPrefixSumDLB(atomicFlagsScratchOffset, readBackIndex, DLB_VALID_PREFIX_SUM);
 
                     Flags flags;
                     flags.prefixSum = prevSum + threadSumScanned + threadSum;
-                    flags.dataValid = 1;
+                    flags.dataValid = currIterationValidValue;
 
                     WriteFlagsDLB(atomicFlagsScratchOffset, blockId, DLB_VALID_PREFIX_SUM, flags);
                     break;
                 }
-                else if (ReadValidDLB(atomicFlagsScratchOffset, readBackIndex, DLB_VALID_SUM) != 0)
+                else if (ReadValidDLB(atomicFlagsScratchOffset, readBackIndex, DLB_VALID_SUM) == currIterationValidValue)
                 {
                     prevSum += ReadPrefixSumDLB(atomicFlagsScratchOffset, readBackIndex, DLB_VALID_SUM);
                     readBackIndex--;
@@ -267,7 +224,7 @@ void ScanExclusiveInt4DLBImpl(
     {
         Flags flags;
         flags.prefixSum = threadSumScanned + threadSum;
-        flags.dataValid = 1;
+        flags.dataValid = currIterationValidValue;
 
         WriteFlagsDLB(atomicFlagsScratchOffset, blockId, DLB_VALID_PREFIX_SUM, flags);
     }
@@ -303,6 +260,7 @@ void ScanExclusiveInt4DLB(
     ScanExclusiveInt4DLBImpl(globalThreadID.x,
                              localThreadID.x,
                              ShaderRootConstants.NumElements,
+                             ShaderRootConstants.passIndex,
                              ShaderConstants.offsets.dynamicBlockIndex,
                              ShaderConstants.offsets.prefixSumAtomicFlags,
                              ShaderConstants.offsets.histogram);

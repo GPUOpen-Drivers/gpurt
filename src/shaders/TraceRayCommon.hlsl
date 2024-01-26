@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -351,6 +351,187 @@ static void WriteRayHistoryTokenBottomLevel(
 }
 
 //=====================================================================================================================
+#define IS_WAVE_UNIFORM(var) WaveActiveAllTrue(WaveReadLaneFirst(var) == var)
+
+//=====================================================================================================================
+static void WriteRayHistoryTokenWaveBegin(
+    in uint     id,
+    in uint3    dispatchRaysIndex,
+    in uint64_t topLevelBvh,
+    in uint     rayFlags,
+    in uint     traceRayParams,
+    in RayDesc  ray,
+    in uint     staticId,
+    in uint     dynamicId,
+    in uint     parentId)
+{
+#ifndef __cplusplus
+    const uint numActiveLanes = WaveActiveCountBits(true);
+    const uint activeLaneIndex = WavePrefixSum(1);
+
+    const uint4 mask = WaveActiveBallot(true);
+
+    const bool waveUniformDispatchX      = (DispatchRaysConstBuf.rayDispatchWidth == 1);
+    const bool waveUniformDispatchY      = (DispatchRaysConstBuf.rayDispatchHeight == 1);
+    const bool waveUniformDispatchZ      = (DispatchRaysConstBuf.rayDispatchDepth == 1);
+    const bool waveUniformAccelStructLo  = IS_WAVE_UNIFORM(LowPart(topLevelBvh));
+    const bool waveUniformAccelStructHi  = IS_WAVE_UNIFORM(HighPart(topLevelBvh));
+    const bool waveUniformRayFlags       = IS_WAVE_UNIFORM(rayFlags);
+    const bool waveUniformTraceRayParams = IS_WAVE_UNIFORM(traceRayParams);
+    const bool waveUniformRayTMin        = IS_WAVE_UNIFORM(ray.TMin);
+    const bool waveUniformRayTMax        = IS_WAVE_UNIFORM(ray.TMax);
+
+    RayHistoryTokenWaveBeginPacketHeader header;
+    header.activeLaneMask    = (uint64_t(mask.y) << 32) | mask.x;
+    header.staticId          = staticId;
+    header.dynamicId         = dynamicId;
+    header.parentId          = parentId;
+
+    uint uniformVarBitMask = 0;
+    uniformVarBitMask |= waveUniformDispatchX      ? WAVE_UNIFORM_MASK_DISPATCH_X : 0;
+    uniformVarBitMask |= waveUniformDispatchY      ? WAVE_UNIFORM_MASK_DISPATCH_Y : 0;
+    uniformVarBitMask |= waveUniformDispatchZ      ? WAVE_UNIFORM_MASK_DISPATCH_Z : 0;
+    uniformVarBitMask |= waveUniformAccelStructLo  ? WAVE_UNIFORM_MASK_ADDR_LO    : 0;
+    uniformVarBitMask |= waveUniformAccelStructHi  ? WAVE_UNIFORM_MASK_ADDR_HI    : 0;
+    uniformVarBitMask |= waveUniformRayFlags       ? WAVE_UNIFORM_MASK_RAY_FLAGS  : 0;
+    uniformVarBitMask |= waveUniformTraceRayParams ? WAVE_UNIFORM_MASK_PARAMS     : 0;
+    uniformVarBitMask |= waveUniformRayTMin        ? WAVE_UNIFORM_MASK_TMIN       : 0;
+    uniformVarBitMask |= waveUniformRayTMax        ? WAVE_UNIFORM_MASK_TMAX       : 0;
+
+    header.packedHwWaveIdAndMask = (AmdTraceRayGetHwWaveId() & 0xffff) | (uniformVarBitMask << 16);
+
+    // Write ray history begin tokens
+    const uint headerSizeDw = RAY_HISTORY_WAVE_BEGIN_PACKET_HEADER_SIZE + countbits(uniformVarBitMask);
+    const uint packetSizeDw = RAY_HISTORY_WAVE_BEGIN_PACKET_DATA_SIZE + countbits((~uniformVarBitMask) & 0xFF);
+
+    uint offset = 0;
+    if (WaveIsFirstLane())
+    {
+        offset = WriteRayHistoryControlToken(
+            id, RAY_HISTORY_TOKEN_TYPE_WAVE_BEGIN, headerSizeDw + (packetSizeDw * numActiveLanes), 0);
+
+        if (offset != 0xFFFFFFFF)
+        {
+            Counters.Store<RayHistoryTokenWaveBeginPacketHeader>(offset, header);
+            offset += sizeof(RayHistoryTokenWaveBeginPacketHeader);
+
+            if (waveUniformDispatchX)
+            {
+                Counters.Store(offset, dispatchRaysIndex.x);
+                offset += sizeof(uint);
+            }
+            if (waveUniformDispatchY)
+            {
+                Counters.Store(offset, dispatchRaysIndex.y);
+                offset += sizeof(uint);
+            }
+            if (waveUniformDispatchZ)
+            {
+                Counters.Store(offset, dispatchRaysIndex.z);
+                offset += sizeof(uint);
+            }
+            if (waveUniformAccelStructLo)
+            {
+                Counters.Store(offset, LowPart(topLevelBvh));
+                offset += sizeof(uint);
+            }
+            if (waveUniformAccelStructHi)
+            {
+                Counters.Store(offset, HighPart(topLevelBvh));
+                offset += sizeof(uint);
+            }
+            if (waveUniformRayFlags)
+            {
+                Counters.Store(offset, rayFlags);
+                offset += sizeof(uint);
+            }
+            if (waveUniformTraceRayParams)
+            {
+                Counters.Store(offset, traceRayParams);
+                offset += sizeof(uint);
+            }
+            if (waveUniformRayTMin)
+            {
+                Counters.Store(offset, asuint(ray.TMin));
+                offset += sizeof(float);
+            }
+            if (waveUniformRayTMax)
+            {
+                Counters.Store(offset, asuint(ray.TMax));
+                offset += sizeof(float);
+            }
+        }
+    }
+
+    const uint waveOffset = WaveReadLaneFirst(offset);
+
+    // Per-lane packet stride in bytes
+    const uint packetStride = (packetSizeDw * sizeof(uint32_t));
+
+    if (waveOffset != 0xFFFFFFFF)
+    {
+        // Wave variant data
+        uint rayOffset = waveOffset + (activeLaneIndex * packetStride);
+
+        Counters.Store<uint>(rayOffset, id);
+        rayOffset += sizeof(uint);
+
+        Counters.Store<float3>(rayOffset, ray.Origin);
+        rayOffset += sizeof(float3);
+
+        Counters.Store<float3>(rayOffset, ray.Direction);
+        rayOffset += sizeof(float3);
+
+        if (!waveUniformDispatchX)
+        {
+            Counters.Store(rayOffset, dispatchRaysIndex.x);
+            rayOffset += sizeof(uint);
+        }
+        if (!waveUniformDispatchY)
+        {
+            Counters.Store(rayOffset, dispatchRaysIndex.y);
+            rayOffset += sizeof(uint);
+        }
+        if (!waveUniformDispatchZ)
+        {
+            Counters.Store(rayOffset, dispatchRaysIndex.z);
+            rayOffset += sizeof(uint);
+        }
+        if (!waveUniformAccelStructLo)
+        {
+            Counters.Store(rayOffset, LowPart(topLevelBvh));
+            rayOffset += sizeof(uint);
+        }
+        if (!waveUniformAccelStructHi)
+        {
+            Counters.Store(rayOffset, HighPart(topLevelBvh));
+            rayOffset += sizeof(uint);
+        }
+        if (!waveUniformRayFlags)
+        {
+            Counters.Store(rayOffset, rayFlags);
+            rayOffset += sizeof(uint);
+        }
+        if (!waveUniformTraceRayParams)
+        {
+            Counters.Store(rayOffset, traceRayParams);
+            rayOffset += sizeof(uint);
+        }
+        if (!waveUniformRayTMin)
+        {
+            Counters.Store(rayOffset, asuint(ray.TMin));
+            rayOffset += sizeof(float);
+        }
+        if (!waveUniformRayTMax)
+        {
+            Counters.Store(rayOffset, asuint(ray.TMax));
+            rayOffset += sizeof(float);
+        }
+    }
+#endif
+}
+
+//=====================================================================================================================
 // Write per-TraceRay data to ray history buffer
 //
 // id                : Unique caller generated ray identifier
@@ -396,6 +577,11 @@ static void WriteRayHistoryTokenBegin(
 
             Counters.Store3(offset + 0x40, uint3(staticId, dynamicId, parentId));
         }
+    }
+    else if (LogCountersRayHistory(id, RAY_HISTORY_TOKEN_TYPE_WAVE_BEGIN))
+    {
+        WriteRayHistoryTokenWaveBegin(
+            id, dispatchRaysIndex, topLevelBvh, rayFlags, traceRayParams, ray, staticId, dynamicId, parentId);
     }
 }
 

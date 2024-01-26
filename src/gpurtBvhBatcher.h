@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -29,6 +29,7 @@
 
 namespace GpuRt
 {
+enum class BuildPhaseFlags : uint32;
 class BvhBuilder;
 
 // =====================================================================================================================
@@ -53,6 +54,9 @@ public:
     void RadixSort(
         Util::Span<BvhBuilder> builders);
 
+    void UpdateEnabledPhaseFlags(
+        BuildPhaseFlags builderPhaseFlags);
+
 private:
     template <bool IsTlas>
     void BuildRaytracingAccelerationStructureBatch(
@@ -63,7 +67,9 @@ private:
     void DispatchInitAccelerationStructure(
         Util::Span<BvhBuilder> builders);
 
-    void Barrier();
+    void Barrier(uint32 flags = 0);
+
+    bool PhaseEnabled(BuildPhaseFlags phase);
 
     template <typename BatchBuilderFunc>
     void BuildFunction(
@@ -98,6 +104,8 @@ private:
     const Pal::DeviceProperties&      m_deviceProps;
     ClientCallbacks                   m_clientCb;
     const DeviceSettings&             m_deviceSettings;      // Device settings
+
+    BuildPhaseFlags m_enabledPhaseFlags{};
 };
 
 };

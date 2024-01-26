@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2021-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2021-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -165,6 +165,7 @@ struct TraversalCounter
 #define RAY_HISTORY_TOKEN_TYPE_CANDIDATE_INTERSECTION_RESULT         8
 #define RAY_HISTORY_TOKEN_TYPE_INTERSECTION_RESULT_V2                9
 #define RAY_HISTORY_TOKEN_TYPE_BEGIN_V2                              10
+#define RAY_HISTORY_TOKEN_TYPE_WAVE_BEGIN                            11
 #define RAY_HISTORY_TOKEN_TYPE_RESERVED                              0x8000
 #define RAY_HISTORY_TOKEN_TYPE_UNKNOWN                               0xffff
 
@@ -179,6 +180,8 @@ struct TraversalCounter
 #define RAY_HISTORY_TOKEN_CANDIDATE_INTERSECTION_RESULT_SIZE         2
 #define RAY_HISTORY_TOKEN_INTERSECTION_RESULT_V2_SIZE                6
 #define RAY_HISTORY_TOKEN_BEGIN_V2_SIZE                              19
+#define RAY_HISTORY_WAVE_BEGIN_PACKET_HEADER_SIZE                    6
+#define RAY_HISTORY_WAVE_BEGIN_PACKET_DATA_SIZE                      7
 
 #define RAY_HISTORY_CONTROL_TOKEN_TYPE_MASK    0xFFFF
 #define RAY_HISTORY_CONTROL_TOKEN_LENGTH_MASK  0xFF
@@ -198,6 +201,60 @@ struct TraversalCounter
 #define RAY_TRACING_COUNTER_REQUEST_BYTE_OFFSET 0
 #define RAY_TRACING_COUNTER_RAY_ID_BYTE_OFFSET  4
 #define RAY_TRACING_COUNTER_RESERVED_BYTE_SIZE  8
+
+// ====================================================================================================================
+// Each bit in the uniformVarBitMask corresponds to one entry in the payload type enumeration.
+enum RayHistoryTokenWaveBeginTokenPayloadType
+{
+    DispatchRaysIndexX,
+    DispatchRaysIndexY,
+    DispatchRaysIndexZ,
+    AccelStructAddrLo,
+    AccelStructAddrHi,
+    RayFlags,
+    PackedTraceRayParams,
+    TMin,
+    TMax
+};
+
+#define WAVE_UNIFORM_MASK_DISPATCH_X 0x0001
+#define WAVE_UNIFORM_MASK_DISPATCH_Y 0x0002
+#define WAVE_UNIFORM_MASK_DISPATCH_Z 0x0004
+#define WAVE_UNIFORM_MASK_ADDR_LO    0x0008
+#define WAVE_UNIFORM_MASK_ADDR_HI    0x0010
+#define WAVE_UNIFORM_MASK_RAY_FLAGS  0x0020
+#define WAVE_UNIFORM_MASK_PARAMS     0x0040
+#define WAVE_UNIFORM_MASK_TMIN       0x0080
+#define WAVE_UNIFORM_MASK_TMAX       0x0100
+
+// ====================================================================================================================
+struct RayHistoryTokenWaveBeginPacketHeader
+{
+#ifdef __cplusplus
+    uint32_t hwWaveId          : 16; // Unique hardware wave identifier (SQ_WAVE_HW_ID_LEGACY), low 16-bits only
+    uint32_t uniformVarBitMask : 16; // Bit mask of uniform payload data
+#else
+    uint32_t packedHwWaveIdAndMask;  // See above.
+#endif
+    uint64_t activeLaneMask;         // Bit mask of active lanes that invoked traversal
+    uint32_t staticId;
+    uint32_t dynamicId;
+    uint32_t parentId;
+
+    // variable data follows (size = bitcount(uniformVarBitMask); max size of 24 bytes)
+    //
+};
+
+// ====================================================================================================================
+struct RayHistoryTokenWaveBeginPacketData
+{
+    uint32 rayId;
+    float origin[3];
+    float direction[3];
+
+    // variable data follows (size = bitcount(~uniformVarBitMask))
+    //
+};
 
 #ifdef __cplusplus
 // ====================================================================================================================
@@ -291,6 +348,10 @@ enum RayHistoryTokenType : uint16
     RayHistoryTokenCandidateIntersectionResult,
     RayHistoryTokenIntersectionResult_v2,
     RayHistoryTokenBegin_v2,
+    RayHistoryTokenWaveBegin,
+
+    // Custom application tokens starting here
+    RayHistoryTokenCustom = 0x4000,
 
     // Anything with the top bit set is reserved
     RayHistoryTokenReserved = 0x8000,

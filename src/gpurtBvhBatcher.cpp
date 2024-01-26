@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -85,6 +85,8 @@ void BvhBatcher::BuildAccelerationStructureBatch(
                            m_clientCb,
                            m_deviceSettings,
                            info);
+
+        UpdateEnabledPhaseFlags(builder.EnabledPhases());
 
         const bool isUpdate = Util::TestAnyFlagSet(info.inputs.flags, AccelStructBuildFlagPerformUpdate);
         const bool isTlas = info.inputs.type == AccelStructType::TopLevel;
@@ -198,10 +200,13 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
                 // Build one TLAS at a time.
                 // Workaround for crashes in cases where there are multiple TLAS and some are TopDown
                 // Games usually have one TLAS per batch, so this shouldn't cause a significant performance impact
+                const BuildPhaseFlags backup = m_enabledPhaseFlags;
                 for (size_t index = 0; index < builders.size(); ++index)
                 {
+                    m_enabledPhaseFlags = builders[index].EnabledPhases();
                     BuildMultiDispatch(builders.Subspan(index, 1u));
                 }
+                m_enabledPhaseFlags = backup;
             }
             else
             {
@@ -229,6 +234,10 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
     {
         RGP_PUSH_MARKER("EmitPostBuildInfo");
 
+        if (PhaseEnabled(BuildPhaseFlags::SeparateEmitPostBuildInfoPass))
+        {
+            Barrier();
+        }
         BuildPhase("Updates", updaters, &BvhBuilder::EmitPostBuildInfo);
         BuildPhase("Builds", builders, &BvhBuilder::EmitPostBuildInfo);
 
@@ -246,68 +255,71 @@ void BvhBatcher::BuildMultiDispatch(Util::Span<BvhBuilder> builders)
         return;
     }
 
-    // Wait for the encoding operation to complete.
-    Barrier();
-
-    // Rebraid the TLAS leaves
-    BuildPhase("Rebraid", builders, &BvhBuilder::Rebraid);
-
-    // Wait until Rebraid has finished
-    Barrier();
-
-    if (builders[0].m_buildConfig.topDownBuild)
+    if (PhaseEnabled(BuildPhaseFlags::Rebraid))
     {
-        BuildPhase("BuildBVHTD", builders, &BvhBuilder::BuildBVHTD);
-
         Barrier();
-
+        BuildPhase("Rebraid", builders, &BvhBuilder::Rebraid);
+    }
+    if (PhaseEnabled(BuildPhaseFlags::BuildBVHTD))
+    {
+        Barrier();
+        BuildPhase("BuildBVHTD", builders, &BvhBuilder::BuildBVHTD);
+    }
+    if (PhaseEnabled(BuildPhaseFlags::GenerateMortonCodes))
+    {
+        Barrier();
+        BuildPhase("GenerateMortonCodes", builders, &BvhBuilder::GenerateMortonCodes);
+    }
+    if (PhaseEnabled(BuildPhaseFlags::MergeSort))
+    {
+        Barrier();
+        const uint32 wavesPerSimd = builders.size() == 1 ? 16U : 4U;
+        BuildFunction("Merge Sort", builders, [wavesPerSimd](BvhBuilder& builder)
+        {
+            builder.MergeSort(wavesPerSimd);
+        });
+    }
+    if (PhaseEnabled(BuildPhaseFlags::RadixSort))
+    {
+        Barrier();
+        RGP_PUSH_MARKER("Radix Sort");
+        RadixSort(builders);
+        RGP_POP_MARKER();
+    }
+    if (PhaseEnabled(BuildPhaseFlags::BuildBVH))
+    {
+        Barrier();
+        BuildPhase("BuildBVH", builders, &BvhBuilder::BuildBVH);
+    }
+    if (PhaseEnabled(BuildPhaseFlags::SortScratchLeaves))
+    {
+        Barrier();
+        BuildPhase("SortScratchLeaves", builders, &BvhBuilder::SortScratchLeaves);
+    }
+    if (PhaseEnabled(BuildPhaseFlags::BuildBVHPLOC))
+    {
+        Barrier();
+        const uint32 wavesPerSimd = builders.size() == 1 ? 4U : 1U;
+        BuildFunction("BuildBVHPLOC", builders, [wavesPerSimd](BvhBuilder& builder)
+        {
+            builder.BuildBVHPLOC(wavesPerSimd);
+        });
+    }
+    if (PhaseEnabled(BuildPhaseFlags::RefitBounds))
+    {
+        Barrier();
+        BuildPhase("RefitBounds", builders, &BvhBuilder::RefitBounds);
+    }
+    if (PhaseEnabled(BuildPhaseFlags::PairCompression))
+    {
+        Barrier();
+        BuildPhase("PairCompression", builders, &BvhBuilder::PairCompression);
+    }
+    if (PhaseEnabled(BuildPhaseFlags::BuildQBVH))
+    {
+        Barrier();
         BuildPhase("BuildQBVH", builders, &BvhBuilder::BuildQBVH);
-        return;
     }
-
-    // Generate morton codes from leaf nodes
-    BuildPhase("GenerateMortonCodes", builders, &BvhBuilder::GenerateMortonCodes);
-
-    // Wait for the morton code generation to complete
-    Barrier();
-
-    if (m_deviceSettings.enableMergeSort)
-    {
-        BuildPhase("MergeSort", builders, &BvhBuilder::MergeSort);
-    }
-    else
-    {
-        if (builders.size() == 1)
-        {
-            // Use legacy multidispatch radix sort for single builds
-            BuildPhase("SortRadixInt32", builders, &BvhBuilder::SortRadixInt32);
-        }
-        else
-        {
-            RGP_PUSH_MARKER("RadixSort");
-            RadixSort(builders);
-            RGP_POP_MARKER();
-        }
-    }
-
-    // Wait for the sorting to complete
-    Barrier();
-
-    BuildPhase("BuildLbvhOrSortLeaves", builders, &BvhBuilder::BuildLbvhOrSortLeaves);
-
-    // Wait for the BVH build to complete
-    Barrier();
-
-    BuildPhase("BuildBvhPlocOrRefit", builders, &BvhBuilder::BuildBvhPlocOrRefit);
-
-    Barrier();
-
-    BuildPhase("PairCompression", builders, &BvhBuilder::PairCompression);
-
-    Barrier();
-
-    BuildPhase("BuildQBVH", builders, &BvhBuilder::BuildQBVH);
-
 }
 
 // =====================================================================================================================
@@ -426,6 +438,9 @@ void BvhBatcher::RadixSort(Util::Span<BvhBuilder> builders)
     const uint32 numPasses = radixSortConfig.numPasses;
     uint32 bitShiftSize = 0;
 
+    // DLB Init only needs to run once before ScanExclusiveAddDLBScan is dispatched
+    BuildPhase("ScanExclusiveAddDLBInit", builders, &BvhBuilder::ScanExclusiveAddDLBInit);
+
     for (uint32 passIndex = 0; passIndex < numPasses; ++passIndex)
     {
         BuildFunction("BitHistogram", builders, [&](BvhBuilder& builder)
@@ -436,12 +451,10 @@ void BvhBatcher::RadixSort(Util::Span<BvhBuilder> builders)
         // Wait for the bit histogram to complete
         Barrier();
 
-        // Force DLB for now
-        BuildPhase("ScanExclusiveAddDLBInit", builders, &BvhBuilder::ScanExclusiveAddDLBInit);
-
-        Barrier();
-
-        BuildPhase("ScanExclusiveAddDLBScan", builders, &BvhBuilder::ScanExclusiveAddDLBScan);
+        BuildFunction("ScanExclusiveAddDLBScan", builders, [&](BvhBuilder& builder)
+        {
+            builder.ScanExclusiveAddDLBScan(passIndex);
+        });
 
         // Wait for the scan operation to complete
         Barrier();
@@ -463,9 +476,25 @@ void BvhBatcher::RadixSort(Util::Span<BvhBuilder> builders)
 
 // =====================================================================================================================
 // Performs a generic barrier that's used to synchronize internal ray tracing shaders
-void BvhBatcher::Barrier()
+void BvhBatcher::Barrier(
+    uint32 flags)
 {
-    m_pDevice->RaytracingBarrier(m_cmdBuffer);
+    m_pDevice->RaytracingBarrier(m_cmdBuffer, flags);
+}
+
+// =====================================================================================================================
+// Updates the enabled phases for the current batch using the flags provided by a BvhBuilder
+void BvhBatcher::UpdateEnabledPhaseFlags(
+    BuildPhaseFlags builderPhaseFlags)
+{
+    m_enabledPhaseFlags |= builderPhaseFlags;
+}
+
+// =====================================================================================================================
+// Checks if the provided phase is enabled for the current batch
+bool BvhBatcher::PhaseEnabled(BuildPhaseFlags phase)
+{
+    return Util::TestAnyFlagSet(uint32(m_enabledPhaseFlags), uint32(phase));
 }
 
 // =====================================================================================================================

@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2022-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2022-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -33,7 +33,12 @@
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
                 "CBV(b255),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
+
+#define TASK_COUNTER_BUFFER   ScratchBuffer
+#define TASK_COUNTER_OFFSET   UPDATE_SCRATCH_ENCODE_TASK_COUNT_OFFSET
+#define NUM_TASKS_DONE_OFFSET UPDATE_SCRATCH_ENCODE_TASKS_DONE_OFFSET
 
 //======================================================================================================================
 // 32 bit constants
@@ -57,8 +62,9 @@ struct InputArgs
 [[vk::binding(2, 0)]]                  RWByteAddressBuffer SrcBuffer      : register(u2);
 
 // unused buffer
-[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer DstBuffer     : register(u3);
-[[vk::binding(4, 0)]] RWByteAddressBuffer                  EmitBuffer    : register(u4);
+[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer DstBuffer      : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer                  EmitBuffer     : register(u4);
+[[vk::binding(5, 0)]] globallycoherent RWByteAddressBuffer ScratchGlobal  : register(u5);
 
 #include "EncodeCommon.hlsl"
 
@@ -86,8 +92,8 @@ void EncodePrimitives(
 {
     for (uint geometryIndex = 0; geometryIndex < ShaderConstants.numDescs; geometryIndex++)
     {
-        const uint primCount = GeometryConstants[geometryIndex].NumPrimitives;
-        const uint geometryBasePrimOffset = GeometryConstants[geometryIndex].PrimitiveOffset;
+        const uint numPrimitives = GeometryConstants[geometryIndex].NumPrimitives;
+        const uint primitiveOffset = GeometryConstants[geometryIndex].PrimitiveOffset;
 
         GeometryArgs geometryArgs = GeometryConstants[geometryIndex];
         geometryArgs.BuildFlags = DDI_BUILD_FLAG_PERFORM_UPDATE;
@@ -95,20 +101,19 @@ void EncodePrimitives(
         if (globalId == 0)
         {
             WriteGeometryInfo(
-                geometryArgs, geometryBasePrimOffset, geometryArgs.NumPrimitives, DECODE_PRIMITIVE_STRIDE_TRIANGLE);
+                geometryArgs, primitiveOffset, geometryArgs.NumPrimitives, DECODE_PRIMITIVE_STRIDE_TRIANGLE);
         }
 
-        for (uint primitiveIndex = globalId; primitiveIndex < primCount; primitiveIndex += ShaderConstants.numThreads)
+        for (uint primitiveIndex = globalId; primitiveIndex < numPrimitives; primitiveIndex += ShaderConstants.numThreads)
         {
-            EncodeTriangleNode(
-                GeometryBuffer[geometryIndex],
-                IndexBuffer[geometryIndex],
-                TransformBuffer[geometryIndex],
-                geometryArgs,
-                primitiveIndex,
-                geometryBasePrimOffset,
-                0,
-                true);
+            EncodeTriangleNode(GeometryBuffer[geometryIndex],
+                               IndexBuffer[geometryIndex],
+                               TransformBuffer[geometryIndex],
+                               geometryArgs,
+                               primitiveIndex,
+                               primitiveOffset,
+                               0,
+                               true);
         }
     }
 }

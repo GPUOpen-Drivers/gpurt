@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2022-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2022-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -183,10 +183,10 @@ struct AccelStructHeader
 {
     AccelStructHeaderInfo  info;                    // Miscellaneous information about the accel struct
     uint32                 metadataSizeInBytes;     // Total size of the metadata in bytes (including metadata header)
-    uint32                 sizeInBytes;             // Total size of the accel struct beginning with this header
+    uint32                 sizeInBytes;             // Total size of the AS including both the metadata and primary AS
     uint32                 numPrimitives;           // Number of primitives encoded in the structure
     uint32                 numActivePrims;          // Number of active primitives
-    uint32                 taskIdCounter;           // Counter for allocting IDs to tasks in a persistent thread group
+    uint32                 reserved0;
     uint32                 numDescs;                // Number of instance/geometry descs in the structure
     uint32                 geometryType;            // Type of geometry contained in a bottom level structure
     AccelStructDataOffsets offsets;                 // Offsets within accel struct (not including the header)
@@ -211,18 +211,14 @@ struct AccelStructHeader
     uint32                 packedFlags;             // Bottom level acceleration structure node flags and instance mask
                                                     // Flags [0:7], Instance Exclusion Mask [8:15]
     uint32                 compactedSizeInBytes;    // Total compacted size of the accel struct
-
-    // if enableSAHCost is enabled,
-    // this can be also used to store the actual SAH cost rather than the number of primitives
-#if __cpluslus
-    uint32                 numChildPrims[4];
+#if __cplusplus
+    uint32                 padding[4];
 #else
-    uint32                 numChildPrims0;
-    uint32                 numChildPrims1;
-    uint32                 numChildPrims2;
-    uint32                 numChildPrims3;
+    uint32                 padding0;
+    uint32                 padding1;
+    uint32                 padding2;
+    uint32                 padding3;
 #endif
-
     uint32 GetInfo()
     {
 #ifdef __cplusplus
@@ -261,7 +257,7 @@ struct AccelStructHeader
 #define ACCEL_STRUCT_HEADER_BYTE_SIZE_OFFSET                     8
 #define ACCEL_STRUCT_HEADER_NUM_PRIMS_OFFSET                    12
 #define ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET             16
-#define ACCEL_STRUCT_HEADER_TASK_ID_COUNTER                     20
+#define ACCEL_STRUCT_RESERVERED0_OFFSET                         20
 #define ACCEL_STRUCT_HEADER_NUM_DESCS_OFFSET                    24
 #define ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET                28
 #define ACCEL_STRUCT_HEADER_OFFSETS_OFFSET                      32
@@ -276,7 +272,6 @@ struct AccelStructHeader
 #define ACCEL_STRUCT_HEADER_INFO_2_OFFSET                       100
 #define ACCEL_STRUCT_HEADER_PACKED_FLAGS_OFFSET                 104
 #define ACCEL_STRUCT_HEADER_COMPACTED_BYTE_SIZE_OFFSET          108
-#define ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET              112
 
 // Acceleration structure root node starts immediately after the header
 #define ACCEL_STRUCT_ROOT_NODE_OFFSET ACCEL_STRUCT_HEADER_SIZE
@@ -288,7 +283,9 @@ GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_METADATA_SIZE_OFFSET           == offset
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_BYTE_SIZE_OFFSET               == offsetof(AccelStructHeader, sizeInBytes),          "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_NUM_PRIMS_OFFSET               == offsetof(AccelStructHeader, numPrimitives),        "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET        == offsetof(AccelStructHeader, numActivePrims),       "");
-GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_TASK_ID_COUNTER                == offsetof(AccelStructHeader, taskIdCounter),        "");
+
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_RESERVERED0_OFFSET                   == offsetof(AccelStructHeader, reserved0),             "");
+
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_NUM_DESCS_OFFSET               == offsetof(AccelStructHeader, numDescs),             "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET           == offsetof(AccelStructHeader, geometryType),         "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_OFFSETS_OFFSET                 == offsetof(AccelStructHeader, offsets),              "");
@@ -303,7 +300,6 @@ GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET           == offset
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_INFO_2_OFFSET                  == offsetof(AccelStructHeader, info2),                "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_PACKED_FLAGS_OFFSET            == offsetof(AccelStructHeader, packedFlags),          "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_COMPACTED_BYTE_SIZE_OFFSET     == offsetof(AccelStructHeader, compactedSizeInBytes), "");
-GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET         == offsetof(AccelStructHeader, numChildPrims0),       "");
 
 #ifdef __cplusplus
 // =====================================================================================================================

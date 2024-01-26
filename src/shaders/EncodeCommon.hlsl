@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -248,9 +248,6 @@ void WriteScratchTriangleNode(
     const float cost = SAH_COST_TRIANGLE_INTERSECTION * ComputeBoxSurfaceArea(bbox);
 
     // type, flags, splitBox, numPrimitivesAndDoCollapse
-    const uint triangleId        = CalcUncompressedTriangleId(geometryFlags);
-    const uint triangleTypeAndId = (triangleId << 3) | NODE_TYPE_TRIANGLE_0;
-
     uint flags = CalcTriangleBoxNodeFlags(geometryFlags);
 
     // Disable triangle splitting if geometry descriptor allows duplicate anyHit invocation
@@ -259,10 +256,11 @@ void WriteScratchTriangleNode(
         flags |= SCRATCH_NODE_FLAGS_DISABLE_TRIANGLE_SPLIT_MASK;
     }
 
-    const uint packedFlags = PackInstanceMaskAndNodeFlags(instanceMask, flags);
+    const uint triangleId = CalcUncompressedTriangleId(geometryFlags);
+    const uint packedFlags = PackScratchNodeFlags(instanceMask, flags, triangleId);
 
-    data = uint4(triangleTypeAndId, packedFlags, INVALID_IDX, asuint(cost));
-    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_TYPE_OFFSET, data);
+    data = uint4(packedFlags, INVALID_IDX, asuint(cost), NODE_TYPE_TRIANGLE_0);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_FLAGS_OFFSET, data);
 }
 
 //=====================================================================================================================
@@ -486,9 +484,8 @@ void PushNodeForUpdate(
                                                        geometryArgs.IndexBufferFormat);
 
             // Check if vertex indices are within bounds.
-            if ((faceIndices.x < geometryArgs.vertexCount) &&
-                (faceIndices.y < geometryArgs.vertexCount) &&
-                (faceIndices.z < geometryArgs.vertexCount))
+            const uint maxIndex = max(faceIndices.x, max(faceIndices.y, faceIndices.z));
+            if (maxIndex < geometryArgs.vertexCount)
             {
                 // Fetch triangle vertex data from vertex buffer.
                 const TriangleData tri = FetchTransformedTriangleData(geometryArgs,
@@ -626,7 +623,7 @@ void EncodeTriangleNode(
     RWStructuredBuffer<float4> TransformBuffer,
     GeometryArgs               geometryArgs,
     uint                       primitiveIndex,
-    uint                       geometryBasePrimOffset,
+    uint                       primitiveOffset,
     uint                       vertexOffset,
     bool                       writeNodesToUpdateStack)
 {
@@ -640,7 +637,7 @@ void EncodeTriangleNode(
     const uint basePrimNodePtr =
         IsUpdate() ? offsets.primNodePtrs : geometryArgs.BasePrimNodePtrOffset;
 
-    const uint flattenedPrimitiveIndex = geometryBasePrimOffset + primitiveIndex;
+    const uint flattenedPrimitiveIndex = primitiveOffset + primitiveIndex;
     const uint primNodePointerOffset =
         metadataSize + basePrimNodePtr + (flattenedPrimitiveIndex * sizeof(uint));
 
@@ -651,9 +648,8 @@ void EncodeTriangleNode(
                                          geometryArgs.IndexBufferFormat);
 
     // Check if vertex indices are within bounds, otherwise make the triangle inactive
-    if ((faceIndices.x < geometryArgs.vertexCount) &&
-        (faceIndices.y < geometryArgs.vertexCount) &&
-        (faceIndices.z < geometryArgs.vertexCount))
+    const uint maxIndex = max(faceIndices.x, max(faceIndices.y, faceIndices.z));
+    if (maxIndex < geometryArgs.vertexCount)
     {
         // Fetch triangle vertex data from vertex buffer
         TriangleData tri = FetchTransformedTriangleData(geometryArgs,
@@ -776,7 +772,7 @@ void EncodeTriangleNode(
             }
 
             WriteScratchTriangleNode(geometryArgs,
-                                     geometryBasePrimOffset,
+                                     primitiveOffset,
                                      primitiveIndex,
                                      geometryArgs.GeometryIndex,
                                      geometryArgs.GeometryFlags,

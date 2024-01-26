@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -23,8 +23,10 @@
  *
  **********************************************************************************************************************/
 //
-// New rebraid algorithm supports up to a rebraidFactor < 4.  It's optimized for this case.
-// It prioritizes the largest sized Instances for a single opening.
+// Newer Rebraid algorithm:
+//
+// Uses 2 types of heuristics for prioritizing openings (ENABLE_HIGHER_QUALITY)
+// Can control number of iterations vis build settings (args.numIterations)
 
 #if NO_SHADER_ENTRYPOINT == 0
 #define RootSig "RootConstants(num32BitConstants=1, b0),"\
@@ -33,8 +35,9 @@
                 "UAV(u1),"\
                 "UAV(u2),"\
                 "UAV(u3),"\
+                "UAV(u4),"\
                 "CBV(b255),"\
-                "UAV(u4)"
+                "UAV(u5)"
 
 #include "../shared/rayTracingDefs.h"
 
@@ -49,10 +52,11 @@ struct RootConstants
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstBuffer          : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata        : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer      : register(u2);
-[[vk::binding(3, 0)]]                  RWByteAddressBuffer InstanceDescBuffer : register(u3);
+[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer ScratchGlobal      : register(u3);
+[[vk::binding(4, 0)]]                  RWByteAddressBuffer InstanceDescBuffer : register(u4);
 
 // unused buffer
-[[vk::binding(4, 0)]] RWByteAddressBuffer                  SrcBuffer          : register(u4);
+[[vk::binding(5, 0)]] RWByteAddressBuffer                  SrcBuffer          : register(u5);
 
 #include "BuildCommonScratch.hlsl"
 
@@ -64,10 +68,8 @@ groupshared uint SharedMem[MAX_LDS_ELEMENTS];
 #include "RadixSort/ScanExclusiveInt4DLBCommon.hlsl"
 #endif
 
-#define REBRAID_KEYS_PER_THREAD         4
-#define REBRAID_KEYS_PER_GROUP          (BUILD_THREADGROUP_SIZE * REBRAID_KEYS_PER_THREAD)
-
-#define ENABLE_HIGHER_QUALITY           1
+#define LOG_BASE_N                          10
+#define LIMIT_OPENINGS_BASED_ON_ITERATION   1
 
 //=====================================================================================================================
 struct RebraidArgs
@@ -82,57 +84,31 @@ struct RebraidArgs
     uint atomicFlagsScratchOffset;
     uint encodeArrayOfPointers;
     uint enableMortonSize;
-    uint enableSAHCost;
+    uint numIterations;
+    uint qualityHeuristic;
 };
-
-//=====================================================================================================================
-void WriteFlags(RebraidArgs args, uint index, Flags flags)
-{
-    const uint offset = args.atomicFlagsScratchOffset + (index * sizeof(Flags));
-
-    ScratchBuffer.Store(offset + FLAGS_PREFIX_SUM_OFFSET, flags.prefixSum);
-
-    DeviceMemoryBarrier();
-
-    ScratchBuffer.Store(offset + FLAGS_DATA_VALID_OFFSET, flags.dataValid);
-}
-
-//=====================================================================================================================
-uint InterlockedCmpxDataValid(
-    RebraidArgs   args,
-    uint          index,
-    uint          compare,
-    uint          value)
-{
-    const uint offset = args.atomicFlagsScratchOffset + (index * sizeof(Flags)) + FLAGS_DATA_VALID_OFFSET;
-
-    uint original;
-    ScratchBuffer.InterlockedCompareExchange(offset, compare, value, original);
-
-    return original;
-}
-
-//=====================================================================================================================
-uint ReadPrefixSum(
-    RebraidArgs args,
-    uint        index)
-{
-    const uint offset = index * sizeof(Flags);
-
-    return ScratchBuffer.Load(args.atomicFlagsScratchOffset + offset + FLAGS_PREFIX_SUM_OFFSET);
-}
 
 //=====================================================================================================================
 // Fetch bottom-level acceleration structure root child information.
 void FetchBlasRootChildInfo(
     uint64_t               blasBaseAddr,
-    uint32_t               rootNodePtr,
+    uint32_t               nodePtr,
     out_param(BoundingBox) bbox[4],
     out_param(uint4)       child)
 {
     {
-        const Float32BoxNode node = FetchFloat32BoxNode(blasBaseAddr,
-                                                        rootNodePtr);
+        Float32BoxNode node;
+
+        if (GetNodeType(nodePtr) == NODE_TYPE_BOX_FLOAT32)
+        {
+            node = FetchFloat32BoxNode(blasBaseAddr,
+                                       nodePtr);
+        }
+        else
+        {
+            node = FetchFloat16BoxNodeAsFp32(blasBaseAddr,
+                                             nodePtr);
+        }
         bbox[0].min = node.bbox0_min;
         bbox[0].max = node.bbox0_max;
         bbox[1].min = node.bbox1_min;
@@ -149,12 +125,8 @@ void FetchBlasRootChildInfo(
 }
 
 //=====================================================================================================================
-float CalculatePriorityUsingSAHComparison(RebraidArgs args, ScratchNode leaf)
+float CalculateInstanceChildrenSA(RebraidArgs args, uint nodePtr, ScratchNode leaf)
 {
-    const BoundingBox aabb = GetScratchNodeBoundingBox(leaf);
-
-    const uint rootNodePointer = CreateRootNodePointer();
-
     InstanceDesc desc;
 
     if (args.encodeArrayOfPointers != 0)
@@ -174,30 +146,24 @@ float CalculatePriorityUsingSAHComparison(RebraidArgs args, ScratchNode leaf)
     uint4 child = uint4(INVALID_IDX, INVALID_IDX, INVALID_IDX, INVALID_IDX);
 
     BoundingBox bbox[4];
-    FetchBlasRootChildInfo(address, rootNodePointer, bbox, child);
+    FetchBlasRootChildInfo(address, nodePtr, bbox, child);
 
-    BoundingBox temp = TransformBoundingBox(bbox[0], desc.Transform);
-    float surfaceArea = ComputeBoxSurfaceArea(temp);
+    float surfaceArea = 0;
 
-    if (child[1] != INVALID_IDX)
+    for (uint i = 0; i < 4; i++)
     {
-        temp = TransformBoundingBox(bbox[1], desc.Transform);
-        surfaceArea += ComputeBoxSurfaceArea(temp);
+        if (child[i] != INVALID_IDX)
+        {
+            BoundingBox temp = TransformBoundingBox(bbox[i], desc.Transform);
+            if ((IsInvalidBoundingBox(bbox[i]) == false) && (IsCorruptBox(temp) == false))
+            {
+                float currentSurfaceArea = ComputeBoxSurfaceArea(temp);
+                surfaceArea += currentSurfaceArea;
+            }
+        }
     }
 
-    if (child[2] != INVALID_IDX)
-    {
-        temp = TransformBoundingBox(bbox[2], desc.Transform);
-        surfaceArea += ComputeBoxSurfaceArea(temp);
-    }
-
-    if (child[3] != INVALID_IDX)
-    {
-        temp = TransformBoundingBox(bbox[3], desc.Transform);
-        surfaceArea += ComputeBoxSurfaceArea(temp);
-    }
-
-    return max(0, ComputeBoxSurfaceArea(aabb) - surfaceArea);
+    return surfaceArea;
 }
 
 //=====================================================================================================================
@@ -213,6 +179,9 @@ void RebraidImpl(
     const uint sumValueOffset            = args.stateScratchOffset + STATE_REBRAID_SUM_VALUE_OFFSET;
     const uint mutexOffset               = args.stateScratchOffset + STATE_REBRAID_MUTEX_OFFSET;
 
+    const uint numLeafIndicesOffset      = args.stateScratchOffset + STATE_REBRAID_NUM_LEAF_INDICES_OFFSET;
+    const uint iterationCountOffset      = args.stateScratchOffset + STATE_REBRAID_ITERATION_COUNT_OFFSET;
+
     if (args.numPrimitives == 0)
     {
         return;
@@ -225,12 +194,21 @@ void RebraidImpl(
 
     if (globalId == 0)
     {
-        AllocTasks(numGroups, REBRAID_PHASE_INIT, taskQueueOffset);
+        ScratchBuffer.Store<float2>(sumValueOffset, float2(0, 0));
+        ScratchBuffer.Store<uint>(mutexOffset, 0);
+
+        ScratchBuffer.Store<uint>(numLeafIndicesOffset, args.numPrimitives);
+        ScratchBuffer.Store<uint>(iterationCountOffset, 0);
+
+        DeviceMemoryBarrier();
+
+        AllocTasks(numGroups, REBRAID_PHASE_CALC_SUM, taskQueueOffset);
     }
 
     const uint rootNodePointer = CreateRootNodePointer();
 
-    const float openFactor = 0.2; // this is the percentage of extension allowed to the scene bounds
+    // more than 1 iteration is not yet supported
+    // since only the first level is up to 4 children
 
     while (1)
     {
@@ -244,80 +222,89 @@ void RebraidImpl(
 
         switch (phase)
         {
-            case REBRAID_PHASE_INIT:
-            {
-                const uint numStages = RoundUpQuotient(args.numPrimitives, REBRAID_KEYS_PER_GROUP);
-
-                for (uint stage = globalId; stage < numStages; stage += numThreads)
-                {
-                    Flags flags;
-                    flags.dataValid = 0;
-                    flags.prefixSum = 0;
-
-                    WriteFlags(args, stage, flags);
-                }
-
-                if (globalId == 0)
-                {
-                    ScratchBuffer.Store<float>(sumValueOffset, 0);
-                    ScratchBuffer.Store<uint>(mutexOffset, 0);
-                }
-
-                if (EndTask(localId, taskQueueOffset))
-                {
-                    AllocTasks(numGroups, REBRAID_PHASE_CALC_SUM, taskQueueOffset);
-                }
-                break;
-            }
-
             // calculates the priorities based on surface of all instances and also the sum of all priorities
             case REBRAID_PHASE_CALC_SUM:
             {
-                for (uint i = globalId; i < args.numPrimitives; i += numThreads)
+                const uint iterationCount = ScratchBuffer.Load(iterationCountOffset);
+                const uint numPrims       = ScratchBuffer.Load(numLeafIndicesOffset);
+
+                // init for next phase
+                const uint numStages = RoundUpQuotient(numPrims, REBRAID_KEYS_PER_GROUP);
+                for (uint stage = globalId; stage < numStages; stage += numThreads)
                 {
-                    const ScratchNode leaf = FetchScratchNode(args.bvhLeafNodeDataScratchOffset, i);
-
-                    if (IsNodeActive(leaf))
+                    for (uint type = 0; type < NUM_DLB_VALID_TYPES; type++)
                     {
-                        const BoundingBox aabb = GetScratchNodeBoundingBox(leaf);
+                        Flags flags;
+                        flags.dataValid = 0;
+                        flags.prefixSum = 0;
 
-                        if (IsInvalidBoundingBox(aabb))
+                        WriteFlagsDLB(args.atomicFlagsScratchOffset, stage, type, flags);
+                    }
+                }
+
+                if (iterationCount == 0)
+                {
+                    float localSum = 0;
+
+                    const uint currentSumValueOffset = sumValueOffset + ((iterationCount & 0x1) * sizeof(float));
+
+                    for (uint i = globalId; i < numPrims; i += numThreads)
+                    {
+                        const ScratchNode leaf = FetchScratchNode(args.bvhLeafNodeDataScratchOffset, i);
+
+                        if (IsNodeActive(leaf))
                         {
-                            continue;
+                            const BoundingBox aabb = GetScratchNodeInstanceBounds(leaf);
+
+                            const uint nodePtr = leaf.splitBox_or_nodePointer == 0 ?
+                                                 rootNodePointer : leaf.splitBox_or_nodePointer;
+
+                            if (IsBoxNode(nodePtr))
+                            {
+                                float instanceSA;
+
+                                if (args.qualityHeuristic == 0)
+                                {
+                                    const float childSA = CalculateInstanceChildrenSA(args, nodePtr, leaf);
+                                    instanceSA = log(max(0, ComputeBoxSurfaceArea(aabb) - childSA) + 1)
+                                                    / log(LOG_BASE_N);
+                                }
+                                else
+                                {
+                                    instanceSA = log(ComputeBoxSurfaceArea(aabb) + 1)
+                                                    / log(LOG_BASE_N);
+                                }
+
+                                localSum += instanceSA;
+                            }
                         }
+                    }
 
-#if ENABLE_HIGHER_QUALITY
-                        const float surfaceArea = CalculatePriorityUsingSAHComparison(args, leaf);
-#else
-                        const float surfaceArea = ComputeBoxSurfaceArea(aabb);
-#endif
-                        const float waveSum = WaveActiveSum(log(surfaceArea + 1));
+                    const float waveSum = WaveActiveSum(localSum);
+                    if (WaveIsFirstLane())
+                    {
+                        // mutex lock
+                        uint orig = 1;
 
-                        if (WaveIsFirstLane())
-                        {
-                            // mutex lock
-                            uint orig = 1;
-
-                            do {
-                                DeviceMemoryBarrier();
-                                ScratchBuffer.InterlockedCompareExchange(mutexOffset, 0, 1, orig);
-                            } while (orig);
-
-                            const float globalSum = ScratchBuffer.Load<float>(sumValueOffset);
-
-                            ScratchBuffer.Store<float>(sumValueOffset, globalSum + waveSum);
-
+                        do {
                             DeviceMemoryBarrier();
+                            ScratchBuffer.InterlockedCompareExchange(mutexOffset, 0, 1, orig);
+                        } while (orig);
 
-                            ScratchBuffer.Store(mutexOffset, 0); //unlock
-                        }
+                        const float globalSum = ScratchBuffer.Load<float>(currentSumValueOffset);
+
+                        ScratchBuffer.Store<float>(currentSumValueOffset, globalSum + waveSum);
+
+                        DeviceMemoryBarrier();
+
+                        ScratchBuffer.Store(mutexOffset, 0); //unlock
                     }
                 }
 
                 if (EndTask(localId, taskQueueOffset))
                 {
-                    AllocTasks(RoundUpQuotient(args.numPrimitives, REBRAID_KEYS_PER_GROUP),
-                                                 REBRAID_PHASE_OPEN, taskQueueOffset);
+                    AllocTasks(RoundUpQuotient(numPrims, REBRAID_KEYS_PER_GROUP),
+                               REBRAID_PHASE_OPEN, taskQueueOffset);
                 }
                 break;
             }
@@ -325,12 +312,25 @@ void RebraidImpl(
             // allows a single opening to an instance based on if the numOpenings >= 1
             case REBRAID_PHASE_OPEN:
             {
-                const float globalSum = ScratchBuffer.Load<float>(sumValueOffset);
+                const uint iterationCount = ScratchBuffer.Load(iterationCountOffset);
+                const uint numPrims = ScratchBuffer.Load(numLeafIndicesOffset);
 
-                const uint maxOpenings = (args.maxNumPrims - args.numPrimitives) / 3;
+                const uint readSumValueOffset = sumValueOffset + ((iterationCount & 0x1) * sizeof(float));
+                const uint writeSumValueOffset = sumValueOffset + (((iterationCount + 1) & 0x1) * sizeof(float));
+
+                const float globalSum = ScratchBuffer.Load<float>(readSumValueOffset);
+
+#if LIMIT_OPENINGS_BASED_ON_ITERATION
+                const uint allocSpace = (args.maxNumPrims - numPrims) / (args.numIterations - iterationCount);
+                uint maxOpenings = allocSpace / 3;
+#else
+                uint maxOpenings = (args.maxNumPrims - numPrims) / 3;
+#endif
+                // makes sure there's no out of bounds access due to float precision
+                maxOpenings = (maxOpenings > 0) ? maxOpenings - 1 : 0;
 
                 const uint start = globalId * REBRAID_KEYS_PER_THREAD;
-                const uint end = min(start + REBRAID_KEYS_PER_THREAD, args.numPrimitives);
+                const uint end = min(start + REBRAID_KEYS_PER_THREAD, numPrims);
 
                 uint localKeys[REBRAID_KEYS_PER_THREAD];
                 bool open[REBRAID_KEYS_PER_THREAD];
@@ -341,62 +341,58 @@ void RebraidImpl(
                 {
                     const ScratchNode leaf = FetchScratchNode(args.bvhLeafNodeDataScratchOffset, i);
 
-                    if (IsNodeActive(leaf))
+                    bool isOpen = false;
+
+                    if (IsNodeActive(leaf) && (globalSum != 0))
                     {
-                        const BoundingBox aabb = GetScratchNodeBoundingBox(leaf);
+                        const BoundingBox aabb = GetScratchNodeInstanceBounds(leaf);
 
-                        bool dontOpen = false;
+                        const uint nodePtr = leaf.splitBox_or_nodePointer == 0 ?
+                                             rootNodePointer : leaf.splitBox_or_nodePointer;
 
-                        if (IsInvalidBoundingBox(aabb))
+                        if (IsBoxNode(nodePtr))
                         {
-                            dontOpen = true;
-                        }
+                            float instanceSA;
 
-                        uint numOpenings = 0;
-
-                        if (!dontOpen)
-                        {
-#if ENABLE_HIGHER_QUALITY
-                            const float surfaceArea = CalculatePriorityUsingSAHComparison(args, leaf);
-#else
-                            const float surfaceArea = ComputeBoxSurfaceArea(aabb);
-#endif
-                            const float value = log(surfaceArea + 1);
-
-                            numOpenings = maxOpenings * (value / globalSum);
-                        }
-
-                        if (numOpenings > 0)
-                        {
-                            const uint64_t instanceBasePointer =
-                                PackUint64(asuint(leaf.sah_or_v2_or_instBasePtr.x), asuint(leaf.sah_or_v2_or_instBasePtr.y));
-
-                            const uint childCount =
-                                GetBlasRebraidChildCount(instanceBasePointer, rootNodePointer);
-
-                            localKeys[keyIndex] = childCount - 1; // Additional children
-                            open[keyIndex] = true;
-                        }
-                        else
-                        {
-                            if (args.enableMortonSize)
+                            if (args.qualityHeuristic == 0)
                             {
-                                UpdateSceneSize(args.sceneBoundsOffset + 24, ComputeBoxSurfaceArea(aabb));
+                                const float childSA = CalculateInstanceChildrenSA(args, nodePtr, leaf);
+                                instanceSA = log(max(0, ComputeBoxSurfaceArea(aabb) - childSA) + 1)
+                                                / log(LOG_BASE_N);
+                            }
+                            else
+                            {
+                                instanceSA = log(ComputeBoxSurfaceArea(aabb) + 1) / log(LOG_BASE_N);
                             }
 
-                            localKeys[keyIndex] = 0;
-                            open[keyIndex] = false;
-                        }
+                            const float value = instanceSA;
 
-                        keyIndex++;
+                            const uint numOpenings = maxOpenings * (value / globalSum);
+
+                            if (numOpenings > 0)
+                            {
+                                const uint64_t instanceBasePointer =
+                                    PackUint64(asuint(leaf.sah_or_v2_or_instBasePtr.x),
+                                                asuint(leaf.sah_or_v2_or_instBasePtr.y));
+
+                                const uint childCount =
+                                    GetBlasRebraidChildCount(instanceBasePointer, nodePtr);
+
+                                localKeys[keyIndex] = childCount - 1; // Additional children
+                                open[keyIndex] = true;
+
+                                isOpen = true;
+                            }
+                        }
                     }
-                    else
+
+                    if (isOpen == false)
                     {
                         localKeys[keyIndex] = 0;
                         open[keyIndex] = false;
-
-                        keyIndex++;
                     }
+
+                    keyIndex++;
                 }
 
                 uint threadSum = 0;
@@ -419,47 +415,65 @@ void RebraidImpl(
                 }
 
                 // Wait until previous dynamic block finished and acquire its sum.
-
                 int prevSum = 0;
-
                 if (taskIndex > 0)
                 {
                     if (localId == (BUILD_THREADGROUP_SIZE - 1))
                     {
-                        while (1)
-                        {
-                            uint orig = InterlockedCmpxDataValid(args, taskIndex - 1, 1, 1);
+                        Flags sum;
+                        sum.prefixSum = threadSumScanned + threadSum;
+                        sum.dataValid = 1;
 
-                            if (orig != 0)
+                        WriteFlagsDLB(args.atomicFlagsScratchOffset, taskIndex, DLB_VALID_SUM, sum);
+
+                        int readBackIndex = taskIndex - 1;
+
+                        // checks previous blocks for prefix sum
+                        // if the prefix sum is valid then it breaks out of loop
+                        // if the prefix sum is NOT valid, then it fetches the SUM and continues to move backwards
+                        while (readBackIndex >= 0)
+                        {
+                            if (ReadValidDLB(args.atomicFlagsScratchOffset, readBackIndex, DLB_VALID_PREFIX_SUM) != 0)
                             {
+                                prevSum += ReadPrefixSumDLB(args.atomicFlagsScratchOffset, readBackIndex, DLB_VALID_PREFIX_SUM);
+
+                                Flags flags;
+                                flags.prefixSum = prevSum + threadSumScanned + threadSum;
+                                flags.dataValid = 1;
+
+                                WriteFlagsDLB(args.atomicFlagsScratchOffset, taskIndex, DLB_VALID_PREFIX_SUM, flags);
                                 break;
                             }
+                            else if (ReadValidDLB(args.atomicFlagsScratchOffset, readBackIndex, DLB_VALID_SUM) != 0)
+                            {
+                                prevSum += ReadPrefixSumDLB(args.atomicFlagsScratchOffset, readBackIndex, DLB_VALID_SUM);
+                                readBackIndex--;
+                            }
+
+                            DeviceMemoryBarrier();
                         }
 
-                        prevSum = ReadPrefixSum(args, taskIndex - 1);
                         SharedMem[0] = prevSum;
                     }
 
                     GroupMemoryBarrierWithGroupSync();
 
                     prevSum = SharedMem[0];
-                }
-
-                GroupMemoryBarrierWithGroupSync();
-
-                // Write our sum and enable successive blocks.
-                if (localId == (BUILD_THREADGROUP_SIZE - 1))
+                }     // Write our sum and enable successive blocks.
+                else if (localId == (BUILD_THREADGROUP_SIZE - 1))
                 {
                     Flags flags;
-                    flags.prefixSum = prevSum + threadSumScanned + threadSum;
+                    flags.prefixSum = threadSumScanned + threadSum;
                     flags.dataValid = 1;
 
-                    WriteFlags(args, taskIndex, flags);
+                    WriteFlagsDLB(args.atomicFlagsScratchOffset, taskIndex, DLB_VALID_PREFIX_SUM, flags);
                 }
 
                 GroupMemoryBarrierWithGroupSync();
 
                 keyIndex = 0;
+
+                float localSum = 0;
 
                 for (uint i = start; i < end; i++)
                 {
@@ -469,222 +483,213 @@ void RebraidImpl(
 
                     if (IsNodeActive(leaf))
                     {
-                        const GpuVirtualAddress address = GetInstanceAddr(asuint(leaf.sah_or_v2_or_instBasePtr.x),
-                                                                          asuint(leaf.sah_or_v2_or_instBasePtr.y));
-
-                        InstanceDesc desc;
-                        if (args.encodeArrayOfPointers != 0)
-                        {
-                            const GpuVirtualAddress addr = InstanceDescBuffer.Load<GpuVirtualAddress>(leaf.left_or_primIndex_or_instIndex *
-                                                                                                      GPU_VIRTUAL_ADDRESS_SIZE);
-                            desc = FetchInstanceDescAddr(addr);
-                        }
-                        else
-                        {
-                            desc = InstanceDescBuffer.Load<InstanceDesc>(leaf.left_or_primIndex_or_instIndex * INSTANCE_DESC_SIZE);
-                        }
-
-                        const uint4 costOrNumChildPrims = FetchHeaderCostOrNumChildPrims(address);
-
-                        float4 cost = float4(0,0,0,0);
-                        if (args.enableSAHCost)
-                        {
-                            const float transformFactor = FetchScratchLeafNodeCost(leaf);
-                            cost = transformFactor * asfloat(costOrNumChildPrims);
-                        }
-
                         if (open[keyIndex])
                         {
+                            const GpuVirtualAddress address = GetInstanceAddr(asuint(leaf.sah_or_v2_or_instBasePtr.x),
+                                                                              asuint(leaf.sah_or_v2_or_instBasePtr.y));
+
+                            InstanceDesc desc;
+                            if (args.encodeArrayOfPointers != 0)
+                            {
+                                const GpuVirtualAddress addr = InstanceDescBuffer.Load<GpuVirtualAddress>(leaf.left_or_primIndex_or_instIndex *
+                                                                                                          GPU_VIRTUAL_ADDRESS_SIZE);
+                                desc = FetchInstanceDescAddr(addr);
+                            }
+                            else
+                            {
+                                desc = InstanceDescBuffer.Load<InstanceDesc>(leaf.left_or_primIndex_or_instIndex * INSTANCE_DESC_SIZE);
+                            }
+
                             uint4 child = uint4(INVALID_IDX, INVALID_IDX, INVALID_IDX, INVALID_IDX);
 
                             BoundingBox bbox[4];
-                            FetchBlasRootChildInfo(address, rootNodePointer, bbox, child);
 
-                            BoundingBox temp = TransformBoundingBox(bbox[0], desc.Transform);
+                            const uint nodePtr = leaf.splitBox_or_nodePointer == 0 ?
+                                                 rootNodePointer : leaf.splitBox_or_nodePointer;
 
-                            if (any(isinf(temp.min)) || any(isinf(temp.max)))
-                            {
-                                temp = InvalidBoundingBox;
-                            }
-                            else
-                            {
-                                if (args.enableMortonSize)
-                                {
-                                    UpdateSceneSize(args.sceneBoundsOffset + 24, ComputeBoxSurfaceArea(temp));
-                                }
-                            }
-
-                            // update a new leaf
-                            WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_BBOX_MIN_OFFSET, temp.min);
-                            WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_BBOX_MAX_OFFSET, temp.max);
-                            WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_NODE_POINTER_OFFSET, child[0]);
-
-                            if (args.enableSAHCost == false)
-                            {
-                                WriteScratchNodeDataAtOffset(
-                                    scratchNodeOffset,
-                                    SCRATCH_NODE_INSTANCE_NUM_PRIMS_OFFSET,
-                                    costOrNumChildPrims[0]);
-                            }
-                            else
-                            {
-                                WriteScratchNodeCost(args.bvhLeafNodeDataScratchOffset, i, cost[0], true);
-                            }
-
+                            FetchBlasRootChildInfo(address, nodePtr, bbox, child);
                             // update leaf and siblings
                             uint numSiblings = 0;
 
-                            if (child[1] != INVALID_IDX)
+                            for (uint j = 0; j < 4; j++)
                             {
-                                temp = TransformBoundingBox(bbox[1], desc.Transform);
+                                if (child[j] != INVALID_IDX)
+                                {
+                                    BoundingBox temp = TransformBoundingBox(bbox[j], desc.Transform);
+                                    uint writeIndex;
 
-                                if (any(isinf(temp.min)) || any(isinf(temp.max)))
-                                {
-                                    temp = InvalidBoundingBox;
-                                }
-                                else
-                                {
-                                    if (args.enableMortonSize)
+                                    // update current leaf
+                                    if (j == 0)
                                     {
-                                        UpdateSceneSize(args.sceneBoundsOffset + 24, ComputeBoxSurfaceArea(temp));
+                                        writeIndex = i;
                                     }
-                                }
-
-                                leaf.bbox_min_or_v0 = temp.min;
-                                leaf.bbox_max_or_v1 = temp.max;
-
-                                const uint writeIndex = args.numPrimitives + prevSum + localKeys[keyIndex] + numSiblings;
-
-                                leaf.splitBox_or_nodePointer = child[1];
-
-                                if (args.enableSAHCost == false)
-                                {
-                                    leaf.sah_or_v2_or_instBasePtr.z = asfloat(costOrNumChildPrims[1]);
-                                }
-                                else
-                                {
-                                    leaf.numPrimitivesAndDoCollapse = asuint(cost[1]);
-                                }
-
-                                WriteScratchNode(args.bvhLeafNodeDataScratchOffset, writeIndex, leaf);
-
-                                numSiblings++;
-                            }
-
-                            if (child[2] != INVALID_IDX)
-                            {
-                                temp = TransformBoundingBox(bbox[2], desc.Transform);
-
-                                if (any(isinf(temp.min)) || any(isinf(temp.max)))
-                                {
-                                    temp = InvalidBoundingBox;
-                                }
-                                else
-                                {
-                                    if (args.enableMortonSize)
+                                    else // alloc new leaf
                                     {
-                                        UpdateSceneSize(args.sceneBoundsOffset + 24, ComputeBoxSurfaceArea(temp));
+                                        // "numPrims" number if leaves in leaf array
+                                        // + "prevSum" prefix sum from previous waves
+                                        // + "localKeys[keyIndex]" prefix sum from threads in the wave
+                                        // + "numSiblings" prefix sum of leaves belonging to this thread
+                                        writeIndex = numPrims + prevSum + localKeys[keyIndex] + numSiblings;
+                                        numSiblings++;
                                     }
-                                }
 
-                                leaf.bbox_min_or_v0 = temp.min;
-                                leaf.bbox_max_or_v1 = temp.max;
-
-                                const uint writeIndex = args.numPrimitives + prevSum + localKeys[keyIndex] + numSiblings;
-
-                                leaf.splitBox_or_nodePointer = child[2];
-
-                                if (args.enableSAHCost == false)
-                                {
-                                    leaf.sah_or_v2_or_instBasePtr.z = asfloat(costOrNumChildPrims[2]);
-                                }
-                                else
-                                {
-                                    leaf.numPrimitivesAndDoCollapse = asuint(cost[2]);
-                                }
-
-                                WriteScratchNode(args.bvhLeafNodeDataScratchOffset, writeIndex, leaf);
-
-                                numSiblings++;
-                            }
-
-                            if (child[3] != INVALID_IDX)
-                            {
-                                temp = TransformBoundingBox(bbox[3], desc.Transform);
-
-                                if (any(isinf(temp.min)) || any(isinf(temp.max)))
-                                {
-                                    temp = InvalidBoundingBox;
-                                }
-                                else
-                                {
-                                    if (args.enableMortonSize)
+                                    // TODO: remove from list for next iteration
+                                    if (IsInvalidBoundingBox(bbox[j]) || IsCorruptBox(temp))
                                     {
-                                        UpdateSceneSize(args.sceneBoundsOffset + 24, ComputeBoxSurfaceArea(temp));
+                                        temp.min.x = NaN; // set inactive
                                     }
+                                    else
+                                    {
+                                        if (iterationCount == (args.numIterations - 1))
+                                        {
+                                            if (args.enableMortonSize)
+                                            {
+                                                UpdateSceneBoundsWithSize(args.sceneBoundsOffset, temp);
+                                            }
+                                            else
+                                            {
+                                                UpdateSceneBounds(args.sceneBoundsOffset, temp);
+                                            }
+                                        }
+                                        else
+                                        {
+                                            if(IsBoxNode(child[j]))
+                                            {
+                                                float instanceSA;
+                                                if (args.qualityHeuristic == 0)
+                                                {
+                                                    const float childSA = CalculateInstanceChildrenSA(args, child[j], leaf);
+                                                    instanceSA = log(max(0, ComputeBoxSurfaceArea(temp) - childSA) + 1) / log(LOG_BASE_N);
+                                                }
+                                                else
+                                                {
+                                                    instanceSA = log(ComputeBoxSurfaceArea(temp) + 1) / log(LOG_BASE_N);
+                                                }
+
+                                                localSum += instanceSA;
+                                            }
+                                        }
+                                    }
+
+                                    leaf.bbox_min_or_v0 = temp.min;
+                                    leaf.bbox_max_or_v1 = temp.max;
+
+                                    leaf.splitBox_or_nodePointer = child[j];
+
+                                    WriteScratchNode(args.bvhLeafNodeDataScratchOffset, writeIndex, leaf);
                                 }
-
-                                leaf.bbox_min_or_v0 = temp.min;
-                                leaf.bbox_max_or_v1 = temp.max;
-
-                                const uint writeIndex = args.numPrimitives + prevSum + localKeys[keyIndex] + numSiblings;
-
-                                leaf.splitBox_or_nodePointer = child[3];
-
-                                if (args.enableSAHCost == false)
-                                {
-                                    leaf.sah_or_v2_or_instBasePtr.z = asfloat(costOrNumChildPrims[3]);
-                                }
-                                else
-                                {
-                                    leaf.numPrimitivesAndDoCollapse = asuint(cost[3]);
-                                }
-
-                                WriteScratchNode(args.bvhLeafNodeDataScratchOffset, writeIndex, leaf);
-
-                                numSiblings++;
                             }
                         }
                         else // no openings
                         {
-                            // point instance to the root
-                            WriteScratchNodeDataAtOffset(
-                                scratchNodeOffset,
-                                SCRATCH_NODE_NODE_POINTER_OFFSET,
-                                CreateRootNodePointer());
-
-                            if (args.enableSAHCost)
+                            // last iteration
+                            if (iterationCount == (args.numIterations - 1))
                             {
-                                float costSum = 0;
-
-                                for (uint c = 0; c < 4; c++)
+                                if (leaf.splitBox_or_nodePointer == 0)
                                 {
-                                    costSum += cost[c];
+                                    // point instance to the root
+                                    WriteScratchNodeDataAtOffset(
+                                        scratchNodeOffset,
+                                        SCRATCH_NODE_NODE_POINTER_OFFSET,
+                                        CreateRootNodePointer());
                                 }
 
-                                const BoundingBox aabb = GetScratchNodeBoundingBox(leaf);
+                                const BoundingBox aabb = GetScratchNodeInstanceBounds(leaf);
 
-                                const float surfaceArea = ComputeBoxSurfaceArea(aabb);
+                                if (args.enableMortonSize)
+                                {
+                                    UpdateSceneBoundsWithSize(args.sceneBoundsOffset, aabb);
+                                }
+                                else
+                                {
+                                    UpdateSceneBounds(args.sceneBoundsOffset, aabb);
+                                }
+                            }
+                            else
+                            {
+                                const BoundingBox aabb = GetScratchNodeInstanceBounds(leaf);
 
-                                costSum += SAH_COST_AABBB_INTERSECTION * surfaceArea;
+                                // TODO: maybe avoid this logic by subtracting the SA when opening
+                                const uint nodePtr = leaf.splitBox_or_nodePointer == 0 ?
+                                                     rootNodePointer : leaf.splitBox_or_nodePointer;
 
-                                WriteScratchNodeCost(args.bvhLeafNodeDataScratchOffset, i, costSum, true);
+                                if (IsBoxNode(nodePtr))
+                                {
+                                    float instanceSA;
+                                    if (args.qualityHeuristic == 0)
+                                    {
+                                        const float childSA = CalculateInstanceChildrenSA(args, nodePtr, leaf);
+                                        instanceSA = log(max(0, ComputeBoxSurfaceArea(aabb) - childSA) + 1)
+                                                        / log(LOG_BASE_N);
+                                    }
+                                    else
+                                    {
+                                        instanceSA = log(ComputeBoxSurfaceArea(aabb) + 1) / log(LOG_BASE_N);
+                                    }
+
+                                    localSum += instanceSA;
+                                }
                             }
                         }
                     }
 
                     keyIndex++;
 
-                    if (i == (args.numPrimitives - 1))
+                    if (i == (numPrims - 1))
                     {
-                        WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET,
-                                                    args.numPrimitives + prevSum + threadSumScanned + threadSum);
+                        DeviceMemoryBarrier();
+
+                        if (iterationCount == (args.numIterations - 1))
+                        {
+                            WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET,
+                                                        numPrims + prevSum + threadSumScanned + threadSum);
+                        }
+                        else
+                        {
+                            // no race condition as the prefix sum wait makes sure the
+                            // numLeafIndices are read already by previous waves
+                            ScratchBuffer.Store<float>(readSumValueOffset, 0);
+
+                            ScratchBuffer.Store(numLeafIndicesOffset, numPrims + prevSum + threadSumScanned + threadSum);
+                            ScratchBuffer.Store(iterationCountOffset, iterationCount + 1);
+                        }
+                    }
+                }
+
+                // create sum for next iteration
+                if (iterationCount != (args.numIterations - 1))
+                {
+                    const float waveSum = WaveActiveSum(localSum);
+                    if (WaveIsFirstLane())
+                    {
+                        // mutex lock
+                        uint orig = 1;
+
+                        do {
+                            DeviceMemoryBarrier();
+                            ScratchBuffer.InterlockedCompareExchange(mutexOffset, 0, 1, orig);
+                        } while (orig);
+
+                        const float globalSum = ScratchBuffer.Load<float>(writeSumValueOffset);
+
+                        ScratchBuffer.Store<float>(writeSumValueOffset, globalSum + waveSum);
+
+                        DeviceMemoryBarrier();
+
+                        ScratchBuffer.Store(mutexOffset, 0); //unlock
                     }
                 }
 
                 if (EndTask(localId, taskQueueOffset))
                 {
-                    AllocTasks(numGroups, REBRAID_PHASE_DONE, taskQueueOffset);
+                    if (iterationCount == (args.numIterations - 1))
+                    {
+                        AllocTasks(numGroups, REBRAID_PHASE_DONE, taskQueueOffset);
+                    }
+                    else
+                    {
+                        AllocTasks(numGroups, REBRAID_PHASE_CALC_SUM, taskQueueOffset);
+                    }
                 }
 
                 break;
@@ -707,7 +712,6 @@ void Rebraid(
     uint localId  : SV_GroupThreadID,
     uint groupId  : SV_GroupID)
 {
-
     RebraidArgs args;
 
     args.numPrimitives                      = ShaderConstants.numPrimitives;
@@ -719,7 +723,9 @@ void Rebraid(
     args.taskQueueCounterScratchOffset      = ShaderConstants.offsets.rebraidTaskQueueCounter;
     args.atomicFlagsScratchOffset           = ShaderConstants.offsets.splitAtomicFlags;
     args.encodeArrayOfPointers              = ShaderConstants.encodeArrayOfPointers;
-    args.enableSAHCost                      = Settings.enableSAHCost;
+
+    args.numIterations                      = Settings.numRebraidIterations;
+    args.qualityHeuristic                   = Settings.rebraidQualityHeuristic;
 
     RebraidImpl(globalId, localId, groupId, args);
 }

@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -27,9 +27,10 @@
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
-                "CBV(b255),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
+                "CBV(b255),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
 
 #include "../shared/rayTracingDefs.h"
 [[vk::binding(1, 0)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b0);
@@ -37,10 +38,11 @@
 [[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer DstMetadata   : register(u1);
 [[vk::binding(2, 0)]] RWByteAddressBuffer ScratchBuffer : register(u2);
+[[vk::binding(3, 0)]] RWByteAddressBuffer ScratchGlobal : register(u3);
 
 // unused buffer
-[[vk::binding(3, 0)]] RWByteAddressBuffer SrcBuffer     : register(u3);
-[[vk::binding(4, 0)]] RWByteAddressBuffer EmitBuffer    : register(u4);
+[[vk::binding(4, 0)]] RWByteAddressBuffer SrcBuffer     : register(u4);
+[[vk::binding(5, 0)]] RWByteAddressBuffer EmitBuffer    : register(u5);
 
 #include "Common.hlsl"
 #include "BuildCommonScratch.hlsl"
@@ -56,7 +58,6 @@ struct FastLBVHArgs
     uint baseScratchNodesOffset;
     uint sortedMortonCodesOffset;
     uint useMortonCode30;
-    uint doCollapse;
     uint doTriangleSplitting;
     uint splitBoxesOffset;
     uint numBatchesOffset;
@@ -71,7 +72,6 @@ struct FastLBVHArgs
     uint enableCentroidBoxes;
     bool ltdPackCentroids;
     int4 numMortonBits;
-    uint enableInstancePrimCount;
     uint enableEarlyPairCompression;
     uint unsortedNodesBaseOffset;
     uint reserved0;
@@ -198,7 +198,7 @@ void CopyUnsortedScratchLeafNode(
     // DO NOT COPY PARENT!!!
 
     WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_TYPE_OFFSET, unsortedNode.type);
-    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, unsortedNode.flags_and_instanceMask);
+    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_FLAGS_OFFSET, unsortedNode.packedFlags);
     WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, unsortedNode.splitBox_or_nodePointer);
     WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET, unsortedNode.numPrimitivesAndDoCollapse);
 }
@@ -268,7 +268,6 @@ void FastAgglomerativeLbvhImpl(
     refitArgs.topLevelBuild               = args.topLevelBuild;
     refitArgs.numActivePrims              = args.numActivePrims;
     refitArgs.baseScratchNodesOffset      = args.baseScratchNodesOffset;
-    refitArgs.doCollapse                  = args.doCollapse;
     refitArgs.doTriangleSplitting         = args.doTriangleSplitting;
     refitArgs.enablePairCompression       = args.enablePairCompression;
     refitArgs.enablePairCostCheck         = args.enablePairCostCheck;
@@ -281,7 +280,6 @@ void FastAgglomerativeLbvhImpl(
     refitArgs.enableCentroidBoxes         = args.enableCentroidBoxes;
     refitArgs.ltdPackCentroids            = args.ltdPackCentroids;
     refitArgs.numMortonBits               = args.numMortonBits;
-    refitArgs.enableInstancePrimCount     = args.enableInstancePrimCount;
     refitArgs.unsortedNodesBaseOffset     = args.unsortedNodesBaseOffset;
     refitArgs.enableEarlyPairCompression  = args.enableEarlyPairCompression;
     // Total number of internal nodes is N - 1
@@ -408,7 +406,7 @@ void SplitInternalNodeLbvh(
 
     WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_LEFT_OFFSET,  c1idx);
     WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_RIGHT_OFFSET, c2idx);
-    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, 0);
+    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_FLAGS_OFFSET, 0);
 
     const uint nodeType = GetInternalNodeType();
     WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_TYPE_OFFSET, nodeType);
@@ -440,7 +438,7 @@ void FastBuildBVH(
             WriteScratchNodeDataAtOffset(targetNodeOffset, SCRATCH_NODE_V2_OFFSET,             node.sah_or_v2_or_instBasePtr);
 
             WriteScratchNodeDataAtOffset(targetNodeOffset, SCRATCH_NODE_TYPE_OFFSET,            node.type);
-            WriteScratchNodeDataAtOffset(targetNodeOffset, SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, node.flags_and_instanceMask);
+            WriteScratchNodeDataAtOffset(targetNodeOffset, SCRATCH_NODE_FLAGS_OFFSET, node.packedFlags);
             WriteScratchNodeDataAtOffset(targetNodeOffset, SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, node.splitBox_or_nodePointer);
             WriteScratchNodeDataAtOffset(targetNodeOffset, SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET, node.numPrimitivesAndDoCollapse);
         }
@@ -456,7 +454,7 @@ void FastBuildBVH(
 
             WriteScratchNodeDataAtOffset(nodeOffset, SCRATCH_NODE_LEFT_OFFSET,  childLeft);
             WriteScratchNodeDataAtOffset(nodeOffset, SCRATCH_NODE_RIGHT_OFFSET, childRight);
-            WriteScratchNodeDataAtOffset(nodeOffset, SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET, 0);
+            WriteScratchNodeDataAtOffset(nodeOffset, SCRATCH_NODE_FLAGS_OFFSET, 0);
 
             const uint nodeType = GetInternalNodeType();
             WriteScratchNodeDataAtOffset(nodeOffset, SCRATCH_NODE_TYPE_OFFSET, nodeType);

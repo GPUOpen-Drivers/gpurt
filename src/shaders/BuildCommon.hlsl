@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -40,15 +40,12 @@
 #define IS_LEAF(i) ((i) >= (numActivePrims - 1))
 #define LEAF_OFFSET(i) ((i) - (numActivePrims - 1))
 
-#define MAX_COLLAPSED_TRIANGLES 8
-
 //=====================================================================================================================
 struct RefitArgs
 {
     uint topLevelBuild;
     uint numActivePrims;
     uint baseScratchNodesOffset;
-    uint doCollapse;
     uint doTriangleSplitting;
     uint enablePairCompression;
     uint enablePairCostCheck;
@@ -61,7 +58,6 @@ struct RefitArgs
     uint enableCentroidBoxes;
     bool ltdPackCentroids;
     int4 numMortonBits;
-    uint enableInstancePrimCount;
     uint unsortedNodesBaseOffset;
     uint enableEarlyPairCompression;
     uint reserved0;
@@ -426,7 +422,7 @@ uint64_t RoundUpQuotient(
 static uint32_t GetNumInternalNodeCount(
     in uint32_t primitiveCount)
 {
-    return CalcAccelStructInternalNodeCount(primitiveCount, 4u);
+    return CalcAccelStructInternalNodeCount(primitiveCount, 4, 2);
 }
 
 //=====================================================================================================================
@@ -571,21 +567,19 @@ uint ComputeChildIndexAndValidBoxCount(
 //=====================================================================================================================
 uint ReadParentPointer(
     in uint             metadataSizeInBytes,
-    in uint             packedNodePtr)
+    in uint             nodePtr)
 {
     // Read parent pointer in metadata buffer in reverse order
-    const uint nodePtr = ExtractNodePointerCollapse(packedNodePtr);
     return SrcBuffer.Load(metadataSizeInBytes - CalcParentPtrOffset(nodePtr));
 }
 
 //=====================================================================================================================
 void WriteParentPointer(
     in uint             metadataSizeInBytes,
-    in uint             packedNodePtr,
+    in uint             nodePtr,
     in uint             parentPtr)
 {
     // Store parent pointer in metadata buffer in reverse order
-    const uint nodePtr = ExtractNodePointerCollapse(packedNodePtr);
     DstMetadata.Store(metadataSizeInBytes - CalcParentPtrOffset(nodePtr), parentPtr);
 }
 
@@ -857,17 +851,20 @@ uint PackInstanceMaskAndNodeFlags(
 }
 
 //=====================================================================================================================
+uint PackScratchNodeFlags(
+    uint instanceInclusionMask,
+    uint nodeFlags,
+    uint triangleId)
+{
+    const uint packedFlags = (triangleId << 16) | PackInstanceMaskAndNodeFlags(instanceInclusionMask, nodeFlags);
+    return packedFlags;
+}
+
+//=====================================================================================================================
 static void WriteAccelStructHeaderRootBoundingBox(
     in BoundingBox bbox)
 {
     DstBuffer.Store<BoundingBox>(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET, bbox);
-}
-
-//=====================================================================================================================
-static void WriteAccelStructHeaderCostOrNumChildPrims(
-    in uint4 costOrNumChildPrims)
-{
-    DstBuffer.Store<uint4>(ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET, costOrNumChildPrims);
 }
 
 //=====================================================================================================================
@@ -899,6 +896,53 @@ bool EnableLatePairCompression()
     return (Settings.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
            (Settings.topLevelBuild == false) &&
            (Settings.enableEarlyPairCompression == false);
+}
+
+//=====================================================================================================================
+uint CalcAtomicFlagsOffset(uint index, uint atomicFlagsScratchOffset, uint type)
+{
+    const uint idx = (index * NUM_DLB_VALID_TYPES) + type;
+    const uint offset = idx * sizeof(Flags);
+
+    return atomicFlagsScratchOffset + offset;
+}
+
+//=====================================================================================================================
+void WriteFlagsDLB(
+    uint    atomicFlagsScratchOffset,
+    uint    index,
+    uint    type,
+    Flags   flags)
+{
+    const uint offset = CalcAtomicFlagsOffset(index, atomicFlagsScratchOffset, type);
+
+    ScratchBuffer.Store(offset + FLAGS_PREFIX_SUM_OFFSET, flags.prefixSum);
+
+    DeviceMemoryBarrier();
+
+    ScratchBuffer.Store(offset + FLAGS_DATA_VALID_OFFSET, flags.dataValid);
+}
+
+//=====================================================================================================================
+uint ReadPrefixSumDLB(
+    uint atomicFlagsScratchOffset,
+    uint index,
+    uint type)
+{
+    const uint offset = CalcAtomicFlagsOffset(index, atomicFlagsScratchOffset, type);
+
+    return ScratchBuffer.Load(offset + FLAGS_PREFIX_SUM_OFFSET);
+}
+
+//=====================================================================================================================
+uint ReadValidDLB(
+    uint atomicFlagsScratchOffset,
+    uint index,
+    uint type)
+{
+    const uint offset = CalcAtomicFlagsOffset(index, atomicFlagsScratchOffset, type);
+
+    return ScratchBuffer.Load(offset + FLAGS_DATA_VALID_OFFSET);
 }
 
 //=====================================================================================================================

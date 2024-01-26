@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -112,6 +112,19 @@ void PalBackend::BindPipeline(
 }
 
 // =====================================================================================================================
+void PalBackend::DispatchIndirect(
+    ClientCmdBufferHandle cmdBuffer,
+    uint64                indirectArgumentAddr
+    ) const
+{
+    // PAL major version 838 added dispatch indirect by GPUVA. It is available before the client updates to 838, so
+    // there is no need to check the PAL client version.
+#if PAL_INTERFACE_MAJOR_VERSION >= 838
+    GetCmdBuffer(cmdBuffer)->CmdDispatchIndirect(indirectArgumentAddr);
+#endif
+}
+
+// =====================================================================================================================
 void PalBackend::Dispatch(
     ClientCmdBufferHandle cmdBuffer,
     uint32                x,
@@ -171,9 +184,12 @@ uint32* PalBackend::AllocateEmbeddedData(
 
 // =====================================================================================================================
 void PalBackend::InsertBarrier(
-    ClientCmdBufferHandle cmdBuffer
+    ClientCmdBufferHandle cmdBuffer,
+    uint32                flags
     ) const
 {
+    const bool syncIndirectArgs = flags & BarrierFlagSyncIndirectArg;
+
     Pal::ICmdBuffer* pCmdBuffer = GetCmdBuffer(cmdBuffer);
     if (m_deviceSettings.enableAcquireReleaseInterface)
     {
@@ -183,6 +199,12 @@ void PalBackend::InsertBarrier(
         acqRelInfo.srcGlobalAccessMask = Pal::CoherShader;
         acqRelInfo.dstGlobalAccessMask = Pal::CoherShader;
 
+        if (syncIndirectArgs)
+        {
+            acqRelInfo.dstGlobalStageMask  |= Pal::PipelineStageFetchIndirectArgs;
+            acqRelInfo.dstGlobalAccessMask |= Pal::CoherIndirectArgs;
+        }
+
         acqRelInfo.reason = m_deviceSettings.rgpBarrierReason;
 
         pCmdBuffer->CmdReleaseThenAcquire(acqRelInfo);
@@ -190,7 +212,7 @@ void PalBackend::InsertBarrier(
     else
     {
         Pal::BarrierInfo barrierInfo = {};
-        barrierInfo.waitPoint = Pal::HwPipePreCs;
+        barrierInfo.waitPoint = syncIndirectArgs ? Pal::HwPipeTop : Pal::HwPipePreCs;
 
         const Pal::HwPipePoint pipePoint = Pal::HwPipePostCs;
         barrierInfo.pipePointWaitCount = 1;
@@ -199,6 +221,11 @@ void PalBackend::InsertBarrier(
         Pal::BarrierTransition transition = {};
         transition.srcCacheMask = Pal::CoherShader;
         transition.dstCacheMask = Pal::CoherShader;
+
+        if (syncIndirectArgs)
+        {
+            transition.dstCacheMask |= Pal::CoherIndirectArgs;
+        }
 
         barrierInfo.transitionCount = 1;
         barrierInfo.pTransitions = &transition;

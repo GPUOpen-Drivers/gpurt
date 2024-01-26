@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -70,6 +70,8 @@ public:
 
     virtual void Dispatch(ClientCmdBufferHandle cmdBuffer, uint32 x, uint32 y, uint32 z) const override;
 
+    virtual void DispatchIndirect(ClientCmdBufferHandle cmdBuffer, uint64 indirectArgumentAddr) const override;
+
     virtual void CommentString(ClientCmdBufferHandle cmdBuffer, const char* comment) const override;
 
     virtual void WriteImmediateSingle(
@@ -88,7 +90,7 @@ public:
         gpusize*              pGpuAddress
     ) const override;
 
-    virtual void InsertBarrier(ClientCmdBufferHandle cmdBuffer) const override;
+    virtual void InsertBarrier(ClientCmdBufferHandle cmdBuffer, uint32 flags) const override;
 
     virtual uint32* AllocateDescriptorTable(
         ClientCmdBufferHandle cmdBuffer,

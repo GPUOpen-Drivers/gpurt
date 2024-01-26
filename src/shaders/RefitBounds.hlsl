@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -26,10 +26,11 @@
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
                 "CBV(b255),"\
-                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
 
 #include "../shared/rayTracingDefs.h"
 
@@ -38,10 +39,11 @@
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer  DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer                   DstMetadata   : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer  ScratchBuffer : register(u2);
+[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer  ScratchGlobal : register(u3);
 
 // unused buffer
-[[vk::binding(3, 0)]] RWByteAddressBuffer                   SrcBuffer     : register(u3);
-[[vk::binding(4, 0)]] RWByteAddressBuffer                   EmitBuffer    : register(u4);
+[[vk::binding(4, 0)]] RWByteAddressBuffer                   SrcBuffer     : register(u4);
+[[vk::binding(5, 0)]] RWByteAddressBuffer                   EmitBuffer    : register(u5);
 
 #include "IntersectCommon.hlsl"
 #include "RefitBoundsImpl.hlsl"
@@ -68,7 +70,6 @@ void RefitBounds(
                         bvhNodes,
                         ShaderConstants.offsets.bvhLeafNodeData,
                         ShaderConstants.offsets.primIndicesSorted,
-                        Settings.doCollapse,
                         Settings.doTriangleSplitting,
                         Settings.noCopySortedNodes,
                         Settings.enableEarlyPairCompression,
@@ -80,8 +81,7 @@ void RefitBounds(
                         Settings.fp16BoxNodesMode,
                         Settings.fp16BoxModeMixedSaThreshold,
                         0,
-                        false,
-                        0,
-                        0);
+                        0
+        );
     }
 }

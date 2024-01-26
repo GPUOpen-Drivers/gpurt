@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -149,9 +149,9 @@ static IntersectionResult TraceRayImpl1_1(
 
     // Start from root node which follows acceleration structure header
     // BLAS root node is always fp32 regardless of mode for fp16 box nodes
-    const uint blasRootNodePtr   = CreateRootNodePointer1_1();
-    uint       packedNodePointer = blasRootNodePtr;
-    uint       tlasNodePtr       = INVALID_IDX;
+    const uint blasRootNodePtr  = CreateRootNodePointer1_1();
+    uint       nodePtr          = blasRootNodePtr;
+    uint       tlasNodePtr      = INVALID_IDX;
 
     bool isGoingDown   = true;
     uint prevNodePtr   = INVALID_IDX;
@@ -187,45 +187,43 @@ static IntersectionResult TraceRayImpl1_1(
     }
 
 #if DEVELOPER
-    while ((packedNodePointer != INVALID_IDX) && (intersection.numIterations < DispatchRaysConstBuf.profileMaxIterations))
+    while ((nodePtr != INVALID_IDX) && (intersection.numIterations < DispatchRaysConstBuf.profileMaxIterations))
 #else
-    while (packedNodePointer != INVALID_IDX)
+    while (nodePtr != INVALID_IDX)
 #endif
     {
 #if DEVELOPER
         if (EnableTraversalCounter())
         {
-            WriteRayHistoryTokenNodePtr(rayId, packedNodePointer);
+            WriteRayHistoryTokenNodePtr(rayId, nodePtr);
 
             intersection.numIterations++;
 
-            if (IsBoxNode1_1(packedNodePointer))
+            if (IsBoxNode1_1(nodePtr))
             {
                 intersection.numRayBoxTest++;
             }
-            else if (IsTriangleNode1_1(packedNodePointer))
+            else if (IsTriangleNode1_1(nodePtr))
             {
                 intersection.numRayTriangleTest++;
             }
-            else if (IsUserNodeInstance(packedNodePointer))
+            else if (IsUserNodeInstance(nodePtr))
             {
                 intersection.instanceIntersections++;
             }
 
-            UpdateWaveTraversalStatistics(GPURT_RTIP1_1, packedNodePointer);
+            UpdateWaveTraversalStatistics(GPURT_RTIP1_1, nodePtr);
         }
 #endif
 
         // Backup last traversed node pointer
-        prevNodePtr = packedNodePointer;
-
-        const uint nodePointer = ExtractNodePointer(packedNodePointer);
+        prevNodePtr = nodePtr;
 
         // pre-calculate node address
-        const GpuVirtualAddress nodeAddr64 = currentBvh + ExtractNodePointerOffset(nodePointer);
+        const GpuVirtualAddress nodeAddr64 = currentBvh + ExtractNodePointerOffset(nodePtr);
 
         uint4 intersectionResult = image_bvh64_intersect_ray(currentBvh,
-                                                             nodePointer,
+                                                             nodePtr,
                                                              boxSortMode,
                                                              intersection.t,
                                                              localRay.Origin,
@@ -233,7 +231,7 @@ static IntersectionResult TraceRayImpl1_1(
                                                              rcp(localRay.Direction));
 
         // Set next node pointer to invalid to trigger node search
-        packedNodePointer = INVALID_NODE;
+        nodePtr = INVALID_NODE;
 
         // Check if it is an internal node
         if (IsBoxNode1_1(prevNodePtr))
@@ -255,7 +253,7 @@ static IntersectionResult TraceRayImpl1_1(
                 }
 
                 // Traverse next valid node
-                packedNodePointer = intersectionResult.x;
+                nodePtr = intersectionResult.x;
             }
             else
             {
@@ -269,9 +267,9 @@ static IntersectionResult TraceRayImpl1_1(
                 // Switch to sibling node
                 // Note, exactly one of the goto flags is set or none. If the last node is not a
                 // traversal candidate we have to go search for a new node.
-                packedNodePointer = gotoW ? intersectionResult.w : INVALID_NODE;
-                packedNodePointer = gotoZ ? intersectionResult.z : packedNodePointer;
-                packedNodePointer = gotoY ? intersectionResult.y : packedNodePointer;
+                nodePtr = gotoW ? intersectionResult.w : INVALID_NODE;
+                nodePtr = gotoZ ? intersectionResult.z : nodePtr;
+                nodePtr = gotoY ? intersectionResult.y : nodePtr;
 
                 // Update traversal direction
                 isGoingDown = true;
@@ -315,7 +313,7 @@ static IntersectionResult TraceRayImpl1_1(
                     if (status != HIT_STATUS_IGNORE)
                     {
                         // load primitive data
-                        const PrimitiveData primitiveData = FetchPrimitiveDataAddr(nodePointer, nodeAddr64);
+                        const PrimitiveData primitiveData = FetchPrimitiveDataAddr(prevNodePtr, nodeAddr64);
 
                         const uint primitiveIndex = primitiveData.primitiveIndex;
                         const uint geometryIndex  = primitiveData.geometryIndex;
@@ -367,7 +365,7 @@ static IntersectionResult TraceRayImpl1_1(
                                                         geometryIndex);
 
                             // Set hit triangle information
-                            AmdTraceRaySetHitTriangleNodePointer(currentBvh, nodePointer);
+                            AmdTraceRaySetHitTriangleNodePointer(currentBvh, prevNodePtr);
                             // get barycentrics
                             float2 barycentrics;
                             barycentrics.x = asfloat(intersectionResult.z) / asfloat(intersectionResult.y);
@@ -396,7 +394,7 @@ static IntersectionResult TraceRayImpl1_1(
                     intersection.barycentrics.x    = asfloat(intersectionResult.z) / asfloat(intersectionResult.y);
                     intersection.barycentrics.y    = asfloat(intersectionResult.w) / asfloat(intersectionResult.y);
                     intersection.t                 = candidateT;
-                    intersection.nodeIndex         = nodePointer;
+                    intersection.nodeIndex         = prevNodePtr;
                     intersection.hitkind           = hitKind;
                     tlasNodePtr                    = instNodePtr;
 
@@ -408,27 +406,20 @@ static IntersectionResult TraceRayImpl1_1(
                 }
             }
 
-            if (IsBvhCollapse())
-            {
-                if (ExtractPrimitiveCount(prevNodePtr) != 0)
-                {
-                    packedNodePointer = IncrementNodePointer(prevNodePtr);
-                }
-            }
-            else if ((AmdTraceRayGetTriangleCompressionMode() == PAIR_TRIANGLE_COMPRESSION) ||
-                     (AmdTraceRayGetTriangleCompressionMode() == AUTO_TRIANGLE_COMPRESSION))
+            if ((AmdTraceRayGetTriangleCompressionMode() == PAIR_TRIANGLE_COMPRESSION) ||
+                (AmdTraceRayGetTriangleCompressionMode() == AUTO_TRIANGLE_COMPRESSION))
             {
                 if (GetNodeType(prevNodePtr) == NODE_TYPE_TRIANGLE_1)
                 {
                     // Intersect with triangle 0 next
-                    packedNodePointer = ClearNodeType(prevNodePtr);
+                    nodePtr = ClearNodeType(prevNodePtr);
                 }
             }
         }
         else if (CheckHandleProceduralUserNode(prevNodePtr))
         {
             // Load primitive data
-            const PrimitiveData primitiveData = FetchPrimitiveData(currentBvh, nodePointer);
+            const PrimitiveData primitiveData = FetchPrimitiveData(currentBvh, prevNodePtr);
 
             const uint primitiveIndex = primitiveData.primitiveIndex;
             const uint geometryIndex  = primitiveData.geometryIndex;
@@ -509,8 +500,8 @@ static IntersectionResult TraceRayImpl1_1(
                         intersection.numCandidateHits++;
                     }
 #endif
-                    intersection.nodeIndex         = nodePointer;
-                    tlasNodePtr                    = instNodePtr;
+                    intersection.nodeIndex = prevNodePtr;
+                    tlasNodePtr            = instNodePtr;
 
                     if ((rayFlags & RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH) ||
                         (status == HIT_STATUS_ACCEPT_AND_END_SEARCH))
@@ -552,12 +543,12 @@ static IntersectionResult TraceRayImpl1_1(
 
                 if (IsBvhRebraid())
                 {
-                    lastInstanceNode  = instanceNodePtr;
-                    packedNodePointer = instanceNodePtr;
+                    lastInstanceNode = instanceNodePtr;
+                    nodePtr = instanceNodePtr;
                 }
                 else
                 {
-                    packedNodePointer = blasRootNodePtr;
+                    nodePtr = blasRootNodePtr;
                 }
 
 #if DEVELOPER
@@ -570,7 +561,7 @@ static IntersectionResult TraceRayImpl1_1(
         }
 
         // If invalid, search for next node to traverse
-        if (packedNodePointer == INVALID_NODE)
+        if (nodePtr == INVALID_NODE)
         {
             // stack is empty, traverse to parent
             if (IsStackEmpty(stack))
@@ -608,11 +599,10 @@ static IntersectionResult TraceRayImpl1_1(
                         }
                     }
 
-                    packedNodePointer = FetchParentNodePointer(currentBvh,
-                                                               prevNodePtr);
+                    nodePtr = FetchParentNodePointer(currentBvh, prevNodePtr);
                     isGoingDown = false;
                     lastNodePtr = prevNodePtr;
-                } // else traversal is complete, packedNodePointer stays invalid and the loop does not continue
+                } // else traversal is complete, nodePtr stays invalid and the loop does not continue
             }
             else
             {
@@ -627,7 +617,7 @@ static IntersectionResult TraceRayImpl1_1(
 #endif
                 }
 
-                packedNodePointer = PopStack(stack);
+                nodePtr = PopStack(stack);
             }
 
             // Select ray based on tlas vs blas
@@ -722,23 +712,21 @@ static IntersectionResult IntersectRayImpl1_1(
                           localRay.Origin,
                           localRay.Direction);
 
-        uint nodePointer = ExtractNodePointer(blasPointer);
-
         uint4 intersectionResult = image_bvh64_intersect_ray(blasAddress,
-                                                             nodePointer,
+                                                             blasPointer,
                                                              BoxSortHeuristic::Closest,
                                                              result.t,
                                                              localRay.Origin,
                                                              localRay.Direction,
                                                              rcp(localRay.Direction));
 
-        const PrimitiveData primitiveData = FetchPrimitiveData(blasAddress, nodePointer);
+        const PrimitiveData primitiveData = FetchPrimitiveData(blasAddress, blasPointer);
         result.primitiveIndex             = primitiveData.primitiveIndex;
         result.geometryIndex              = primitiveData.geometryIndex;
         result.t                          = (asfloat(intersectionResult.x) / asfloat(intersectionResult.y));
         result.barycentrics.x             = asfloat(intersectionResult.z) / asfloat(intersectionResult.y);
         result.barycentrics.y             = asfloat(intersectionResult.w) / asfloat(intersectionResult.y);
-        result.nodeIndex                  = nodePointer;
+        result.nodeIndex                  = blasPointer;
         result.instNodePtr                = tlasPointer;
         result.instanceContribution       = desc.InstanceContributionToHitGroupIndex_and_Flags & 0x00FFFFFF;
 

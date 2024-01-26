@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2019-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2019-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -29,6 +29,7 @@
 #include "gpurt/gpurtBuildSettings.h"
 #include "gpurt/gpurtCounter.h"
 #include "shared/gpurtBuildConstants.h"
+#include "shared/rayTracingDefs.h"
 #include "gpurtDebugMonitor.h"
 
 #include "palInlineFuncs.h"
@@ -76,7 +77,7 @@ static constexpr size_t RayTracingTSRefScratchSize      = 36;
 static constexpr size_t RayTracingStateTSBuildSize      = 20;
 static constexpr size_t RayTracingAtomicFlags           = 8;
 
-static constexpr size_t RayTracingStateRebraidBuildSize = 8;
+static constexpr size_t RayTracingStateRebraidBuildSize = 20;
 
 static constexpr size_t RayTracingBuildDebugCounters    = 11;
 
@@ -306,6 +307,22 @@ public:
     virtual Pal::Result QueryRayTracingEntryFunctionTable(
         const Pal::RayTracingIpLevel   rayTracingIpLevel,
         EntryFunctionTable* const      pEntryFunctionTable) override;
+
+    // Determines required memory allocation size for use by ray continuation stacks
+    // and other memory needed for ray sorting
+    //
+    // @param cpsStackSize  (in) Maximum CPS stack size per thread, in bytes.
+    // @param numThreads    (in) Number of Threads.
+    //
+    // @return the required global memory allocation size in bytes
+    virtual gpusize QueryCpsScratchMemorySize(uint32 cpsStackSize, uint32 numThreads) override
+    {
+        gpusize memorySize = (numThreads * static_cast<gpusize>(cpsStackSize)) + // size of the total continuation stack
+               (RegroupingBinSize * RegroupingBinCount * sizeof(uint32)) +     // size of the ray sorting memory
+               (RegroupingBinCount * 2 * sizeof(uint64));                      // size of the header of the bins
+
+        return memorySize;
+    }
 
     // Returns the static pipeline mask shader constant values for a particular pipeline given a compatible
     // AS memory layout parameters.
@@ -616,8 +633,10 @@ public:
     // Performs a generic barrier that's used to synchronize internal ray tracing shaders
     //
     // @param pCmdBuffer       [in] Command buffer where commands will be written
+    // @param flags            Barrier control flags (GpuRt::BarrierFlags)
     void RaytracingBarrier(
-        ClientCmdBufferHandle pCmdBuffer);
+        ClientCmdBufferHandle pCmdBuffer,
+        uint32                flags);
 
     Pal::IDevice* GetPalDevice() const { return m_info.pPalDevice; };
 

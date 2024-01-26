@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -43,12 +43,12 @@ struct ScratchNode
                                            // instanceNodeBasePointerLo, instanceNodeBasePointerHi for instance node
     uint   parent;
 
-    uint   type;                           // type [0:2], triangle id [3:18] for max of 2 compressed triangles
-    uint   flags_and_instanceMask;         // flags [0:7], instanceMask [8:15]
+    uint   packedFlags;                    // flags [0:7], instanceMask [8:15]
     uint   splitBox_or_nodePointer;        // TriangleSplitBox index for triangle nodes /
                                            // BLAS node pointer for instance nodes
     uint   numPrimitivesAndDoCollapse;     // number of tris collapsed, doCollapse is boolean bit in the LSB /
                                            // scratch node index of the tri in the pair in PAIR_TRIANGLE_COMPRESSION
+    uint   type;                           // type [0:2], triangle id [3:18] for max of 2 compressed triangles
 };
 
 #define SCRATCH_NODE_FLAGS_DISABLE_TRIANGLE_SPLIT_SHIFT 31
@@ -65,18 +65,15 @@ struct ScratchNode
 #define SCRATCH_NODE_GEOMETRY_INDEX_OFFSET            SCRATCH_NODE_RIGHT_OFFSET
 #define SCRATCH_NODE_COST_OFFSET                      32
 #define SCRATCH_NODE_SA_OFFSET                        36
-#define SCRATCH_NODE_DENSITY_OFFSET                   40
 #define SCRATCH_NODE_V2_OFFSET                        SCRATCH_NODE_COST_OFFSET
 #define SCRATCH_NODE_INSTANCE_BASE_PTR_OFFSET         SCRATCH_NODE_V2_OFFSET
-#define SCRATCH_NODE_INSTANCE_NUM_PRIMS_OFFSET        SCRATCH_NODE_DENSITY_OFFSET
 #define SCRATCH_NODE_PARENT_OFFSET                    44
-#define SCRATCH_NODE_TYPE_OFFSET                      48
-#define SCRATCH_NODE_BOX_LEAF_CHILD_COUNT             SCRATCH_NODE_TYPE_OFFSET
-#define SCRATCH_NODE_FLAGS_AND_INSTANCE_MASK_OFFSET   52
-#define SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET           56
+#define SCRATCH_NODE_FLAGS_OFFSET                     48
+#define SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET           52
 #define SCRATCH_NODE_NODE_POINTER_OFFSET              SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET
 #define SCRATCH_NODE_NUM_LARGEST_LENGTH_OFFSET        SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET
-#define SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET 60
+#define SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET 56
+#define SCRATCH_NODE_TYPE_OFFSET                      60
 #define SCRATCH_NODE_SIZE                             64
 
 //=====================================================================================================================
@@ -106,20 +103,28 @@ static uint CalculateScratchBvhNodesOffset(
 
 //=====================================================================================================================
 // Extract node flags from scratch node
-static uint ExtractScratchNodeFlags(
-    in uint flagsAndInstanceMask)
+static uint ExtractScratchNodeBoxFlags(
+    in uint packedFlags)
 {
-    return (flagsAndInstanceMask & 0xff);
+    return (packedFlags & 0xff);
 }
 
 //=====================================================================================================================
 // Extract instance mask from scratch node
 static uint ExtractScratchNodeInstanceMask(
-    in uint flagsAndInstanceMask)
+    in uint packedFlags)
 {
     // Note, we store the instance exclusion mask (instead of inclusion) so that we can combine the
     // masks together using a AND operation similar to boxNodeFlags.
-    return (~flagsAndInstanceMask >> 8) & 0xff;
+    return (~packedFlags >> 8) & 0xff;
+}
+
+//=====================================================================================================================
+// Extract triangle ID from scratch node
+static uint ExtractScratchNodeTriangleId(
+    in uint packedFlags)
+{
+    return (packedFlags >> 16);
 }
 
 //=====================================================================================================================

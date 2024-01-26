@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -22,10 +22,6 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-// Here is to define a piece shared memory to be used, and call EncodePairedTriangleNodeImpl
-#define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
-groupshared uint SharedMem[MAX_LDS_ELEMENTS];        // log the triangle Vertex, faces, and rotation info
-
 #include "EncodePairedTriangleImpl.hlsl"
 
 //======================================================================================================================
@@ -36,18 +32,17 @@ void EncodePairedTriangleNode(
     GeometryArgs               geometryArgs,
     uint                       primitiveIndex,
     uint                       localId,
-    uint                       geometryBasePrimOffset,
+    uint                       primitiveOffset,
     uint                       vertexOffset,
     bool                       writeNodesToUpdateStack)
 {
-    EncodePairedTriangleNodeImpl(
-        GeometryBuffer,
-        IndexBuffer,
-        TransformBuffer,
-        geometryArgs,
-        primitiveIndex,
-        localId,
-        geometryBasePrimOffset,
-        vertexOffset,
-        writeNodesToUpdateStack);
+    EncodePairedTriangleNodeImpl(GeometryBuffer,
+                                 IndexBuffer,
+                                 TransformBuffer,
+                                 geometryArgs,
+                                 primitiveIndex,
+                                 localId,
+                                 primitiveOffset,
+                                 vertexOffset,
+                                 writeNodesToUpdateStack);
 }

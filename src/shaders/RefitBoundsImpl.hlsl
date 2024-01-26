@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -32,7 +32,6 @@ void RefitBoundsImpl(
     uint                baseScratchNodesOffset,
     uint                unsortedNodesBaseOffset,
     uint                sortedPrimIndicesOffset,
-    uint                doCollapse,
     uint                doTriangleSplitting,
     uint                noCopySortedNodes,
     uint                enableEarlyPairCompression,
@@ -43,10 +42,8 @@ void RefitBoundsImpl(
     uint                baseBatchIndicesOffset,
     uint                fp16BoxNodeMode,
     float               fp16BoxModeMixedSaThreshold,
-    uint                enableInstancePrimCount,
-    uint                reservedUint5,
-    uint                reservedUint6,
-    uint                reservedUint7
+    uint                reservedUint0,
+    uint                reservedUint1
 )
 {
     const bool doLatePairCompression = enablePairCompression && (!enableEarlyPairCompression);
@@ -110,24 +107,24 @@ void RefitBoundsImpl(
             {
                 const bool isLeafNode = IsLeafNode(rc, numActivePrims);
 
-                bboxRightChild = FetchScratchNodeBoundingBox(rightNode,
-                                                             isLeafNode,
-                                                             doTriangleSplitting,
-                                                             splitBoxesOffset,
-                                                             enableEarlyPairCompression,
-                                                             unsortedNodesBaseOffset);
+                bboxRightChild = GetScratchNodeBoundingBox(rightNode,
+                                                           isLeafNode,
+                                                           doTriangleSplitting,
+                                                           splitBoxesOffset,
+                                                           enableEarlyPairCompression,
+                                                           unsortedNodesBaseOffset);
             }
 
             // Left child
             {
                 const bool isLeafNode = IsLeafNode(lc, numActivePrims);
 
-                bboxLeftChild = FetchScratchNodeBoundingBox(leftNode,
-                                                            isLeafNode,
-                                                            doTriangleSplitting,
-                                                            splitBoxesOffset,
-                                                            enableEarlyPairCompression,
-                                                            unsortedNodesBaseOffset);
+                bboxLeftChild = GetScratchNodeBoundingBox(leftNode,
+                                                          isLeafNode,
+                                                          doTriangleSplitting,
+                                                          splitBoxesOffset,
+                                                          enableEarlyPairCompression,
+                                                          unsortedNodesBaseOffset);
             }
 
             // Merge bounding boxes up to parent
@@ -157,16 +154,6 @@ void RefitBoundsImpl(
                 rightNode,
                 mergedBoxSurfaceArea,
                 largestLength);
-
-            if (enableInstancePrimCount)
-            {
-                const uint instancePrimCount = asuint(rightNode.sah_or_v2_or_instBasePtr[2]) +
-                                               asuint(leftNode.sah_or_v2_or_instBasePtr[2]);
-
-                WriteScratchNodeInstanceNumPrims(baseScratchNodesOffset,
-                                                 parentNodeIndex,
-                                                 instancePrimCount);
-            }
         }
 
         DeviceMemoryBarrier();

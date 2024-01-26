@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -52,8 +52,7 @@ void WriteScratchInstanceNode(
     uint                instanceBasePointerLo,
     uint                instanceBasePointerHi,
     uint                instanceMask,
-    uint                numActivePrims,
-    float               cost)
+    uint                numActivePrims)
 {
     uint4 data;
 
@@ -75,11 +74,11 @@ void WriteScratchInstanceNode(
     // enabled in traversal but not during this build, we need to set the pointer to the true root of the bottom level.
     const uint rootNodePointer = IsRebraidEnabled() ? 0 : CreateRootNodePointer();
 
-    const uint packedFlags = PackInstanceMaskAndNodeFlags(instanceMask, boxNodeFlags);
+    const uint packedFlags = PackScratchNodeFlags(instanceMask, boxNodeFlags, 0);
 
     // type, flags, nodePointer, numPrimitivesAndDoCollapse
-    data = uint4(NODE_TYPE_USER_NODE_INSTANCE, packedFlags, rootNodePointer, asuint(cost));
-    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_TYPE_OFFSET, data);
+    data = uint4(packedFlags, rootNodePointer, 0, NODE_TYPE_USER_NODE_INSTANCE);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_FLAGS_OFFSET, data);
 }
 
 //=====================================================================================================================
@@ -150,32 +149,6 @@ uint64_t GetAccelStructBaseAddr(InstanceDesc desc, bool allowUpdate)
     }
 
     return baseAddrAccelStructHeader;
-}
-
-//=====================================================================================================================
-float CalculateSAHCost(uint64_t baseAddrAccelStructHeader, BoundingBox rootBbox, BoundingBox instanceBbox)
-{
-    float cost = 0;
-
-    float origSA = ComputeBoxSurfaceArea(rootBbox);
-    float transformedSA = ComputeBoxSurfaceArea(instanceBbox);
-
-    if (IsRebraidEnabled())
-    {
-        cost = transformedSA / origSA;
-    }
-    else
-    {
-        for (uint c = 0; c < 4; c++)
-        {
-            cost += asfloat(FetchHeaderField(baseAddrAccelStructHeader,
-                                             ACCEL_STRUCT_HEADER_NUM_CHILD_PRIMS_OFFSET + (4 * c)));
-        }
-
-        cost = (transformedSA / origSA) * cost + (transformedSA * SAH_COST_AABBB_INTERSECTION);
-    }
-
-    return cost;
 }
 
 #endif

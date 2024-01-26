@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -92,10 +92,11 @@ struct BuildPlocArgs
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
                 "CBV(b255),"\
-                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
 
 struct RootConstants
 {
@@ -107,10 +108,11 @@ struct RootConstants
 [[vk::binding(0, 0)]] RWByteAddressBuffer                  DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata   : register(u1);
 [[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer : register(u2);
+[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer ScratchGlobal : register(u3);
 
 // unused buffer
-[[vk::binding(3, 0)]] RWByteAddressBuffer                  SrcBuffer     : register(u3);
-[[vk::binding(4, 0)]] RWByteAddressBuffer                  EmitBuffer    : register(u4);
+[[vk::binding(4, 0)]] RWByteAddressBuffer                  SrcBuffer     : register(u4);
+[[vk::binding(5, 0)]] RWByteAddressBuffer                  EmitBuffer    : register(u5);
 
 #include "BuildCommonScratch.hlsl"
 
@@ -122,18 +124,6 @@ groupshared int SharedMem[(2 * PLOC_RADIUS_MAX + BUILD_THREADGROUP_SIZE) * LDS_A
 
 // https://dcgi.fel.cvut.cz/home/meistdan/dissertation/publications/ploc/paper.pdf
 // https://github.com/meistdan/ploc/blob/master/gpu-ray-traversal/src/rt/ploc/PLOCBuilderKernels.cu
-
-//=====================================================================================================================
-static uint CalculateBvhNodesOffset(
-    uint numActivePrims)
-{
-    return GetBvhNodesOffset(
-               numActivePrims,
-               ShaderConstants.numLeafNodes,
-               ShaderConstants.offsets.bvhNodeData,
-               ShaderConstants.offsets.bvhLeafNodeData,
-               ShaderConstants.offsets.primIndicesSorted);
-}
 #endif
 
 //=====================================================================================================================
@@ -375,12 +365,12 @@ void FindNearestNeighbour(
             const ScratchNode scratchNode = FetchScratchNode(args.scratchNodesScratchOffset, nodeIndex);
 
             // Would need to fetch paired triangle BBox here, if "enableEarlyPairCompression" is ON
-            BoundingBox aabb = FetchScratchNodeBoundingBox(scratchNode,
-                                                           IsLeafNode(nodeIndex, numActivePrims),
-                                                           Settings.doTriangleSplitting,
-                                                           args.splitBoxesByteOffset,
-                                                           Settings.enableEarlyPairCompression,
-                                                           args.unsortedBvhLeafNodesOffset);
+            BoundingBox aabb = GetScratchNodeBoundingBox(scratchNode,
+                                                         IsLeafNode(nodeIndex, numActivePrims),
+                                                         Settings.doTriangleSplitting,
+                                                         args.splitBoxesByteOffset,
+                                                         Settings.enableEarlyPairCompression,
+                                                         args.unsortedBvhLeafNodesOffset);
 
             StoreLdsBoundingBox(t + plocRadius, aabb);
         }
@@ -919,7 +909,7 @@ void BuildBVHPLOC(
     plocArgs.numLeafNodes                   = ShaderConstants.numLeafNodes;
     plocArgs.unsortedBvhLeafNodesOffset     = ShaderConstants.offsets.bvhLeafNodeData;
 
-    plocArgs.scratchNodesScratchOffset = CalculateBvhNodesOffset(numActivePrims);
+    plocArgs.scratchNodesScratchOffset = CalculateBvhNodesOffset(ShaderConstants, numActivePrims);
 
     if (numActivePrims > 0)
     {

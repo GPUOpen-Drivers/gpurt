@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -27,10 +27,11 @@
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
                 "CBV(b255),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u6, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
 // 32 bit constants
@@ -53,18 +54,20 @@ struct Constants
 
 [[vk::binding(0, 0)]] RWByteAddressBuffer                 DstMetadata        : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer                 ScratchBuffer      : register(u1);
-[[vk::binding(2, 0)]] RWByteAddressBuffer                 SrcBuffer          : register(u2);
-[[vk::binding(3, 0)]] RWByteAddressBuffer                 InstanceDescBuffer : register(u3);
+[[vk::binding(2, 0)]] RWByteAddressBuffer                 ScratchGlobal      : register(u2);
+[[vk::binding(3, 0)]] RWByteAddressBuffer                 SrcBuffer          : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer                 InstanceDescBuffer : register(u4);
 
 // unused buffer
-[[vk::binding(4, 0)]] RWByteAddressBuffer                 DstBuffer          : register(u4);
-[[vk::binding(5, 0)]] RWByteAddressBuffer                 EmitBuffer         : register(u5);
+[[vk::binding(5, 0)]] RWByteAddressBuffer                 DstBuffer          : register(u5);
+[[vk::binding(6, 0)]] RWByteAddressBuffer                 EmitBuffer         : register(u6);
 
 #include "IntersectCommon.hlsl"
 #include "BuildCommonScratch.hlsl"
-
 #include "EncodeTopLevelBuild.hlsl"
 #include "EncodeTopLevelUpdate.hlsl"
+
+#include "TaskCounter.hlsl"
 
 //=====================================================================================================================
 [RootSignature(RootSig)]
@@ -91,9 +94,15 @@ void EncodeInstances(
             desc = InstanceDescBuffer.Load<InstanceDesc>(index * INSTANCE_DESC_SIZE);
         }
 
-        const uint tlasMetadataSize = ShaderConstants.metadataSizeInBytes;
+        const uint tlasMetadataSize =
+            IsUpdate() ? SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : ShaderConstants.metadataSizeInBytes;
 
-        const uint basePrimNodePointersOffset = ShaderConstants.basePrimNodePtrOffset;
+        // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
+        const AccelStructOffsets offsets =
+            SrcBuffer.Load<AccelStructOffsets>(tlasMetadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
+
+        const uint basePrimNodePointersOffset =
+            IsUpdate() ? offsets.primNodePtrs : ShaderConstants.basePrimNodePtrOffset;
 
         const uint primNodePointerOffset = tlasMetadataSize + basePrimNodePointersOffset + (index * sizeof(uint));
 
@@ -128,7 +137,8 @@ void EncodeInstances(
                                  primNodePointerOffset,
                                  destScratchNodeOffset,
                                  baseAddrAccelStructHeader,
-                                 numActivePrims);
+                                 numActivePrims,
+                                 allowUpdate);
         }
 
         // ClearFlags for refit and update
@@ -140,7 +150,6 @@ void EncodeInstances(
             ScratchBuffer.Store(flagOffset + (i * sizeof(uint)), initValue);
         }
 
-        DeviceMemoryBarrier();
-        ScratchBuffer.InterlockedAdd(ShaderConstants.encodeTaskCounterScratchOffset, 1);
+        IncrementTaskCounter(ShaderConstants.encodeTaskCounterScratchOffset);
     }
 }

@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -373,7 +373,7 @@ static bool RayQueryProceedImpl1_1(
         // Backup last traversed node pointer
         rayQuery.prevNodePtr = rayQuery.currNodePtr;
 
-        const uint nodePointer = ExtractNodePointer(rayQuery.currNodePtr);
+        const uint nodePointer = rayQuery.currNodePtr;
 
         // pre-calculate node address
         const GpuVirtualAddress nodeAddr64 = bvhAddress + ExtractNodePointerOffset(nodePointer);
@@ -507,15 +507,8 @@ static bool RayQueryProceedImpl1_1(
                 }
             }
 
-            if (IsBvhCollapse())
-            {
-                if (ExtractPrimitiveCount(rayQuery.prevNodePtr) != 0)
-                {
-                    rayQuery.currNodePtr = IncrementNodePointer(rayQuery.prevNodePtr);
-                }
-            }
-            else if ((AmdTraceRayGetTriangleCompressionMode() == PAIR_TRIANGLE_COMPRESSION) ||
-                     (AmdTraceRayGetTriangleCompressionMode() == AUTO_TRIANGLE_COMPRESSION))
+            if ((AmdTraceRayGetTriangleCompressionMode() == PAIR_TRIANGLE_COMPRESSION) ||
+                (AmdTraceRayGetTriangleCompressionMode() == AUTO_TRIANGLE_COMPRESSION))
             {
                 if (GetNodeType(rayQuery.prevNodePtr) == NODE_TYPE_TRIANGLE_1)
                 {

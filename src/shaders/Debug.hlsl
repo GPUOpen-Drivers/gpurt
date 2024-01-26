@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -39,7 +39,12 @@
             DoGpuPrintf(Settings.gpuDebugFlags, id, args); \
         } while (false)
     #else
-        #define GPU_ASSERT_IMPL(id, cond) if (!(cond)) { Halt(); }
+        #define GPU_ASSERT_IMPL(id, cond) \
+        do \
+        {  \
+            if ((Settings.gpuDebugFlags & GpuDebugFlags::ShaderHalt) && !(cond)) { Halt(); } \
+        } while (false)
+
         #define GPU_DPF_IMPL(msg, ...)
     #endif
 #else
@@ -55,7 +60,7 @@ void Halt()
 
 #if GPURT_ENABLE_GPU_DEBUG && BUILD_PARALLEL
 
-globallycoherent RWByteAddressBuffer DebugBuffer : register(u5);
+globallycoherent RWByteAddressBuffer DebugBuffer : register(u6);
 
 //======================================================================================================================
 // Reserve write space in the debug ring buffer

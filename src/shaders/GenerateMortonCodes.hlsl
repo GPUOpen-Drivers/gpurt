@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -29,9 +29,10 @@
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
-                "CBV(b255),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
+                "CBV(b255),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
 
 #include "../shared/rayTracingDefs.h"
 
@@ -40,10 +41,11 @@
 [[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer DstMetadata   : register(u1);
 [[vk::binding(2, 0)]] RWByteAddressBuffer ScratchBuffer : register(u2);
+[[vk::binding(3, 0)]] RWByteAddressBuffer ScratchGlobal : register(u3);
 
 // unused buffer
-[[vk::binding(3, 0)]] RWByteAddressBuffer SrcBuffer     : register(u3);
-[[vk::binding(4, 0)]] RWByteAddressBuffer EmitBuffer    : register(u4);
+[[vk::binding(4, 0)]] RWByteAddressBuffer SrcBuffer     : register(u4);
+[[vk::binding(5, 0)]] RWByteAddressBuffer EmitBuffer    : register(u5);
 #endif
 
 #include "BuildCommonScratch.hlsl"
@@ -331,16 +333,12 @@ void GenerateMortonCodesImpl(
     {
         // Calculate the scene-normalized position of the center of the current bounding box.
         // This is required for the morton code generation.
-        BoundingBox bounds;
-
-        if (doTriangleSplitting)
-        {
-            bounds = FetchSplitBoxAtIndex(splitBoxesOffset, node.splitBox_or_nodePointer);
-        }
-        else
-        {
-            bounds = GetScratchNodeBoundingBox(node);
-        }
+        const BoundingBox bounds = GetScratchNodeBoundingBox(node,
+                                                             true,
+                                                             doTriangleSplitting,
+                                                             splitBoxesOffset,
+                                                             Settings.enableEarlyPairCompression,
+                                                             leafNodesOffset);
 
         const bool isDegenerate = IsInvalidBoundingBox(bounds);
 

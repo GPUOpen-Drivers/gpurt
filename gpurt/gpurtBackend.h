@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -85,6 +85,13 @@ enum class HwPipePoint : uint32
 };
 
 // =====================================================================================================================
+enum BarrierFlags : uint32
+{
+    BarrierFlagNone            = 0x0,
+    BarrierFlagSyncIndirectArg = 0x1, // Prepare previous shader output for indirect argument use
+};
+
+// =====================================================================================================================
 // Copy of Pal::ImmediateDataWidth.
 enum class ImmediateDataWidth : uint32
 {
@@ -118,6 +125,8 @@ public:
     // Dispatches using a given size.
     virtual void Dispatch(ClientCmdBufferHandle cmdBuffer, uint32 x, uint32 y, uint32 z) const = 0;
 
+    virtual void DispatchIndirect(ClientCmdBufferHandle cmdBuffer, uint64 indirectArgumentAddr) const = 0;
+
     // Inserts a comment string.
     virtual void CommentString(ClientCmdBufferHandle cmdBuffer, const char* comment) const = 0;
 
@@ -146,7 +155,7 @@ public:
         uint32*               pSrdSizeOut) const = 0;
 
     // Performs a generic barrier that's used to synchronize internal ray tracing shaders
-    virtual void InsertBarrier(ClientCmdBufferHandle cmdBuffer) const = 0;
+    virtual void InsertBarrier(ClientCmdBufferHandle cmdBuffer, uint32 flags) const = 0;
 
     // Creates typed or untyped buffer view SRDs, typically for writing descriptor tables.
     virtual void CreateBufferViewSrds(

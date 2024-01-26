@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -56,7 +56,7 @@ struct CompileTimeBuildSettings
     uint32 buildMode;
     uint32 triangleCompressionMode;
     uint32 doTriangleSplitting;
-    uint32 doCollapse;
+    uint32 unused00;
     uint32 fp16BoxNodesMode;
     float  fp16BoxModeMixedSaThreshold;
     uint32 radixSortScanLevel;
@@ -73,7 +73,7 @@ struct CompileTimeBuildSettings
     uint32 enableFusedInstanceNode;
     float  tsPriority;
     uint32 noCopySortedNodes;
-    uint32 enableSAHCost;
+    uint32 numRebraidIterations;
     uint32 unused0;
     uint32 doEncode;
     uint32 unused1;
@@ -88,19 +88,21 @@ struct CompileTimeBuildSettings
     uint32 unused6;
     uint32 unused7;
     uint32 unused8;
+    uint32 unused9;
     uint32 enableInstanceRebraid;
     uint32 gpuDebugFlags;
     uint32 isUpdate;
     uint32 isUpdateInPlace;
     uint32 encodeArrayOfPointers;
     uint32 sceneBoundsCalculationType;
+    uint32 rebraidQualityHeuristic;
 };
 
 #define BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_ID                        0
 #define BUILD_SETTINGS_DATA_BUILD_MODE_ID                             1
 #define BUILD_SETTINGS_DATA_TRIANGLE_COMPRESSION_MODE_ID              2
 #define BUILD_SETTINGS_DATA_DO_TRIANGLE_SPLITTING_ID                  3
-#define BUILD_SETTINGS_DATA_DO_COLLAPSE_ID                            4
+#define BUILD_SETTINGS_DATA_UNUSED_ID                                 4
 #define BUILD_SETTINGS_DATA_FP16_BOX_NODES_MODE_ID                    5
 #define BUILD_SETTINGS_DATA_FP16_BOX_MODE_MIXED_SA_THRESHOLD_ID       6
 #define BUILD_SETTINGS_DATA_RADIX_SORT_SCAN_LEVEL_ID                  7
@@ -117,18 +119,19 @@ struct CompileTimeBuildSettings
 #define BUILD_SETTINGS_DATA_ENABLE_FUSED_INSTANCE_NODE_ID             18
 #define BUILD_SETTINGS_DATA_TS_PRIORITY_ID                            19
 #define BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_ID                   20
-#define BUILD_SETTINGS_DATA_ENABLE_SAH_COST_ID                        21
+#define BUILD_SETTINGS_DATA_NUM_REBRAID_ITERATIONS_ID                 21
 #define BUILD_SETTINGS_DATA_DO_ENCODE_ID                              23
 #define BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_ID          25
 #define BUILD_SETTINGS_DATA_ENABLE_FAST_LBVH_ID                       26
 #define BUILD_SETTINGS_DATA_RTIP_LEVEL_ID                             27
 #define BUILD_SETTINGS_DATA_GEOMETRY_TYPE_ID                          28
-#define BUILD_SETTINGS_DATA_ENABLE_INSTANCE_REBRAID_ID                36
-#define BUILD_SETTINGS_DATA_GPU_DEBUG_FLAGS_ID                        37
-#define BUILD_SETTINGS_DATA_IS_UPDATE_ID                              38
-#define BUILD_SETTINGS_DATA_IS_UPDATE_IN_PLACE_ID                     39
-#define BUILD_SETTINGS_DATA_ENCODE_ARRAY_OF_POINTERS_ID               40
-#define BUILD_SETTINGS_DATA_SCENE_BOUNDS_CALCULATION_TYPE_ID          41
+#define BUILD_SETTINGS_DATA_ENABLE_INSTANCE_REBRAID_ID                37
+#define BUILD_SETTINGS_DATA_GPU_DEBUG_FLAGS_ID                        38
+#define BUILD_SETTINGS_DATA_IS_UPDATE_ID                              39
+#define BUILD_SETTINGS_DATA_IS_UPDATE_IN_PLACE_ID                     40
+#define BUILD_SETTINGS_DATA_ENCODE_ARRAY_OF_POINTERS_ID               41
+#define BUILD_SETTINGS_DATA_SCENE_BOUNDS_CALCULATION_TYPE_ID          42
+#define BUILD_SETTINGS_DATA_REBRAID_QUALITY_HEURISTIC_ID              43
 
 #ifdef __cplusplus
 } // namespace GpuRt
