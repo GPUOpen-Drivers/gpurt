@@ -23,6 +23,8 @@
  *
  **********************************************************************************************************************/
 #if NO_SHADER_ENTRYPOINT == 0
+#define BUILD_THREADGROUP_SIZE 512
+
 //=====================================================================================================================
 // Root signature
 #define RootSig "CBV(b0),"\
@@ -426,6 +428,7 @@ void FetchAndLocalSortAndWriteBack(
     // Step 1) Fetch the keys (Morton Codes) to LDS for local sort.
     const uint2 globalFetchSpan = uint2(globalId << 1, (globalId + 1) << 1);
     const uint2 mortonCodeIndex = uint2(localId << 1, (localId << 1) + 1);
+
     if (useMortonCode30)
     {
         // Assign uint to int. Might break if a Morton Codes's MSB is 1.
@@ -446,7 +449,7 @@ void FetchAndLocalSortAndWriteBack(
     const uint partitionSize = firstbithigh(pSize) == firstbitlow(pSize) ? pSize : 1U << (firstbithigh(pSize) + 1);
     // Extend the partition size to the nearest n^2 for OddEvenMerge Sort
 
-    const uint indicesOffset = (useMortonCode30) ? partitionSize : partitionSize * 2;
+    const uint indicesOffset = (useMortonCode30) ? groupCapacity : groupCapacity * 2;
     const uint groupOffset   = groupId * groupCapacity;
 
     SharedMem[indicesOffset + mortonCodeIndex.x] = groupOffset + mortonCodeIndex.x;
@@ -525,10 +528,8 @@ void MergeSort(
     uint localId      : SV_GroupThreadID,
     uint groupId      : SV_GroupID)
 {
-    const uint numPrimitives =
-        (Settings.topLevelBuild && Settings.rebraidType == RebraidType::V2) || Settings.doTriangleSplitting ?
-            ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET) :
-            ShaderConstants.numLeafNodes;
+    const uint numPrimitives = FetchTaskCounter(
+        ShaderConstants.offsets.encodeTaskCounter + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET);
 
     uint numTasksWait = 0;
     uint waveId       = 0;

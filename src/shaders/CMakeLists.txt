@@ -42,6 +42,7 @@ set(gpurtHlsl
     BuildCommon.hlsl
     BuildCommonScratch.hlsl
     BuildCommonScratchGlobal.hlsl
+    BuildFastAgglomerativeLbvh.hlsl
     Debug.hlsl
     TaskCounter.hlsl
     TaskQueueCounter.hlsl
@@ -55,6 +56,7 @@ set(gpurtHlsl
     CompactCommon.hlsl
     CopyAS.hlsl
     CopyBufferRaw.hlsl
+    CountTrianglePairsPrefixSum.hlsl
     DecodeAS.hlsl
     DecodeCommon.hlsl
     DeserializeAS.hlsl

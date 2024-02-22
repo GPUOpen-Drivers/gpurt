@@ -39,19 +39,22 @@ void AllocTasks(const uint numTasks, const uint phase, uint taskQueueOffset)
 //=====================================================================================================================
 uint2 BeginTask(const uint localId, uint taskQueueOffset)
 {
-    if (localId == 0) {
-        ScratchGlobal.InterlockedAdd(taskQueueOffset + STATE_TASK_QUEUE_TASK_COUNTER_OFFSET, 1, SharedMem[0]);
-    }
-
-    GroupMemoryBarrierWithGroupSync();
-
-    uint index = SharedMem[0];
-
-    // wait till there are valid tasks to do
-    do
+    AllMemoryBarrierWithGroupSync();
+    uint index = 0xFFFFFFFF;
+    if (localId == 0)
     {
-        DeviceMemoryBarrier();
-    } while (index >= ScratchGlobal.Load(taskQueueOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET));
+        ScratchGlobal.InterlockedAdd(taskQueueOffset + STATE_TASK_QUEUE_TASK_COUNTER_OFFSET, 1, index);
+        // wait until there are valid tasks to do
+        do
+        {
+            DeviceMemoryBarrier();
+        } while (index >= ScratchGlobal.Load(taskQueueOffset + STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET));
+
+        SharedMem[0] = index;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    index = SharedMem[0];
+    GroupMemoryBarrierWithGroupSync();
 
     const uint phase = ScratchGlobal.Load(taskQueueOffset + STATE_TASK_QUEUE_PHASE_OFFSET);
 
@@ -65,7 +68,7 @@ bool EndTask(const uint localId, uint taskQueueOffset)
 {
     bool returnValue = false;
 
-    DeviceMemoryBarrier();
+    AllMemoryBarrierWithGroupSync();
 
     if (localId == 0)
     {

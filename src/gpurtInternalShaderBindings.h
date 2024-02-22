@@ -57,13 +57,23 @@ namespace EncodeNodes
         uint32 indexBufferInfoScratchOffset;
         uint32 indexBufferGpuVaLo;
         uint32 indexBufferGpuVaHi;
-        uint32 sceneBoundsCalculationType;
-        uint32 trianglePairingSearchRadius;    // Search radius for triangles that could be paired together
+        uint32 blockOffset;                    // Starting block index for current geometry;
         uint32 encodeTaskCounterScratchOffset;
     };
     // Add 4 DWORD padding to avoid page faults when the compiler uses a multi-DWORD load straddling the end of the
     // constant buffer
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32)) + 4;
+}
+
+namespace CountTrianglePairsPrefixSum
+{
+    struct Constants
+    {
+        uint32 numBlocks;                     // Number of primitives
+        uint32 basePrimRefCountOffset;        // Offset in destination buffer where prim ref counts are stored
+        uint32 encodeTaskCounterScratchOffset;// Offset of encode task counters in scratch buffer
+    };
+    constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
 }
 
 namespace BuildBVHPLOC
@@ -401,6 +411,40 @@ constexpr NodeMapping EncodeInstancesMapping[] =
     { NodeType::Uav, 2 }
 };
 
+constexpr NodeMapping CountTrianglePairsMapping[] =
+{
+    { NodeType::ConstantBuffer, 2 },
+    { NodeType::TypedUavTable, 1 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 }
+};
+
+constexpr NodeMapping CountTrianglePairsPrefixSumMapping[] =
+{
+    { NodeType::Constant, CountTrianglePairsPrefixSum::NumEntries },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+};
+
+constexpr NodeMapping CountTrianglePairsIndirectMapping[] =
+{
+    { NodeType::ConstantBuffer, 2 },
+    { NodeType::TypedUavTable, 1 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 }
+};
+
 /* Build Shaders NodeMappings */
 
 namespace InitAccelerationStructure
@@ -484,6 +528,15 @@ constexpr NodeMapping BuildBVHMapping[] =
 };
 
 constexpr NodeMapping BuildBVHSortLeavesMapping[] =
+{
+    { NodeType::ConstantBuffer, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 }
+};
+
+constexpr NodeMapping BuildFastAgglomerativeLbvhMapping[] =
 {
     { NodeType::ConstantBuffer, 2 },
     { NodeType::Uav, 2 },
@@ -663,7 +716,19 @@ constexpr NodeMapping UpdateParallelMapping[] =
     { NodeType::Uav, 2 }
 };
 
-constexpr NodeMapping UpdateMapping[]
+constexpr NodeMapping UpdateTrianglesMapping[]
+{
+    { NodeType::Constant, UpdateParallel::NumEntries },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::ConstantBufferTable, 1 },
+    { NodeType::UavTable, 1 },
+    { NodeType::UavTable, 1 },
+    { NodeType::UavTable, 1 }
+};
+
+constexpr NodeMapping UpdateAabbsMapping[]
 {
     { NodeType::Constant, UpdateParallel::NumEntries },
     { NodeType::Uav, 2 },

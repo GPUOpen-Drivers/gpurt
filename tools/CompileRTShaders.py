@@ -98,10 +98,14 @@ traceShaderConfigs = [
 ]
 
 bvhShaderConfigs = [
-    ShaderConfig(path="Update.hlsl", entryPoint="Update"),
+    ShaderConfig(path="Update.hlsl", entryPoint="UpdateTriangles"),
+    ShaderConfig(path="Update.hlsl", entryPoint="UpdateAabbs"),
     ShaderConfig(path="EncodeNodes.hlsl", entryPoint="EncodeTriangleNodes"),
     ShaderConfig(path="EncodeNodes.hlsl", entryPoint="EncodeTriangleNodes", outputName="EncodeTriangleNodesIndirect", defines="INDIRECT_BUILD=1"),
     ShaderConfig(path="EncodeNodes.hlsl", entryPoint="EncodeAABBNodes"),
+    ShaderConfig(path="EncodeNodes.hlsl", entryPoint="CountTrianglePairs"),
+    ShaderConfig(path="EncodeNodes.hlsl", entryPoint="CountTrianglePairs", outputName="CountTrianglePairsIndirect", defines="INDIRECT_BUILD=1"),
+    ShaderConfig(path="CountTrianglePairsPrefixSum.hlsl", entryPoint="CountTrianglePairsPrefixSum"),
     ShaderConfig(path="EncodeTopLevel.hlsl", entryPoint="EncodeInstances"),
     ShaderConfig(path="BuildParallel.hlsl", entryPoint="BuildBvh", outputName="BuildParallel"),
     ShaderConfig(path="UpdateParallel.hlsl", entryPoint="UpdateParallel"),
@@ -139,6 +143,7 @@ bvhShaderConfigs = [
     ShaderConfig(path="MergeSort.hlsl", entryPoint="MergeSort"),
     ShaderConfig(path="InitAccelerationStructure.hlsl", entryPoint="InitAccelerationStructure"),
     ShaderConfig(path="InitAccelerationStructure.hlsl", entryPoint="InitAccelerationStructure", defines="IS_UPDATE=1", outputName="InitUpdateAccelerationStructure"),
+    ShaderConfig(path="BuildFastAgglomerativeLbvh.hlsl", entryPoint="BuildFastAgglomerativeLbvh"),
 ]
 
 def isSpirvShader(shaderConfig, args):

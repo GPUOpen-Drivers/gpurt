@@ -127,21 +127,6 @@ void RefitBoundsImpl(
                                                           unsortedNodesBaseOffset);
             }
 
-            // Merge bounding boxes up to parent
-            BoundingBox mergedBox = (BoundingBox)0;
-            mergedBox.min = min(bboxLeftChild.min, bboxRightChild.min);
-            mergedBox.max = max(bboxLeftChild.max, bboxRightChild.max);
-
-            // Compute surface area of parent box
-            const float mergedBoxSurfaceArea = ComputeBoxSurfaceArea(mergedBox);
-
-            WriteScratchNodeBoundingBox(baseScratchNodesOffset,
-                                        parentNodeIndex,
-                                        mergedBox.min,
-                                        mergedBox.max);
-
-            const float largestLength = 0;
-
             MergeScratchNodes(
                 baseScratchNodesOffset,
                 numBatchesOffset,
@@ -150,10 +135,10 @@ void RefitBoundsImpl(
                 parentNodeIndex,
                 lc,
                 leftNode,
+                bboxLeftChild,
                 rc,
                 rightNode,
-                mergedBoxSurfaceArea,
-                largestLength);
+                bboxRightChild);
         }
 
         DeviceMemoryBarrier();

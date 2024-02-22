@@ -55,7 +55,7 @@ struct RootConstants
 [[vk::binding(5, 0)]] RWByteAddressBuffer EmitBuffer    : register(u5);
 
 #include "ScanCommon.hlsli"
-#include "../BuildCommon.hlsl"
+#include "../BuildCommonScratch.hlsl"
 
 //=====================================================================================================================
 // Local memory for offsets counting
@@ -540,10 +540,8 @@ void ScatterKeysAndValues(
     uint localId : SV_GroupThreadID,
     uint groupId : SV_GroupId)
 {
-    const uint numPrimitives =
-        (Settings.topLevelBuild && Settings.rebraidType == RebraidType::V2) || Settings.doTriangleSplitting ?
-            ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET) :
-            ShaderConstants.numLeafNodes;
+    const uint numPrimitives = FetchTaskCounter(
+        ShaderConstants.offsets.encodeTaskCounter + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET);
 
     const uint inputKeysOffset    = ShaderConstants.offsets.mortonCodes;
     const uint outputKeysOffset   = ShaderConstants.offsets.mortonCodesSorted;

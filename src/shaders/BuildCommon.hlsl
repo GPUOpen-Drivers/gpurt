@@ -868,11 +868,14 @@ static void WriteAccelStructHeaderRootBoundingBox(
 }
 
 //=====================================================================================================================
-static void IncrementAccelStructHeaderField(
+static uint IncrementAccelStructHeaderField(
     in uint offset,
     in uint value)
 {
-    DstBuffer.InterlockedAdd(offset, value);
+    uint origValue;
+    DstBuffer.InterlockedAdd(offset, value, origValue);
+
+    return origValue;
 }
 
 //=====================================================================================================================
@@ -966,7 +969,8 @@ uint ReadValidDLB(
                                 TASK_COUNTER_BUFFER.InterlockedAdd(TASK_COUNTER_OFFSET, 1, SharedMem[0]);\
                             }\
                             GroupMemoryBarrierWithGroupSync();\
-                            waveId = SharedMem[0];
+                            waveId = SharedMem[0];\
+                            GroupMemoryBarrierWithGroupSync();
 
 #define BEGIN_TASK(n)       while((waveId >= numTasksWait) && (waveId < (numTasksWait + n)))\
                             {\
@@ -981,6 +985,7 @@ uint ReadValidDLB(
                                 }\
                                 GroupMemoryBarrierWithGroupSync();\
                                 waveId = SharedMem[0];\
+                                GroupMemoryBarrierWithGroupSync();\
                             }\
                             numTasksWait += n;\
                             do\

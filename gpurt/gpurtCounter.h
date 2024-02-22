@@ -226,6 +226,7 @@ enum RayHistoryTokenWaveBeginTokenPayloadType
 #define WAVE_UNIFORM_MASK_PARAMS     0x0040
 #define WAVE_UNIFORM_MASK_TMIN       0x0080
 #define WAVE_UNIFORM_MASK_TMAX       0x0100
+#define WAVE_UNIFORM_BITS_VALID_MASK 0x01ff
 
 // ====================================================================================================================
 struct RayHistoryTokenWaveBeginPacketHeader
@@ -236,7 +237,8 @@ struct RayHistoryTokenWaveBeginPacketHeader
 #else
     uint32_t packedHwWaveIdAndMask;  // See above.
 #endif
-    uint64_t activeLaneMask;         // Bit mask of active lanes that invoked traversal
+    uint32_t activeLaneMaskLo;       // Lower 32-bits of active lane mask
+    uint32_t activeLaneMaskHi;       // Uppper 32-bits of active lane mask
     uint32_t staticId;
     uint32_t dynamicId;
     uint32_t parentId;

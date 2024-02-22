@@ -23,12 +23,17 @@
  *
  **********************************************************************************************************************/
 // Increment task counter to mark a task / primitive as done
-void IncrementTaskCounter(uint offset)
+uint IncrementTaskCounter(uint offset, uint value)
 {
     DeviceMemoryBarrier();
-    ScratchGlobal.InterlockedAdd(offset, 1);
+
+    uint originalVal = 0;
+    ScratchGlobal.InterlockedAdd(offset, value, originalVal);
+
+    return originalVal;
 }
 
+//=====================================================================================================================
 uint FetchTaskCounter(uint offset)
 {
     return ScratchGlobal.Load(offset);

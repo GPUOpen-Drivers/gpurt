@@ -22,19 +22,15 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-void WriteScratchCompressedTriangleNode(
-    GeometryArgs        geometryArgs,
-    uint                primitiveIndex,
-    in TriangleData     tri,
-    uint                triangleId,
-    uint                nodeType,
-    uint                pairedTriPrimIdx)
+void WriteScratchTriangleNode(
+    uint         leafNodeDataOffset,
+    uint         dstScratchNodeIdx,
+    uint         geometryIndex,
+    uint         geometryFlags,
+    TriangleData tri,
+    uint         primitiveIndex)
 {
-    uint primitiveOffset = geometryArgs.PrimitiveOffset;
-    uint geometryIndex   = geometryArgs.GeometryIndex;
-    uint flags           = geometryArgs.GeometryFlags;
-
-    uint offset = CalcScratchNodeOffset(geometryArgs.LeafNodeDataByteOffset, primitiveOffset + primitiveIndex);
+    uint offset = CalcScratchNodeOffset(leafNodeDataOffset, dstScratchNodeIdx);
 
     uint4 data;
 
@@ -51,26 +47,15 @@ void WriteScratchCompressedTriangleNode(
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V2_OFFSET, data);
 
     const BoundingBox box = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
-    const float cost = SAH_COST_TRIANGLE_INTERSECTION * ComputeBoxSurfaceArea(box);
 
-    // type, flags, splitBox_or_pairedNodeIdx, numPrimitivesAndDoCollapse
-    uint pairedId = pairedTriPrimIdx;
-    if ((pairedTriPrimIdx != INVALID_IDX) &&
-        (pairedTriPrimIdx != PAIRED_TRI_LINKONLY))
-    {
-        // need to log the "flattened" globalIdx here
-        // (not just the primitiveIndex within geometry)
-        //
-        // this will be used by BVH builder to access the paired node from ScratchBuffer
-        pairedId = pairedTriPrimIdx + primitiveOffset;
-    }
+    const uint triangleId = WriteTriangleIdField(0, NODE_TYPE_TRIANGLE_0, 0, geometryFlags);
 
     // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
     const uint instanceMask = (box.min.x > box.max.x) ? 0 : 0xff;
-    const uint packedFlags = PackScratchNodeFlags(instanceMask, flags, triangleId);
+    const uint packedFlags = PackScratchNodeFlags(instanceMask, geometryFlags, triangleId);
 
-    data = uint4(packedFlags, pairedId, asuint(cost), nodeType);
-    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_FLAGS_OFFSET, data);
+    data = uint4(0, 0, 0, packedFlags);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, data);
 }
 
 //=====================================================================================================================
@@ -95,8 +80,11 @@ void WriteScratchInactiveTriangleNode(
 }
 
 //=====================================================================================================================
-void WriteOutPairedTriangles(
-    GeometryArgs geometryArgs,
+void WriteScratchQuadNode(
+    uint         leafNodeDataOffset,
+    uint         dstScratchNodeIdx,
+    uint         geometryIndex,
+    uint         geometryFlags,
     TriangleData tri1,
     uint         tri1PrimIdx,
     uint         triT1Rotation,
@@ -104,28 +92,58 @@ void WriteOutPairedTriangles(
     uint         tri0PrimIdx,
     uint         triT0Rotation)
 {
+    // TODO: For Navi3, we can directly write the scratch node data to the result leaf node data section
+    //
     uint triangleId = 0;
 
     // triT0 - NODE_TYPE_TRIANGLE_0 (2nd to intersect)
-    triangleId = WriteTriangleIdField(triangleId, NODE_TYPE_TRIANGLE_0, triT0Rotation, geometryArgs.GeometryFlags);
+    triangleId = WriteTriangleIdField(triangleId, NODE_TYPE_TRIANGLE_0, triT0Rotation, geometryFlags);
 
     // triT1 - NODE_TYPE_TRIANGLE_1 (1st to intersect)
-    triangleId = WriteTriangleIdField(triangleId, NODE_TYPE_TRIANGLE_1, triT1Rotation, geometryArgs.GeometryFlags);
+    triangleId = WriteTriangleIdField(triangleId, NODE_TYPE_TRIANGLE_1, triT1Rotation, geometryFlags);
 
-    WriteScratchCompressedTriangleNode(geometryArgs,
-                                       tri1PrimIdx,
-                                       tri1,
-                                       triangleId,
-                                       NODE_TYPE_TRIANGLE_1,
-                                       tri0PrimIdx);
+    uint offset = CalcScratchNodeOffset(leafNodeDataOffset, dstScratchNodeIdx);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_PRIMITIVE_ID_OFFSET, tri1PrimIdx);
 
-    WriteScratchCompressedTriangleNode(geometryArgs,
-                                       tri0PrimIdx,
-                                       tri0,
-                                       triangleId,
-                                       NODE_TYPE_TRIANGLE_0,
-                                       PAIRED_TRI_LINKONLY);
+    // Pack triangle 0 primitive offset from triangle 1. Note, the pairing process always searches within a contiguous
+    // group of primitives and finds a paired triangle that has a lower primitive index than itself. Maximum offset
+    // currently is not expected to be more than 63
+    const uint primIdOffset = tri1PrimIdx - tri0PrimIdx;
+    const uint packedGeomId = geometryIndex | (primIdOffset << 24u);
 
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_GEOMETRY_INDEX_OFFSET, packedGeomId);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_PARENT_OFFSET, INVALID_IDX);
+
+    const uint3 t0VtxIndices = CalcTriangleCompressionVertexIndices(NODE_TYPE_TRIANGLE_0, triangleId);
+    const uint3 t1VtxIndices = CalcTriangleCompressionVertexIndices(NODE_TYPE_TRIANGLE_1, triangleId);
+
+    const uint3 t1VtxOffsets = SCRATCH_NODE_V0_OFFSET + (t1VtxIndices * SCRATCH_NODE_TRIANGLE_VERTEX_STRIDE);
+    WriteScratchNodeDataAtOffset(offset, t1VtxOffsets.x, tri1.v0);
+    WriteScratchNodeDataAtOffset(offset, t1VtxOffsets.y, tri1.v1);
+    WriteScratchNodeDataAtOffset(offset, t1VtxOffsets.z, tri1.v2);
+
+    float3 v0 = tri0.v2;
+    if (t0VtxIndices.x == 0)
+    {
+        v0 = tri0.v0;
+    }
+    else if (t0VtxIndices.y == 0)
+    {
+        v0 = tri0.v1;
+    }
+
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V0_OFFSET, v0);
+
+    // Account for the unshared vertex from triangle 0
+    BoundingBox box = GenerateTriangleBoundingBox(tri1.v0, tri1.v1, tri1.v2);
+    box.min = min(box.min, v0);
+    box.max = max(box.max, v0);
+
+    // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
+    const uint instanceMask = (box.min.x > box.max.x) ? 0 : 0xff;
+
+    const uint packedFlags = PackScratchNodeFlags(instanceMask, geometryFlags, triangleId);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_FLAGS_OFFSET, packedFlags);
 }
 
 //=====================================================================================================================
@@ -190,14 +208,14 @@ uint TryPairTriangles(
 }
 
 //======================================================================================================================
-uint PairTriangles(
+int PairTriangles(
     float3x3 tri,
     bool     isActive)
 {
     bool valid = isActive;
 
     // Initialise to unpaired triangle
-    uint pairInfo = -1;
+    int pairInfo = -1;
 
     while (valid)
     {
@@ -241,7 +259,7 @@ uint PairTriangles(
 }
 
 //======================================================================================================================
-uint TryPairTrianglesIndexed(
+int TryPairTrianglesIndexed(
     const uint3 t0,
     const uint3 t1)
 {
@@ -250,7 +268,7 @@ uint TryPairTrianglesIndexed(
     // 0:3 : triangle_0_vertex_offset
     // 4:7 : triangle_1_vertex_offset
     //
-    uint packedOffset = -1;
+    int packedOffset = -1;
 
     if ((t1[2] == t0[0]) && (t1[1] == t0[1]))
     {
@@ -301,14 +319,14 @@ uint TryPairTrianglesIndexed(
 }
 
 //======================================================================================================================
-uint PairTrianglesIndexed(
+int PairTrianglesIndexed(
     uint3 tri,
     bool  isActive)
 {
     bool valid = isActive;
 
     // Initialise to unpaired triangle
-    uint pairInfo = -1;
+    int pairInfo = -1;
 
     while (valid)
     {
@@ -351,6 +369,14 @@ uint PairTrianglesIndexed(
     return pairInfo;
 }
 
+//=====================================================================================================================
+uint ComputePrimRefCountBlockOffset(
+    in uint blockOffset, in uint globalId)
+{
+    const uint waveID = (globalId / WaveGetLaneCount());
+    return (blockOffset + waveID) * sizeof(uint);
+}
+
 //======================================================================================================================
 void EncodePairedTriangleNodeImpl(
     RWBuffer<float3>           GeometryBuffer,
@@ -358,27 +384,26 @@ void EncodePairedTriangleNodeImpl(
     RWStructuredBuffer<float4> TransformBuffer,
     GeometryArgs               geometryArgs,
     uint                       primitiveIndex,
-    uint                       localId,
+    uint                       globalId,
     uint                       primitiveOffset,
-    uint                       vertexOffset,
-    bool                       writeNodesToUpdateStack)
+    uint                       vertexOffset)
 {
-    const uint metadataSize = IsUpdate() ?
-        SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : geometryArgs.metadataSizeInBytes;
+    const uint metadataSize = geometryArgs.metadataSizeInBytes;
 
-    // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
-    const AccelStructOffsets offsets =
-        SrcBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
-
-    const uint basePrimNodePtr =
-        IsUpdate() ? offsets.primNodePtrs : geometryArgs.BasePrimNodePtrOffset;
+    const uint basePrimNodePtr = geometryArgs.BasePrimNodePtrOffset;
 
     const uint flattenedPrimitiveIndex = primitiveOffset + primitiveIndex;
 
     const uint primNodePointerOffset =
         metadataSize + basePrimNodePtr + (flattenedPrimitiveIndex * sizeof(uint));
 
-    const uint numLeafNodesOffset = metadataSize + ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET;
+    const uint basePrimRefCountOffset =
+        metadataSize + geometryArgs.DestLeafByteOffset;
+
+    const uint primRefCountOffset =
+        basePrimRefCountOffset + ComputePrimRefCountBlockOffset(geometryArgs.blockOffset, globalId);
+
+    const uint dstScratchNodeOffset = DstMetadata.Load(primRefCountOffset);
 
     // Fetch face indices from index buffer
     uint3 faceIndices = FetchFaceIndices(IndexBuffer,
@@ -388,20 +413,26 @@ void EncodePairedTriangleNodeImpl(
 
     const bool isIndexed = (geometryArgs.IndexBufferFormat != IndexFormatInvalid);
 
-    uint numQuads = 0;
+    // Initialise lane as inactive or paired triangle
+    int pairInfo = -2;
+
+    TriangleData tri;
+    tri.v0 = float3(0, 0, 0);
+    tri.v1 = float3(0, 0, 0);
+    tri.v2 = float3(0, 0, 0);
 
     // Check if vertex indices are within bounds, otherwise make the triangle inactive
     const uint maxIndex = max(faceIndices.x, max(faceIndices.y, faceIndices.z));
     if (maxIndex < geometryArgs.vertexCount)
     {
         // Fetch triangle vertex data from vertex buffer
-        TriangleData tri = FetchTransformedTriangleData(geometryArgs,
-                                                        GeometryBuffer,
-                                                        faceIndices,
-                                                        geometryArgs.GeometryStride,
-                                                        vertexOffset,
-                                                        geometryArgs.HasValidTransform,
-                                                        TransformBuffer);
+        tri = FetchTransformedTriangleData(geometryArgs,
+                                           GeometryBuffer,
+                                           faceIndices,
+                                           geometryArgs.GeometryStride,
+                                           vertexOffset,
+                                           geometryArgs.HasValidTransform,
+                                           TransformBuffer);
 
         // Generate triangle bounds and update scene bounding box
         const BoundingBox boundingBox = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
@@ -426,8 +457,6 @@ void EncodePairedTriangleNodeImpl(
             tri.v0.x = NaN;
         }
 
-        uint pairInfo = 0;
-
         if (isIndexed)
         {
             pairInfo = PairTrianglesIndexed(faceIndices, true);
@@ -441,70 +470,114 @@ void EncodePairedTriangleNodeImpl(
 
             pairInfo = PairTriangles(faceVertices, isActive);
         }
+    }
 
-        // Count quads produced by the current wave. Note, this includes unpaired triangles as well
-        // (marked with a value of -1).
-        numQuads = WaveActiveCountBits(int(pairInfo) >= -1);
+    // Store invalid prim node pointer for now during first time builds.
+    // If the triangle is active, BuildQBVH will write it in.
+    DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
 
-        // TODO: Allocate quads in contiguous memory in the scratch buffer
-        // const uint quadIdx = WavePrefixSum(hasValidQuad ? 1 : 0);
+    // Count quads produced by the current wave. Note, this includes unpaired triangles as well
+    // (marked with a value of -1).
+    const bool isActiveTriangle = (pairInfo >= -1);
+    const uint waveActivePrimCount = WaveActiveCountBits(isActiveTriangle);
 
-        const bool hasValidQuad = (int(pairInfo) >= 0);
-        const uint pairLaneId = hasValidQuad ? pairInfo >> 16 : 0;
+    // Allocate scratch nodes for active triangle primitives using the precomputed block offset for each
+    // triangle geometry
+    const uint laneActivePrimIdx = WavePrefixSum(isActiveTriangle ? 1 : 0);
+    const uint dstScratchNodeIdx = dstScratchNodeOffset + laneActivePrimIdx;
 
-        TriangleData tri1;
-        tri1.v0 = WaveReadLaneAt(tri.v0, pairLaneId);
-        tri1.v1 = WaveReadLaneAt(tri.v1, pairLaneId);
-        tri1.v2 = WaveReadLaneAt(tri.v2, pairLaneId);
+    const bool hasValidQuad = (pairInfo >= 0);
+    const uint pairLaneId = hasValidQuad ? pairInfo >> 16 : 0;
 
-        const uint primitiveIndex1 = WaveReadLaneAt(primitiveIndex, pairLaneId);
+    TriangleData tri1;
+    tri1.v0 = WaveReadLaneAt(tri.v0, pairLaneId);
+    tri1.v1 = WaveReadLaneAt(tri.v1, pairLaneId);
+    tri1.v2 = WaveReadLaneAt(tri.v2, pairLaneId);
 
-        if (hasValidQuad)
-        {
-            const uint triT0Rotation = (pairInfo & 0xF);
-            const uint triT1Rotation = (pairInfo >> 4) & 0xF;
+    const uint primitiveIndex1 = WaveReadLaneAt(primitiveIndex, pairLaneId);
 
-            WriteOutPairedTriangles(geometryArgs,
-                                    tri1,
-                                    primitiveIndex1,
-                                    triT1Rotation,
-                                    tri,
-                                    primitiveIndex,
-                                    triT0Rotation);
-        }
-        else if (pairInfo == -1)
-        {
-            // Write out unpaired triangle
-            const uint triangleId = WriteTriangleIdField(0, NODE_TYPE_TRIANGLE_0, 0, geometryArgs.GeometryFlags);
-            WriteScratchCompressedTriangleNode(geometryArgs,
-                                               primitiveIndex,
-                                               tri,
-                                               triangleId,
-                                               NODE_TYPE_TRIANGLE_0,
-                                               INVALID_IDX);
-        }
-        else
-        {
-            // This triangle is a pair in a quad handled by the lead lane. Nothing to do here.
-        }
+    if (hasValidQuad)
+    {
+        const uint triT0Rotation = (pairInfo & 0xF);
+        const uint triT1Rotation = (pairInfo >> 4) & 0xF;
 
-        // Store invalid prim node pointer for now during first time builds.
-        // If the triangle is active, BuildQBVH will write it in.
-        DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
+        WriteScratchQuadNode(geometryArgs.LeafNodeDataByteOffset,
+                             dstScratchNodeIdx,
+                             geometryArgs.GeometryIndex,
+                             geometryArgs.GeometryFlags,
+                             tri1,
+                             primitiveIndex1,
+                             triT1Rotation,
+                             tri,
+                             primitiveIndex,
+                             triT0Rotation);
+    }
+    else if (pairInfo == -1)
+    {
+        // Write out unpaired triangle
+        WriteScratchTriangleNode(geometryArgs.LeafNodeDataByteOffset,
+                                 dstScratchNodeIdx,
+                                 geometryArgs.GeometryIndex,
+                                 geometryArgs.GeometryFlags,
+                                 tri,
+                                 primitiveIndex);
     }
     else
     {
-        // Immediately write out the inactive nodes to scratch
-        WriteScratchInactiveTriangleNode(geometryArgs,
-                                         flattenedPrimitiveIndex,
-                                         primNodePointerOffset);
-    }
-
-    if (WaveIsFirstLane())
-    {
-        DstMetadata.InterlockedAdd(numLeafNodesOffset, numQuads);
+        // This triangle is a pair in a quad handled by the lead lane. Nothing to do here.
     }
 
     // ClearFlags for refit and update
     ClearFlagsForRefitAndUpdate(geometryArgs, flattenedPrimitiveIndex, false);
+}
+
+//======================================================================================================================
+uint TryPairTriangleImpl(
+    RWBuffer<float3>           GeometryBuffer,
+    RWByteAddressBuffer        IndexBuffer,
+    RWStructuredBuffer<float4> TransformBuffer,
+    GeometryArgs               geometryArgs,
+    uint                       primitiveIndex,
+    uint                       vertexOffset)
+{
+    // Fetch face indices from index buffer
+    uint3 faceIndices = FetchFaceIndices(IndexBuffer,
+                                         primitiveIndex,
+                                         geometryArgs.IndexBufferByteOffset,
+                                         geometryArgs.IndexBufferFormat);
+
+    const bool isIndexed = (geometryArgs.IndexBufferFormat != IndexFormatInvalid);
+
+    // Initialise lane as inactive or paired triangle
+    int pairInfo = -2;
+
+    // Check if vertex indices are within bounds, otherwise make the triangle inactive
+    const uint maxIndex = max(faceIndices.x, max(faceIndices.y, faceIndices.z));
+    if (maxIndex < geometryArgs.vertexCount)
+    {
+        if (isIndexed)
+        {
+            pairInfo = PairTrianglesIndexed(faceIndices, true);
+        }
+        else
+        {
+            // Fetch triangle vertex data from vertex buffer
+            TriangleData tri = FetchTransformedTriangleData(geometryArgs,
+                                                            GeometryBuffer,
+                                                            faceIndices,
+                                                            geometryArgs.GeometryStride,
+                                                            vertexOffset,
+                                                            geometryArgs.HasValidTransform,
+                                                            TransformBuffer);
+
+            float3x3 faceVertices;
+            faceVertices[0] = tri.v0;
+            faceVertices[1] = tri.v1;
+            faceVertices[2] = tri.v2;
+
+            pairInfo = PairTriangles(faceVertices, IsActive(tri));
+        }
+    }
+
+    return pairInfo;
 }

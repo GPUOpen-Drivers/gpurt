@@ -255,7 +255,7 @@ static IntersectionResult TraceRayImpl2_0(
                 if (rayForceOpaque == false)
                 {
                     // load primitive data
-                    const PrimitiveData primitiveData = FetchPrimitiveDataAddr(nodePtr, nodeAddr64);
+                    const PrimitiveData primitiveData = FetchPrimitiveDataAddr(prevNodePtr, nodeAddr64);
 
                     const uint primitiveIndex = primitiveData.primitiveIndex;
                     const uint geometryIndex  = primitiveData.geometryIndex;
@@ -298,7 +298,7 @@ static IntersectionResult TraceRayImpl2_0(
                                                     geometryIndex);
 
                         // Set hit triangle information
-                        AmdTraceRaySetHitTriangleNodePointer(currentBvh, nodePtr);
+                        AmdTraceRaySetHitTriangleNodePointer(currentBvh, prevNodePtr);
 
                         // get barycentrics
                         float2 barycentrics;
@@ -326,7 +326,7 @@ static IntersectionResult TraceRayImpl2_0(
                     intersection.barycentrics.x    = asfloat(intersectionResult.z) / asfloat(intersectionResult.y);
                     intersection.barycentrics.y    = asfloat(intersectionResult.w) / asfloat(intersectionResult.y);
                     intersection.t                 = candidateT;
-                    intersection.nodeIndex         = nodePtr;
+                    intersection.nodeIndex         = prevNodePtr;
                     intersection.hitkind           = hitKind;
                     tlasNodePtr                    = instNodePtr;
 
@@ -372,7 +372,7 @@ static IntersectionResult TraceRayImpl2_0(
         if (CheckHandleProceduralUserNode(prevNodePtr))
         {
             // Load primitive data
-            const PrimitiveData primitiveData = FetchPrimitiveDataAddr(nodePtr, nodeAddr64);
+            const PrimitiveData primitiveData = FetchPrimitiveDataAddr(prevNodePtr, nodeAddr64);
 
             const uint primitiveIndex = primitiveData.primitiveIndex;
             const uint geometryIndex  = primitiveData.geometryIndex;
@@ -453,7 +453,7 @@ static IntersectionResult TraceRayImpl2_0(
                         intersection.numCandidateHits++;
                     }
 #endif
-                    intersection.nodeIndex = nodePtr;
+                    intersection.nodeIndex = prevNodePtr;
                     tlasNodePtr = instNodePtr;
 
                     if ((rayFlags & RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH) ||

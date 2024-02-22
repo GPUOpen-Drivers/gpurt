@@ -31,18 +31,16 @@ void EncodePairedTriangleNode(
     RWStructuredBuffer<float4> TransformBuffer,
     GeometryArgs               geometryArgs,
     uint                       primitiveIndex,
-    uint                       localId,
+    uint                       globalId,
     uint                       primitiveOffset,
-    uint                       vertexOffset,
-    bool                       writeNodesToUpdateStack)
+    uint                       vertexOffset)
 {
     EncodePairedTriangleNodeImpl(GeometryBuffer,
                                  IndexBuffer,
                                  TransformBuffer,
                                  geometryArgs,
                                  primitiveIndex,
-                                 localId,
+                                 globalId,
                                  primitiveOffset,
-                                 vertexOffset,
-                                 writeNodesToUpdateStack);
+                                 vertexOffset);
 }

@@ -306,9 +306,14 @@ enum class InternalRayTracingCsType : uint32
     InitExecuteIndirect,
     PairCompression,
     MergeSort,
-    Update,
+    UpdateTriangles,
+    UpdateAabbs,
     InitAccelerationStructure,
     InitUpdateAccelerationStructure,
+    BuildFastAgglomerativeLbvh,
+    CountTrianglePairs,
+    CountTrianglePairsIndirect,
+    CountTrianglePairsPrefixSum,
     Count
 };
 
@@ -1410,6 +1415,16 @@ public:
     //
     // @return the required global memory allocation size in bytes
     virtual gpusize QueryCpsScratchMemorySize(uint32 cpsStackSize, uint32 numThreads) = 0;
+
+    // Initializes ray sorting memory.
+    //
+    // @param cmdBuffer            [in] Opaque handle to command buffer where commands will be written
+    // @param cpsGpuMemAddr        [in] GPU address pointing to cps memory.
+    // @param cpsMemorySize        [in] The required global memory allocation size in bytes
+    virtual void InitializeCpsMemory(
+        ClientCmdBufferHandle   cmdBuffer,
+        const gpusize           cpsGpuMemAddr,
+        const gpusize           cpsMemorySize) = 0;
 
     // Returns the static pipeline mask shader constant values for a particular pipeline given a compatible
     // AS memory layout parameters.

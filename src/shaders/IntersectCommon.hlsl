@@ -93,8 +93,7 @@ static GpuVirtualAddress FetchAccelStructBaseAddr(GpuVirtualAddress bvhAddress)
     if (bvhAddress)
     {
         // Fetch acceleration structure base address. Note that an empty BVH will have 0 as the address in the metadata.
-        bvhAddress = MakeGpuVirtualAddress(LoadDwordAtAddr(bvhAddress + ACCEL_STRUCT_METADATA_VA_LO_OFFSET),
-                                           LoadDwordAtAddr(bvhAddress + ACCEL_STRUCT_METADATA_VA_HI_OFFSET));
+        bvhAddress = ConstantLoadDwordAtAddrx2(bvhAddress + ACCEL_STRUCT_METADATA_VA_LO_OFFSET);
     }
 #endif
     return bvhAddress;

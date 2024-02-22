@@ -89,6 +89,7 @@ enum BarrierFlags : uint32
 {
     BarrierFlagNone            = 0x0,
     BarrierFlagSyncIndirectArg = 0x1, // Prepare previous shader output for indirect argument use
+    BarrierFlagSyncPostCopy    = 0x2, // Prepare copy to dispatch barrier
 };
 
 // =====================================================================================================================

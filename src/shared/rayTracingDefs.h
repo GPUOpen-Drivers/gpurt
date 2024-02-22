@@ -188,7 +188,6 @@ enum SceneBoundsCalculation : uint
 
 #define INVALID_IDX           0xffffffff
 #define INACTIVE_PRIM         0xfffffffe
-#define PAIRED_TRI_LINKONLY   0xfffffffd
 
 static const uint ByteStrideScratchNode = 64;
 static const uint ByteStrideU32         = 12;
@@ -1041,6 +1040,18 @@ struct StateTaskQueueCounter
 #define STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET     8
 #define STATE_TASK_QUEUE_TASK_COUNTER_OFFSET        12
 #define STATE_TASK_QUEUE_NUM_TASKS_DONE_OFFSET      16
+
+//=====================================================================================================================
+// Counters used in encode phase
+struct EncodeTaskCounters
+{
+    uint numPrimitives;
+    uint primRefs;
+};
+
+#define ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET 0
+#define ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET      4
+#define ENCODE_TASK_COUNTER_NUM_DWORDS            (sizeof(EncodeTaskCounters) / sizeof(uint))
 
 //=====================================================================================================================
 struct TaskLoopCounters

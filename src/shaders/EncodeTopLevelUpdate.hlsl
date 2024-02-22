@@ -78,20 +78,20 @@ void EncodeInstancesUpdate(
             const uint blasMetadataSize = FetchHeaderField(baseAddrAccelStructHeader,
                                                             ACCEL_STRUCT_HEADER_METADATA_SIZE_OFFSET);
             const uint nodePointer = SrcBuffer.Load(primNodePointerOffset);
-            const uint nodeOffset  = tlasMetadataSize + ExtractNodePointerOffset(nodePointer);
 
-            // Fetch parent node pointer
-            const uint parentNodePointer = ReadParentPointer(tlasMetadataSize,
-                                                                nodePointer);
+            uint parentNodePointer;
+            {
+                parentNodePointer = ReadParentPointer(tlasMetadataSize, nodePointer);
+            }
 
             // Update prim node pointer and parent pointer in out of place destination buffer
             if (IsUpdateInPlace() == false)
             {
                 DstMetadata.Store(primNodePointerOffset, nodePointer);
 
-                WriteParentPointer(tlasMetadataSize,
-                                    nodePointer,
-                                    parentNodePointer);
+                {
+                    WriteParentPointer(tlasMetadataSize, nodePointer, parentNodePointer);
+                }
             }
 
             // Compute box node count and child index in parent node

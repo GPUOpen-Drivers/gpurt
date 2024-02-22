@@ -92,6 +92,9 @@ public:
 
     uint32 EncodePrimitives();
 
+    void CountTrianglePairs();
+    void CountTrianglePairsPrefixSum();
+
     // data offset and size in ResultBuffer
     struct ResultBufferInfo
     {
@@ -133,7 +136,7 @@ public:
         uint32                                             primitiveCount,
         uint32                                             geometryIndex,
         GeometryFlags                                      geometryFlags,
-        uint64                                             resultLeafOffset,
+        uint32                                             blockOffset,
         gpusize                                            indirectGpuVa);
 
     // Encodes AABB nodes into a scratch buffer
@@ -142,8 +145,7 @@ public:
         const GeometryAabbs*                           pDesc,
         uint32                                         primitiveCount,
         uint32                                         geometryIndex,
-        GeometryFlags                                  geometryFlags,
-        uint64                                         resultLeafOffset);
+        GeometryFlags                                  geometryFlags);
 
     // Encodes instance nodes into a scratch buffer
     void EncodeInstances(
@@ -218,6 +220,7 @@ private:
 
         uint32                          numMortonSizeBits;
 
+        uint32                          trianglePairBlockCount;       // For early pair compression
         SceneBoundsCalculation          sceneCalcType;
         bool                            topLevelBuild;
         bool                            triangleSplitting;            // Triangle Splitting Enabled
@@ -325,7 +328,7 @@ private:
         bool                       typedBuffer,
         uint32                     entryOffset);
 
-    uint32 WriteTriangleGeometrySrdTables(uint32 entryOffset);
+    uint32 WriteGeometrySrdTables(uint32 entryOffset);
 
     void EncodeUpdate();
 
@@ -347,6 +350,8 @@ private:
     void BuildBVHTD();
 
     void BuildBVHPLOC(uint32 wavesPerSimd);
+
+    void BuildFastAgglomerativeLbvh();
 
     void UpdateQBVH();
 
@@ -498,6 +503,10 @@ private:
         const GeometryTriangles* pDesc,
         EncodeNodes::Constants*  pEncodeConstants,
         uint32                   entryoffset);
+
+    BufferViewInfo SetupAabbBuffer(
+        const GeometryAabbs& desc,
+        uint32* pStride) const;
 
     uint32 WriteAabbGeometryTable(
         const GeometryAabbs* pAabbGeometry,

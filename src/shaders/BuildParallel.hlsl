@@ -75,7 +75,6 @@ struct RootConstants
 #define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
 groupshared uint SharedMem[MAX_LDS_ELEMENTS];
 
-#include "TaskCounter.hlsl"
 #include "TaskQueueCounter.hlsl"
 
 // The encode path uses SrcBuffer and DstBuffer as the true acceleration structure base.
@@ -105,10 +104,11 @@ uint GetNumThreads()
 void WaitForEncodeTasksToFinish(
     uint numTasksWait)
 {
+    const uint offset = ShaderConstants.offsets.encodeTaskCounter + ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET;
     do
     {
         DeviceMemoryBarrier();
-    } while (FetchTaskCounter(ShaderConstants.offsets.encodeTaskCounter) < numTasksWait);
+    } while (FetchTaskCounter(offset) < numTasksWait);
 }
 
 // Include implementations for each pass without shader entry points and resource declarations
@@ -121,6 +121,7 @@ void WaitForEncodeTasksToFinish(
 #include "BuildQBVH.hlsl"
 #include "BuildBVHTDTR.hlsl"
 #include "BuildBVH.hlsl"
+#include "BuildFastAgglomerativeLbvh.hlsl"
 #include "RefitBoundsImpl.hlsl"
 #include "TriangleSplitting.hlsl"
 #include "PairCompression.hlsl"
@@ -257,32 +258,7 @@ void FastAgglomerativeLbvh(
     uint globalId,
     uint numActivePrims)
 {
-    FastLBVHArgs args;
-
-    args.rootNodeIndexOffset         = ShaderConstants.offsets.fastLBVHRootNodeIndex;
-    args.topLevelBuild               = Settings.topLevelBuild;
-    args.numActivePrims              = numActivePrims;
-    args.baseFlagsOffset             = ShaderConstants.offsets.propagationFlags;
-    args.baseScratchNodesOffset      = CalculateBvhNodesOffset(ShaderConstants, numActivePrims);
-    args.sortedMortonCodesOffset     = ShaderConstants.offsets.mortonCodesSorted;
-    args.useMortonCode30             = Settings.useMortonCode30;
-    args.doTriangleSplitting         = Settings.doTriangleSplitting;
-    args.splitBoxesOffset            = ShaderConstants.offsets.triangleSplitBoxes;
-    args.numBatchesOffset            = ShaderConstants.offsets.numBatches;
-    args.baseBatchIndicesOffset      = ShaderConstants.offsets.batchIndices;
-    args.fp16BoxNodesMode            = Settings.fp16BoxNodesMode;
-    args.fp16BoxModeMixedSaThreshold = Settings.fp16BoxModeMixedSaThreshold;
-    args.noCopySortedNodes           = Settings.noCopySortedNodes;
-    args.sortedPrimIndicesOffset     = ShaderConstants.offsets.primIndicesSorted;
-    args.enableEarlyPairCompression  = Settings.enableEarlyPairCompression;
-    args.unsortedNodesBaseOffset     = ShaderConstants.offsets.bvhLeafNodeData,
-
-    args.enablePairCompression       = EnableLatePairCompression();
-    args.enablePairCostCheck         = Settings.enablePairCostCheck;
-    args.centroidBoxesOffset         = 0;
-    args.enableCentroidBoxes         = false;
-    args.ltdPackCentroids            = false;
-    args.numMortonBits               = 0;
+    const FastLBVHArgs args = GetFastLbvhArgs(numActivePrims);
 
     for (uint primIndex = globalId; primIndex < numActivePrims; primIndex += GetNumThreads())
     {
@@ -313,6 +289,7 @@ void TriangleSplitting(
     args.dynamicBlockIndexScratchOffset = ShaderConstants.offsets.dynamicBlockIndex;
     args.sceneBoundsByteOffset          = ShaderConstants.offsets.sceneBounds;
     args.tsBudgetPerTriangle            = ShaderConstants.tsBudgetPerTriangle;
+    args.encodeTaskCounterScratchOffset = ShaderConstants.offsets.encodeTaskCounter;
 
     TriangleSplittingImpl(globalId, localId, groupId, args);
 }
@@ -446,7 +423,6 @@ BuildQbvhArgs GetBuildQbvhArgs(
     qbvhArgs.enableFusedInstanceNode     = Settings.enableFusedInstanceNode;
     qbvhArgs.enableFastLBVH              = Settings.enableFastLBVH;
     qbvhArgs.fastLBVHRootNodeIndex       = rootNodeIndex;
-    qbvhArgs.enableEarlyPairCompression  = Settings.enableEarlyPairCompression;
     qbvhArgs.unsortedBvhLeafNodesOffset  = ShaderConstants.offsets.bvhLeafNodeData;
 
     return qbvhArgs;
@@ -520,8 +496,19 @@ void InitAccelerationStructure()
 
     DstBuffer.Store(0, ShaderConstants.header);
 
+    // Initialise encode counters
+    ScratchBuffer.Store(
+        ShaderConstants.offsets.encodeTaskCounter + ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET, 0);
+
+    // Early triangle pairing and triangle splitting dynamically increment primitive reference counter. Initialise
+    // counters to 0 when these features are enabled
+    const uint primRefInitCount =
+        (Settings.enableEarlyPairCompression || Settings.doTriangleSplitting) ? 0 : ShaderConstants.numPrimitives;
+
+    ScratchBuffer.Store(
+        ShaderConstants.offsets.encodeTaskCounter + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET, primRefInitCount);
+
     // Initialize valid scratch buffer counters to 0
-    InitScratchCounter(ShaderConstants.offsets.encodeTaskCounter);
     InitScratchCounter(ShaderConstants.offsets.plocTaskQueueCounter);
     InitScratchCounter(ShaderConstants.offsets.tdTaskQueueCounter);
     InitScratchCounter(CurrentSplitTaskQueueCounter());
@@ -579,10 +566,9 @@ void EncodePrimitives(
                     TransformBuffer[geometryIndex],
                     geometryArgs,
                     primitiveIndex,
-                    localId,
+                    globalId,
                     primitiveOffset,
-                    0,
-                    false); // Don't write to the update stack
+                    0);
             }
             else
             {
@@ -645,20 +631,27 @@ void BuildBvh(
 
     DeviceMemoryBarrierWithGroupSync();
 
-    uint numPrimitives = ShaderConstants.numPrimitives;
-
     if (Settings.doTriangleSplitting)
     {
         TriangleSplitting(globalId, localId, groupId);
-
-        numPrimitives = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
     }
     else if (Settings.rebraidType == RebraidType::V2)
     {
         Rebraid(globalId, localId, groupId);
-
-        numPrimitives = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
     }
+
+    // Note, the primitive reference counter in scratch represents the following.
+    //
+    // BLAS Default: Number of triangles processed by Encode.
+    // BLAS EarlyPairCompression: Number of triangle references including paired triangles.
+    // BLAS TriangleSplitting: Number of split triangle references.
+    // TLAS Default: Number of instances processed by Encode.
+    // TLAS Rebraid: Number of rebraided instances created by the rebraid process.
+    //
+    // TODO: Support early triangle pairing with triangle splitting.
+    //
+    const uint numPrimitives = FetchTaskCounter(
+        ShaderConstants.offsets.encodeTaskCounter + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET);
 
     uint numActivePrims;
 

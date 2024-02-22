@@ -55,6 +55,8 @@ enum class BuildPhaseFlags : uint32_t
     PairCompression               = 1 << 10,
     SeparateEmitPostBuildInfoPass = 1 << 12,
     BuildParallel                 = 1 << 13,
+    BuildFastAgglomerativeLbvh    = 1 << 15,
+    EarlyPairCompression          = 1 << 16,
 };
 
 constexpr BuildPhaseFlags& operator|=(BuildPhaseFlags& a, BuildPhaseFlags b) noexcept

@@ -67,8 +67,6 @@ struct Constants
 #include "EncodeTopLevelBuild.hlsl"
 #include "EncodeTopLevelUpdate.hlsl"
 
-#include "TaskCounter.hlsl"
-
 //=====================================================================================================================
 [RootSignature(RootSig)]
 [numthreads(BUILD_THREADGROUP_SIZE, 1, 1)]
@@ -149,7 +147,12 @@ void EncodeInstances(
         {
             ScratchBuffer.Store(flagOffset + (i * sizeof(uint)), initValue);
         }
+    }
 
-        IncrementTaskCounter(ShaderConstants.encodeTaskCounterScratchOffset);
+    const uint wavePrimCount = WaveActiveCountBits(index < ShaderConstants.numPrimitives);
+    if (WaveIsFirstLane())
+    {
+        IncrementTaskCounter(ShaderConstants.encodeTaskCounterScratchOffset + ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET,
+                             wavePrimCount);
     }
 }

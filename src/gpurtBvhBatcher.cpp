@@ -186,6 +186,14 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
         // TODO: Disable per-bvh timestamp events for batched builds
         BuildPhase(builders, &BvhBuilder::PreBuildDumpEvents);
 
+        if (PhaseEnabled(BuildPhaseFlags::EarlyPairCompression))
+        {
+            BuildPhase("CountTrianglePairs", builders, &BvhBuilder::CountTrianglePairs);
+            Barrier();
+            BuildPhase("CountTrianglePairsPrefixSum", builders, &BvhBuilder::CountTrianglePairsPrefixSum);
+            Barrier();
+        }
+
         BuildPhase("EncodePrimitives", builders, &BvhBuilder::EncodePrimitives);
 
         if (m_deviceSettings.enableParallelBuild)
@@ -273,7 +281,7 @@ void BvhBatcher::BuildMultiDispatch(Util::Span<BvhBuilder> builders)
     if (PhaseEnabled(BuildPhaseFlags::MergeSort))
     {
         Barrier();
-        const uint32 wavesPerSimd = builders.size() == 1 ? 16U : 4U;
+        const uint32 wavesPerSimd = builders.size() == 1 ? 16U : 2U;
         BuildFunction("Merge Sort", builders, [wavesPerSimd](BvhBuilder& builder)
         {
             builder.MergeSort(wavesPerSimd);
@@ -291,15 +299,21 @@ void BvhBatcher::BuildMultiDispatch(Util::Span<BvhBuilder> builders)
         Barrier();
         BuildPhase("BuildBVH", builders, &BvhBuilder::BuildBVH);
     }
-    if (PhaseEnabled(BuildPhaseFlags::SortScratchLeaves))
+    // SortScratchLeaves only needs to run when BuildBVH is not run
+    else if (PhaseEnabled(BuildPhaseFlags::SortScratchLeaves))
     {
         Barrier();
         BuildPhase("SortScratchLeaves", builders, &BvhBuilder::SortScratchLeaves);
     }
+    if (PhaseEnabled(BuildPhaseFlags::BuildFastAgglomerativeLbvh))
+    {
+        Barrier();
+        BuildPhase("BuildFastAgglomerativeLbvh", builders, &BvhBuilder::BuildFastAgglomerativeLbvh);
+    }
     if (PhaseEnabled(BuildPhaseFlags::BuildBVHPLOC))
     {
         Barrier();
-        const uint32 wavesPerSimd = builders.size() == 1 ? 4U : 1U;
+        const uint32 wavesPerSimd = builders.size() == 1 ? 8U : 1U;
         BuildFunction("BuildBVHPLOC", builders, [wavesPerSimd](BvhBuilder& builder)
         {
             builder.BuildBVHPLOC(wavesPerSimd);

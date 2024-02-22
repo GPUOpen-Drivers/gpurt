@@ -58,8 +58,6 @@
 #include "EncodeCommon.hlsl"
 #include "EncodePairedTriangle.hlsl"
 
-#include "TaskCounter.hlsl"
-
 [[vk::binding(0, 1)]] ConstantBuffer<GeometryArgs> ShaderConstants : register(b0);
 
 //=====================================================================================================================
@@ -83,6 +81,9 @@ void EncodeTriangleNodes(
     const uint vertexOffset       = 0;
 #endif
 
+    const bool enableEarlyPairCompression =
+        (Settings.enableEarlyPairCompression == true) && (IsUpdate() == false);
+
     if (globalThreadId.x == 0)
     {
         WriteGeometryInfo(
@@ -90,22 +91,19 @@ void EncodeTriangleNodes(
     }
 
     uint primitiveIndex = globalThreadId.x;
-    bool isUpdate = IsUpdate();
 
     if (primitiveIndex < numPrimitives)
     {
-        if ((Settings.enableEarlyPairCompression == true) &&
-            (isUpdate == false))
+        if (enableEarlyPairCompression)
         {
             EncodePairedTriangleNode(GeometryBuffer,
                                      IndexBuffer,
                                      TransformBuffer,
                                      ShaderConstants,
                                      primitiveIndex,
-                                     localId,
+                                     globalThreadId.x,
                                      primitiveOffset,
-                                     vertexOffset,
-                                     true);
+                                     vertexOffset);
         }
         else
         {
@@ -118,117 +116,13 @@ void EncodeTriangleNodes(
                                vertexOffset,
                                true);
         }
-
-        IncrementTaskCounter(ShaderConstants.encodeTaskCounterScratchOffset);
-    }
-}
-
-//=====================================================================================================================
-// Fetch API bounding box from source buffer which is a typed R32G32 buffer.
-BoundingBox FetchBoundingBoxData(RWBuffer<float3> buffer, uint index, uint boxStrideInElements)
-{
-    const uint baseElementIndex = index * boxStrideInElements;
-
-    float2 data[3];
-    data[0] = buffer[baseElementIndex+0].xy;
-    data[1] = buffer[baseElementIndex+1].xy;
-    data[2] = buffer[baseElementIndex+2].xy;
-
-    BoundingBox bbox;
-    bbox.min = float3(data[0].xy, data[1].x);
-    bbox.max = float3(data[1].y, data[2].xy);
-
-    // Generate degenerate bounding box for zero area bounds
-    if (ComputeBoxSurfaceArea(bbox) == 0)
-    {
-        bbox = InvalidBoundingBox;
     }
 
-    return bbox;
-}
-
-//======================================================================================================================
-uint CalcProceduralBoxNodeFlags(
-    in uint geometryFlags)
-{
-    // Determine opacity from geometry flags
-    uint nodeFlags =
-        (geometryFlags & D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE) ? 1u << BOX_NODE_FLAGS_ONLY_OPAQUE_SHIFT :
-                                                                  1u << BOX_NODE_FLAGS_ONLY_NON_OPAQUE_SHIFT;
-
-    // Note, a bottom-level acceleration structure can only contain a single geometry type.
-    nodeFlags |= 1u << BOX_NODE_FLAGS_ONLY_PROCEDURAL_SHIFT;
-
-    return nodeFlags;
-}
-
-//=====================================================================================================================
-void WriteScratchProceduralNode(
-    uint                primitiveOffset,
-    uint                primitiveIndex,
-    uint                geometryIndex,
-    uint                geometryFlags,
-    uint                instanceMask,
-    in BoundingBox      bbox)
-{
-    uint offset = CalcScratchNodeOffset(
-        ShaderConstants.LeafNodeDataByteOffset,
-        primitiveOffset + primitiveIndex);
-
-    uint4 data;
-
-    // LeafNode.bbox_min_or_v0, primitiveIndex
-    data = uint4(asuint(bbox.min), primitiveIndex);
-    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_BBOX_MIN_OFFSET, data);
-
-    // LeafNode.bbox_max_or_v1, geometryIndex
-    data = uint4(asuint(bbox.max), geometryIndex);
-    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_BBOX_MAX_OFFSET, data);
-
-    // LeafNode.v2, parent
-    data = uint4(0xffffffff, 0xffffffff, 0xffffffff, 0);
-    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V2_OFFSET, data);
-
-    // type, flags, splitBox, numPrimitivesAndDoCollapse
-    uint triangleId = 0;
-
-    const float cost = SAH_COST_AABBB_INTERSECTION * ComputeBoxSurfaceArea(bbox);
-
-    // Instance mask is assumed 0 in bottom level acceleration structures
-    const uint flags = CalcProceduralBoxNodeFlags(geometryFlags);
-
-    const uint packedFlags = PackScratchNodeFlags(instanceMask, flags, triangleId);
-
-    data = uint4(packedFlags, INVALID_IDX, asuint(cost), NODE_TYPE_USER_NODE_PROCEDURAL);
-    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_FLAGS_OFFSET, data);
-}
-
-//=====================================================================================================================
-void WriteProceduralNodeBoundingBox(
-    uint        metadataSize,
-    uint        nodePointer,
-    BoundingBox bbox)
-{
-    const uint nodeOffset = metadataSize + ExtractNodePointerOffset(nodePointer);
-
-    DstMetadata.Store<float3>(nodeOffset + USER_NODE_PROCEDURAL_MIN_OFFSET,bbox.min);
-    DstMetadata.Store<float3>(nodeOffset + USER_NODE_PROCEDURAL_MAX_OFFSET,bbox.max);
-}
-
-//=====================================================================================================================
-void WriteProceduralNodePrimitiveData(
-    uint metadataSize,
-    uint nodePointer,
-    uint primitiveIndex)
-{
-    const uint nodeOffset = metadataSize + ExtractNodePointerOffset(nodePointer);
-
+    const uint wavePrimCount = WaveActiveCountBits(primitiveIndex < numPrimitives);
+    if (WaveIsFirstLane())
     {
-        const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(ShaderConstants.GeometryIndex,
-                                                                     ShaderConstants.GeometryFlags);
-
-        DstMetadata.Store(nodeOffset + USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET, primitiveIndex);
-        DstMetadata.Store(nodeOffset + USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
+        IncrementTaskCounter(ShaderConstants.encodeTaskCounterScratchOffset + ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET,
+                             wavePrimCount);
     }
 }
 
@@ -245,11 +139,9 @@ void EncodeAABBNodes(
 
     const uint numPrimitives      = buildOffsetInfo.primitiveCount;
     const uint primitiveOffset    = ComputePrimitiveOffset(ShaderConstants);
-    const uint destLeafByteOffset = primitiveOffset * USER_NODE_PROCEDURAL_SIZE;
 #else
     const uint numPrimitives      = ShaderConstants.NumPrimitives;
     const uint primitiveOffset    = ShaderConstants.PrimitiveOffset;
-    const uint destLeafByteOffset = ShaderConstants.DestLeafByteOffset;
 #endif
 
     if (globalThreadId.x == 0)
@@ -260,104 +152,68 @@ void EncodeAABBNodes(
     uint primitiveIndex = globalThreadId.x;
     if (primitiveIndex < ShaderConstants.NumPrimitives)
     {
-        const uint metadataSize =
-            IsUpdate() ? SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : ShaderConstants.metadataSizeInBytes;
+        EncodeAabbNode(GeometryBuffer,
+                       IndexBuffer,
+                       TransformBuffer,
+                       ShaderConstants,
+                       primitiveIndex,
+                       primitiveOffset,
+                       true);
+    }
 
-        // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
-        const AccelStructOffsets offsets =
-            SrcBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
+    const uint wavePrimCount = WaveActiveCountBits(primitiveIndex < ShaderConstants.NumPrimitives);
+    if (WaveIsFirstLane())
+    {
+        IncrementTaskCounter(ShaderConstants.encodeTaskCounterScratchOffset + ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET,
+                             wavePrimCount);
+    }
+}
 
-        const uint basePrimNodePtr =
-            IsUpdate() ? offsets.primNodePtrs : ShaderConstants.BasePrimNodePtrOffset;
+//=====================================================================================================================
+[RootSignature(RootSig)]
+[numthreads(BUILD_THREADGROUP_SIZE, 1, 1)]
+//=====================================================================================================================
+void CountTrianglePairs(
+    in uint globalId : SV_DispatchThreadID,
+    in uint localId  : SV_GroupThreadID)
+{
+#if INDIRECT_BUILD
+    // Sourced from Indirect Buffers
+    const IndirectBuildOffset buildOffsetInfo = IndirectArgBuffer.Load<IndirectBuildOffset>(0);
 
-        // Get bounds for this thread
-        const BoundingBox boundingBox = FetchBoundingBoxData(GeometryBuffer,
-                                                             primitiveIndex,
-                                                             ShaderConstants.GeometryStride);
+    const uint numPrimitives      = buildOffsetInfo.primitiveCount;
+    const uint primitiveOffset    = ComputePrimitiveOffset(ShaderConstants);
+    const uint vertexOffset       = buildOffsetInfo.firstVertex;
+#else
+    const uint numPrimitives      = ShaderConstants.NumPrimitives;
+    const uint primitiveOffset    = ShaderConstants.PrimitiveOffset;
+    const uint vertexOffset       = 0;
+#endif
 
-        // Set the instance inclusion mask to 0 for degenerate procedural nodes so that they are culled out.
-        const uint instanceMask = (boundingBox.min.x > boundingBox.max.x) ? 0 : 0xff;
+    // Reset geometry primitive reference count in result buffer
+    const uint basePrimRefCountOffset =
+        ShaderConstants.metadataSizeInBytes + ShaderConstants.DestLeafByteOffset;
 
-        const uint primNodePointerOffset =
-            metadataSize + basePrimNodePtr + ((primitiveOffset + primitiveIndex) * sizeof(uint));
+    const uint primRefCountOffset =
+        basePrimRefCountOffset + ComputePrimRefCountBlockOffset(ShaderConstants.blockOffset, globalId);
 
-        if (IsUpdate())
+    if (globalId < numPrimitives)
+    {
+        const int pairInfo = TryPairTriangleImpl(GeometryBuffer,
+                                                 IndexBuffer,
+                                                 TransformBuffer,
+                                                 ShaderConstants,
+                                                 globalId,
+                                                 vertexOffset);
+
+        // Count quads produced by the current wave. Note, this includes unpaired triangles as well
+        // (marked with a value of -1).
+        const bool isActivePrimRef = (pairInfo >= -1);
+        const uint wavePrimRefCount = WaveActiveCountBits(isActivePrimRef);
+
+        if (WaveIsFirstLane())
         {
-            const uint nodePointer = SrcBuffer.Load(primNodePointerOffset);
-
-            // If the primitive was active during the initial build, it will have a valid primitive node pointer.
-            if (nodePointer != INVALID_IDX)
-            {
-
-                {
-
-                    WriteProceduralNodeBoundingBox(metadataSize, nodePointer, boundingBox);
-
-                    if (Settings.isUpdateInPlace == false)
-                    {
-                        WriteProceduralNodePrimitiveData(metadataSize,
-                                                         nodePointer,
-                                                         primitiveIndex);
-                    }
-                }
-
-                if (Settings.isUpdateInPlace == false)
-                {
-                    DstMetadata.Store(primNodePointerOffset, nodePointer);
-                }
-
-                PushNodeForUpdate(ShaderConstants,
-                                  GeometryBuffer,
-                                  IndexBuffer,
-                                  TransformBuffer,
-                                  metadataSize,
-                                  ShaderConstants.BaseUpdateStackScratchOffset,
-                                  Settings.triangleCompressionMode,
-                                  Settings.isUpdateInPlace,
-                                  nodePointer,
-                                  0,
-                                  0,
-                                  instanceMask,
-                                  boundingBox,
-                                  true);
-
-            }
-            else if (Settings.isUpdateInPlace == false)
-            {
-                // For inactive primitives, just copy over the primitive node pointer.
-                DstMetadata.Store(primNodePointerOffset, nodePointer);
-            }
+            DstMetadata.Store(primRefCountOffset, wavePrimRefCount);
         }
-        else
-        {
-            if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometry)
-            {
-                UpdateSceneBounds(ShaderConstants.SceneBoundsByteOffset, boundingBox);
-            }
-            else if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
-            {
-                UpdateSceneBoundsWithSize(ShaderConstants.SceneBoundsByteOffset, boundingBox);
-            }
-
-            WriteScratchProceduralNode(primitiveOffset,
-                                       primitiveIndex,
-                                       ShaderConstants.GeometryIndex,
-                                       ShaderConstants.GeometryFlags,
-                                       instanceMask,
-                                       boundingBox);
-
-            // Store invalid prim node pointer for now during first time builds.
-            // If the Procedural node is active, BuildQBVH will update it.
-            DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
-
-            const uint numLeafNodesOffset = metadataSize + ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET;
-            DstMetadata.InterlockedAdd(numLeafNodesOffset, 1);
-        }
-
-        // ClearFlags for refit and update
-        const uint flattenedPrimitiveIndex = primitiveOffset + primitiveIndex;
-        ClearFlagsForRefitAndUpdate(ShaderConstants, flattenedPrimitiveIndex, true);
-
-        IncrementTaskCounter(ShaderConstants.encodeTaskCounterScratchOffset);
     }
 }

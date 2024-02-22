@@ -31,17 +31,26 @@
 #define __decl [noinline]
 
 // Dummy implementation for Vulkan build only
-__decl uint AmdExtD3DShaderIntrinsics_LoadDwordAtAddr(
-    uint gpuVaLoBits, uint gpuVaHiBits, uint offset) DUMMY_UINT_FUNC
-
 __decl uint AmdExtLaneIndex() DUMMY_UINT_FUNC
 
 __decl uint AmdExtLaneCount() DUMMY_UINT_FUNC
+
+__decl uint AmdExtD3DShaderIntrinsics_LoadDwordAtAddr(
+    uint gpuVaLoBits, uint gpuVaHiBits, uint offset) DUMMY_UINT_FUNC
 
 __decl uint2 AmdExtD3DShaderIntrinsics_LoadDwordAtAddrx2(
     uint gpuVaLoBits, uint gpuVaHiBits, uint offset) DUMMY_UINT2_FUNC
 
 __decl uint4 AmdExtD3DShaderIntrinsics_LoadDwordAtAddrx4(
+    uint gpuVaLoBits, uint gpuVaHiBits, uint offset) DUMMY_UINT4_FUNC
+
+__decl uint AmdExtD3DShaderIntrinsics_ConstantLoadDwordAtAddr(
+    uint gpuVaLoBits, uint gpuVaHiBits, uint offset) DUMMY_UINT_FUNC
+
+__decl uint2 AmdExtD3DShaderIntrinsics_ConstantLoadDwordAtAddrx2(
+    uint gpuVaLoBits, uint gpuVaHiBits, uint offset) DUMMY_UINT2_FUNC
+
+__decl uint4 AmdExtD3DShaderIntrinsics_ConstantLoadDwordAtAddrx4(
     uint gpuVaLoBits, uint gpuVaHiBits, uint offset) DUMMY_UINT4_FUNC
 
 __decl uint2 AmdExtD3DShaderIntrinsics_AtomicMinU64(
@@ -227,6 +236,11 @@ __decl void AmdTraceRaySetParentId(uint rayId) DUMMY_VOID_FUNC
 __decl uint AmdTraceRayGetStaticId() DUMMY_UINT_FUNC;
 
 //=====================================================================================================================
+// constant load dword at address
+__decl uint     AmdExtConstantLoadDwordAtAddr(GpuVirtualAddress addr, uint offset) DUMMY_UINT_FUNC
+__decl uint64_t AmdExtConstantLoad64AtAddr(GpuVirtualAddress addr, uint offset) DUMMY_UINT_FUNC
+
+//=====================================================================================================================
 // Loads from reserved register the dispath thread id as a single value computed from the dispatch dimensions.
 __decl uint AmdExtDispatchThreadIdFlat() DUMMY_UINT_FUNC;
 
@@ -313,6 +327,38 @@ static uint4 LoadDwordAtAddrx4(GpuVirtualAddress addr)
     retVal.y = LoadDwordAtAddr(addr + 4);
     retVal.z = LoadDwordAtAddr(addr + 8);
     retVal.w = LoadDwordAtAddr(addr + 12);
+
+    return retVal;
+#endif
+}
+
+static uint ConstantLoadDwordAtAddr(GpuVirtualAddress addr)
+{
+#if !defined(__cplusplus)
+    return AmdExtD3DShaderIntrinsics_ConstantLoadDwordAtAddr(LowPart(addr), HighPart(addr), 0);
+#else
+    return AmdExtConstantLoadDwordAtAddr(addr, 0);
+#endif
+}
+
+static uint64_t ConstantLoadDwordAtAddrx2(GpuVirtualAddress addr)
+{
+#if !defined(__cplusplus)
+    uint2 retVal = AmdExtD3DShaderIntrinsics_ConstantLoadDwordAtAddrx2(LowPart(addr), HighPart(addr), 0);
+    return PackUint64(retVal.x, retVal.y);
+#else
+    return AmdExtConstantLoad64AtAddr(addr, 0);
+#endif
+}
+
+static uint4 ConstantLoadDwordAtAddrx4(GpuVirtualAddress addr)
+{
+#if !defined(__cplusplus)
+    return AmdExtD3DShaderIntrinsics_ConstantLoadDwordAtAddrx4(LowPart(addr), HighPart(addr), 0);
+#else
+    uint4 retVal;
+    retVal.xy = SplitUint64(AmdExtConstantLoad64AtAddr(addr, 0));
+    retVal.zw = SplitUint64(AmdExtConstantLoad64AtAddr(addr + 8, 0));
 
     return retVal;
 #endif

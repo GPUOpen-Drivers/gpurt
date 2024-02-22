@@ -53,12 +53,12 @@ struct GeometryArgs
     uint GeometryFlags;                 // Geometry flags (D3D12_RAYTRACING_GEOMETRY_FLAGS)
     uint VertexComponentCount;          // Components in vertex buffer format
     uint vertexCount;                   // Vertex count
-    uint DestLeafByteOffset;            // Offset to this geometry's location in the dest leaf node buffer
+    uint DestLeafByteOffset;            // Destination buffer leaf node data section offset
     uint LeafNodeExpansionFactor;       // Leaf node expansion factor (> 1 for triangle splitting)
     uint IndexBufferInfoScratchOffset;
     uint IndexBufferVaLo;
     uint IndexBufferVaHi;
-    uint trianglePairingSearchRadius;   // The search radius for paired triangle, used by EarlyCompression
+    uint blockOffset;                    // Starting block index for current geometry
     uint encodeTaskCounterScratchOffset;
 };
 
@@ -219,7 +219,7 @@ uint CalcTriangleBoxNodeFlags(
 //======================================================================================================================
 void WriteScratchTriangleNode(
     GeometryArgs        geometryArgs,
-    uint                primitiveOffset,
+    uint                dstScratchNodeIdx,
     uint                primitiveIndex,
     uint                geometryIndex,
     uint                geometryFlags,
@@ -227,9 +227,7 @@ void WriteScratchTriangleNode(
     in BoundingBox      bbox,
     in TriangleData     tri)
 {
-    uint offset = CalcScratchNodeOffset(
-        geometryArgs.LeafNodeDataByteOffset,
-        primitiveOffset + primitiveIndex);
+    uint offset = CalcScratchNodeOffset(geometryArgs.LeafNodeDataByteOffset, dstScratchNodeIdx);
 
     uint4 data;
 
@@ -245,8 +243,6 @@ void WriteScratchTriangleNode(
     data = uint4(asuint(tri.v2), 0);
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V2_OFFSET, data);
 
-    const float cost = SAH_COST_TRIANGLE_INTERSECTION * ComputeBoxSurfaceArea(bbox);
-
     // type, flags, splitBox, numPrimitivesAndDoCollapse
     uint flags = CalcTriangleBoxNodeFlags(geometryFlags);
 
@@ -259,8 +255,8 @@ void WriteScratchTriangleNode(
     const uint triangleId = CalcUncompressedTriangleId(geometryFlags);
     const uint packedFlags = PackScratchNodeFlags(instanceMask, flags, triangleId);
 
-    data = uint4(packedFlags, INVALID_IDX, asuint(cost), NODE_TYPE_TRIANGLE_0);
-    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_FLAGS_OFFSET, data);
+    data = uint4(INVALID_IDX, 0, 0, packedFlags);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, data);
 }
 
 //=====================================================================================================================
@@ -446,77 +442,15 @@ bool IsActive(TriangleData tri)
 
 //=====================================================================================================================
 void PushNodeForUpdate(
-    GeometryArgs               geometryArgs,
-    RWBuffer<float3>           GeometryBuffer,
-    RWByteAddressBuffer        IndexBuffer,
-    RWStructuredBuffer<float4> TransformBuffer,
     uint                       metadataSize,
     uint                       baseUpdateStackScratchOffset,
-    uint                       triangleCompressionMode,
     uint                       isUpdateInPlace,
-    uint                       nodePointer,
-    uint                       triangleId,
-    uint                       vertexOffset,
+    uint                       childNodePointer,
+    uint                       parentNodePointer,
     uint                       instanceMask,
     in BoundingBox             boundingBox,
     bool                       writeNodesToUpdateStack)
 {
-    // Handle two triangles sharing a bounding box when pair compression is enabled.
-    uint childNodePointer = nodePointer;
-    if ((triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) && (GetNodeType(nodePointer) == NODE_TYPE_TRIANGLE_0))
-    {
-        const uint triNodeOffset = metadataSize + ExtractNodePointerOffset(nodePointer);
-
-        // Check whether or not there is a triangle 1 in this node.
-        if (((triangleId >> (NODE_TYPE_TRIANGLE_1 * TRIANGLE_ID_BIT_STRIDE)) & 0xf) != 0)
-        {
-            // Triangle 0 is not a child pointer in the parent box node, so correct the node pointer used for the
-            // comparison when finding the child index in the parent below.
-            childNodePointer |= NODE_TYPE_TRIANGLE_1;
-
-            uint otherPrimIndexOffset = TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET;
-            const uint otherPrimIndex = SrcBuffer.Load(triNodeOffset + otherPrimIndexOffset);
-
-            // Fetch face indices from index buffer.
-            const uint3 faceIndices = FetchFaceIndices(IndexBuffer,
-                                                       otherPrimIndex,
-                                                       geometryArgs.IndexBufferByteOffset,
-                                                       geometryArgs.IndexBufferFormat);
-
-            // Check if vertex indices are within bounds.
-            const uint maxIndex = max(faceIndices.x, max(faceIndices.y, faceIndices.z));
-            if (maxIndex < geometryArgs.vertexCount)
-            {
-                // Fetch triangle vertex data from vertex buffer.
-                const TriangleData tri = FetchTransformedTriangleData(geometryArgs,
-                                                                      GeometryBuffer,
-                                                                      faceIndices,
-                                                                      geometryArgs.GeometryStride,
-                                                                      vertexOffset,
-                                                                      geometryArgs.HasValidTransform,
-                                                                      TransformBuffer);
-
-                const BoundingBox otherBox = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
-
-                // Merge the bounding boxes of the two triangles.
-                boundingBox.min = min(boundingBox.min, otherBox.min);
-                boundingBox.max = max(boundingBox.max, otherBox.max);
-            }
-        }
-    }
-
-    // Fetch parent node pointer
-    const uint parentNodePointer = ReadParentPointer(metadataSize,
-                                                     nodePointer);
-
-    // Update out of place destination buffer
-    if (isUpdateInPlace == 0)
-    {
-        WriteParentPointer(metadataSize,
-                           nodePointer,
-                           parentNodePointer);
-    }
-
     // Compute box node count and child index in parent node
     uint boxNodeCount = 0;
     const uint childIdx = ComputeChildIndexAndValidBoxCount(metadataSize,
@@ -647,6 +581,8 @@ void EncodeTriangleNode(
                                          geometryArgs.IndexBufferByteOffset,
                                          geometryArgs.IndexBufferFormat);
 
+    uint waveActivePrimCount = 0;
+
     // Check if vertex indices are within bounds, otherwise make the triangle inactive
     const uint maxIndex = max(faceIndices.x, max(faceIndices.y, faceIndices.z));
     if (maxIndex < geometryArgs.vertexCount)
@@ -664,10 +600,7 @@ void EncodeTriangleNode(
         uint triangleId  = 0;
 
         // Generate triangle bounds and update scene bounding box
-        const BoundingBox boundingBox = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
-
-        // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
-        const uint instanceMask = (boundingBox.min.x > boundingBox.max.x) ? 0 : 0xff;
+        BoundingBox boundingBox = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
 
         if (IsUpdate())
         {
@@ -678,42 +611,41 @@ void EncodeTriangleNode(
             {
                 const uint nodeOffset = metadataSize + ExtractNodePointerOffset(nodePointer);
                 const uint nodeType   = GetNodeType(nodePointer);
+
+                uint3 vertexOffsets;
+
+                if (Settings.triangleCompressionMode != NO_TRIANGLE_COMPRESSION)
                 {
-                    uint3 vertexOffsets;
+                    triangleId = SrcBuffer.Load(nodeOffset + TRIANGLE_NODE_ID_OFFSET);
+                    vertexOffsets = CalcTriangleCompressionVertexOffsets(nodeType, triangleId);
+                }
+                else
+                {
+                    triangleId = CalcUncompressedTriangleId(geometryArgs.GeometryFlags);
+                    vertexOffsets = CalcTriangleVertexOffsets(nodeType);
+                }
 
-                    if (Settings.triangleCompressionMode != NO_TRIANGLE_COMPRESSION)
+                DstMetadata.Store3(nodeOffset + vertexOffsets.x, asuint(tri.v0));
+                DstMetadata.Store3(nodeOffset + vertexOffsets.y, asuint(tri.v1));
+                DstMetadata.Store3(nodeOffset + vertexOffsets.z, asuint(tri.v2));
+
+                if (Settings.isUpdateInPlace == false)
+                {
+                    const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(geometryArgs.GeometryIndex,
+                                                                                 geometryArgs.GeometryFlags);
                     {
-                        triangleId = SrcBuffer.Load(nodeOffset + TRIANGLE_NODE_ID_OFFSET);
-                        vertexOffsets = CalcTriangleCompressionVertexOffsets(nodeType, triangleId);
+                        DstMetadata.Store(
+                            nodeOffset + TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
                     }
-                    else
+
+                    const uint primIndexOffset = CalcPrimitiveIndexOffset(nodePointer);
+
                     {
-                        triangleId = CalcUncompressedTriangleId(geometryArgs.GeometryFlags);
-                        vertexOffsets = CalcTriangleVertexOffsets(nodeType);
+                        DstMetadata.Store(
+                            nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + primIndexOffset, primitiveIndex);
                     }
 
-                    DstMetadata.Store3(nodeOffset + vertexOffsets.x, asuint(tri.v0));
-                    DstMetadata.Store3(nodeOffset + vertexOffsets.y, asuint(tri.v1));
-                    DstMetadata.Store3(nodeOffset + vertexOffsets.z, asuint(tri.v2));
-
-                    if (Settings.isUpdateInPlace == false)
-                    {
-                        const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(geometryArgs.GeometryIndex,
-                            geometryArgs.GeometryFlags);
-                        {
-                            DstMetadata.Store(
-                                nodeOffset + TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
-                        }
-
-                        const uint primIndexOffset = CalcPrimitiveIndexOffset(nodePointer);
-
-                        {
-                            DstMetadata.Store(
-                                nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + primIndexOffset, primitiveIndex);
-                        }
-
-                        DstMetadata.Store(nodeOffset + TRIANGLE_NODE_ID_OFFSET, triangleId);
-                    }
+                    DstMetadata.Store(nodeOffset + TRIANGLE_NODE_ID_OFFSET, triangleId);
                 }
             }
 
@@ -728,17 +660,67 @@ void EncodeTriangleNode(
 
             if ((nodePointer != INVALID_IDX) && (skipPairUpdatePush == false))
             {
-                PushNodeForUpdate(geometryArgs,
-                                  GeometryBuffer,
-                                  IndexBuffer,
-                                  TransformBuffer,
-                                  metadataSize,
+                // Fetch parent node pointer
+                const uint parentNodePointer = ReadParentPointer(metadataSize, nodePointer);
+
+                // Update out of place destination buffer
+                if (Settings.isUpdateInPlace == false)
+                {
+                    WriteParentPointer(metadataSize, nodePointer, parentNodePointer);
+                }
+
+                // Handle two triangles sharing a bounding box when pair compression is enabled.
+                uint childNodePointer = nodePointer;
+                if ((Settings.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
+                    (GetNodeType(nodePointer) == NODE_TYPE_TRIANGLE_0))
+                {
+                    const uint triNodeOffset = metadataSize + ExtractNodePointerOffset(nodePointer);
+
+                    // Check whether or not there is a triangle 1 in this node.
+                    if (((triangleId >> (NODE_TYPE_TRIANGLE_1 * TRIANGLE_ID_BIT_STRIDE)) & 0xf) != 0)
+                    {
+                        // Triangle 0 is not a child pointer in the parent box node, so correct the node pointer used for the
+                        // comparison when finding the child index in the parent below.
+                        childNodePointer |= NODE_TYPE_TRIANGLE_1;
+
+                        uint otherPrimIndexOffset = TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET;
+                        const uint otherPrimIndex = SrcBuffer.Load(triNodeOffset + otherPrimIndexOffset);
+
+                        // Fetch face indices from index buffer.
+                        const uint3 faceIndices = FetchFaceIndices(IndexBuffer,
+                                                                   otherPrimIndex,
+                                                                   geometryArgs.IndexBufferByteOffset,
+                                                                   geometryArgs.IndexBufferFormat);
+
+                        // Check if vertex indices are within bounds.
+                        const uint maxIndex = max(faceIndices.x, max(faceIndices.y, faceIndices.z));
+                        if (maxIndex < geometryArgs.vertexCount)
+                        {
+                            // Fetch triangle vertex data from vertex buffer.
+                            const TriangleData tri = FetchTransformedTriangleData(geometryArgs,
+                                                                                  GeometryBuffer,
+                                                                                  faceIndices,
+                                                                                  geometryArgs.GeometryStride,
+                                                                                  vertexOffset,
+                                                                                  geometryArgs.HasValidTransform,
+                                                                                  TransformBuffer);
+
+                            const BoundingBox otherBox = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
+
+                            // Merge the bounding boxes of the two triangles.
+                            boundingBox = CombineAABB(boundingBox, otherBox);
+                        }
+                    }
+                }
+
+                // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
+                const uint instanceMask = (boundingBox.min.x > boundingBox.max.x) ? 0 : 0xff;
+
+                PushNodeForUpdate(metadataSize,
                                   geometryArgs.BaseUpdateStackScratchOffset,
-                                  Settings.triangleCompressionMode,
                                   Settings.isUpdateInPlace,
-                                  nodePointer,
-                                  triangleId,
-                                  vertexOffset,
+                                  childNodePointer,
+                                  parentNodePointer,
                                   instanceMask,
                                   boundingBox,
                                   writeNodesToUpdateStack);
@@ -746,14 +728,8 @@ void EncodeTriangleNode(
         }
         else
         {
-            if ((Settings.triangleCompressionMode != PAIR_TRIANGLE_COMPRESSION)
-                )
-            {
-                const uint numLeafNodesOffset = metadataSize + ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET;
-                DstMetadata.InterlockedAdd(numLeafNodesOffset, 1);
-            }
-
-            if (IsActive(tri))
+            const bool isActiveTriangle = IsActive(tri);
+            if (isActiveTriangle)
             {
                 if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometry)
                 {
@@ -771,8 +747,12 @@ void EncodeTriangleNode(
                 tri.v0.x = NaN;
             }
 
+            // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
+            const uint instanceMask = (boundingBox.min.x > boundingBox.max.x) ? 0 : 0xff;
+
+            // Triangle scratch nodes have a 1:1 mapping with global primitive index when pairing is disabled
             WriteScratchTriangleNode(geometryArgs,
-                                     primitiveOffset,
+                                     flattenedPrimitiveIndex,
                                      primitiveIndex,
                                      geometryArgs.GeometryIndex,
                                      geometryArgs.GeometryFlags,
@@ -789,13 +769,6 @@ void EncodeTriangleNode(
     {
         if (IsUpdate() == false)
         {
-            // Deactivate primitive by setting bbox_min_or_v0.x to NaN
-            WriteScratchNodeData(
-                geometryArgs.LeafNodeDataByteOffset,
-                flattenedPrimitiveIndex,
-                0,
-                NaN);
-
             DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
         }
         else if (Settings.isUpdateInPlace == false)
@@ -806,4 +779,210 @@ void EncodeTriangleNode(
 
     // ClearFlags for refit and update
     ClearFlagsForRefitAndUpdate(geometryArgs, flattenedPrimitiveIndex, false);
+}
+
+//=====================================================================================================================
+// Fetch API bounding box from source buffer which is a typed R32G32 buffer.
+BoundingBox FetchBoundingBoxData(RWBuffer<float3> buffer, uint index, uint boxStrideInElements)
+{
+    const uint baseElementIndex = index * boxStrideInElements;
+
+    float2 data[3];
+    data[0] = buffer[baseElementIndex+0].xy;
+    data[1] = buffer[baseElementIndex+1].xy;
+    data[2] = buffer[baseElementIndex+2].xy;
+
+    BoundingBox bbox;
+    bbox.min = float3(data[0].xy, data[1].x);
+    bbox.max = float3(data[1].y, data[2].xy);
+
+    // Generate degenerate bounding box for zero area bounds
+    if (ComputeBoxSurfaceArea(bbox) == 0)
+    {
+        bbox = InvalidBoundingBox;
+    }
+
+    return bbox;
+}
+
+//======================================================================================================================
+uint CalcProceduralBoxNodeFlags(
+    in uint geometryFlags)
+{
+    // Determine opacity from geometry flags
+    uint nodeFlags =
+        (geometryFlags & D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE) ? 1u << BOX_NODE_FLAGS_ONLY_OPAQUE_SHIFT :
+                                                                  1u << BOX_NODE_FLAGS_ONLY_NON_OPAQUE_SHIFT;
+
+    // Note, a bottom-level acceleration structure can only contain a single geometry type.
+    nodeFlags |= 1u << BOX_NODE_FLAGS_ONLY_PROCEDURAL_SHIFT;
+
+    return nodeFlags;
+}
+
+//=====================================================================================================================
+void WriteScratchProceduralNode(
+    GeometryArgs        geometryArgs,
+    uint                primitiveOffset,
+    uint                primitiveIndex,
+    uint                geometryIndex,
+    uint                geometryFlags,
+    uint                instanceMask,
+    in BoundingBox      bbox)
+{
+    uint offset = CalcScratchNodeOffset(geometryArgs.LeafNodeDataByteOffset, primitiveOffset + primitiveIndex);
+
+    uint4 data;
+
+    // LeafNode.bbox_min_or_v0, primitiveIndex
+    data = uint4(asuint(bbox.min), primitiveIndex);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_BBOX_MIN_OFFSET, data);
+
+    // LeafNode.bbox_max_or_v1, geometryIndex
+    data = uint4(asuint(bbox.max), geometryIndex);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_BBOX_MAX_OFFSET, data);
+
+    // LeafNode.v2, parent
+    data = uint4(0xffffffff, 0xffffffff, 0xffffffff, 0);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V2_OFFSET, data);
+
+    // type, flags, splitBox, numPrimitivesAndDoCollapse
+    uint triangleId = 0;
+
+    // Instance mask is assumed 0 in bottom level acceleration structures
+    const uint flags = CalcProceduralBoxNodeFlags(geometryFlags);
+
+    const uint packedFlags = PackScratchNodeFlags(instanceMask, flags, triangleId);
+
+    data = uint4(INVALID_IDX, 0, 0, packedFlags);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, data);
+}
+
+//=====================================================================================================================
+void WriteProceduralNodeBoundingBox(
+    uint        metadataSize,
+    uint        nodePointer,
+    BoundingBox bbox)
+{
+    const uint nodeOffset = metadataSize + ExtractNodePointerOffset(nodePointer);
+
+    DstMetadata.Store<float3>(nodeOffset + USER_NODE_PROCEDURAL_MIN_OFFSET,bbox.min);
+    DstMetadata.Store<float3>(nodeOffset + USER_NODE_PROCEDURAL_MAX_OFFSET,bbox.max);
+}
+
+//=====================================================================================================================
+void WriteProceduralNodePrimitiveData(
+    GeometryArgs geometryArgs,
+    uint         metadataSize,
+    uint         nodePointer,
+    uint         primitiveIndex)
+{
+    const uint nodeOffset = metadataSize + ExtractNodePointerOffset(nodePointer);
+
+    {
+        const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(geometryArgs.GeometryIndex,
+                                                                     geometryArgs.GeometryFlags);
+
+        DstMetadata.Store(nodeOffset + USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET, primitiveIndex);
+        DstMetadata.Store(nodeOffset + USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
+    }
+}
+
+//======================================================================================================================
+void EncodeAabbNode(
+    RWBuffer<float3>           GeometryBuffer,
+    RWByteAddressBuffer        IndexBuffer,
+    RWStructuredBuffer<float4> TransformBuffer,
+    GeometryArgs               geometryArgs,
+    uint                       primitiveIndex,
+    uint                       primitiveOffset,
+    bool                       writeNodesToUpdateStack)
+{
+    const uint metadataSize =
+        IsUpdate() ? SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : geometryArgs.metadataSizeInBytes;
+
+    // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
+    const AccelStructOffsets offsets =
+        SrcBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
+
+    const uint basePrimNodePtr =
+        IsUpdate() ? offsets.primNodePtrs : geometryArgs.BasePrimNodePtrOffset;
+
+    // Get bounds for this thread
+    const BoundingBox boundingBox = FetchBoundingBoxData(GeometryBuffer,
+                                                         primitiveIndex,
+                                                         geometryArgs.GeometryStride);
+
+    // Set the instance inclusion mask to 0 for degenerate procedural nodes so that they are culled out.
+    const uint instanceMask = (boundingBox.min.x > boundingBox.max.x) ? 0 : 0xff;
+
+    const uint primNodePointerOffset =
+        metadataSize + basePrimNodePtr + ((primitiveOffset + primitiveIndex) * sizeof(uint));
+
+    if (IsUpdate())
+    {
+        const uint nodePointer = SrcBuffer.Load(primNodePointerOffset);
+
+        // If the primitive was active during the initial build, it will have a valid primitive node pointer.
+        if (nodePointer != INVALID_IDX)
+        {
+            WriteProceduralNodeBoundingBox(metadataSize, nodePointer, boundingBox);
+
+            // Fetch parent node pointer
+            const uint parentNodePointer = ReadParentPointer(metadataSize, nodePointer);
+
+            if (Settings.isUpdateInPlace == false)
+            {
+                WriteProceduralNodePrimitiveData(geometryArgs,
+                                                 metadataSize,
+                                                 nodePointer,
+                                                 primitiveIndex);
+
+                WriteParentPointer(metadataSize, nodePointer, parentNodePointer);
+
+                DstMetadata.Store(primNodePointerOffset, nodePointer);
+            }
+
+            PushNodeForUpdate(metadataSize,
+                              geometryArgs.BaseUpdateStackScratchOffset,
+                              Settings.isUpdateInPlace,
+                              nodePointer,
+                              parentNodePointer,
+                              instanceMask,
+                              boundingBox,
+                              writeNodesToUpdateStack);
+        }
+        else if (Settings.isUpdateInPlace == false)
+        {
+            // For inactive primitives, just copy over the primitive node pointer.
+            DstMetadata.Store(primNodePointerOffset, nodePointer);
+        }
+    }
+    else
+    {
+        if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometry)
+        {
+            UpdateSceneBounds(geometryArgs.SceneBoundsByteOffset, boundingBox);
+        }
+        else if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
+        {
+            UpdateSceneBoundsWithSize(geometryArgs.SceneBoundsByteOffset, boundingBox);
+        }
+
+        WriteScratchProceduralNode(geometryArgs,
+                                   primitiveOffset,
+                                   primitiveIndex,
+                                   geometryArgs.GeometryIndex,
+                                   geometryArgs.GeometryFlags,
+                                   instanceMask,
+                                   boundingBox);
+
+        // Store invalid prim node pointer for now during first time builds.
+        // If the Procedural node is active, BuildQBVH will update it.
+        DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
+    }
+
+    // ClearFlags for refit and update
+    const uint flattenedPrimitiveIndex = primitiveOffset + primitiveIndex;
+    ClearFlagsForRefitAndUpdate(geometryArgs, flattenedPrimitiveIndex, true);
 }

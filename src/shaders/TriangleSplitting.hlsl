@@ -40,6 +40,7 @@ struct TriangleSplittingArgs
     uint dynamicBlockIndexScratchOffset;
     uint sceneBoundsByteOffset;
     uint tsBudgetPerTriangle;
+    uint encodeTaskCounterScratchOffset;
 };
 
 #define TS_KEYS_PER_THREAD         4
@@ -953,13 +954,6 @@ void TriangleSplittingImpl(
 
                                 WriteSplitBoxAtIndex(args.splitBoxesScratchOffset, ref.leafIndex, ref.bbox);
 
-                                const float sahCost = surfaceArea * SAH_COST_TRIANGLE_INTERSECTION;
-
-                                WriteScratchNodeCost(args.scratchLeafNodesScratchOffset,
-                                                     ref.leafIndex,
-                                                     sahCost,
-                                                     true);
-
                                 WriteScratchNodeSplitBoxIndex(args.scratchLeafNodesScratchOffset,
                                                               ref.leafIndex,
                                                               ref.leafIndex);
@@ -1004,7 +998,9 @@ void TriangleSplittingImpl(
                     }
                     else
                     {
-                        IncrementAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET, numRefsAlloc/2);
+                        // TODO: Support triangle splitting and early pair compression together.
+                        IncrementTaskCounter(args.encodeTaskCounterScratchOffset + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET,
+                                             numRefsAlloc / 2);
 
                         ScratchBuffer.Store(numRefsAllocOffset, 0);
 

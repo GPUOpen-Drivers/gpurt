@@ -54,7 +54,7 @@ struct RootConstants
 [[vk::binding(4, 0)]] RWByteAddressBuffer SrcBuffer     : register(u4);
 [[vk::binding(5, 0)]] RWByteAddressBuffer EmitBuffer    : register(u5);
 
-#include "..\BuildCommon.hlsl"
+#include "../BuildCommonScratch.hlsl"
 #include "ScanCommon.hlsli"
 
 //=====================================================================================================================
@@ -160,10 +160,8 @@ void BitHistogram(
     uint localThreadId : SV_GroupThreadID,
     uint groupId       : SV_groupId)
 {
-    const uint numPrimitives =
-        (Settings.topLevelBuild && Settings.rebraidType == RebraidType::V2) || Settings.doTriangleSplitting ?
-            ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET) :
-            ShaderConstants.numLeafNodes;
+    const uint numPrimitives = FetchTaskCounter(
+        ShaderConstants.offsets.encodeTaskCounter + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET);
 
     const uint inputKeysOffset    = ShaderConstants.offsets.mortonCodes;
     const uint outputKeysOffset   = ShaderConstants.offsets.mortonCodesSorted;

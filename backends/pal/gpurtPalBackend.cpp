@@ -168,7 +168,7 @@ uint32 PalBackend::GetMaxDescriptorTableSize(
     ) const
 {
     const uint32 bufferSrdSizeDw = m_deviceProperties.gfxipProperties.srdSizes.bufferView / sizeof(uint32);
-    return GetCmdBuffer(cmdBuffer)->GetEmbeddedDataLimit() / bufferSrdSizeDw;
+    return GetCmdBuffer(cmdBuffer)->GetLargeEmbeddedDataLimit() / bufferSrdSizeDw;
 }
 
 // =====================================================================================================================
@@ -189,15 +189,25 @@ void PalBackend::InsertBarrier(
     ) const
 {
     const bool syncIndirectArgs = flags & BarrierFlagSyncIndirectArg;
+    const bool syncPostCopy     = flags & BarrierFlagSyncPostCopy;
 
     Pal::ICmdBuffer* pCmdBuffer = GetCmdBuffer(cmdBuffer);
     if (m_deviceSettings.enableAcquireReleaseInterface)
     {
-        Pal::AcquireReleaseInfo acqRelInfo = {};
-        acqRelInfo.srcGlobalStageMask  = Pal::PipelineStageCs;
-        acqRelInfo.dstGlobalStageMask  = Pal::PipelineStageCs;
-        acqRelInfo.srcGlobalAccessMask = Pal::CoherShader;
-        acqRelInfo.dstGlobalAccessMask = Pal::CoherShader;
+        Pal::AcquireReleaseInfo acqRelInfo  = {};
+        acqRelInfo.dstGlobalStageMask       = Pal::PipelineStageCs;
+        acqRelInfo.dstGlobalAccessMask      = Pal::CoherShader;
+
+        if (syncPostCopy)
+        {
+            acqRelInfo.srcGlobalStageMask   = Pal::PipelineStageBlt;
+            acqRelInfo.srcGlobalAccessMask  = Pal::CoherCopy;
+        }
+        else
+        {
+            acqRelInfo.srcGlobalStageMask   = Pal::PipelineStageCs;
+            acqRelInfo.srcGlobalAccessMask  = Pal::CoherShader;
+        }
 
         if (syncIndirectArgs)
         {
@@ -212,23 +222,30 @@ void PalBackend::InsertBarrier(
     else
     {
         Pal::BarrierInfo barrierInfo = {};
-        barrierInfo.waitPoint = syncIndirectArgs ? Pal::HwPipeTop : Pal::HwPipePreCs;
+        barrierInfo.waitPoint        = Pal::HwPipePreCs;
 
-        const Pal::HwPipePoint pipePoint = Pal::HwPipePostCs;
-        barrierInfo.pipePointWaitCount = 1;
-        barrierInfo.pPipePoints = &pipePoint;
+        Pal::HwPipePoint pipePoint   = Pal::HwPipePostCs;
 
         Pal::BarrierTransition transition = {};
         transition.srcCacheMask = Pal::CoherShader;
         transition.dstCacheMask = Pal::CoherShader;
 
+        if (syncPostCopy)
+        {
+            pipePoint               = Pal::HwPipePostBlt;
+            transition.srcCacheMask = Pal::CoherCopy;
+        }
+
         if (syncIndirectArgs)
         {
+            barrierInfo.waitPoint    = Pal::HwPipeTop;
             transition.dstCacheMask |= Pal::CoherIndirectArgs;
         }
 
-        barrierInfo.transitionCount = 1;
-        barrierInfo.pTransitions = &transition;
+        barrierInfo.pipePointWaitCount  = 1;
+        barrierInfo.pPipePoints         = &pipePoint;
+        barrierInfo.transitionCount     = 1;
+        barrierInfo.pTransitions        = &transition;
 
         barrierInfo.reason = m_deviceSettings.rgpBarrierReason;
 
@@ -246,7 +263,7 @@ uint32* PalBackend::AllocateDescriptorTable(
 {
     const uint32 bufferSrdSizeDw = m_deviceProperties.gfxipProperties.srdSizes.bufferView / sizeof(uint32);
     *pSrdSizeOut = bufferSrdSizeDw * sizeof(uint32);
-    return GetCmdBuffer(cmdBuffer)->CmdAllocateEmbeddedData(count * bufferSrdSizeDw, bufferSrdSizeDw, pGpuAddress);
+    return GetCmdBuffer(cmdBuffer)->CmdAllocateLargeEmbeddedData(count * bufferSrdSizeDw, bufferSrdSizeDw, pGpuAddress);
 }
 
 // =====================================================================================================================

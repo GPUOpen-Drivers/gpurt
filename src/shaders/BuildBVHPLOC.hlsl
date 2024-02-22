@@ -71,6 +71,10 @@ struct BuildPlocArgs
     uint reserved1;
 };
 
+#if NO_SHADER_ENTRYPOINT == 0
+#define BUILD_THREADGROUP_SIZE 256
+#endif
+
 #define PLOC_RADIUS_MAX         10
 #define PLOC_KEYS_PER_THREAD    32
 #define PLOC_KEYS_PER_GROUP     (BUILD_THREADGROUP_SIZE * PLOC_KEYS_PER_THREAD)
@@ -308,8 +312,6 @@ void InitPLOC(
         ScratchBuffer.Store(internalNodesIndexOffset, numActivePrims - 2);
         ScratchBuffer.Store(clusterListIndexOffset, 0);
         ScratchBuffer.Store(numClustersAllocOffset, 0);
-
-        DeviceMemoryBarrier();
     }
 
     for (uint i = globalId; i < numActivePrims; i += args.numThreads)
@@ -379,6 +381,7 @@ void FindNearestNeighbour(
     const int minLdsIndex = plocRadius - min(stageOffset, plocRadius);
     const int maxLdsIndex = plocRadius + min(stageOffset + BUILD_THREADGROUP_SIZE + plocRadius, numClusters) - stageOffset;
 
+    // For StoreLds
     GroupMemoryBarrierWithGroupSync();
 
     uint minIndex = 0xFFFFFFFF;
@@ -466,7 +469,8 @@ void FindNearestNeighbour(
         }
     }
 
-    GroupMemoryBarrierWithGroupSync();
+    // StoreLds and WriteNeighbourIndex
+    AllMemoryBarrierWithGroupSync();
 
     // notify right side that neighbours is done
     if (localId == 0)
@@ -478,13 +482,12 @@ void FindNearestNeighbour(
         WriteFlags(args, stageIndex, VALID_NEIGHBOURS, flags);
     }
 
-    GroupMemoryBarrierWithGroupSync();
-
     // fill in with INIT_CLUSTER_LIST_LDS
     // ClusterIndices represents the cluster list of the "left radius + (block - right side's radius)"
     // localId = 0 is ClusterIndices[0] and so forth
     StoreLdsClusterIndex(localId, INIT_CLUSTER_LIST_LDS);
 
+    // StoreLds
     GroupMemoryBarrierWithGroupSync();
 
     // merge
@@ -556,9 +559,6 @@ void FindNearestNeighbour(
             BoundingBox aabbLeft = bestNeighbourAabb;
             BoundingBox aabbRight = aabb;
 
-            BoundingBox mergedBox = CombineAABB(aabbLeft, aabbRight);
-            const float mergedBoxSurfaceArea = ComputeBoxSurfaceArea(mergedBox);
-
             const uint mergedNodeOffset = CalcScratchNodeOffset(args.scratchNodesScratchOffset, mergedNodeIndex);
             const uint leftNodeOffset   = CalcScratchNodeOffset(args.scratchNodesScratchOffset, leftNodeIndex);
             const uint rightNodeOffset  = CalcScratchNodeOffset(args.scratchNodesScratchOffset, rightNodeIndex);
@@ -568,8 +568,6 @@ void FindNearestNeighbour(
             const ScratchNode leftNode  = FetchScratchNodeAtOffset(leftNodeOffset);
             const ScratchNode rightNode = FetchScratchNodeAtOffset(rightNodeOffset);
 
-            WriteScratchNodeDataAtOffset(mergedNodeOffset, SCRATCH_NODE_BBOX_MIN_OFFSET, mergedBox.min);
-            WriteScratchNodeDataAtOffset(mergedNodeOffset, SCRATCH_NODE_BBOX_MAX_OFFSET, mergedBox.max);
             WriteScratchNodeDataAtOffset(mergedNodeOffset, SCRATCH_NODE_LEFT_OFFSET, leftNodeIndex);
             WriteScratchNodeDataAtOffset(mergedNodeOffset, SCRATCH_NODE_RIGHT_OFFSET, rightNodeIndex);
 
@@ -581,10 +579,10 @@ void FindNearestNeighbour(
                 mergedNodeIndex,
                 leftNodeIndex,
                 leftNode,
+                aabbLeft,
                 rightNodeIndex,
                 rightNode,
-                mergedBoxSurfaceArea,
-                0);
+                aabbRight);
 
             WriteScratchNodeDataAtOffset(leftNodeOffset, SCRATCH_NODE_PARENT_OFFSET, mergedNodeIndex);
             WriteScratchNodeDataAtOffset(rightNodeOffset, SCRATCH_NODE_PARENT_OFFSET, mergedNodeIndex);
@@ -630,7 +628,8 @@ void FindNearestNeighbour(
         }
     }
 
-    GroupMemoryBarrierWithGroupSync();
+    // StoreLds, WriteClusterList, WriteScratchNodeDataAtOffset
+    AllMemoryBarrierWithGroupSync();
 
     // notify the right side that we wrote out the cluster list
     if (localId == 0)
@@ -659,6 +658,7 @@ void FindNearestNeighbour(
         }
     }
 
+    // StoreLds
     GroupMemoryBarrierWithGroupSync();
 
     // calculate prefix sum
@@ -672,6 +672,8 @@ void FindNearestNeighbour(
     // wait for prefix sum
     if (stageIndex > 0)
     {
+        // SharedMem[0] access
+        GroupMemoryBarrierWithGroupSync();
         if (localId == (BUILD_THREADGROUP_SIZE - 1))
         {
             Flags flags;
@@ -684,6 +686,7 @@ void FindNearestNeighbour(
 
             while (readBackIndex >= 0)
             {
+                DeviceMemoryBarrier();
                 if (ReadValid(args, readBackIndex, VALID_PREFIX_SUM) != 0)
                 {
                     prevSum += ReadPrefixSum(args, readBackIndex, VALID_PREFIX_SUM);
@@ -700,16 +703,15 @@ void FindNearestNeighbour(
                     prevSum += ReadPrefixSum(args, readBackIndex, VALID_CLUSTER_COUNT);
                     readBackIndex--;
                 }
-
-                DeviceMemoryBarrier();
             }
 
             SharedMem[0] = prevSum;
         }
 
+        // SharedMem[0] access
         GroupMemoryBarrierWithGroupSync();
-
         prevSum = SharedMem[0];
+        GroupMemoryBarrierWithGroupSync();
     }  // write out for the right side
     else if (localId == (BUILD_THREADGROUP_SIZE - 1))
     {

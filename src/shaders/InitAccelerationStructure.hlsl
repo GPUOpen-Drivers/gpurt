@@ -165,7 +165,19 @@ void InitAccelerationStructure(
             ResetTaskQueueCounters(ScratchBuffer, BuilderConstants.plocTaskQueueCounterScratchOffset);
         }
 
-        ScratchBuffer.Store(BuilderConstants.encodeTaskCounterScratchOffset, 0);
+        // Initialise encode counters
+        ScratchBuffer.Store(
+            BuilderConstants.encodeTaskCounterScratchOffset + ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET, 0);
+
+        // Early triangle pairing and triangle splitting dynamically increment primitive reference counter. Initialise
+        // counters to 0 when these features are enabled
+        const uint primRefInitCount =
+            (Settings.enableEarlyPairCompression || Settings.doTriangleSplitting) ?
+                0 : BuilderConstants.header.numPrimitives;
+
+        ScratchBuffer.Store(
+            BuilderConstants.encodeTaskCounterScratchOffset + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET, primRefInitCount);
+
         for (uint i = 0; i < TASK_LOOP_COUNTERS_NUM_DWORDS; ++i)
         {
             ScratchBuffer.Store(BuilderConstants.taskLoopCountersOffset + (i * sizeof(uint)), 0);

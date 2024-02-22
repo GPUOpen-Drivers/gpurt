@@ -49,7 +49,9 @@ uint CalcCompactedSize(
         runningOffset += internalNodeSize;
 
         offsets.leafNodes = runningOffset;
-        leafNodeSize = srcHeader.numLeafNodes * leafNodeSize;
+        {
+            leafNodeSize = srcHeader.numLeafNodes * leafNodeSize;
+        }
         runningOffset += leafNodeSize;
 
         offsets.geometryInfo = runningOffset;
@@ -77,10 +79,11 @@ uint CalcCompactedSize(
         runningOffset += srcHeader.numPrimitives * sizeof(uint);
     }
 
-    // Align metadata size to 128B cache line boundary
-    metadataSizeInBytes = Pow2Align(CalcMetadataSizeInBytes(internalNodeSize,
-                                                            leafNodeSize),
-                                    128);
+    {
+        metadataSizeInBytes = CalcMetadataSizeInBytes(internalNodeSize, leafNodeSize);
+    }
+
+    metadataSizeInBytes = Pow2Align(metadataSizeInBytes, 128);
 
     dstOffsets = offsets;
 

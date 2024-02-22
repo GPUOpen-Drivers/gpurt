@@ -231,7 +231,6 @@ uint AllocScratchNode(uint parent, BoundingBox box, TDArgs args)
     internalNode.right_or_geometryIndex = 0; // not set yet
     internalNode.sah_or_v2_or_instBasePtr = float3(0, ComputeBoxSurfaceArea(box), 0);
     internalNode.parent = parent;
-    internalNode.type = GetInternalNodeType();
 
     // Initialize box node flags to 1. These will be updated with the leaf node flags as the tree is constructed.
     internalNode.packedFlags = 0xffffffff;
@@ -1869,16 +1868,12 @@ void BuildBVHTD(
     uint groupId  : SV_GroupID,
     uint localId  : SV_GroupThreadID)
 {
-    uint numPrimitives = ShaderConstants.numPrimitives;
-
-    if (Settings.doTriangleSplitting || (Settings.rebraidType == RebraidType::V2))
-    {
-        numPrimitives = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
-    }
+    const uint numPrimitives = FetchTaskCounter(
+        ShaderConstants.offsets.encodeTaskCounter + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET);
 
     TDArgs args;
 
-    args.NumPrimitives                = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
+    args.NumPrimitives                = numPrimitives;
     args.NumThreads                   = ShaderRootConstants.numThreads;
     args.MaxRefCountSize              = numPrimitives * ShaderConstants.rebraidFactor;
     args.LengthPercentage             = 0.1;

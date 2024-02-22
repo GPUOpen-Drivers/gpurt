@@ -308,6 +308,14 @@ public:
         const Pal::RayTracingIpLevel   rayTracingIpLevel,
         EntryFunctionTable* const      pEntryFunctionTable) override;
 
+    // Returns Cps Bin Header Size.
+    //
+    // @return Cps Bin Header Size
+    const gpusize QueryCpsBinHeaderSize() const
+    {
+        return RegroupingBinCount * 2 * sizeof(uint64);
+    }
+
     // Determines required memory allocation size for use by ray continuation stacks
     // and other memory needed for ray sorting
     //
@@ -318,11 +326,22 @@ public:
     virtual gpusize QueryCpsScratchMemorySize(uint32 cpsStackSize, uint32 numThreads) override
     {
         gpusize memorySize = (numThreads * static_cast<gpusize>(cpsStackSize)) + // size of the total continuation stack
-               (RegroupingBinSize * RegroupingBinCount * sizeof(uint32)) +     // size of the ray sorting memory
-               (RegroupingBinCount * 2 * sizeof(uint64));                      // size of the header of the bins
+               (RegroupingBinSize * RegroupingBinCount * sizeof(uint32)) +       // size of the ray sorting memory
+               QueryCpsBinHeaderSize();                                          // size of the header of the bins
 
         return memorySize;
     }
+
+    // Initializes ray sorting memory.
+    //
+    // @param cmdBuffer            [in] Opaque handle to command buffer where commands will be written
+    // @param cpsGpuMemAddr        [in] GPU address pointing to cps memory.
+    // @param cpsMemorySize        [in] The required global memory allocation size in bytes
+    virtual void InitializeCpsMemory(
+        ClientCmdBufferHandle   cmdBuffer,
+        const gpusize           cpsGpuMemAddr,
+        const gpusize           cpsMemorySize
+    ) override;
 
     // Returns the static pipeline mask shader constant values for a particular pipeline given a compatible
     // AS memory layout parameters.

@@ -39,7 +39,6 @@ struct BuildQbvhArgs
     uint enableFusedInstanceNode;
     uint enableFastLBVH;                // Enable the Fast LBVH path
     uint fastLBVHRootNodeIndex;
-    uint enableEarlyPairCompression;
     uint unsortedBvhLeafNodesOffset;
     uint reservedUint0;
     uint reservedUint1;
@@ -116,7 +115,6 @@ BuildQbvhArgs GetBuildQbvhArgs()
     qbvhArgs.enableFusedInstanceNode     = Settings.enableFusedInstanceNode;
     qbvhArgs.enableFastLBVH              = Settings.enableFastLBVH;
     qbvhArgs.fastLBVHRootNodeIndex       = rootNodeIndex;
-    qbvhArgs.enableEarlyPairCompression  = Settings.enableEarlyPairCompression;
     qbvhArgs.unsortedBvhLeafNodesOffset  = ShaderConstants.offsets.bvhLeafNodeData;
 
     qbvhArgs.scratchNodesScratchOffset = CalculateBvhNodesOffset(ShaderConstants, header.numActivePrims);
@@ -228,10 +226,9 @@ BoundingBox GetScratchNodeBoundingBoxTS(
     in ScratchNode   node)
 {
     const bool enablePairCompression = (args.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION);
-    const bool enableEarlyPairCompression = enablePairCompression && args.enableEarlyPairCompression;
 
     const uint baseScratchNodesOffset =
-        enableEarlyPairCompression ? args.unsortedBvhLeafNodesOffset : args.scratchNodesScratchOffset;
+        Settings.enableEarlyPairCompression ? args.unsortedBvhLeafNodesOffset : args.scratchNodesScratchOffset;
 
     return GetScratchNodeBoundingBox(node,
                                      isLeafNode,
@@ -429,6 +426,21 @@ void InitBuildQBVH(
 #endif
 
 //=====================================================================================================================
+void WriteTriangleNodePrimitive0(
+    in uint geometryPrimNodePtrsOffset,
+    in uint nodeOffset,
+    in uint primitiveIndex)
+{
+    {
+        DstBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET, primitiveIndex);
+    }
+
+    const uint primNodePtr = PackNodePointer(NODE_TYPE_TRIANGLE_0, nodeOffset);
+    DstBuffer.Store(geometryPrimNodePtrsOffset + (primitiveIndex * sizeof(uint)),
+                    primNodePtr);
+}
+
+//=====================================================================================================================
 uint WritePrimitiveNode(
     in BuildQbvhArgs      args,
     in ScratchNode        scratchNode,
@@ -439,13 +451,16 @@ uint WritePrimitiveNode(
         (Settings.geometryType == GEOMETRY_TYPE_TRIANGLES) ? NODE_TYPE_TRIANGLE_0 : NODE_TYPE_USER_NODE_PROCEDURAL;
 
     // Load geometry info
-    const uint geometryInfoOffset = offsets.geometryInfo + (scratchNode.right_or_geometryIndex * sizeof(GeometryInfo));
+    const uint geometryIndex = ExtractScratchNodeGeometryIndex(scratchNode);
+
+    const uint geometryInfoOffset = offsets.geometryInfo + (geometryIndex * sizeof(GeometryInfo));
     const GeometryInfo geometryInfo = DstBuffer.Load<GeometryInfo>(geometryInfoOffset);
     const uint geometryFlags = ExtractGeometryInfoFlags(geometryInfo.geometryFlagsAndNumPrimitives);
-    const uint geometryIndex = scratchNode.right_or_geometryIndex;
     const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(geometryIndex, geometryFlags);
     const uint geometryPrimNodePtrsOffset = offsets.primNodePtrs + geometryInfo.primNodePtrsOffset;
-    const uint flattenedPrimIndex = (geometryInfo.primNodePtrsOffset / sizeof(uint)) + scratchNode.left_or_primIndex_or_instIndex;
+
+    const uint flattenedPrimIndex =
+        (geometryInfo.primNodePtrsOffset / sizeof(uint)) + scratchNode.left_or_primIndex_or_instIndex;
 
     uint numLeafsDone;
     ScratchGlobal.InterlockedAdd(args.stackPtrsScratchOffset + STACK_PTRS_NUM_LEAFS_DONE_OFFSET, 1, numLeafsDone);
@@ -485,8 +500,15 @@ uint WritePrimitiveNode(
     {
         DstBuffer.Store(nodeOffset + TRIANGLE_NODE_ID_OFFSET, triangleId);
 
-        const bool isPairCompressed = (args.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
-                                      (scratchNode.splitBox_or_nodePointer != INVALID_IDX);
+        bool isPairCompressed = (args.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION);
+        if (Settings.enableEarlyPairCompression)
+        {
+            isPairCompressed &= IsScratchNodeEarlyTrianglePair(scratchNode);
+        }
+        else
+        {
+            isPairCompressed &= (scratchNode.splitBox_or_nodePointer != INVALID_IDX);
+        }
 
         // Pair compressed triangles nodes are referenced by triangle 1
         nodeType = isPairCompressed ? NODE_TYPE_TRIANGLE_1 : NODE_TYPE_TRIANGLE_0;
@@ -497,51 +519,77 @@ uint WritePrimitiveNode(
                             scratchNode.left_or_primIndex_or_instIndex);
         }
 
-        uint3 vertexOffsets;
-        if (args.triangleCompressionMode != NO_TRIANGLE_COMPRESSION)
+        if (Settings.enableEarlyPairCompression)
         {
-            vertexOffsets = CalcTriangleCompressionVertexOffsets(nodeType, triangleId);
+            DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET, scratchNode.bbox_min_or_v0);
+            DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V1_OFFSET, scratchNode.bbox_max_or_v1);
+            DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V2_OFFSET, scratchNode.sah_or_v2_or_instBasePtr);
+
+            // For PAIR_TRIANGLE_COMPRESSION, the other node is not linked in the BVH tree, so we need to find it and
+            // store it as well if it exists.
+            if (isPairCompressed)
+            {
+                const float3 v3 = float3(asfloat(scratchNode.splitBox_or_nodePointer),
+                                         asfloat(scratchNode.numPrimitivesAndDoCollapse),
+                                         asfloat(scratchNode.unused));
+
+                DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V3_OFFSET, v3);
+
+                const uint tri0PrimitiveIndex =
+                    scratchNode.left_or_primIndex_or_instIndex - ExtractScratchNodePairPrimOffset(scratchNode);
+
+                WriteTriangleNodePrimitive0(geometryPrimNodePtrsOffset,
+                                            nodeOffset,
+                                            tri0PrimitiveIndex);
+            }
         }
         else
         {
-            vertexOffsets = CalcTriangleVertexOffsets(nodeType);
-        }
-
-        DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.x, scratchNode.bbox_min_or_v0);
-        DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.y, scratchNode.bbox_max_or_v1);
-        DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET + vertexOffsets.z, scratchNode.sah_or_v2_or_instBasePtr);
-
-        // For PAIR_TRIANGLE_COMPRESSION, the other node is not linked in the BVH tree, so we need to find it and
-        // store it as well if it exists.
-        if (isPairCompressed)
-        {
-            const uint baseScratchLeafNodeOffset =
-                args.enableEarlyPairCompression ? args.unsortedBvhLeafNodesOffset : args.scratchNodesScratchOffset;
-
-            const ScratchNode otherNode = FetchScratchNode(baseScratchLeafNodeOffset, scratchNode.splitBox_or_nodePointer);
-
-            const float3 otherVerts[3] = { otherNode.bbox_min_or_v0,
-                                           otherNode.bbox_max_or_v1,
-                                           otherNode.sah_or_v2_or_instBasePtr };
-            const uint3 otherVertexOffsets = CalcTriangleCompressionVertexOffsets(NODE_TYPE_TRIANGLE_0, triangleId);
-            for (uint i = 0; i < 3; ++i)
+            uint3 vertexOffsets = uint3(TRIANGLE_NODE_V0_OFFSET, TRIANGLE_NODE_V0_OFFSET, TRIANGLE_NODE_V0_OFFSET);
+            if (args.triangleCompressionMode != NO_TRIANGLE_COMPRESSION)
             {
-                // Since the other node will always be of type NODE_TYPE_TRIANGLE_0, it is sufficient to store only
-                // the vertex that goes into v0. v1, v2, and v3 were already stored by NODE_TYPE_TRIANGLE_1 above.
-                if (otherVertexOffsets[i] == 0)
+                vertexOffsets += CalcTriangleCompressionVertexOffsets(nodeType, triangleId);
+            }
+            else
+            {
+                vertexOffsets += CalcTriangleVertexOffsets(nodeType);
+            }
+
+            DstBuffer.Store<float3>(nodeOffset + vertexOffsets.x, scratchNode.bbox_min_or_v0);
+            DstBuffer.Store<float3>(nodeOffset + vertexOffsets.y, scratchNode.bbox_max_or_v1);
+            DstBuffer.Store<float3>(nodeOffset + vertexOffsets.z, scratchNode.sah_or_v2_or_instBasePtr);
+
+            // For PAIR_TRIANGLE_COMPRESSION, the other node is not linked in the BVH tree, so we need to find it and
+            // store it as well if it exists.
+            if (isPairCompressed)
+            {
+                const ScratchNode tri0Node =
+                    FetchScratchNode(args.scratchNodesScratchOffset, scratchNode.splitBox_or_nodePointer);
+
+                const float3 tr0Verts[3] =
                 {
-                    DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET, otherVerts[i]);
+                    tri0Node.bbox_min_or_v0,
+                    tri0Node.bbox_max_or_v1,
+                    tri0Node.sah_or_v2_or_instBasePtr
+                };
+
+                const uint3 tri0VertOffsets =
+                    CalcTriangleCompressionVertexOffsets(NODE_TYPE_TRIANGLE_0, triangleId);
+
+                for (uint i = 0; i < 3; ++i)
+                {
+                    // Since the other node will always be of type NODE_TYPE_TRIANGLE_0, it is sufficient to store only
+                    // the vertex that goes into v0. v1, v2, and v3 were already stored by NODE_TYPE_TRIANGLE_1 above.
+                    if (tri0VertOffsets[i] == 0)
+                    {
+                        DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V0_OFFSET, tr0Verts[i]);
+                    }
                 }
-            }
 
-            {
-                DstBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET,
-                                otherNode.left_or_primIndex_or_instIndex);
+                WriteTriangleNodePrimitive0(geometryPrimNodePtrsOffset,
+                                            nodeOffset,
+                                            tri0Node.left_or_primIndex_or_instIndex);
             }
-
-            const uint otherPrimNodePointer = PackNodePointer(NODE_TYPE_TRIANGLE_0, nodeOffset);
-            DstBuffer.Store(geometryPrimNodePtrsOffset + (otherNode.left_or_primIndex_or_instIndex * sizeof(uint)),
-                            otherPrimNodePointer);
         }
     }
 
@@ -692,9 +740,7 @@ static uint ProcessNode(
         }
     }
 
-    WriteParentPointer(args.metadataSizeInBytes,
-                       nodePointer,
-                       parentNodePtr);
+    WriteParentPointer(args.metadataSizeInBytes, nodePointer, parentNodePtr);
 
     return nodePointer;
 }
@@ -909,9 +955,7 @@ void BuildQbvhImpl(
 
         WriteAccelStructHeaderRootBoundingBox(bbox);
 
-        WriteParentPointer(args.metadataSizeInBytes,
-                           rootNodePtr,
-                           INVALID_IDX);
+        WriteParentPointer(args.metadataSizeInBytes, rootNodePtr, INVALID_IDX);
 
         // Generate box node with a leaf reference in child index 0 for single primitive acceleration structure
         if (args.numPrimitives == 1)

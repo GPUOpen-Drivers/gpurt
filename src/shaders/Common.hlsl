@@ -400,7 +400,9 @@ static uint CalcUncompressedTriangleId(uint geometryFlags)
 
 //=====================================================================================================================
 // Extract the order of the triangle vertices from the node's triangle ID field.
-static uint3 CalcTriangleCompressionVertexOffsets(uint nodeType, uint triangleId)
+static uint3 CalcTriangleCompressionVertexIndices(
+    uint nodeType,
+    uint triangleId)
 {
     uint3 vertexSwizzle;
     vertexSwizzle.y = (triangleId >> (TRIANGLE_ID_BIT_STRIDE * nodeType + TRIANGLE_ID_I_SRC_SHIFT)) % 4;
@@ -419,8 +421,16 @@ static uint3 CalcTriangleCompressionVertexOffsets(uint nodeType, uint triangleId
     nodeVertexIndices.y = (nodeVertexMapping[nodeType] >> (vertexSwizzle.y * 4)) & 0xf;
     nodeVertexIndices.z = (nodeVertexMapping[nodeType] >> (vertexSwizzle.z * 4)) & 0xf;
 
-    const uint nodeVertexStride = 12;
+    return nodeVertexIndices;
+}
 
+//=====================================================================================================================
+// Extract the order of the triangle vertices from the node's triangle ID field.
+static uint3 CalcTriangleCompressionVertexOffsets(uint nodeType, uint triangleId)
+{
+    const uint3 nodeVertexIndices = CalcTriangleCompressionVertexIndices(nodeType, triangleId);
+
+    const uint nodeVertexStride = 12;
     return nodeVertexIndices * nodeVertexStride;
 }
 

@@ -641,8 +641,8 @@ void RebraidImpl(
 
                         if (iterationCount == (args.numIterations - 1))
                         {
-                            WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET,
-                                                        numPrims + prevSum + threadSumScanned + threadSum);
+                            ScratchBuffer.Store(ShaderConstants.offsets.encodeTaskCounter + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET,
+                                                numPrims + prevSum + threadSumScanned + threadSum);
                         }
                         else
                         {

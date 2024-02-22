@@ -425,6 +425,39 @@ Pal::Result Device::Init()
     return result;
 }
 
+// =====================================================================================================================
+// Initializes ray sorting memory.
+void Device::InitializeCpsMemory(
+    ClientCmdBufferHandle   cmdBuffer,
+    const gpusize           cpsGpuMemAddr,
+    const gpusize           cpsMemorySize)
+{
+    const gpusize binHeaderSize = QueryCpsBinHeaderSize();
+    const gpusize binHeaderOffset = cpsMemorySize - binHeaderSize;
+    const gpusize binHeaderAddr = cpsGpuMemAddr + binHeaderOffset;
+
+    // write_count needs to be initialized to RegroupingBinSize, other sections to 0
+    // | write_count       |  write_start |  read_count |  read_start |
+    // | RegroupingBinSize |       0      |      0      |      0      |
+    const uint64 writeReadWindow[2] = { static_cast<uint64>(RegroupingBinSize) << 32 , 0 };
+    const uint32 writeReadWindowSize = sizeof(writeReadWindow);
+
+    const uint32 binCount = 2 * RegroupingBinCount;
+    uint64 binHeader[binCount];
+    uint64* pCurrent = binHeader;
+    const uint64* pEnd = binHeader + binCount;
+    while (pCurrent < pEnd)
+    {
+        memcpy(pCurrent, writeReadWindow, writeReadWindowSize);
+        pCurrent += 2;
+    }
+
+    // Initialize GPU Ray Sorting Memory
+    m_pBackend->UploadCpuMemory(cmdBuffer, binHeaderAddr, binHeader, binHeaderSize);
+    // Wait for the copy operation to complete to synchronize the copy and dispatch
+    RaytracingBarrier(cmdBuffer, BarrierFlagSyncPostCopy);
+}
+
 //=====================================================================================================================
 // Maps Pal::RayTracingIpLevel to the appropriate function table.
 Pal::Result Device::QueryRayTracingEntryFunctionTable(
@@ -579,6 +612,27 @@ ClientPipelineHandle Device::GetInternalPipeline(
                     newBuildInfo.hashedCompilerOptionCount = 0;
                     newBuildInfo.pHashedCompilerOptions = nullptr;
                     break;
+            }
+
+            if (buildSettings.enableEarlyPairCompression)
+            {
+                // When early compression is enabled, the triangle pairing only occurs within a wave (wave32/wave64).
+                // However, since the build thread group size is 64, we need the wave size to match the group size
+                // to avoid using LDS for allocating triangle pairs within a thread group larger than the wave size.
+                //
+                switch (pipelineBuildInfo.shaderType)
+                {
+                    case InternalRayTracingCsType::EncodeTriangleNodes:
+                    case InternalRayTracingCsType::EncodeTriangleNodesIndirect:
+                    case InternalRayTracingCsType::CountTrianglePairs:
+                    case InternalRayTracingCsType::CountTrianglePairsIndirect:
+                    case InternalRayTracingCsType::CountTrianglePairsPrefixSum:
+                        newBuildInfo.hashedCompilerOptionCount = 1;
+                        newBuildInfo.pHashedCompilerOptions = wave64Option;
+                        break;
+                    default:
+                        break;
+                }
             }
 
             CompileTimeConstants compileConstants = {};
@@ -953,30 +1007,31 @@ void Device::WriteAccelStructChunk(
     Pal::IPlatform* pPlatform = m_info.pPalPlatform;
     GpuUtil::TraceSession* pTraceSession = pPlatform->GetTraceSession();
 #endif
+    const auto* pMetadataHdr = static_cast<const AccelStructMetadataHeader*>(pData);
+    const RawAccelStructRdfChunkHeader header =
+    {
+        .accelStructBaseVaLo = Util::LowPart(gpuVa),
+        .accelStructBaseVaHi = Util::HighPart(gpuVa),
+        .metaHeaderOffset    = 0,
+        .metaHeaderSize      = sizeof(GpuRt::AccelStructMetadataHeader),
+        .headerOffset        = pMetadataHdr->sizeInBytes,
+        .headerSize          = sizeof(GpuRt::AccelStructHeader),
+        .flags               = { .blas = isBlas },
+    };
 
     // Write Accel data to the TraceChunkInfo
-    GpuUtil::TraceChunkInfo info = {};
-
-    RawAccelStructRdfChunkHeader header = {};
-    header.accelStructBaseVaLo = Util::LowPart(gpuVa);
-    header.accelStructBaseVaHi = Util::HighPart(gpuVa);
-    header.metaHeaderOffset    = 0;
-    header.metaHeaderSize      = sizeof(GpuRt::AccelStructMetadataHeader);
-
-    const auto* pMetadataHdr = static_cast<const AccelStructMetadataHeader*>(pData);
-    header.headerOffset = pMetadataHdr->sizeInBytes;
-    header.headerSize   = sizeof(GpuRt::AccelStructHeader);
-    header.flags.blas   = isBlas;
-
+    GpuUtil::TraceChunkInfo info =
+    {
+        .version           = GPURT_ACCEL_STRUCT_VERSION,
+        .pHeader           = &header,
+        .headerSize        = sizeof(GpuRt::RawAccelStructRdfChunkHeader),
+        .pData             = pData,
+        .dataSize          = static_cast<Pal::int64>(dataSize),
+        .enableCompression = true,
+    };
     const char chunkId[] = "RawAccelStruct";
-    Util::Strncpy(info.id, chunkId, sizeof(info.id));
+    memcpy(info.id, chunkId, strlen(chunkId));
 
-    info.version           = GPURT_ACCEL_STRUCT_VERSION;
-    info.headerSize        = sizeof(GpuRt::RawAccelStructRdfChunkHeader);
-    info.pHeader           = &header;
-    info.pData             = pData;
-    info.dataSize          = dataSize;
-    info.enableCompression = true;
 #if PAL_BUILD_RDF
     pTraceSession->WriteDataChunk(pTraceSource, info);
 #endif
@@ -1141,18 +1196,20 @@ void Device::AddMetadataToList(
     RtPipelineType              pipelineType,
     RayHistoryTraceListInfo*    pTraceListInfo)
 {
-    CounterInfo counterInfo = {};
-    counterInfo.dispatchRayDimensionX  = dispatchInfo.dimX;
-    counterInfo.dispatchRayDimensionY  = dispatchInfo.dimY;
-    counterInfo.dispatchRayDimensionZ  = dispatchInfo.dimZ;
-    counterInfo.pipelineType           = uint32(pipelineType);
-    counterInfo.rayCounterDataSize     = GetRayHistoryBufferSizeInBytes();
-    counterInfo.counterMask            = 0;
-    counterInfo.counterStride          = sizeof(uint32);
-    counterInfo.counterMode            = 1;
-    counterInfo.counterRayIdRangeBegin = 0;
-    counterInfo.counterRayIdRangeEnd   = 0xFFFFFFFF;
-    counterInfo.isIndirect             = false;
+    CounterInfo counterInfo =
+    {
+        .dispatchRayDimensionX  = dispatchInfo.dimX,
+        .dispatchRayDimensionY  = dispatchInfo.dimY,
+        .dispatchRayDimensionZ  = dispatchInfo.dimZ,
+        .counterMode            = 1,
+        .counterMask            = 0,
+        .counterStride          = sizeof(uint32),
+        .rayCounterDataSize     = uint32(GetRayHistoryBufferSizeInBytes()),
+        .counterRayIdRangeBegin = 0,
+        .counterRayIdRangeEnd   = 0xFFFFFFFF,
+        .pipelineType           = uint32(pipelineType),
+        .isIndirect             = false,
+    };
 
     if (dispatchInfo.hitGroupTable.stride > 0ULL)
     {
@@ -1454,28 +1511,33 @@ void Device::WriteRayHistoryMetaDataChunks(
     GpuUtil::TraceSession* pTraceSession = pPlatform->GetTraceSession();
 #endif
 
-    GpuUtil::TraceChunkInfo info = {};
+    const RayHistoryMetadata rayHistoryMetadata =
+    {
+        .counterInfo =
+        {
+            .kind = RayHistoryMetadataKind::CounterInfo,
+            .sizeInByte = sizeof(CounterInfo),
+        },
+        .counter = traceListInfo.counterInfo,
+        .traversalFlagsInfo =
+        {
+            .kind = RayHistoryMetadataKind::TraversalFlags,
+            .sizeInByte = sizeof(RayHistoryTraversalFlags),
+        },
+        .traversalFlags = traceListInfo.traversalFlags,
+    };
 
+    GpuUtil::TraceChunkInfo info =
+    {
+        .version           = GPURT_COUNTER_VERSION,
+        .pHeader           = &traceListInfo.rayHistoryRdfChunkHeader,
+        .headerSize        = sizeof(GpuRt::RayHistoryRdfChunkHeader),
+        .pData             = &rayHistoryMetadata,
+        .dataSize          = sizeof(RayHistoryMetadata),
+        .enableCompression = true,
+    };
     const char chunkId[] = "HistoryMetadata";
     memcpy(info.id, chunkId, strlen(chunkId));
-
-    info.version           = GPURT_COUNTER_VERSION;
-    info.headerSize        = sizeof(GpuRt::RayHistoryRdfChunkHeader);
-    info.pHeader           = &traceListInfo.rayHistoryRdfChunkHeader;
-    info.enableCompression = true;
-
-    RayHistoryMetadata rayHistoryMetadata = {};
-
-    rayHistoryMetadata.counterInfo.kind              = RayHistoryMetadataKind::CounterInfo;
-    rayHistoryMetadata.counterInfo.sizeInByte        = sizeof(CounterInfo);
-    rayHistoryMetadata.counter                       = traceListInfo.counterInfo;
-
-    rayHistoryMetadata.traversalFlagsInfo.kind       = RayHistoryMetadataKind::TraversalFlags;
-    rayHistoryMetadata.traversalFlagsInfo.sizeInByte = sizeof(RayHistoryTraversalFlags);
-    rayHistoryMetadata.traversalFlags                = traceListInfo.traversalFlags;
-
-    info.pData = &rayHistoryMetadata;
-    info.dataSize = sizeof(RayHistoryMetadata);
 
 #if PAL_BUILD_RDF
     pTraceSession->WriteDataChunk(&m_rayHistoryTraceSource, info);
@@ -1881,7 +1943,7 @@ void Device::CopyBufferRaw(
 
     const CopyBufferRaw::Constants shaderConstants =
     {
-        numDwords,
+        .numDwords = numDwords,
     };
 
     // Set shader constants

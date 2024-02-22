@@ -77,8 +77,8 @@ void WriteScratchInstanceNode(
     const uint packedFlags = PackScratchNodeFlags(instanceMask, boxNodeFlags, 0);
 
     // type, flags, nodePointer, numPrimitivesAndDoCollapse
-    data = uint4(packedFlags, rootNodePointer, 0, NODE_TYPE_USER_NODE_INSTANCE);
-    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_FLAGS_OFFSET, data);
+    data = uint4(rootNodePointer, 0, 0, packedFlags);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, data);
 }
 
 //=====================================================================================================================

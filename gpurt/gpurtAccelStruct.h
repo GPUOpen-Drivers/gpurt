@@ -45,7 +45,7 @@
 // Note this file is designed to be compilable as HLSL.
 
 #define GPURT_ACCEL_STRUCT_MAJOR_VERSION 16
-#define GPURT_ACCEL_STRUCT_MINOR_VERSION 1
+#define GPURT_ACCEL_STRUCT_MINOR_VERSION 3
 #define GPURT_ACCEL_STRUCT_VERSION       ((GPURT_ACCEL_STRUCT_MAJOR_VERSION << 16) | GPURT_ACCEL_STRUCT_MINOR_VERSION)
 
 #ifdef __cplusplus
@@ -146,7 +146,8 @@ union AccelStructHeaderInfo2
     {
         uint32 compacted              : 1;   // This BVH has been compacted
         uint32 reserved               : 1;   // Unused bits
-        uint32 reserved2              : 30;  // Unused bits
+        uint32 reserved2              : 1;
+        uint32 reserved3              : 29;  // Unused bits
     };
 
     uint32 u32All;
@@ -174,8 +175,8 @@ typedef uint32 AccelStructHeaderInfo2;
 #define ACCEL_STRUCT_HEADER_INFO_FLAGS_SHIFT                            16
 #define ACCEL_STRUCT_HEADER_INFO_FLAGS_MASK                             0xffff
 
-#define ACCEL_STRUCT_HEADER_INFO_2_BVH_COMPACTION_FLAGS_SHIFT    0
-#define ACCEL_STRUCT_HEADER_INFO_2_BVH_COMPACTION_FLAGS_MASK     0x1
+#define ACCEL_STRUCT_HEADER_INFO_2_BVH_COMPACTION_FLAGS_SHIFT           0
+#define ACCEL_STRUCT_HEADER_INFO_2_BVH_COMPACTION_FLAGS_MASK            0x1
 
 // =====================================================================================================================
 // Primary acceleration structure header.

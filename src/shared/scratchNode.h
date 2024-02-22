@@ -43,12 +43,12 @@ struct ScratchNode
                                            // instanceNodeBasePointerLo, instanceNodeBasePointerHi for instance node
     uint   parent;
 
-    uint   packedFlags;                    // flags [0:7], instanceMask [8:15]
     uint   splitBox_or_nodePointer;        // TriangleSplitBox index for triangle nodes /
                                            // BLAS node pointer for instance nodes
     uint   numPrimitivesAndDoCollapse;     // number of tris collapsed, doCollapse is boolean bit in the LSB /
                                            // scratch node index of the tri in the pair in PAIR_TRIANGLE_COMPRESSION
-    uint   type;                           // type [0:2], triangle id [3:18] for max of 2 compressed triangles
+    uint   unused;                         // Unused bits
+    uint   packedFlags;                    // flags [0:7], instanceMask [8:15], triangleId [16:31]
 };
 
 #define SCRATCH_NODE_FLAGS_DISABLE_TRIANGLE_SPLIT_SHIFT 31
@@ -68,13 +68,15 @@ struct ScratchNode
 #define SCRATCH_NODE_V2_OFFSET                        SCRATCH_NODE_COST_OFFSET
 #define SCRATCH_NODE_INSTANCE_BASE_PTR_OFFSET         SCRATCH_NODE_V2_OFFSET
 #define SCRATCH_NODE_PARENT_OFFSET                    44
-#define SCRATCH_NODE_FLAGS_OFFSET                     48
-#define SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET           52
+#define SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET           48
+#define SCRATCH_NODE_V3_OFFSET                        SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET
 #define SCRATCH_NODE_NODE_POINTER_OFFSET              SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET
 #define SCRATCH_NODE_NUM_LARGEST_LENGTH_OFFSET        SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET
-#define SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET 56
-#define SCRATCH_NODE_TYPE_OFFSET                      60
+#define SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET 52
+#define SCRATCH_NODE_UNUSED_OFFSET                    56
+#define SCRATCH_NODE_FLAGS_OFFSET                     60
 #define SCRATCH_NODE_SIZE                             64
+#define SCRATCH_NODE_TRIANGLE_VERTEX_STRIDE           16
 
 //=====================================================================================================================
 static bool IsLeafNode(in uint x, uint numActivePrims)
@@ -99,6 +101,38 @@ static uint CalculateScratchBvhNodesOffset(
 {
     const uint offset = noCopySortedNodes ? (numLeafNodes - numActivePrims) * SCRATCH_NODE_SIZE : 0;
     return bvhNodesOffset + offset;
+}
+
+//=====================================================================================================================
+// Extract scratch leaf geometry index
+static uint ExtractScratchNodeGeometryIndex(
+    in ScratchNode node)
+{
+    return (node.right_or_geometryIndex & 0x00ffffff);
+}
+
+//=====================================================================================================================
+// Extract primitive offset of paired triangle
+static uint ExtractScratchNodePairPrimOffset(
+    in ScratchNode node)
+{
+    return (node.right_or_geometryIndex >> 24);
+}
+
+//=====================================================================================================================
+// Returns whether a scratch leaf node is a triangle pair when early triangle pairing is enabled
+static bool IsScratchNodeEarlyTrianglePair(
+    in ScratchNode node)
+{
+    return ((node.right_or_geometryIndex >> 24) != 0);
+}
+
+//=====================================================================================================================
+static uint PackScratchNodeGeometryIndex(
+    in uint geometryIndex,
+    in uint primIdOffsetTri0)
+{
+    return geometryIndex | (primIdOffsetTri0 << 24u);
 }
 
 //=====================================================================================================================
@@ -159,13 +193,6 @@ static bool IsNodeActive(ScratchNode node)
 {
     // Inactive nodes force v0.x to NaN during encode
     return !isnan(node.bbox_min_or_v0.x);
-}
-
-//=====================================================================================================================
-static bool IsNodeLinkedOnly(ScratchNode node)
-{
-    // if this the "2nd" triangle of a set of paired triangle
-    return (node.splitBox_or_nodePointer == PAIRED_TRI_LINKONLY);
 }
 
 #endif

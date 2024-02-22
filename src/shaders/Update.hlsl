@@ -88,7 +88,8 @@ groupshared uint SharedMem[1];
 #if !AMD_VULKAN
 //======================================================================================================================
 void EncodePrimitives(
-    uint globalId)
+    uint globalId,
+    uint geometryType)
 {
     for (uint geometryIndex = 0; geometryIndex < ShaderConstants.numDescs; geometryIndex++)
     {
@@ -100,31 +101,47 @@ void EncodePrimitives(
 
         if (globalId == 0)
         {
-            WriteGeometryInfo(
-                geometryArgs, primitiveOffset, geometryArgs.NumPrimitives, DECODE_PRIMITIVE_STRIDE_TRIANGLE);
+            const uint primitiveStride = (geometryType == GEOMETRY_TYPE_TRIANGLES) ?
+                                         DECODE_PRIMITIVE_STRIDE_TRIANGLE :
+                                         DECODE_PRIMITIVE_STRIDE_AABB;
+            WriteGeometryInfo(geometryArgs, primitiveOffset, geometryArgs.NumPrimitives, primitiveStride);
         }
 
         for (uint primitiveIndex = globalId; primitiveIndex < numPrimitives; primitiveIndex += ShaderConstants.numThreads)
         {
-            EncodeTriangleNode(GeometryBuffer[geometryIndex],
+            if (geometryType == GEOMETRY_TYPE_TRIANGLES)
+            {
+                EncodeTriangleNode(GeometryBuffer[geometryIndex],
+                                   IndexBuffer[geometryIndex],
+                                   TransformBuffer[geometryIndex],
+                                   geometryArgs,
+                                   primitiveIndex,
+                                   primitiveOffset,
+                                   0,
+                                   true);
+            }
+            else
+            {
+                EncodeAabbNode(GeometryBuffer[geometryIndex],
                                IndexBuffer[geometryIndex],
                                TransformBuffer[geometryIndex],
                                geometryArgs,
                                primitiveIndex,
                                primitiveOffset,
-                               0,
                                true);
+            }
         }
     }
 }
+
 #endif
 
 //======================================================================================================================
-// Main Function : Update
+// Main Function : UpdateTriangles
 //======================================================================================================================
 [RootSignature(RootSig)]
 [numthreads(BUILD_THREADGROUP_SIZE, 1, 1)]
-void Update(
+void UpdateTriangles(
     uint globalId : SV_DispatchThreadID,
     uint localId  : SV_GroupThreadID)
 {
@@ -137,7 +154,42 @@ void Update(
 #if !AMD_VULKAN
     BEGIN_TASK(numGroups);
 
-    EncodePrimitives(globalId);
+    {
+        EncodePrimitives(globalId, GEOMETRY_TYPE_TRIANGLES);
+    }
+
+    END_TASK(numGroups);
+#endif
+
+    const uint numWorkItems = ScratchBuffer.Load(UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET);
+
+    UpdateQBVHImpl(globalId,
+                   ShaderConstants.propagationFlagsScratchOffset,
+                   numWorkItems,
+                   ShaderConstants.numThreads);
+}
+
+//======================================================================================================================
+// Main Function : UpdateAabbs
+//======================================================================================================================
+[RootSignature(RootSig)]
+[numthreads(BUILD_THREADGROUP_SIZE, 1, 1)]
+void UpdateAabbs(
+    uint globalId : SV_DispatchThreadID,
+    uint localId  : SV_GroupThreadID)
+{
+    uint waveId = 0;
+    uint numTasksWait = 0;
+    INIT_TASK;
+
+    const uint numGroups = ShaderConstants.numThreads / BUILD_THREADGROUP_SIZE;
+
+#if !AMD_VULKAN
+    BEGIN_TASK(numGroups);
+
+    {
+        EncodePrimitives(globalId, GEOMETRY_TYPE_AABBS);
+    }
 
     END_TASK(numGroups);
 #endif

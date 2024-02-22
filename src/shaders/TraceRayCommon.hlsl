@@ -382,7 +382,8 @@ static void WriteRayHistoryTokenWaveBegin(
     const bool waveUniformRayTMax        = IS_WAVE_UNIFORM(ray.TMax);
 
     RayHistoryTokenWaveBeginPacketHeader header;
-    header.activeLaneMask    = (uint64_t(mask.y) << 32) | mask.x;
+    header.activeLaneMaskLo  = mask.x;
+    header.activeLaneMaskHi  = mask.y;
     header.staticId          = staticId;
     header.dynamicId         = dynamicId;
     header.parentId          = parentId;
@@ -402,7 +403,8 @@ static void WriteRayHistoryTokenWaveBegin(
 
     // Write ray history begin tokens
     const uint headerSizeDw = RAY_HISTORY_WAVE_BEGIN_PACKET_HEADER_SIZE + countbits(uniformVarBitMask);
-    const uint packetSizeDw = RAY_HISTORY_WAVE_BEGIN_PACKET_DATA_SIZE + countbits((~uniformVarBitMask) & 0xFF);
+    const uint packetSizeDw =
+        RAY_HISTORY_WAVE_BEGIN_PACKET_DATA_SIZE + countbits((~uniformVarBitMask) & WAVE_UNIFORM_BITS_VALID_MASK);
 
     uint offset = 0;
     if (WaveIsFirstLane())

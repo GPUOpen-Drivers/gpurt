@@ -50,6 +50,7 @@
 #include "../shared/scratchNode.h"
 #include "BuildCommon.hlsl"
 #include "BuildCommonScratchGlobal.hlsl"
+#include "TaskCounter.hlsl"
 
 //=====================================================================================================================
 void WriteScratchBatchIndex(
@@ -73,9 +74,9 @@ static bool IsTrianglePrimitiveBuild()
 static BoundingBox GetScratchNodeBoundingBox(
     in ScratchNode node,
     in bool        isLeafNode,
-    in bool        doTriangleSplit,
+    in bool        triangleSplittingEnabled,
     in uint        splitBoxesByteOffset,
-    in bool        doTriangleCompression,
+    in bool        trianglePairingEnabled,
     in uint        baseScratchNodesOffset)
 {
     BoundingBox bbox;
@@ -83,7 +84,7 @@ static BoundingBox GetScratchNodeBoundingBox(
     if (isLeafNode && IsTrianglePrimitiveBuild())
     {
         // For triangle geometry we need to generate bounding box from split boxes
-        if (doTriangleSplit && (node.splitBox_or_nodePointer != INVALID_IDX))
+        if (triangleSplittingEnabled && (node.splitBox_or_nodePointer != INVALID_IDX))
         {
             bbox = FetchSplitBoxAtIndex(splitBoxesByteOffset, node.splitBox_or_nodePointer);
         }
@@ -94,20 +95,35 @@ static BoundingBox GetScratchNodeBoundingBox(
                                                node.bbox_max_or_v1,
                                                node.sah_or_v2_or_instBasePtr);
 
-            // if TriangleCompression is on, and this is a leaf node
-            // need to fetch the "pairedNode" (if any) and update boundingbox
-            if (doTriangleCompression && (node.splitBox_or_nodePointer != INVALID_IDX))
+            if (trianglePairingEnabled)
             {
-                BoundingBox nodeBbox = bbox;
-                ScratchNode pairedNode = FetchScratchNode(baseScratchNodesOffset,
-                                                          node.splitBox_or_nodePointer);
+                if (Settings.enableEarlyPairCompression)
+                {
+                    // Early triangle pairing encodes the quad in a single scratch node
+                    const uint primIdOffset = (node.right_or_geometryIndex >> 24);
+                    if (IsScratchNodeEarlyTrianglePair(node))
+                    {
+                        const float3 v3 = float3(asfloat(node.splitBox_or_nodePointer),
+                                                 asfloat(node.numPrimitivesAndDoCollapse),
+                                                 asfloat(node.unused));
 
-                BoundingBox pairedNodeBbox = GenerateTriangleBoundingBox(pairedNode.bbox_min_or_v0,
-                                                                         pairedNode.bbox_max_or_v1,
-                                                                         pairedNode.sah_or_v2_or_instBasePtr);
+                        bbox.min = min(v3, bbox.min);
+                        bbox.max = max(v3, bbox.max);
+                    }
+                }
+                else if (node.splitBox_or_nodePointer != INVALID_IDX)
+                {
+                    // Late triangle pairing uses multiple scratch nodes to encode paired triangle data
+                    BoundingBox nodeBbox = bbox;
+                    ScratchNode pairedNode = FetchScratchNode(baseScratchNodesOffset, node.splitBox_or_nodePointer);
 
-                bbox.min = min(nodeBbox.min, pairedNodeBbox.min);
-                bbox.max = max(nodeBbox.max, pairedNodeBbox.max);
+                    BoundingBox pairedNodeBbox = GenerateTriangleBoundingBox(pairedNode.bbox_min_or_v0,
+                                                                             pairedNode.bbox_max_or_v1,
+                                                                             pairedNode.sah_or_v2_or_instBasePtr);
+
+                    bbox.min = min(nodeBbox.min, pairedNodeBbox.min);
+                    bbox.max = max(nodeBbox.max, pairedNodeBbox.max);
+                }
             }
         }
     }
@@ -195,27 +211,21 @@ void WriteScratchNodeNumPrimitives(
 void WriteScratchNodeCost(
     uint  baseScratchNodesOffset,
     uint  nodeIndex,
-    float cost,
-    bool  isLeaf)
+    float cost)
 {
-    const uint dataOffset = (isLeaf ? SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET : SCRATCH_NODE_COST_OFFSET);
-
     WriteScratchNodeData(
         baseScratchNodesOffset,
         nodeIndex,
-        dataOffset,
+        SCRATCH_NODE_COST_OFFSET,
         cost);
 }
 
 //=====================================================================================================================
 float FetchScratchNodeCost(
     uint baseScratchNodesOffset,
-    uint nodeIndex,
-    bool isLeaf)
+    uint nodeIndex)
 {
-    const uint dataOffset = (isLeaf ? SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET : SCRATCH_NODE_COST_OFFSET);
-
-    return FETCH_SCRATCH_NODE_DATA(float, baseScratchNodesOffset, nodeIndex, dataOffset);
+    return FETCH_SCRATCH_NODE_DATA(float, baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_COST_OFFSET);
 }
 
 //=====================================================================================================================
@@ -248,23 +258,6 @@ void WriteScratchNodeLargestLength(
     float value)
 {
     WriteScratchNodeData(baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_NUM_LARGEST_LENGTH_OFFSET, value);
-}
-
-//=====================================================================================================================
-void WriteScratchNodeType(
-    uint baseScratchNodesOffset,
-    uint nodeIndex,
-    uint nodeType)
-{
-    WriteScratchNodeData(baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_TYPE_OFFSET, nodeType);
-}
-
-//=====================================================================================================================
-uint FetchScratchNodeType(
-    uint baseScratchNodesOffset,
-    uint nodeIndex)
-{
-    return FETCH_SCRATCH_NODE_DATA(uint, baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_TYPE_OFFSET);
 }
 
 //=====================================================================================================================
@@ -606,11 +599,19 @@ void MergeScratchNodes(
     uint        mergedNodeIndex,
     uint        leftNodeIndex,
     ScratchNode leftNode,
+    BoundingBox leftBounds,
     uint        rightNodeIndex,
     ScratchNode rightNode,
-    float       mergedBoxSurfaceArea,
-    float       largestLength)
+    BoundingBox rightBounds)
 {
+    BoundingBox mergedBounds = CombineAABB(leftBounds, rightBounds);
+    const float mergedBoxSurfaceArea = ComputeBoxSurfaceArea(mergedBounds);
+
+    WriteScratchNodeBoundingBox(scratchNodesOffset,
+                                mergedNodeIndex,
+                                mergedBounds.min,
+                                mergedBounds.max);
+
     const uint numLeft  = FetchScratchNodeNumPrimitives(leftNode, IsLeafNode(leftNodeIndex, numActivePrims));
     const uint numRight = FetchScratchNodeNumPrimitives(rightNode, IsLeafNode(rightNodeIndex, numActivePrims));
     const uint numTris  = numLeft + numRight;
@@ -620,11 +621,13 @@ void MergeScratchNodes(
 
     const float Ci = SAH_COST_AABBB_INTERSECTION;
 
-    const float leftCost = FetchScratchNodeCost(scratchNodesOffset, leftNodeIndex,
-                                                IsLeafNode(leftNodeIndex, numActivePrims));
+    const float leftCost =
+        IsLeafNode(leftNodeIndex, numActivePrims) ?
+            (Ct * ComputeBoxSurfaceArea(leftBounds)) : FetchScratchNodeCost(scratchNodesOffset, leftNodeIndex);
 
-    const float rightCost = FetchScratchNodeCost(scratchNodesOffset, rightNodeIndex,
-                                                 IsLeafNode(rightNodeIndex, numActivePrims));
+    const float rightCost =
+        IsLeafNode(rightNodeIndex, numActivePrims) ?
+            (Ct * ComputeBoxSurfaceArea(rightBounds)) : FetchScratchNodeCost(scratchNodesOffset, rightNodeIndex);
 
     const bool leftCollapse      = (leftNode.numPrimitivesAndDoCollapse & 0x1) ||
                                     IsLeafNode(leftNodeIndex, numActivePrims);
@@ -671,9 +674,6 @@ void MergeScratchNodes(
         }
     }
 
-    WriteScratchNodeType(scratchNodesOffset,
-                         mergedNodeIndex,
-                         GetInternalNodeType());
     WriteScratchNodeFlagsFromNodes(scratchNodesOffset,
                                    mergedNodeIndex,
                                    leftNode,
@@ -681,8 +681,11 @@ void MergeScratchNodes(
     WriteScratchNodeSurfaceArea(scratchNodesOffset,
                                 mergedNodeIndex,
                                 mergedBoxSurfaceArea);
+
+    const float largestLength = 0;
+
     WriteScratchNodeLargestLength(scratchNodesOffset, mergedNodeIndex, largestLength);
-    WriteScratchNodeCost(scratchNodesOffset, mergedNodeIndex, bestCost, false);
+    WriteScratchNodeCost(scratchNodesOffset, mergedNodeIndex, bestCost);
     WriteScratchNodeNumPrimitives(scratchNodesOffset, mergedNodeIndex, numTris, isCollapsed);
 
 }
@@ -751,21 +754,6 @@ void RefitNode(
         numMortonCells += isLeafNode ? 1 : leftNode.splitBox_or_nodePointer;
     }
 
-    // Merge bounding boxes up to parent
-    BoundingBox mergedBox = (BoundingBox)0;
-    mergedBox.min = min(bboxLeftChild.min, bboxRightChild.min);
-    mergedBox.max = max(bboxLeftChild.max, bboxRightChild.max);
-
-    // Compute surface area of parent box
-    const float mergedBoxSurfaceArea = ComputeBoxSurfaceArea(mergedBox);
-
-    WriteScratchNodeBoundingBox(args.baseScratchNodesOffset,
-                                nodeIndex,
-                                mergedBox.min,
-                                mergedBox.max);
-
-    const float largestLength = 0;
-
     MergeScratchNodes(
         args.baseScratchNodesOffset,
         args.numBatchesOffset,
@@ -774,10 +762,10 @@ void RefitNode(
         nodeIndex,
         lc,
         leftNode,
+        bboxLeftChild,
         rc,
         rightNode,
-        mergedBoxSurfaceArea,
-        largestLength);
+        bboxRightChild);
 }
 
 #endif

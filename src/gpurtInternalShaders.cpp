@@ -96,10 +96,14 @@ const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsTyp
     PIPELINE_BUILD_INFO(InitExecuteIndirect),
     PIPELINE_BUILD_INFO(PairCompression),
     PIPELINE_BUILD_INFO(MergeSort),
-    PIPELINE_BUILD_INFO(Update),
+    PIPELINE_BUILD_INFO(UpdateTriangles),
+    PIPELINE_BUILD_INFO(UpdateAabbs),
     PIPELINE_BUILD_INFO(InitAccelerationStructure),
     PIPELINE_BUILD_INFO(InitUpdateAccelerationStructure),
-
+    PIPELINE_BUILD_INFO(BuildFastAgglomerativeLbvh),
+    PIPELINE_BUILD_INFO(CountTrianglePairs),
+    PIPELINE_BUILD_INFO(CountTrianglePairsIndirect),
+    PIPELINE_BUILD_INFO(CountTrianglePairsPrefixSum),
 };
 
 #undef PIPELINE_BUILD_INFO
