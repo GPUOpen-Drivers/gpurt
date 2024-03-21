@@ -53,8 +53,6 @@ FILE_STANDARD_HEADER = """
 
 #pragma once
 
-#include "gpurt/gpurt.h"
-
 """
 FILE_HEADER_FORMAT_STRING = "static constexpr uint32 Cs%s[] =\n{\n"
 FILE_FOOTER_STRING = "\n};\n"
@@ -113,7 +111,6 @@ bvhShaderConfigs = [
     ShaderConfig(path="BuildBVHTDTR.hlsl", entryPoint="BuildBVHTD", outputName="BuildBVHTDTR", defines="USE_BVH_REBRAID=1"),
     ShaderConfig(path="GenerateMortonCodes.hlsl", entryPoint="GenerateMortonCodes"),
     ShaderConfig(path="Rebraid.hlsl", entryPoint="Rebraid"),
-    ShaderConfig(path="BuildBVH.hlsl", entryPoint="BuildBVH", outputName="BuildBVHSortLeaves"),
     ShaderConfig(path="BuildBVH.hlsl", entryPoint="BuildBVH", defines="USE_BUILD_LBVH=1"),
     ShaderConfig(path="BuildBVHPLOC.hlsl", entryPoint="BuildBVHPLOC"),
     ShaderConfig(path="UpdateQBVH.hlsl", entryPoint="UpdateQBVH"),
@@ -226,9 +223,10 @@ def SpvRemap(spvRemap, whiteListFile, inSpvFilename, outputDir, threadOutput) ->
 
 def ConvertSpvFile(disableDebugStripping, spvRemap, whiteListFile, inSpvFilename, inOutputName, isBVH, outputDir, threadOutput):
     try:
-        # Generate file name with *_spv.h and file header name with Cs*_spv[] for SPIR-V BVH shaders to distinguish them with the AMDIL header
-        outputFileName = "g_" + inOutputName + '.h' if not isBVH else "g_" + inOutputName + '_spv.h'
-        conversionOutputFilename = inOutputName if not isBVH else inOutputName + '_spv'
+        # Generate file name with *_spv.h and file header name with Cs*_spv[] for SPIR-V shaders to distinguish
+        # them with the AMDIL header
+        outputFileName = "g_" + inOutputName + '_spv.h'
+        conversionOutputFilename = inOutputName + '_spv'
 
         if not disableDebugStripping:
             remapResult = SpvRemap(spvRemap, whiteListFile, inSpvFilename, outputDir, threadOutput)
@@ -269,17 +267,60 @@ def ConvertSpvFile(disableDebugStripping, spvRemap, whiteListFile, inSpvFilename
         threadOutput.append(f"Error: {e}")
         return False
 
-def RunSpirv(outputDir, compilerPath, inShaderConfig, inShaderBasePath, inDXC, inVerbose, threadOutput):
+def ConvertDxilFile(inDxilFilename, inOutputName, threadOutput):
+    try:
+        # Generate file name with *_dxil.h and file header name with Cs*_dxil[] for DXIL shaders to distinguish
+        # them with the AMDIL header
+        outputFileName = "g_" + inOutputName + '_dxil.h'
+        conversionOutputFilename = inOutputName + '_dxil'
+
+        dxilBinaryFile = open(f"{inDxilFilename}", "rb")
+        dxilBinData = dxilBinaryFile.read()
+        dxilBinaryFile.close()
+
+        i = 0
+        dxilHexText = ""
+        while i < len(dxilBinData):
+            binWord = dxilBinData[i:i+4]
+            intWord = struct.unpack('I', binWord)[0]
+            hexWord = "{0:#010x}".format(intWord)
+            dxilHexText += hexWord
+
+            i += 4
+
+            if (i != len(dxilBinData)):
+                dxilHexText += ","
+            if (i % 32 == 0):
+                dxilHexText += "\n"
+            else:
+                dxilHexText += " "
+
+        outputFile = open(outputFileName, "w")
+        outputFile.write(FILE_STANDARD_HEADER)
+        outputFile.write(FILE_HEADER_FORMAT_STRING % conversionOutputFilename)
+        outputFile.write(dxilHexText)
+        outputFile.write(FILE_FOOTER_STRING)
+        outputFile.close()
+
+        return True
+    except Exception as e:
+        threadOutput.append(f"Error: {e}")
+        return False
+
+def RunCompiler(outputDir, compilerPath, inShaderConfig, inShaderBasePath, inDXC, inVerbose, threadOutput, spirv):
     shaderPath = os.path.join(inShaderBasePath, inShaderConfig.path).replace('\\', '/')
     shaderFilename = os.path.basename(inShaderConfig.path)
 
     detailString = ":" + inShaderConfig.entryPoint if inShaderConfig.entryPoint is not None else "<Library>"
     ext = ".h"
     if inDXC:
-        ext = "_spv" + ext
+        if spirv:
+            ext = "_spv" + ext
+        else:
+            ext = "_dxil" + ext
     genFileName = inShaderConfig.getName() + ext
-    compilationString = "Compiling %s%s -> %s..." % (shaderFilename, detailString, genFileName)
-    threadOutput.append(compilationString)
+    compilerName = os.path.split(compilerPath)[1]
+    compilationString = "Compiling (%s spirv=%s) %s%s -> %s..." % (compilerName, spirv, shaderFilename, detailString, genFileName)
 
     shaderDefines = []
     if inShaderConfig.defines:
@@ -288,7 +329,10 @@ def RunSpirv(outputDir, compilerPath, inShaderConfig, inShaderBasePath, inDXC, i
             shaderDefines.append(f"-D{define}")
 
     hlslFile = shaderPath
-    spvFile  = inShaderConfig.getName() + ".spv"
+    if spirv:
+        binFile  = inShaderConfig.getName() + ".spv"
+    else:
+        binFile  = inShaderConfig.getName() + ".dxil"
     entryPoint = inShaderConfig.entryPoint
 
     # Get proper file extension for executable
@@ -302,27 +346,29 @@ def RunSpirv(outputDir, compilerPath, inShaderConfig, inShaderBasePath, inDXC, i
     if inDXC:
         isLibrary = inShaderConfig.isLibrary()
         shaderProfileString = SHADER_PROFILE_LIB if isLibrary else SHADER_PROFILE
-        target_env = 'universal1.5' if isLibrary else 'vulkan1.1'
-
-        commandArgs += [f'-fspv-target-env={target_env}']
-        commandArgs += ['-spirv']
+        if spirv:
+            target_env = 'universal1.5' if isLibrary else 'vulkan1.1'
+            commandArgs += [f'-fspv-target-env={target_env}']
+            commandArgs += ['-spirv']
+            commandArgs += ['-Od']
+            commandArgs += ['-DAMD_VULKAN', '-DAMD_VULKAN_DXC', '-DAMD_VULKAN_SPV']
+            commandArgs += ['-fvk-use-scalar-layout']
+            if isLibrary:
+                commandArgs += ['-fcgl']
+        else:
+            commandArgs += ['-O3']
         if entryPoint:
             commandArgs += ['-E', entryPoint]
-        commandArgs += ['-DAMD_VULKAN', '-DAMD_VULKAN_DXC', '-DAMD_VULKAN_SPV']
         commandArgs += shaderDefines
-        commandArgs += ['-fvk-use-scalar-layout']
-        if isLibrary:
-            commandArgs += ['-fcgl']
-        commandArgs += ['-Od']
         commandArgs += ['-Vd']
         commandArgs += ['-T', shaderProfileString]
         commandArgs += ['-Wno-ignored-attributes']
         commandArgs += ['-Wno-parentheses-equality']
-        commandArgs += ['-Fo', spvFile]
+        commandArgs += ['-Fo', binFile]
         commandArgs += [hlslFile]
     else:
         commandArgs += ['-V', hlslFile]
-        commandArgs += ['-o', spvFile]
+        commandArgs += ['-o', binFile]
         commandArgs += ['-D']
         commandArgs += ['-S', 'comp']
         commandArgs += ['--entry-point', 'TraceRaysRTPSO']
@@ -334,18 +380,22 @@ def RunSpirv(outputDir, compilerPath, inShaderConfig, inShaderBasePath, inDXC, i
 
     compileResult = InvokeSubprocess(commandArgs, outputDir, threadOutput, linuxLibraryPath=(compilerPath if inDXC else ''))
 
+    compilationString += "Success" if (compileResult == 0) else "Failure"
+    threadOutput.append(compilationString)
+    print(compilationString)
+
     if compileResult != 0:
         return False
 
-    if inVerbose:
+    if inVerbose and spirv:
         # non-essential command, so return code can be ignored
-        InvokeSubprocess(['spirv-dis', spvFile, '-o', spvFile + 'as'], outputDir, threadOutput)
+        InvokeSubprocess(['spirv-dis', binFile, '-o', binFile + 'as'], outputDir, threadOutput)
 
     return True
 
 # returns true if compiled successfully, false if failed.
 def CompileShaderConfig(shaderConfig, args, shadersOutputDir,
-    dxcompilerLibPath, spirvCompilerPath, spvRemap, whiteListPath, shadersBasePath):
+    dxcompilerLibPath, compilerPath, spvRemap, whiteListPath, shadersBasePath):
     # Output for this thread if we need to report errors
     threadOutput = []
 
@@ -368,7 +418,7 @@ def CompileShaderConfig(shaderConfig, args, shadersOutputDir,
     if isBVH:
         shaderConfig.defines += ",GPURT_BVH_BUILD_SHADER=1"
 
-    # Create a temporary working directory for this shader
+    # Create a temporary working directory for this shader.
     tempDirPath = shadersOutputDir + '/' + conversionOutputFilename
 
     # Get rid of temp dir that can be left over from an unclean build.
@@ -381,10 +431,10 @@ def CompileShaderConfig(shaderConfig, args, shadersOutputDir,
     startTime = time.time()
 
     try:
-        if not isSpirv:
+        if False:
             pass
         else:
-            if not RunSpirv(tempDirPath, spirvCompilerPath, shaderConfig, shadersBasePath, (not args.glslang or isBVH), args.verbose, threadOutput):
+            if not RunCompiler(tempDirPath, compilerPath, shaderConfig, shadersBasePath, (not args.glslang or isBVH), args.verbose, threadOutput, args.spirv):
                 threadOutput.append("Failed to compile Vulkan shader config %s" % shaderConfig)
                 return (False, os.linesep.join(threadOutput))
 
@@ -405,6 +455,9 @@ def CompileShaderConfig(shaderConfig, args, shadersOutputDir,
             if isSpirv:
                 compiledSpvFilename = f"{conversionOutputFilename}.spv"
                 conversionResult = ConvertSpvFile(args.disableDebugStripping, spvRemap, whiteListPath, compiledSpvFilename, conversionOutputFilename, isBVH, tempDirPath, threadOutput)
+            else:
+                compiledDxilFileName = f"{tempDirPath}/{conversionOutputFilename}.dxil"
+                conversionResult = ConvertDxilFile(compiledDxilFileName, conversionOutputFilename, threadOutput)
 
         if not args.interm_only:
             if compiledSpvFilename:
@@ -440,12 +493,12 @@ def CompileShaders(args, internalShadersHeader, compileType) -> int:
     shadersBasePath = FixInputPath(args.basepath)
     shadersOutputDir = FixInputPath(args.outputDir)
 
-    spirvCompilerPath = FixInputPath(args.spirvCompilerPath) + '/'
+    compilerPath = FixInputPath(args.compilerPath) + '/'
     if args.glslang:
-        spirvCompilerPath += GLSLANG_EXECUTABLE
+        compilerPath += GLSLANG_EXECUTABLE
     else:
-        spirvCompilerPath += DXC_EXECUTABLE
-    spirvCompilerPath = FixExePath(spirvCompilerPath)
+        compilerPath += DXC_EXECUTABLE
+    compilerPath = FixExePath(compilerPath)
 
     dxcompilerLibPath = FixInputPath(args.dxcompilerLibPath)
 
@@ -473,7 +526,7 @@ def CompileShaders(args, internalShadersHeader, compileType) -> int:
     with ThreadPoolExecutor(max_workers=int(args.jobs)) as exe:
         for idx, shaderConfig in enumerate(shadersConfigs):
             compileResults[idx] = exe.submit(CompileShaderConfig, shaderConfig, args, shadersOutputDir,
-                dxcompilerLibPath, spirvCompilerPath, spvRemap, whiteListPath, shadersBasePath)
+                dxcompilerLibPath, compilerPath, spvRemap, whiteListPath, shadersBasePath)
 
     successfulCompilation = True
     for idx, future in enumerate(compileResults):
@@ -504,7 +557,8 @@ def CompileShaders(args, internalShadersHeader, compileType) -> int:
         else:
             print(f"Unhandled compilation type: {compileType}")
             return 1
-        internalShadersHeader.write(f"#include \"{dir}g_{shaderName}.h\"\n")
+        if internalShadersHeader:
+            internalShadersHeader.write(f"#include \"{dir}g_{shaderName}.h\"\n")
 
     if successfulCompilation:
         print("Raytracing shader compilation completed with no errors.")
@@ -526,7 +580,7 @@ def main() -> int:
     parser.add_argument('--verbose', action='store_true', help='Output verbose inforation', default=False)
     parser.add_argument('--defines', help='Defines for the shader compiler, separated by ; or ,.', default="")
     parser.add_argument('--includePaths', help='Include paths for the shader compiler, separated by ; or ,.', default="")
-    parser.add_argument('--spirvCompilerPath', help='Path to SPIR-V compiler (either dxc or glslangValidator).', default='./dxc.exe')
+    parser.add_argument('--compilerPath', help='Path to standalone compiler (either dxc or glslangValidator).', default='./dxc.exe')
     parser.add_argument('--dxcompilerLibPath', help='Path to dxcompiler.dll/libdxcompiler.so', default='./dxcompiler.dll')
     parser.add_argument('--spirvRemapPath', help='Path to spirv-remap executable', default='./spirv-remap.exe')
     parser.add_argument('--whiteListPath', help='Path to SPIRV whitelist file', default=SPIRV_WHITELIST)
@@ -544,12 +598,14 @@ def main() -> int:
         os.mkdir(outputDir)
 
     # Generate the internal_shaders header, containing includes for all the generated headers
-    internalShadersHeader = open(outputDir + '/' + DEFAULT_INTERNAL_SHADERS_HEADER_NAME + ".h", "w")
-    internalShadersHeader.write(FILE_STANDARD_HEADER)
+    internalShadersHeader = None
+    if not args.skip_bvh:
+        internalShadersHeader = open(outputDir + '/' + DEFAULT_INTERNAL_SHADERS_HEADER_NAME + ".h", "w")
+        internalShadersHeader.write(FILE_STANDARD_HEADER)
 
     compileType = CompilationType.Dxil
 
-    if args.vulkan:
+    if args.vulkan and not args.skip_bvh:
         # Compile traversal shaders first
         args.skip_bvh = True
         args.outputDir = outputDir # vk root dir
@@ -565,8 +621,9 @@ def main() -> int:
 
     result |= CompileShaders(args, internalShadersHeader, compileType)
 
-    internalShadersHeader.flush()
-    internalShadersHeader.close()
+    if internalShadersHeader:
+        internalShadersHeader.flush()
+        internalShadersHeader.close()
 
     return result
 

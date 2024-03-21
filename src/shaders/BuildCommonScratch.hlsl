@@ -554,13 +554,13 @@ uint GetBvhNodesOffset(
     uint bvhLeafNodeDataOffset,
     uint primIndicesSortedOffset)
 {
-    if ((Settings.noCopySortedNodes == true) &&
+    if ((Settings.enableTopDownBuild == false) &&
         (Settings.enableFastLBVH == false) &&
         (numActivePrims == 1) &&
         (numLeafNodes > 1))
     {
         // If there is one active primitive among a number of inactive primitives and
-        // NoCopySortedNodes is enabled, then we need to move the root to match the
+        // the top down builder is disabled, then we need to move the root to match the
         // offset of the single active primitive.
         // The FastLBVH does not need to do this, because it provides the root's index
         // in ShaderConstants.offsets.fastLBVHRootNodeIndex.
@@ -573,7 +573,7 @@ uint GetBvhNodesOffset(
                    numActivePrims,
                    numLeafNodes,
                    bvhNodeDataOffset,
-                   Settings.noCopySortedNodes);
+                   Settings.enableTopDownBuild);
     }
 }
 

@@ -61,7 +61,7 @@ void RefitBounds(
                               numActivePrims,
                               ShaderConstants.numLeafNodes,
                               ShaderConstants.offsets.bvhNodeData,
-                              Settings.noCopySortedNodes);
+                              Settings.enableTopDownBuild);
     if (globalId < numActivePrims)
     {
         RefitBoundsImpl(globalId,
@@ -71,7 +71,6 @@ void RefitBounds(
                         ShaderConstants.offsets.bvhLeafNodeData,
                         ShaderConstants.offsets.primIndicesSorted,
                         Settings.doTriangleSplitting,
-                        Settings.noCopySortedNodes,
                         Settings.enableEarlyPairCompression,
                         EnableLatePairCompression(),
                         Settings.enablePairCostCheck,

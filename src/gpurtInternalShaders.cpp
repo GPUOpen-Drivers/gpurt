@@ -66,7 +66,6 @@ const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsTyp
     PIPELINE_BUILD_INFO(Rebraid),
     PIPELINE_BUILD_INFO(GenerateMortonCodes),
     PIPELINE_BUILD_INFO(BuildBVH),
-    PIPELINE_BUILD_INFO(BuildBVHSortLeaves),
     PIPELINE_BUILD_INFO(BuildBVHTD),
     PIPELINE_BUILD_INFO(BuildBVHTDTR),
     PIPELINE_BUILD_INFO(BuildBVHPLOC),

@@ -641,8 +641,10 @@ void RebraidImpl(
 
                         if (iterationCount == (args.numIterations - 1))
                         {
-                            ScratchBuffer.Store(ShaderConstants.offsets.encodeTaskCounter + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET,
-                                                numPrims + prevSum + threadSumScanned + threadSum);
+                            WriteTaskCounterData(
+                                ShaderConstants.offsets.encodeTaskCounter,
+                                ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET,
+                                numPrims + prevSum + threadSumScanned + threadSum);
                         }
                         else
                         {

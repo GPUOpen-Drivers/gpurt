@@ -228,7 +228,6 @@ private:
                                                                       // and has top down enabled or rebraid
         // Top down build in TLAS (topDownAllowed && prim count is not larger than max count)
         bool                            topDownBuild;
-        bool                            noCopySortedNodes;
         bool                            needEncodeDispatch;
         bool                            enableEarlyPairCompression;
         bool                            enableFastLBVH;
@@ -344,8 +343,6 @@ private:
         InternalRayTracingCsType pipeline);
 
     void BuildBVH();
-
-    void SortScratchLeaves();
 
     void BuildBVHTD();
 

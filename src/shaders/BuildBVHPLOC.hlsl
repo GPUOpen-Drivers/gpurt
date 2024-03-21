@@ -316,8 +316,7 @@ void InitPLOC(
 
     for (uint i = globalId; i < numActivePrims; i += args.numThreads)
     {
-        const uint primIndex = Settings.noCopySortedNodes ?
-            FetchSortedPrimIndex(args.primIndicesSortedScratchOffset, i) : i;
+        const uint primIndex = FetchSortedPrimIndex(args.primIndicesSortedScratchOffset, i);
         WriteClusterList(args, 0, i, numInternalNodes + primIndex);
     }
 

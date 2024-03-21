@@ -49,14 +49,13 @@ enum class BuildPhaseFlags : uint32_t
     MergeSort                     = 1 << 4,
     RadixSort                     = 1 << 5,
     BuildBVH                      = 1 << 6,
-    SortScratchLeaves             = 1 << 7,
-    BuildBVHPLOC                  = 1 << 8,
-    RefitBounds                   = 1 << 9,
-    PairCompression               = 1 << 10,
-    SeparateEmitPostBuildInfoPass = 1 << 12,
-    BuildParallel                 = 1 << 13,
-    BuildFastAgglomerativeLbvh    = 1 << 15,
-    EarlyPairCompression          = 1 << 16,
+    BuildBVHPLOC                  = 1 << 7,
+    RefitBounds                   = 1 << 8,
+    PairCompression               = 1 << 9,
+    SeparateEmitPostBuildInfoPass = 1 << 11,
+    BuildParallel                 = 1 << 12,
+    BuildFastAgglomerativeLbvh    = 1 << 14,
+    EarlyPairCompression          = 1 << 15,
 };
 
 constexpr BuildPhaseFlags& operator|=(BuildPhaseFlags& a, BuildPhaseFlags b) noexcept

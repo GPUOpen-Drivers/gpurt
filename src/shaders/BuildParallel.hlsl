@@ -30,8 +30,11 @@
 #define DEBUG_BUFFER
 #endif
 
+#define LUT_BUFFER
+
 #define RootSig "RootConstants(num32BitConstants=1, b0),"\
                 "CBV(b1),"\
+                LUT_BUFFER \
                 "UAV(u0),"\
                 "UAV(u1),"\
                 "UAV(u2),"\
@@ -57,8 +60,8 @@ struct RootConstants
     uint numThreadGroups;
 };
 
-[[vk::push_constant]] ConstantBuffer<RootConstants> ShaderRootConstants : register(b0);
-[[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b1);
+[[vk::push_constant]] ConstantBuffer<RootConstants>        ShaderRootConstants : register(b0);
+[[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants     : register(b1);
 
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstBuffer          : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata        : register(u1);
@@ -186,23 +189,6 @@ void GenerateMortonCodes(
 }
 
 //======================================================================================================================
-// Reorder scratch leaves based on sorted prim indices
-void SortScratchLeaves(
-    uint globalId,
-    uint numActivePrims)
-{
-    for (uint primIndex = globalId; primIndex < numActivePrims; primIndex += GetNumThreads())
-    {
-        CopyUnsortedScratchLeafNode(
-            primIndex,
-            numActivePrims,
-            ShaderConstants.offsets.primIndicesSorted,
-            ShaderConstants.offsets.bvhLeafNodeData,
-            ShaderConstants.offsets.bvhNodeData);
-    }
-}
-
-//======================================================================================================================
 void BuildBvhLinear(
     uint globalId,
     uint numActivePrims,
@@ -218,8 +204,7 @@ void BuildBvhLinear(
             CalculateBvhNodesOffset(ShaderConstants, numActivePrims),
             ShaderConstants.offsets.primIndicesSorted,
             ShaderConstants.offsets.mortonCodesSorted,
-            Settings.useMortonCode30,
-            Settings.noCopySortedNodes);
+            Settings.useMortonCode30);
     }
 }
 
@@ -238,7 +223,6 @@ void RefitBounds(
             ShaderConstants.offsets.bvhLeafNodeData,
             ShaderConstants.offsets.primIndicesSorted,
             Settings.doTriangleSplitting,
-            Settings.noCopySortedNodes,
             Settings.enableEarlyPairCompression,
             EnableLatePairCompression(),
             Settings.enablePairCostCheck,
@@ -497,16 +481,16 @@ void InitAccelerationStructure()
     DstBuffer.Store(0, ShaderConstants.header);
 
     // Initialise encode counters
-    ScratchBuffer.Store(
-        ShaderConstants.offsets.encodeTaskCounter + ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET, 0);
+    WriteTaskCounterData(
+        ShaderConstants.offsets.encodeTaskCounter, ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET, 0);
 
     // Early triangle pairing and triangle splitting dynamically increment primitive reference counter. Initialise
     // counters to 0 when these features are enabled
     const uint primRefInitCount =
         (Settings.enableEarlyPairCompression || Settings.doTriangleSplitting) ? 0 : ShaderConstants.numPrimitives;
 
-    ScratchBuffer.Store(
-        ShaderConstants.offsets.encodeTaskCounter + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET, primRefInitCount);
+    WriteTaskCounterData(
+        ShaderConstants.offsets.encodeTaskCounter, ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET, primRefInitCount);
 
     // Initialize valid scratch buffer counters to 0
     InitScratchCounter(ShaderConstants.offsets.plocTaskQueueCounter);
@@ -568,6 +552,8 @@ void EncodePrimitives(
                     primitiveIndex,
                     globalId,
                     primitiveOffset,
+                    0,
+                    0,
                     0);
             }
             else
@@ -579,6 +565,8 @@ void EncodePrimitives(
                     geometryArgs,
                     primitiveIndex,
                     primitiveOffset,
+                    0,
+                    0,
                     0,
                     false); // Don't write to the update stack
             }
@@ -701,16 +689,7 @@ void BuildBvh(
                 writeDebugCounter(COUNTER_MORTON_SORT_OFFSET);
                 // Note there is an implicit sync on the last pass of the sort
 
-                if (Settings.noCopySortedNodes == false)
-                {
-                    BEGIN_TASK(ShaderRootConstants.numThreadGroups);
-
-                    SortScratchLeaves(globalId, numActivePrims);
-
-                    END_TASK(ShaderRootConstants.numThreadGroups);
-                    writeDebugCounter(COUNTER_SORTLEAF_OFFSET);
-                }
-                // If noCopySortedNodes is on, the unsorted leaves will stay where the
+                // If the top down builder is off, the unsorted leaves will stay where the
                 // Encode step put them. On top of that, if TS or Rebraid is also on,
                 // there might be a gap between the last inner node and the first leaf
                 // if we place the root of the tree at ShaderConstants.offsets.bvhNodeData.

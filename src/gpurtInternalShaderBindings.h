@@ -527,15 +527,6 @@ constexpr NodeMapping BuildBVHMapping[] =
     { NodeType::Uav, 2 }
 };
 
-constexpr NodeMapping BuildBVHSortLeavesMapping[] =
-{
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
-};
-
 constexpr NodeMapping BuildFastAgglomerativeLbvhMapping[] =
 {
     { NodeType::ConstantBuffer, 2 },
@@ -833,6 +824,7 @@ constexpr NodeMapping InitAccelerationStructureMapping[] =
 {
     { NodeType::Constant, InitAccelerationStructure::NumRootEntries },
     { NodeType::ConstantBufferTable, 1 },
+    { NodeType::UavTable, 1 },
     { NodeType::UavTable, 1 },
     { NodeType::UavTable, 1 },
 };

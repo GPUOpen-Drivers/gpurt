@@ -357,7 +357,9 @@ uint32 BvhBuilder::CalculateInternalNodesSize()
 // Static helper function that calculates the size of the buffer for leaf nodes
 uint32 BvhBuilder::CalculateLeafNodesSize()
 {
-    return m_buildConfig.numLeafNodes * GetLeafNodeSize(m_deviceSettings, m_buildConfig);
+    {
+        return m_buildConfig.numLeafNodes * GetLeafNodeSize(m_deviceSettings, m_buildConfig);
+    }
 }
 
 // =====================================================================================================================
@@ -511,8 +513,7 @@ bool BvhBuilder::AllowRemappingScratchBuffer() const
     return
         (m_deviceSettings.enableRemapScratchBuffer == true) &&
         (IsUpdate() == false) &&
-        (m_deviceSettings.enableBuildAccelStructScratchDumping == false) &&
-        (m_deviceSettings.enableParallelBuild && (m_buildConfig.rebraidType != GpuRt::RebraidType::V1));
+        (m_deviceSettings.enableBuildAccelStructScratchDumping == false);
 }
 
 // =====================================================================================================================
@@ -671,7 +672,7 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfo(
     uint32 bvhLeafNodeData = 0xFFFFFFFF;
     uint32 triangleSplitBoxes = 0xFFFFFFFF;
     uint32 fastLBVHRootNodeIndex = 0xFFFFFFFF;
-   uint32 numBatches = 0xFFFFFFFF;
+    uint32 numBatches = 0xFFFFFFFF;
 
     //--------------------------------------------
     // Task Loop Counters
@@ -786,7 +787,7 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfo(
         runningOffset += nodeCount * RayTracingScratchNodeSize;
 
         // Unsorted leaf buffer
-        if (m_buildConfig.noCopySortedNodes)
+        if (m_buildConfig.topDownBuild == false)
         {
             // Scratch data for storing unsorted leaf nodes. No additional memory is
             // used, so runningOffset doesn't need to be updated.
@@ -1373,8 +1374,6 @@ void BvhBuilder::InitBuildConfig(
     }
 
     m_buildConfig.numMortonSizeBits = m_deviceSettings.numMortonSizeBits;
-    // Todo: fix NoCopySortedNodes for TopDown builder, for now disable it for TopDown
-    m_buildConfig.noCopySortedNodes  = m_buildConfig.topDownBuild ? 0 : m_deviceSettings.noCopySortedNodes;
     m_buildConfig.enableFastLBVH     = (m_buildConfig.topDownBuild == false) && (m_deviceSettings.enableFastLBVH == true) &&
         ((m_buildConfig.buildMode == BvhBuildMode::Linear)
         );
@@ -1384,11 +1383,8 @@ void BvhBuilder::InitBuildConfig(
     // Only enable earlyPairCompression if
     // -) triangleCompressionMode is set to be "Pair", and
     // -) deviceSettings chose to enable EarlyPairCompression
-    // -) "NoCopySortedNodes" is set to true
-    //     (because it preserves the unsorted scratch leaf without additional memory required)
     m_buildConfig.enableEarlyPairCompression = false;
-    if ((m_buildConfig.triangleCompressionMode == TriangleCompressionMode::Pair) &&
-        (m_buildConfig.noCopySortedNodes == true))
+    if (m_buildConfig.triangleCompressionMode == TriangleCompressionMode::Pair)
     {
         m_buildConfig.enableEarlyPairCompression = m_deviceSettings.enableEarlyPairCompression;
     }
@@ -1407,8 +1403,11 @@ void BvhBuilder::InitBuildConfig(
          (m_deviceSettings.enableMergedEncodeUpdate == 0)) ||
         ((IsUpdate() == false) && (m_deviceSettings.enableMergedEncodeBuild == 0)) ||
         (buildArgs.inputs.type == AccelStructType::TopLevel) ||
-        ((IsUpdate() == false) && (m_buildConfig.geometryType == GeometryType::Aabbs)) ||
-        (buildArgs.inputs.inputElemCount > maxDescriptorTableSize);
+        ((IsUpdate() == false) && (m_buildConfig.geometryType == GeometryType::Aabbs))
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 46
+        || (buildArgs.inputs.inputElemCount > maxDescriptorTableSize)
+#endif
+        ;
 }
 
 // =====================================================================================================================
@@ -1446,9 +1445,9 @@ void BvhBuilder::InitBuildShaderConstants()
     // constant buffer
     static constexpr uint32 BufferPadding = 4u;
     static constexpr uint32 NumDwordsInBuildShaderConstants = (sizeof(BuildShaderConstants) / sizeof(uint32));
-    uint32* pData = m_backend.AllocateEmbeddedData(m_cmdBuffer,
-                                                   NumDwordsInBuildShaderConstants + BufferPadding,
-                                                   1,
+    static constexpr uint32 AllocationSizeBytes = (NumDwordsInBuildShaderConstants + BufferPadding) * sizeof(uint32);
+    void* pData = m_pDevice->AllocateTemporaryData(m_cmdBuffer,
+                                                   AllocationSizeBytes,
                                                    &m_shaderConstantsGpuVa);
     std::memcpy(pData, &m_buildShaderConstants, sizeof(BuildShaderConstants));
 }
@@ -1583,9 +1582,7 @@ uint32 BvhBuilder::WriteVertexBufferTable(
     uint32                   userDataOffset)
 {
     gpusize tableGpuVa = 0;
-    uint32 srdSize;
-
-    void* pTable = m_backend.AllocateDescriptorTable(m_cmdBuffer, 1, &tableGpuVa, &srdSize);
+    void* pTable = m_pDevice->AllocateDescriptorTable(m_cmdBuffer, 1, &tableGpuVa);
 
     const BufferViewInfo bufferInfo =
         SetupVertexBuffer(*pTriGeometry, &pEncodeConstants->geometryStride, &pEncodeConstants->vertexComponentCount);
@@ -1659,11 +1656,9 @@ void BvhBuilder::EncodeTriangleNodes(
     uint32 entryOffset = 0;
 
     // Allocate embedded data memory for shader root constant buffer
-    // and add 4 dword alignment to avoid SC out of bounds read.
     gpusize shaderConstantsGpuVa;
-    uint32* pData = m_backend.AllocateEmbeddedData(m_cmdBuffer,
-                                                   EncodeNodes::NumEntries,
-                                                   4,
+    void* pData = m_pDevice->AllocateTemporaryData(m_cmdBuffer,
+                                                   EncodeNodes::NumEntries * sizeof(uint32),
                                                    &shaderConstantsGpuVa);
 
     // Set shader root constant buffer
@@ -1738,8 +1733,7 @@ uint32 BvhBuilder::WriteAabbGeometryTable(
     uint32               userDataOffset)
 {
     gpusize tableGpuVa = 0;
-    uint32 srdSize;
-    void* pTable = m_backend.AllocateDescriptorTable(m_cmdBuffer, 1, &tableGpuVa, &srdSize);
+    void* pTable = m_pDevice->AllocateDescriptorTable(m_cmdBuffer, 1, &tableGpuVa);
 
     const BufferViewInfo bufferInfo = SetupAabbBuffer(*pAabbGeometry, pStrideConstant);
 
@@ -1786,11 +1780,9 @@ void BvhBuilder::EncodeAABBNodes(
     uint32 entryOffset = 0;
 
     // Allocate embedded data memory for shader constant buffer
-    // and add 4 dword alignment to avoid SC out of bounds read.
     gpusize shaderConstantsGpuVa;
-    uint32* pData = m_backend.AllocateEmbeddedData(m_cmdBuffer,
-                                                   EncodeNodes::NumEntries,
-                                                   4,
+    void* pData = m_pDevice->AllocateTemporaryData(m_cmdBuffer,
+                                                   EncodeNodes::NumEntries * sizeof(uint32),
                                                    &shaderConstantsGpuVa);
 
     // Set shader root constant buffer
@@ -2293,7 +2285,6 @@ void BvhBuilder::InitBuildSettings()
         m_buildSettings.tsPriority = 1.0f;
     }
 
-    m_buildSettings.noCopySortedNodes       = m_buildConfig.noCopySortedNodes;
     m_buildSettings.numRebraidIterations    = Util::Max(1u, m_deviceSettings.numRebraidIterations);
     m_buildSettings.rebraidQualityHeuristic = m_deviceSettings.rebraidQualityHeuristic;
     m_buildSettings.radixSortScanLevel      = m_buildConfig.radixSortScanLevel;
@@ -2686,11 +2677,9 @@ void BvhBuilder::CountTrianglePairs()
         uint32 entryOffset = 0;
 
         // Allocate embedded data memory for shader root constant buffer
-        // and add 4 dword alignment to avoid SC out of bounds read.
         gpusize shaderConstantsGpuVa;
-        uint32* pData = m_backend.AllocateEmbeddedData(m_cmdBuffer,
-                                                       EncodeNodes::NumEntries,
-                                                       4,
+        void* pData = m_pDevice->AllocateTemporaryData(m_cmdBuffer,
+                                                       EncodeNodes::NumEntries * sizeof(uint32),
                                                        &shaderConstantsGpuVa);
 
         const IndexBufferInfo indexBuffer = GetIndexBufferInfo(geometry.triangles);
@@ -3374,10 +3363,6 @@ BuildPhaseFlags BvhBuilder::EnabledPhases() const
         flags |= BuildPhaseFlags::RadixSort;
     }
 
-    if (m_buildSettings.noCopySortedNodes == false)
-    {
-        flags |= BuildPhaseFlags::SortScratchLeaves;
-    }
     if ((m_buildConfig.buildMode == BvhBuildMode::Linear)
         )
     {
@@ -3387,8 +3372,6 @@ BuildPhaseFlags BvhBuilder::EnabledPhases() const
         }
         else
         {
-            // TODO: Unset SortScratchLeaves flag?
-            // flags &= ~BuildPhaseFlags::SortScratchLeaves;
             flags |= BuildPhaseFlags::BuildBVH;
             flags |= BuildPhaseFlags::RefitBounds;
         }
@@ -3592,13 +3575,6 @@ void BvhBuilder::DispatchBuildBVHPipeline(
 void BvhBuilder::BuildBVH()
 {
     DispatchBuildBVHPipeline(InternalRayTracingCsType::BuildBVH);
-}
-
-// =====================================================================================================================
-// Executes the build BVH SortScratchLeaves shader
-void BvhBuilder::SortScratchLeaves()
-{
-    DispatchBuildBVHPipeline(InternalRayTracingCsType::BuildBVHSortLeaves);
 }
 
 // =====================================================================================================================
@@ -3861,16 +3837,17 @@ BufferViewInfo BvhBuilder::AllocGeometryConstants(
     }
 
     constexpr uint32 AlignedSizeDw = Util::Pow2Align(EncodeNodes::NumEntries, 4);
+    constexpr uint32 AlignedSizeBytes = AlignedSizeDw * sizeof(uint32);
 
     gpusize constantsVa;
-    void* pConstants = m_backend.AllocateEmbeddedData(m_cmdBuffer, AlignedSizeDw, 1, &constantsVa);
+    void* pConstants = m_pDevice->AllocateTemporaryData(m_cmdBuffer, AlignedSizeBytes, &constantsVa);
 
     memcpy(pConstants, &shaderConstants, sizeof(shaderConstants));
 
     const BufferViewInfo viewInfo =
     {
         .gpuAddr = constantsVa,
-        .range   = AlignedSizeDw * sizeof(uint32),
+        .range   = AlignedSizeBytes,
         .stride  = 16,
     };
     return viewInfo;

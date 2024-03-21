@@ -30,6 +30,11 @@
 #include "TraceRayCommon.hlsl"
 #include "AccelStructTracker.hlsl"
 
+#if GPURT_BUILD_CONTINUATION && LLPC_CLIENT_INTERFACE_MAJOR_VERSION
+// Include the continuations library
+#include "GpuRtLibraryCont.hlsl"
+#endif
+
 #include "RayQuery.hlsl"
 #include "TraceRay.hlsl"
 

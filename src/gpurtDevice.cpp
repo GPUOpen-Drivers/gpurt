@@ -56,6 +56,10 @@ namespace GpuRt
 {
 
 #include "pipelines/g_internal_shaders.h"
+#include "pipelines/g_GpuRtLibrary_spv.h"
+#include "pipelines/g_GpuRtLibraryDev_spv.h"
+#include "pipelines/g_GpuRtLibrarySw_spv.h"
+#include "pipelines/g_GpuRtLibrarySwDev_spv.h"
 
 //=====================================================================================================================
 // Enumeration for supported intrinsic functions in GPURT
@@ -74,6 +78,10 @@ enum class RtIntrinsicFunction : uint32
     GetWorldToObjectTransform,
     FetchTrianglePositionFromNodePointer,
     FetchTrianglePositionFromRayQuery,
+#if GPURT_BUILD_CONTINUATION
+    ContTraceRay,
+    ContTraversal,
+#endif
     GetRayQuery64BitInstanceNodePtr,
     _Count
 };
@@ -95,6 +103,10 @@ constexpr const char* FunctionTableRTIP1_1[] =
     "\01?GetWorldToObjectTransform@@YAM_KII@Z",
     "\01?FetchTrianglePositionFromNodePointer@@YA?AUTriangleData@@_KI@Z",
     "\01?FetchTrianglePositionFromRayQuery@@YA?AUTriangleData@@URayQueryInternal@@_N@Z",
+#if GPURT_BUILD_CONTINUATION
+    "\01?_cont_TraceRayCont1_1@@YAXU_AmdDispatchSystemData@@_KIIIIIMMMMMMMM@Z",
+    "\01?TraversalImpl1_1@@YA?AU_AmdTraversalResultData@@IU_AmdSystemData@@@Z",
+#endif
     "\01?GetRayQuery64BitInstanceNodePtr@@YA_K_KI@Z",
 };
 
@@ -115,6 +127,10 @@ constexpr const char* FunctionTableRTIP2_0[] =
     "\01?GetWorldToObjectTransform@@YAM_KII@Z",
     "\01?FetchTrianglePositionFromNodePointer@@YA?AUTriangleData@@_KI@Z",
     "\01?FetchTrianglePositionFromRayQuery@@YA?AUTriangleData@@URayQueryInternal@@_N@Z",
+#if GPURT_BUILD_CONTINUATION
+    "\01?_cont_TraceRayCont2_0@@YAXU_AmdDispatchSystemData@@_KIIIIIMMMMMMMM@Z",
+    "\01?TraversalImpl2_0@@YA?AU_AmdTraversalResultData@@IU_AmdSystemData@@@Z",
+#endif
     "\01?GetRayQuery64BitInstanceNodePtr@@YA_K_KI@Z",
 };
 
@@ -174,6 +190,12 @@ static Pal::Result QueryRayTracingEntryFunctionTableInternal(
             ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::FetchTrianglePositionFromNodePointer)];
         pEntryFunctionTable->intrinsic.pFetchTrianglePositionFromRayQuery =
             ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::FetchTrianglePositionFromRayQuery)];
+#if GPURT_BUILD_CONTINUATION
+        pEntryFunctionTable->cps.pContTraceRay =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::ContTraceRay)];
+        pEntryFunctionTable->cps.pContTraversal =
+            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::ContTraversal)];
+#endif
     }
 
     return result;
@@ -233,8 +255,8 @@ PipelineShaderCode GPURT_API_ENTRY GetShaderLibraryCode(
 
     PipelineShaderCode code = {};
 
-#define CHOOSE_SHADER(x) { code.pDxilCode = (x); code.dxilSize = sizeof(x); \
-                           code.pSpvCode  = (x); code.spvSize  = sizeof(x); }
+#define CHOOSE_SHADER(x) { code.pDxilCode = (x ## _spv); code.dxilSize = sizeof(x ## _spv); \
+                           code.pSpvCode  = (x ## _spv); code.spvSize  = sizeof(x ## _spv); }
 
     if (enableSwTraversal)
     {
@@ -740,6 +762,42 @@ void Device::BindPipeline(
 }
 
 // =====================================================================================================================
+// Allocates temporary mapped GPU memory
+void* Device::AllocateTemporaryData(
+    ClientCmdBufferHandle cmdBuffer,
+    gpusize               sizeInBytes,
+    gpusize*              pGpuAddress) const
+{
+    const uint32 bufferSizeInDwords = Util::RoundUpQuotient(sizeInBytes, gpusize(sizeof(uint32)));
+    void* pMappedData = m_pBackend->RequestTemporaryGpuMemory(cmdBuffer, bufferSizeInDwords, pGpuAddress);
+
+    if (pMappedData == nullptr)
+    {
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 46
+        PAL_ALERT_ALWAYS_MSG("Temporary data allocation is too large. Requesting 0x%llx bytes", sizeInBytes);
+#else
+        const Pal::Result result =
+            m_clientCb.pfnClientGetTemporaryGpuMemory(cmdBuffer, sizeInBytes, pGpuAddress, &pMappedData);
+        PAL_ASSERT(result == Pal::Result::Success);
+#endif
+    }
+
+    return pMappedData;
+}
+
+// =====================================================================================================================
+// Allocates embedded data for a descriptor table using hardware-specific SRD sizes.
+void* Device::AllocateDescriptorTable(
+    ClientCmdBufferHandle cmdBuffer,
+    uint32                count,
+    gpusize*              pGpuAddress) const
+{
+    const uint32 srdSizeBytes = m_bufferSrdSizeDw * sizeof(uint32);
+    const uint32 srdBufferSizeBytes = srdSizeBytes * count;
+    return AllocateTemporaryData(cmdBuffer, srdBufferSizeBytes, pGpuAddress);
+}
+
+// =====================================================================================================================
 // Setup the SRD tables for the provided buffer views
 uint32 Device::WriteBufferSrdTable(
     ClientCmdBufferHandle cmdBuffer,
@@ -749,15 +807,15 @@ uint32 Device::WriteBufferSrdTable(
     uint32                entryOffset) const
 {
     gpusize tableVa;
-    uint32 srdSize;
-    void* pTable = m_pBackend->AllocateDescriptorTable(cmdBuffer, count, &tableVa, &srdSize);
+    void* pTable = AllocateDescriptorTable(cmdBuffer, count, &tableVa);
+    const uint32 srdSizeBytes = m_bufferSrdSizeDw * sizeof(uint32);
 
     for (uint32 i = 0; i < count; i++)
     {
         const BufferViewInfo& currentBufInfo = pBufferViews[i];
 
         m_pBackend->CreateBufferViewSrds(1, currentBufInfo, pTable, typedBuffer);
-        pTable = Util::VoidPtrInc(pTable, srdSize);
+        pTable = Util::VoidPtrInc(pTable, srdSizeBytes);
     }
 
     entryOffset = WriteUserDataEntries(cmdBuffer, &tableVa, 1, entryOffset);

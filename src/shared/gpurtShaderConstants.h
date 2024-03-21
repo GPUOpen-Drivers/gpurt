@@ -22,29 +22,5 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "EncodePairedTriangleImpl.hlsl"
+#pragma once
 
-//======================================================================================================================
-void EncodePairedTriangleNode(
-    RWBuffer<float3>           GeometryBuffer,
-    RWByteAddressBuffer        IndexBuffer,
-    RWStructuredBuffer<float4> TransformBuffer,
-    GeometryArgs               geometryArgs,
-    uint                       primitiveIndex,
-    uint                       globalId,
-    uint                       primitiveOffset,
-    uint                       vertexOffset,
-    uint                       indexOffsetInBytes,
-    uint                       transformOffestInElements)
-{
-    EncodePairedTriangleNodeImpl(GeometryBuffer,
-                                 IndexBuffer,
-                                 TransformBuffer,
-                                 geometryArgs,
-                                 primitiveIndex,
-                                 globalId,
-                                 primitiveOffset,
-                                 vertexOffset,
-                                 indexOffsetInBytes,
-                                 transformOffestInElements);
-}

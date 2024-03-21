@@ -172,6 +172,12 @@ uint32 PalBackend::GetMaxDescriptorTableSize(
 }
 
 // =====================================================================================================================
+uint32 PalBackend::GetEmbeddedDataLimit(ClientCmdBufferHandle cmdBuffer) const
+{
+    return GetCmdBuffer(cmdBuffer)->GetEmbeddedDataLimit();
+}
+
+// =====================================================================================================================
 uint32* PalBackend::AllocateEmbeddedData(
     ClientCmdBufferHandle cmdBuffer,
     uint32                sizeInDwords,
@@ -180,6 +186,46 @@ uint32* PalBackend::AllocateEmbeddedData(
     ) const
 {
     return GetCmdBuffer(cmdBuffer)->CmdAllocateEmbeddedData(sizeInDwords, alignment, pGpuAddress);
+}
+
+// =====================================================================================================================
+uint32 PalBackend::GetLargeEmbeddedDataLimit(ClientCmdBufferHandle cmdBuffer) const
+{
+    return GetCmdBuffer(cmdBuffer)->GetLargeEmbeddedDataLimit();
+}
+
+// =====================================================================================================================
+uint32* PalBackend::AllocateLargeEmbeddedData(
+    ClientCmdBufferHandle cmdBuffer,
+    uint32                sizeInDwords,
+    uint32                alignment,
+    gpusize*              pGpuAddress
+    ) const
+{
+    return GetCmdBuffer(cmdBuffer)->CmdAllocateLargeEmbeddedData(sizeInDwords, alignment, pGpuAddress);
+}
+
+// =====================================================================================================================
+uint32* PalBackend::RequestTemporaryGpuMemory(
+    ClientCmdBufferHandle cmdBuffer,
+    uint32                sizeInDwords,
+    gpusize*              pGpuAddress
+    ) const
+{
+    const uint32 embeddedDataLimitInDwords = GetEmbeddedDataLimit(cmdBuffer);
+    const uint32 largeEmbeddedDataLimitInDwords = GetLargeEmbeddedDataLimit(cmdBuffer);
+
+    uint32* pMappedData = nullptr;
+    if (sizeInDwords <= embeddedDataLimitInDwords)
+    {
+        pMappedData = AllocateEmbeddedData(cmdBuffer, sizeInDwords, 1, pGpuAddress);
+    }
+    else if (sizeInDwords <= largeEmbeddedDataLimitInDwords)
+    {
+        pMappedData = AllocateLargeEmbeddedData(cmdBuffer, sizeInDwords, 1, pGpuAddress);
+    }
+
+    return pMappedData;
 }
 
 // =====================================================================================================================
@@ -254,19 +300,6 @@ void PalBackend::InsertBarrier(
 }
 
 // =====================================================================================================================
-uint32* PalBackend::AllocateDescriptorTable(
-    ClientCmdBufferHandle cmdBuffer,
-    uint32                count,
-    gpusize*              pGpuAddress,
-    uint32*               pSrdSizeOut
-    ) const
-{
-    const uint32 bufferSrdSizeDw = m_deviceProperties.gfxipProperties.srdSizes.bufferView / sizeof(uint32);
-    *pSrdSizeOut = bufferSrdSizeDw * sizeof(uint32);
-    return GetCmdBuffer(cmdBuffer)->CmdAllocateLargeEmbeddedData(count * bufferSrdSizeDw, bufferSrdSizeDw, pGpuAddress);
-}
-
-// =====================================================================================================================
 void PalBackend::CreateBufferViewSrds(
     uint32                count,
     const BufferViewInfo& bufferViewInfo,
@@ -300,7 +333,7 @@ uint32 PalBackend::GetOptimalNumThreadGroups(
     const auto* pProps = &m_deviceProperties.gfxipProperties.shaderCore;
     const uint32 wavesPerGroup = Util::RoundUpQuotient(threadGroupSize, pProps->nativeWavefrontSize);
 
-    return (pProps->numAvailableCus * pProps->numSimdsPerCu) / wavesPerGroup;
+    return Util::RoundUpQuotient((pProps->numAvailableCus * pProps->numSimdsPerCu), wavesPerGroup);
 }
 
 // =====================================================================================================================
@@ -324,7 +357,7 @@ void PalBackend::UploadCpuMemory(
 {
     Pal::ICmdBuffer* pCmdBuffer = GetCmdBuffer(cmdBuffer);
     const uint32 embeddedDataLimitDwords = pCmdBuffer->GetEmbeddedDataLimit();
-    const uint32 uploadSizeDwords = Util::Pow2Align(sizeInBytes, 4);
+    const uint32 uploadSizeDwords = Util::RoundUpQuotient(sizeInBytes, 4u);
     PAL_ASSERT(uploadSizeDwords <= embeddedDataLimitDwords);
 
     gpusize srcGpuVa = 0;

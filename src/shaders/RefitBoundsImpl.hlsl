@@ -33,7 +33,6 @@ void RefitBoundsImpl(
     uint                unsortedNodesBaseOffset,
     uint                sortedPrimIndicesOffset,
     uint                doTriangleSplitting,
-    uint                noCopySortedNodes,
     uint                enableEarlyPairCompression,
     uint                enablePairCompression,
     uint                enablePairCostCheck,
@@ -54,9 +53,7 @@ void RefitBoundsImpl(
     }
 
     // Start from leaf node referenced by this thread
-    uint nodeIndex = noCopySortedNodes ?
-        LEAFIDX(FetchSortedPrimIndex(sortedPrimIndicesOffset, primIndex)) :
-        LEAFIDX(primIndex);
+    uint nodeIndex = LEAFIDX(FetchSortedPrimIndex(sortedPrimIndicesOffset, primIndex));
 
     uint numTris = 1;
 

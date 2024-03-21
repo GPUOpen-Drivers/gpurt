@@ -351,7 +351,8 @@ TriangleData FetchTransformedTriangleData(
     in uint                       geometryStride,
     in uint                       vertexOffset,
     in bool                       hasValidTransform,
-    in RWStructuredBuffer<float4> transformBuffer)
+    in RWStructuredBuffer<float4> transformBuffer,
+    in uint                       transformOffsetInElements)
 {
     // Fetch triangle vertex data from vertex buffer
     TriangleData tri =
@@ -361,9 +362,9 @@ TriangleData FetchTransformedTriangleData(
     if (hasValidTransform)
     {
         float4x4 transform;
-        transform[0] = transformBuffer[0];
-        transform[1] = transformBuffer[1];
-        transform[2] = transformBuffer[2];
+        transform[0] = transformBuffer[transformOffsetInElements + 0];
+        transform[1] = transformBuffer[transformOffsetInElements + 1];
+        transform[2] = transformBuffer[transformOffsetInElements + 2];
         transform[3] = float4(0, 0, 0, 1);
 
         tri.v0 = mul(transform, float4(tri.v0, 1)).xyz;
@@ -559,6 +560,8 @@ void EncodeTriangleNode(
     uint                       primitiveIndex,
     uint                       primitiveOffset,
     uint                       vertexOffset,
+    uint                       indexOffsetInBytes,
+    uint                       transformOffsetInElements,
     bool                       writeNodesToUpdateStack)
 {
     const uint metadataSize = IsUpdate() ?
@@ -578,10 +581,8 @@ void EncodeTriangleNode(
     // Fetch face indices from index buffer
     uint3 faceIndices = FetchFaceIndices(IndexBuffer,
                                          primitiveIndex,
-                                         geometryArgs.IndexBufferByteOffset,
+                                         geometryArgs.IndexBufferByteOffset + indexOffsetInBytes,
                                          geometryArgs.IndexBufferFormat);
-
-    uint waveActivePrimCount = 0;
 
     // Check if vertex indices are within bounds, otherwise make the triangle inactive
     const uint maxIndex = max(faceIndices.x, max(faceIndices.y, faceIndices.z));
@@ -594,7 +595,8 @@ void EncodeTriangleNode(
                                                         geometryArgs.GeometryStride,
                                                         vertexOffset,
                                                         geometryArgs.HasValidTransform,
-                                                        TransformBuffer);
+                                                        TransformBuffer,
+                                                        transformOffsetInElements);
 
         uint nodePointer = INVALID_IDX;
         uint triangleId  = 0;
@@ -703,7 +705,8 @@ void EncodeTriangleNode(
                                                                                   geometryArgs.GeometryStride,
                                                                                   vertexOffset,
                                                                                   geometryArgs.HasValidTransform,
-                                                                                  TransformBuffer);
+                                                                                  TransformBuffer,
+                                                                                  transformOffsetInElements);
 
                             const BoundingBox otherBox = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
 
@@ -769,6 +772,13 @@ void EncodeTriangleNode(
     {
         if (IsUpdate() == false)
         {
+            // Deactivate primitive by setting bbox_min_or_v0.x to NaN
+            WriteScratchNodeData(
+                geometryArgs.LeafNodeDataByteOffset,
+                flattenedPrimitiveIndex,
+                0,
+                NaN);
+
             DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
         }
         else if (Settings.isUpdateInPlace == false)

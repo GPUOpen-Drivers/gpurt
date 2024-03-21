@@ -173,3 +173,4 @@ void ClearNumBatches(uint numBatchesOffset)
         ScratchGlobal.Store(numBatchesOffset, 0);
     }
 }
+

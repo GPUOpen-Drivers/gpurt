@@ -118,6 +118,8 @@ void EncodePrimitives(
                                    primitiveIndex,
                                    primitiveOffset,
                                    0,
+                                   0,
+                                   0,
                                    true);
             }
             else

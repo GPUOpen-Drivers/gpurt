@@ -90,6 +90,14 @@ endif()
 # Set the client API, error checking done via static_asserts.
 gpurt_add_compile_definitions(GPURT_CLIENT_API_${GPURT_CLIENT_API}=1)
 
+#if GPURT_BUILD_CONTINUATION
+option(GPURT_BUILD_CONTINUATION "GpuRt uses continuation traversal" ON)
+
+if (GPURT_BUILD_CONTINUATION)
+    gpurt_add_compile_definitions(GPURT_BUILD_CONTINUATION=1)
+endif()
+#endif
+
 # Disable run time type information
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     gpurt_add_compile_options(-fno-rtti)

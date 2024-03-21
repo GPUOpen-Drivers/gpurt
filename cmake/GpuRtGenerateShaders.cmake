@@ -41,7 +41,7 @@ if (TARGET llpc_version)
     # Propagate include directories and defines from llpc_version into the HLSL code
     get_target_property(LLPC_VERSION_INCLUDE_DIRS llpc_version INTERFACE_INCLUDE_DIRECTORIES)
     get_target_property(LLPC_VERSION_DEFS llpc_version INTERFACE_COMPILE_DEFINITIONS)
-    set(gpurtDefines "${gpurtDefines},${LLPC_VERSION_DEFS}")
+    list(APPEND gpurtDefines "${LLPC_VERSION_DEFS}")
     set(gpurtIncludeDirectories "${LLPC_VERSION_INCLUDE_DIRS}")
     set(gpurtSharedDependencies llpc_version)
 endif()
@@ -54,15 +54,10 @@ set(gpurtStripWhitelist "${gpurtToolsDir}/strip_whitelist.txt")
 
 # Outputs
 set(gpurtOutputDir "${CMAKE_CURRENT_BINARY_DIR}/pipelines")
-set(gpurtShaders
-    "${gpurtOutputDir}/g_internal_shaders.h"
-    "${gpurtOutputDir}/g_GpuRtLibrary.h"
-)
+set(gpurtBvhShaders "${gpurtOutputDir}/g_internal_shaders.h")
+set(gpurtTraceShadersSpirv "${gpurtOutputDir}/g_GpuRtLibrary_spv.h")
 
 set(gpurtDebugInfoFile "${CMAKE_CURRENT_BINARY_DIR}/g_gpurtDebugInfo.h")
-
-# Make the outputs accessible in the source code.
-target_include_directories(gpurt_internal PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 set(originalShaderSourceDir "${GPU_RAY_TRACING_SOURCE_DIR}/src/shaders/")
 set(originalShaderSource ${GPURT_SHADER_SOURCE_FILES})
@@ -97,12 +92,12 @@ set(gpurtSharedDependencies
     ${gpurtCompileScript}
 )
 
-# Create custom command that outputs the generated shaders
+# Create custom command that outputs the generated BVH shaders
 # The generated shaders depend on all the above mentioned files
 if(GPURT_CLIENT_API STREQUAL "VULKAN")
     set(SPIRV_FLAG "--spirv")
 
-    if (CMAKE_HOST_SYSTEM_NAME MATCHES "Linux")
+    if (NOT CMAKE_HOST_SYSTEM_NAME MATCHES "Windows")
         # Find other executable paths so we can check if they updated in the DEPENDS.
         set(gpurtSpirvRemap "")
         find_program(gpurtSpirvRemap spirv-remap REQUIRED)
@@ -110,18 +105,18 @@ if(GPURT_CLIENT_API STREQUAL "VULKAN")
         find_program(gpurtDxcCompiler dxc REQUIRED)
 
         if (EXISTS ${GPU_RAY_TRACING_SOURCE_DIR}/tools/lnx)
-            set(SPIRV_COMPILER_ARGUMENT "--spirvCompilerPath" "${GPU_RAY_TRACING_SOURCE_DIR}/tools/lnx")
-            set(SPIRV_REMAP_ARGUMENT    "--spirvRemapPath"    "${GPU_RAY_TRACING_SOURCE_DIR}/tools/lnx")
+            set(COMPILER_ARGUMENT    "--compilerPath"   "${GPU_RAY_TRACING_SOURCE_DIR}/tools/lnx")
+            set(SPIRV_REMAP_ARGUMENT "--spirvRemapPath" "${GPU_RAY_TRACING_SOURCE_DIR}/tools/lnx")
         else()
             # Adjust arguments to remove the unnecessary ones. These binaries should be found on the system PATH.
-            set(SPIRV_COMPILER_ARGUMENT "")
+            set(COMPILER_ARGUMENT "")
             set(SPIRV_REMAP_ARGUMENT "")
         endif()
     endif()
 
     add_custom_command(
         OUTPUT
-            ${gpurtShaders}
+            ${gpurtBvhShaders}
 
         DEPENDS
             ${gpurtSharedDependencies}
@@ -133,7 +128,8 @@ if(GPURT_CLIENT_API STREQUAL "VULKAN")
             --vulkan
             "${SPIRV_FLAG}"
             --outputDir "${gpurtOutputDir}"
-            ${SPIRV_COMPILER_ARGUMENT}
+            --skip-trace
+            ${COMPILER_ARGUMENT}
             ${SPIRV_REMAP_ARGUMENT}
             --defines "\"${gpurtDefines}\""
             --includePaths "\"${gpurtIncludeDirectories}\""
@@ -145,9 +141,61 @@ else()
     message(FATAL_ERROR "Unknown graphics API: ${GPURT_CLIENT_API}")
 endif()
 
-# Create the custom target
-# Have it depend on the above custom commands' output to establish a dependency
-add_custom_target(GpuRtGenerateShaders DEPENDS ${gpurtShaders})
+# For trace shaders, remove the GPURT_CLIENT_API_* definition.
+# The command below adds the appropriate GPURT_CLIENT_API_* definition for the
+# trace shaders being built.
+list(FILTER gpurtDefines EXCLUDE REGEX "GPURT_CLIENT_API_.*")
 
-# Make gpurt dependent on RT shader generation
-add_dependencies(gpurt_internal GpuRtGenerateShaders)
+# Create custom command that outputs the generated trace shaders as SPIR-V.
+# The generated shaders depend on all the above mentioned files.
+add_custom_command(
+    OUTPUT
+        ${gpurtTraceShadersSpirv}
+
+    DEPENDS
+        ${gpurtSharedDependencies}
+        ${gpurtStripWhitelist}
+        ${gpurtDxcCompiler}
+        ${gpurtSpirvRemap}
+
+    COMMAND Python3::Interpreter "${gpurtCompileScript}"
+        --vulkan
+        "${SPIRV_FLAG}"
+        --outputDir "${gpurtOutputDir}"
+        --skip-bvh
+        --spirv
+        ${COMPILER_ARGUMENT}
+        ${SPIRV_REMAP_ARGUMENT}
+        --defines "\"${gpurtDefines};GPURT_CLIENT_API_VULKAN=1\""
+        --includePaths "\"${gpurtIncludeDirectories}\""
+        --whiteListPath "${gpurtStripWhitelist}"
+        "${gpurtShadersSourceDir}"
+        --strict
+)
+
+# Create the custom targets for generating the header files.
+# Have them depend on the above custom commands' output to establish a dependency.
+add_custom_target(GpuRtGenerateBvhShaders DEPENDS ${gpurtBvhShaders})
+set_target_properties(GpuRtGenerateBvhShaders PROPERTIES EXCLUDE_FROM_ALL TRUE)
+add_custom_target(GpuRtGenerateTraceShadersSpirv DEPENDS ${gpurtTraceShadersSpirv})
+set_target_properties(GpuRtGenerateTraceShadersSpirv PROPERTIES EXCLUDE_FROM_ALL TRUE)
+
+# Create interface targets for using the generated header files. The interface targets encode
+# the include directory, which is inherited by anything using the interface.
+add_library(GpuRtBvhShaders INTERFACE)
+add_dependencies(GpuRtBvhShaders GpuRtGenerateBvhShaders)
+target_include_directories(GpuRtBvhShaders INTERFACE ${CMAKE_CURRENT_BINARY_DIR})
+
+add_library(GpuRtTraceShadersSpirv INTERFACE)
+add_dependencies(GpuRtTraceShadersSpirv GpuRtGenerateTraceShadersSpirv)
+target_include_directories(GpuRtTraceShadersSpirv INTERFACE ${CMAKE_CURRENT_BINARY_DIR})
+target_compile_definitions(GpuRtTraceShadersSpirv INTERFACE HAVE_GPURT_TRACE_SHADERS_SPIRV=1)
+
+# Make gpurt dependent on RT shader generation and include directory.
+target_link_libraries(gpurt_internal PRIVATE GpuRtBvhShaders)
+if(GPURT_CLIENT_API STREQUAL "VULKAN")
+    target_link_libraries(gpurt_internal PRIVATE GpuRtTraceShadersSpirv)
+else()
+    message(FATAL_ERROR "Unknown graphics API: ${GPURT_CLIENT_API}")
+endif()
+

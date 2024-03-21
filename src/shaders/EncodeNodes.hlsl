@@ -60,26 +60,47 @@
 
 [[vk::binding(0, 1)]] ConstantBuffer<GeometryArgs> ShaderConstants : register(b0);
 
+struct InputOffsetsAndNumPrim
+{
+    uint numPrimitives;
+    uint primitiveOffset;
+    uint vertexOffset;
+    uint indexOffsetInBytes;
+    uint transformOffsetInElements;
+};
+
+//======================================================================================================================
+// Helper function that fetches data from IndirectArgBuffer when needed, uses sane defaults for direct path otherwise.
+InputOffsetsAndNumPrim GetInputOffsetsAndNumPrim()
+{
+    InputOffsetsAndNumPrim result;
+#if INDIRECT_BUILD
+    // Sourced from Indirect Buffers
+    const IndirectBuildOffset buildOffsetInfo = IndirectArgBuffer.Load<IndirectBuildOffset>(0);
+    result.numPrimitives             = buildOffsetInfo.primitiveCount;
+    result.primitiveOffset           = ComputePrimitiveOffset(ShaderConstants);
+    result.vertexOffset              = buildOffsetInfo.firstVertex;
+    result.indexOffsetInBytes        = (ShaderConstants.IndexBufferFormat != IndexFormatInvalid) ? buildOffsetInfo.primitiveOffset : 0;
+    result.transformOffsetInElements = buildOffsetInfo.transformOffset / sizeof(float4);
+#else
+    result.numPrimitives = ShaderConstants.NumPrimitives;
+    result.primitiveOffset = ShaderConstants.PrimitiveOffset;
+    result.vertexOffset = 0;
+    result.indexOffsetInBytes = 0;
+    result.transformOffsetInElements = 0;
+#endif
+    return result;
+}
+
 //=====================================================================================================================
 [RootSignature(RootSig)]
 [numthreads(BUILD_THREADGROUP_SIZE, 1, 1)]
 //=====================================================================================================================
 void EncodeTriangleNodes(
     in uint3 globalThreadId : SV_DispatchThreadID,
-    in uint localId         : SV_GroupThreadID)
+    in uint localId : SV_GroupThreadID)
 {
-#if INDIRECT_BUILD
-    // Sourced from Indirect Buffers
-    const IndirectBuildOffset buildOffsetInfo = IndirectArgBuffer.Load<IndirectBuildOffset>(0);
-
-    const uint numPrimitives      = buildOffsetInfo.primitiveCount;
-    const uint primitiveOffset    = ComputePrimitiveOffset(ShaderConstants);
-    const uint vertexOffset       = buildOffsetInfo.firstVertex;
-#else
-    const uint numPrimitives      = ShaderConstants.NumPrimitives;
-    const uint primitiveOffset    = ShaderConstants.PrimitiveOffset;
-    const uint vertexOffset       = 0;
-#endif
+    const InputOffsetsAndNumPrim inputOffsets = GetInputOffsetsAndNumPrim();
 
     const bool enableEarlyPairCompression =
         (Settings.enableEarlyPairCompression == true) && (IsUpdate() == false);
@@ -87,12 +108,12 @@ void EncodeTriangleNodes(
     if (globalThreadId.x == 0)
     {
         WriteGeometryInfo(
-            ShaderConstants, primitiveOffset, ShaderConstants.NumPrimitives, DECODE_PRIMITIVE_STRIDE_TRIANGLE);
+            ShaderConstants, inputOffsets.primitiveOffset, ShaderConstants.NumPrimitives, DECODE_PRIMITIVE_STRIDE_TRIANGLE);
     }
 
     uint primitiveIndex = globalThreadId.x;
 
-    if (primitiveIndex < numPrimitives)
+    if (primitiveIndex < inputOffsets.numPrimitives)
     {
         if (enableEarlyPairCompression)
         {
@@ -102,8 +123,10 @@ void EncodeTriangleNodes(
                                      ShaderConstants,
                                      primitiveIndex,
                                      globalThreadId.x,
-                                     primitiveOffset,
-                                     vertexOffset);
+                                     inputOffsets.primitiveOffset,
+                                     inputOffsets.vertexOffset,
+                                     inputOffsets.indexOffsetInBytes,
+                                     inputOffsets.transformOffsetInElements);
         }
         else
         {
@@ -112,13 +135,15 @@ void EncodeTriangleNodes(
                                TransformBuffer,
                                ShaderConstants,
                                primitiveIndex,
-                               primitiveOffset,
-                               vertexOffset,
+                               inputOffsets.primitiveOffset,
+                               inputOffsets.vertexOffset,
+                               inputOffsets.indexOffsetInBytes,
+                               inputOffsets.transformOffsetInElements,
                                true);
         }
     }
 
-    const uint wavePrimCount = WaveActiveCountBits(primitiveIndex < numPrimitives);
+    const uint wavePrimCount = WaveActiveCountBits(primitiveIndex < inputOffsets.numPrimitives);
     if (WaveIsFirstLane())
     {
         IncrementTaskCounter(ShaderConstants.encodeTaskCounterScratchOffset + ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET,
@@ -133,20 +158,11 @@ void EncodeTriangleNodes(
 void EncodeAABBNodes(
     in uint3 globalThreadId : SV_DispatchThreadID)
 {
-#if INDIRECT_BUILD
-    // Sourced from Indirect Buffers
-    const IndirectBuildOffset buildOffsetInfo = IndirectArgBuffer.Load<IndirectBuildOffset>(0);
-
-    const uint numPrimitives      = buildOffsetInfo.primitiveCount;
-    const uint primitiveOffset    = ComputePrimitiveOffset(ShaderConstants);
-#else
-    const uint numPrimitives      = ShaderConstants.NumPrimitives;
-    const uint primitiveOffset    = ShaderConstants.PrimitiveOffset;
-#endif
+    const InputOffsetsAndNumPrim inputOffsets = GetInputOffsetsAndNumPrim();
 
     if (globalThreadId.x == 0)
     {
-        WriteGeometryInfo(ShaderConstants, primitiveOffset, numPrimitives, DECODE_PRIMITIVE_STRIDE_AABB);
+        WriteGeometryInfo(ShaderConstants, inputOffsets.primitiveOffset, inputOffsets.numPrimitives, DECODE_PRIMITIVE_STRIDE_AABB);
     }
 
     uint primitiveIndex = globalThreadId.x;
@@ -157,7 +173,7 @@ void EncodeAABBNodes(
                        TransformBuffer,
                        ShaderConstants,
                        primitiveIndex,
-                       primitiveOffset,
+                       inputOffsets.primitiveOffset,
                        true);
     }
 
@@ -175,20 +191,9 @@ void EncodeAABBNodes(
 //=====================================================================================================================
 void CountTrianglePairs(
     in uint globalId : SV_DispatchThreadID,
-    in uint localId  : SV_GroupThreadID)
+    in uint localId : SV_GroupThreadID)
 {
-#if INDIRECT_BUILD
-    // Sourced from Indirect Buffers
-    const IndirectBuildOffset buildOffsetInfo = IndirectArgBuffer.Load<IndirectBuildOffset>(0);
-
-    const uint numPrimitives      = buildOffsetInfo.primitiveCount;
-    const uint primitiveOffset    = ComputePrimitiveOffset(ShaderConstants);
-    const uint vertexOffset       = buildOffsetInfo.firstVertex;
-#else
-    const uint numPrimitives      = ShaderConstants.NumPrimitives;
-    const uint primitiveOffset    = ShaderConstants.PrimitiveOffset;
-    const uint vertexOffset       = 0;
-#endif
+    const InputOffsetsAndNumPrim inputOffsets = GetInputOffsetsAndNumPrim();
 
     // Reset geometry primitive reference count in result buffer
     const uint basePrimRefCountOffset =
@@ -197,14 +202,16 @@ void CountTrianglePairs(
     const uint primRefCountOffset =
         basePrimRefCountOffset + ComputePrimRefCountBlockOffset(ShaderConstants.blockOffset, globalId);
 
-    if (globalId < numPrimitives)
+    if (globalId < inputOffsets.numPrimitives)
     {
         const int pairInfo = TryPairTriangleImpl(GeometryBuffer,
                                                  IndexBuffer,
                                                  TransformBuffer,
                                                  ShaderConstants,
                                                  globalId,
-                                                 vertexOffset);
+                                                 inputOffsets.vertexOffset,
+                                                 inputOffsets.indexOffsetInBytes,
+                                                 inputOffsets.transformOffsetInElements);
 
         // Count quads produced by the current wave. Note, this includes unpaired triangles as well
         // (marked with a value of -1).

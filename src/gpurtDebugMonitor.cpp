@@ -117,10 +117,9 @@ void DebugMonitor::PrintMessage(
     uint32 readIndex,
     volatile uint32* pDebugData)
 {
-#define PRINT_GPU_MESSAGE(...) \
+#define PRINT_GPU_MESSAGE(...)                                             \
     Util::DbgPrintf(Util::DbgPrintCatInfoMsg, Util::DbgPrintStyleNoPrefix, \
-                    GpuDebugMessages[packet.messageId], packet.laneId, __VA_ARGS__);
-
+                    GpuDebugMessages[packet.messageId], packet.laneId __VA_OPT__(, ) __VA_ARGS__);
     PAL_ASSERT(packet.messageId < std::size(GpuDebugMessages));
 
     auto ReadArg = [&](uint32 i)

@@ -72,7 +72,6 @@ struct CompileTimeBuildSettings
     uint32 fastBuildThreshold;
     uint32 enableFusedInstanceNode;
     float  tsPriority;
-    uint32 noCopySortedNodes;
     uint32 numRebraidIterations;
     uint32 unused0;
     uint32 doEncode;
@@ -96,6 +95,7 @@ struct CompileTimeBuildSettings
     uint32 encodeArrayOfPointers;
     uint32 sceneBoundsCalculationType;
     uint32 rebraidQualityHeuristic;
+    uint32 unused10;
 };
 
 #define BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_ID                        0
@@ -118,20 +118,19 @@ struct CompileTimeBuildSettings
 #define BUILD_SETTINGS_DATA_FAST_BUILD_THRESHOLD_ID                   17
 #define BUILD_SETTINGS_DATA_ENABLE_FUSED_INSTANCE_NODE_ID             18
 #define BUILD_SETTINGS_DATA_TS_PRIORITY_ID                            19
-#define BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_ID                   20
-#define BUILD_SETTINGS_DATA_NUM_REBRAID_ITERATIONS_ID                 21
-#define BUILD_SETTINGS_DATA_DO_ENCODE_ID                              23
-#define BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_ID          25
-#define BUILD_SETTINGS_DATA_ENABLE_FAST_LBVH_ID                       26
-#define BUILD_SETTINGS_DATA_RTIP_LEVEL_ID                             27
-#define BUILD_SETTINGS_DATA_GEOMETRY_TYPE_ID                          28
-#define BUILD_SETTINGS_DATA_ENABLE_INSTANCE_REBRAID_ID                37
-#define BUILD_SETTINGS_DATA_GPU_DEBUG_FLAGS_ID                        38
-#define BUILD_SETTINGS_DATA_IS_UPDATE_ID                              39
-#define BUILD_SETTINGS_DATA_IS_UPDATE_IN_PLACE_ID                     40
-#define BUILD_SETTINGS_DATA_ENCODE_ARRAY_OF_POINTERS_ID               41
-#define BUILD_SETTINGS_DATA_SCENE_BOUNDS_CALCULATION_TYPE_ID          42
-#define BUILD_SETTINGS_DATA_REBRAID_QUALITY_HEURISTIC_ID              43
+#define BUILD_SETTINGS_DATA_NUM_REBRAID_ITERATIONS_ID                 20
+#define BUILD_SETTINGS_DATA_DO_ENCODE_ID                              22
+#define BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_ID          24
+#define BUILD_SETTINGS_DATA_ENABLE_FAST_LBVH_ID                       25
+#define BUILD_SETTINGS_DATA_RTIP_LEVEL_ID                             26
+#define BUILD_SETTINGS_DATA_GEOMETRY_TYPE_ID                          27
+#define BUILD_SETTINGS_DATA_ENABLE_INSTANCE_REBRAID_ID                36
+#define BUILD_SETTINGS_DATA_GPU_DEBUG_FLAGS_ID                        37
+#define BUILD_SETTINGS_DATA_IS_UPDATE_ID                              38
+#define BUILD_SETTINGS_DATA_IS_UPDATE_IN_PLACE_ID                     39
+#define BUILD_SETTINGS_DATA_ENCODE_ARRAY_OF_POINTERS_ID               40
+#define BUILD_SETTINGS_DATA_SCENE_BOUNDS_CALCULATION_TYPE_ID          41
+#define BUILD_SETTINGS_DATA_REBRAID_QUALITY_HEURISTIC_ID              42
 
 #ifdef __cplusplus
 } // namespace GpuRt

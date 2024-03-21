@@ -35,6 +35,18 @@ static IntersectionResult TraceRayInternal(
     in uint              rayId,                   // Ray ID for profiling
     in uint              rtIpLevel                // HW version to determine TraceRay implementation
 )
+#if GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
+{
+    return TraceRayInternalCPSDebug(topLevelBvh,
+                                    rayFlags,
+                                    traceRayParameters,
+                                    rayDesc,
+                                    rayId,
+                                    rtIpLevel
+
+    );
+}
+#else // GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
 // Default path
 {
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION  >= 41
@@ -62,6 +74,7 @@ static IntersectionResult TraceRayInternal(
         default: return (IntersectionResult) 0;
     }
 }
+#endif
 
 //=====================================================================================================================
 static IntersectionResult IntersectRay(

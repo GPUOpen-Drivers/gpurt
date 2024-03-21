@@ -50,6 +50,8 @@ struct RootConstants
 [[vk::binding(0, 0)]] RWByteAddressBuffer           DstBuffer           : register(u0);
 [[vk::binding(3, 0)]] RWByteAddressBuffer           ScratchGlobal       : register(u1);
 
+#include "TaskCounter.hlsl"
+
 #define PREFIX_SUM_THREADGROUP_SIZE 1024
 groupshared uint SharedMem[PREFIX_SUM_THREADGROUP_SIZE];
 
@@ -112,7 +114,7 @@ void CountTrianglePairsPrefixSum(
     // Update primitive reference count
     if (globalID == 0)
     {
-        ScratchGlobal.Store(
-            ShaderRootConstants.encodeTaskCounterScratchOffset + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET, globalCount);
+        WriteTaskCounterData(
+            ShaderRootConstants.encodeTaskCounterScratchOffset, ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET, globalCount);
     }
 }

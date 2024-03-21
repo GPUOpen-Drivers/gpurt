@@ -97,9 +97,9 @@ static uint CalculateScratchBvhNodesOffset(
     in uint numActivePrims,
     in uint numLeafNodes,
     in uint bvhNodesOffset,
-    in bool noCopySortedNodes)
+    in bool topDownBuild)
 {
-    const uint offset = noCopySortedNodes ? (numLeafNodes - numActivePrims) * SCRATCH_NODE_SIZE : 0;
+    const uint offset = topDownBuild ? 0 : (numLeafNodes - numActivePrims) * SCRATCH_NODE_SIZE;
     return bvhNodesOffset + offset;
 }
 

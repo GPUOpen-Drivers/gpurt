@@ -276,7 +276,6 @@ enum class InternalRayTracingCsType : uint32
     Rebraid,
     GenerateMortonCodes,
     BuildBVH,
-    BuildBVHSortLeaves,
     BuildBVHTD,
     BuildBVHTDTR,
     BuildBVHPLOC,
@@ -744,7 +743,6 @@ struct DeviceSettings
         uint32 topDownBuild : 1;                            // Top down build in TLAS
         uint32 allowFp16BoxNodesInUpdatableBvh : 1;         // Allow box node in updatable bvh.
         uint32 fp16BoxNodesRequireCompaction : 1;           // Compaction is set or not.
-        uint32 noCopySortedNodes : 1;                       // Disable CopyUnsortedScratchLeafNode()
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 43
         uint32 enableSAHCost : 1;                           // Use more accurate SAH cost
 #endif
@@ -898,6 +896,13 @@ struct EntryFunctionTable
         const char* pFetchTrianglePositionFromNodePointer;
         const char* pFetchTrianglePositionFromRayQuery;
     } intrinsic;
+#if GPURT_BUILD_CONTINUATION
+    struct
+    {
+        const char* pContTraceRay;
+        const char* pContTraversal;
+    } cps;
+#endif
 };
 
 // Input flags to enable/disable GPURT shader library features
@@ -1324,6 +1329,12 @@ typedef void (*FnClientFreeGpuMem)(
     const DeviceInitInfo& initInfo,
     ClientGpuMemHandle    gpuMem);
 
+typedef Pal::Result(*FnClientGetTemporaryGpuMemory)(
+    ClientCmdBufferHandle cmdBuf,        // Opaque handle to command buffer that will handle the allocation
+    uint64                sizeInBytes,   // Buffer size in bytes
+    gpusize*              pDestGpuVa,    // (out) Buffer GPU VA
+    void**                ppMappedData); // (out) Map data
+
 // =====================================================================================================================
 // Client callback function pointers
 struct ClientCallbacks
@@ -1343,6 +1354,7 @@ struct ClientCallbacks
     FnClientFlushCmdContext pfnFlushCmdContext;
     FnClientAllocateGpuMemory pfnAllocateGpuMemory;
     FnClientFreeGpuMem pfnFreeGpuMem;
+    FnClientGetTemporaryGpuMemory pfnClientGetTemporaryGpuMemory;
 };
 
 class IDevice;

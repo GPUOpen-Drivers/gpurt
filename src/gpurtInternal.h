@@ -563,6 +563,16 @@ public:
         const CompileTimeBuildSettings& buildSettings,
         uint32                          buildSettingsHash);
 
+    void* AllocateTemporaryData(
+        ClientCmdBufferHandle cmdBuffer,
+        gpusize               sizeInBytes,
+        gpusize*              pGpuAddress) const;
+
+    void* AllocateDescriptorTable(
+        ClientCmdBufferHandle cmdBuffer,
+        uint32                count,
+        gpusize*              pGpuAddress) const;
+
     uint32 WriteBufferSrdTable(
         ClientCmdBufferHandle cmdBuffer,
         const BufferViewInfo* pBufferViews,

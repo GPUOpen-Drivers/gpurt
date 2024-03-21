@@ -141,19 +141,12 @@ public:
     // Calculates the maximum number of geometries that will fit in an SRD table.
     virtual uint32 GetMaxDescriptorTableSize(ClientCmdBufferHandle cmdBuffer) const = 0;
 
-    // Allocates embedded data.
-    virtual uint32* AllocateEmbeddedData(
+    // Requests temporary mapped GPU memory.
+    // May return a nullptr if the request is too large to be allocated.
+    virtual uint32* RequestTemporaryGpuMemory(
         ClientCmdBufferHandle cmdBuffer,
         uint32                sizeInDwords,
-        uint32                alignment,
         gpusize*              pGpuAddress) const = 0;
-
-    // Allocates embedded data for a descriptor table using hardware-specific SRD sizes.
-    virtual uint32* AllocateDescriptorTable(
-        ClientCmdBufferHandle cmdBuffer,
-        uint32                count,
-        gpusize*              pGpuAddress,
-        uint32*               pSrdSizeOut) const = 0;
 
     // Performs a generic barrier that's used to synchronize internal ray tracing shaders
     virtual void InsertBarrier(ClientCmdBufferHandle cmdBuffer, uint32 flags) const = 0;

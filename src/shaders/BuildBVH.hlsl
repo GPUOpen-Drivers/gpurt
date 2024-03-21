@@ -145,34 +145,6 @@ int FindSplit(int2 span, int numPrim, uint sortedMortonCodesOffset, bool useMort
 }
 
 //=====================================================================================================================
-void CopyUnsortedScratchLeafNode(
-    uint primIndex,
-    uint numActivePrims,
-    uint sortedPrimIndicesOffset,
-    uint unsortedNodesBaseOffset,
-    uint bvhNodesBaseOffset)
-{
-    // Store leaf node bounding boxes
-    const uint nodeIndex = FetchSortedPrimIndex(sortedPrimIndicesOffset, primIndex);
-
-    const ScratchNode unsortedNode = FetchScratchNode(unsortedNodesBaseOffset, nodeIndex);
-
-    const uint scratchNodeOffset = CalcScratchNodeOffset(bvhNodesBaseOffset, LEAFIDX(primIndex));
-
-    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_V0_OFFSET,             unsortedNode.bbox_min_or_v0);
-    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_PRIMITIVE_ID_OFFSET,   unsortedNode.left_or_primIndex_or_instIndex);
-    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_V1_OFFSET,             unsortedNode.bbox_max_or_v1);
-    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_GEOMETRY_INDEX_OFFSET, unsortedNode.right_or_geometryIndex);
-    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_V2_OFFSET,             unsortedNode.sah_or_v2_or_instBasePtr);
-
-    // DO NOT COPY PARENT!!!
-
-    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_FLAGS_OFFSET, unsortedNode.packedFlags);
-    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, unsortedNode.splitBox_or_nodePointer);
-    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET, unsortedNode.numPrimitivesAndDoCollapse);
-}
-
-//=====================================================================================================================
 // Construct scratch tree topology using the LBVH algorithm
 void SplitInternalNodeLbvh(
     uint nodeIndex,
@@ -180,8 +152,7 @@ void SplitInternalNodeLbvh(
     uint scratchNodesOffset,
     uint sortedPrimIndicesOffset,
     uint sortedMortonCodesOffset,
-    uint useMortonCode30,
-    uint noCopySortedNodes)
+    uint useMortonCode30)
 {
     // Find span occupied by the current node
     const uint2 range = FindSpan(nodeIndex, numActivePrims, sortedMortonCodesOffset, useMortonCode30);
@@ -190,8 +161,8 @@ void SplitInternalNodeLbvh(
     const uint split = FindSplit(range, numActivePrims, sortedMortonCodesOffset, useMortonCode30);
 
     // Create child nodes if needed
-    const uint splitIdx1 = noCopySortedNodes  ? LEAFIDX(FetchSortedPrimIndex(sortedPrimIndicesOffset, split))     : LEAFIDX(split);
-    const uint splitIdx2 = noCopySortedNodes  ? LEAFIDX(FetchSortedPrimIndex(sortedPrimIndicesOffset, split + 1)) : LEAFIDX(split + 1);
+    const uint splitIdx1 = LEAFIDX(FetchSortedPrimIndex(sortedPrimIndicesOffset, split));
+    const uint splitIdx2 = LEAFIDX(FetchSortedPrimIndex(sortedPrimIndicesOffset, split + 1));
     const uint c1idx = (split == range.x)     ? splitIdx1 : NODEIDX(split);
     const uint c2idx = (split + 1 == range.y) ? splitIdx2 : NODEIDX(split + 1);
 
@@ -273,23 +244,12 @@ void BuildBVH(
 
     if (numActivePrims > 0)
     {
-        // Initialise leaf nodes with sorted node data. Copy from LeafAABB to InternalAABB leaf section.
-        if (globalId < numActivePrims && (Settings.noCopySortedNodes == false))
-        {
-            CopyUnsortedScratchLeafNode(
-                globalId,
-                numActivePrims,
-                ShaderConstants.offsets.primIndicesSorted,
-                ShaderConstants.offsets.bvhLeafNodeData,
-                ShaderConstants.offsets.bvhNodeData);
-        }
-
 #if USE_BUILD_LBVH == 1
         const uint bvhNodes = CalculateScratchBvhNodesOffset(
                                   numActivePrims,
                                   ShaderConstants.numLeafNodes,
                                   ShaderConstants.offsets.bvhNodeData,
-                                  Settings.noCopySortedNodes);
+                                  Settings.enableTopDownBuild);
         // Set internal nodes
         if (globalId < (numActivePrims - 1))
         {
@@ -299,8 +259,7 @@ void BuildBVH(
                 bvhNodes,
                 ShaderConstants.offsets.primIndicesSorted,
                 ShaderConstants.offsets.mortonCodesSorted,
-                Settings.useMortonCode30,
-                Settings.noCopySortedNodes);
+                Settings.useMortonCode30);
         }
 #endif
     }

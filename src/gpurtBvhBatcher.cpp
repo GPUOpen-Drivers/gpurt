@@ -299,12 +299,6 @@ void BvhBatcher::BuildMultiDispatch(Util::Span<BvhBuilder> builders)
         Barrier();
         BuildPhase("BuildBVH", builders, &BvhBuilder::BuildBVH);
     }
-    // SortScratchLeaves only needs to run when BuildBVH is not run
-    else if (PhaseEnabled(BuildPhaseFlags::SortScratchLeaves))
-    {
-        Barrier();
-        BuildPhase("SortScratchLeaves", builders, &BvhBuilder::SortScratchLeaves);
-    }
     if (PhaseEnabled(BuildPhaseFlags::BuildFastAgglomerativeLbvh))
     {
         Barrier();
@@ -364,17 +358,36 @@ void BvhBatcher::DispatchInitAccelerationStructure(
                             initAsBuildSettings,
                             buildSettingsHash);
 
-    // Limit the number of builders per dispatch to avoid allocating excess embedded data
-    static constexpr size_t MaxNumBuildersPerDispatch = 64;
-    for (size_t offset = 0; offset < builders.size(); offset += MaxNumBuildersPerDispatch)
-    {
-        const uint32 numBuildersToDispatch = static_cast<uint32>(Util::Min(MaxNumBuildersPerDispatch,
-                                                                           builders.size() - offset));
-        const Util::Span<BvhBuilder> buildersToDispatch(builders.Data() + offset, numBuildersToDispatch);
+    constexpr uint32 AlignedConstantsSizeDwords = Util::Pow2Align(InitAccelerationStructure::NumEntries, 4);
+    constexpr uint32 AlignedConstantsSizeBytes = AlignedConstantsSizeDwords * sizeof(uint32);
 
-        Util::Vector<BufferViewInfo, MaxNumBuildersPerDispatch, Internal::Device> constants(m_pDevice);
-        Util::Vector<BufferViewInfo, MaxNumBuildersPerDispatch, Internal::Device> headerBuffers(m_pDevice);
-        Util::Vector<BufferViewInfo, MaxNumBuildersPerDispatch, Internal::Device> scratchBuffers(m_pDevice);
+    gpusize constantsGpuVa;
+    void* pConstantsBufferMap;
+
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 46
+    // Limit the number of builders per dispatch to avoid allocating excess embedded data
+    static constexpr size_t DefaultNumBuildersPerDispatch = 64;
+    for (size_t builderOffset = 0; builderOffset < builders.size(); builderOffset += DefaultNumBuildersPerDispatch)
+    {
+        const uint32 numBuildersToDispatch = static_cast<uint32>(Util::Min(DefaultNumBuildersPerDispatch,
+                                                                           builders.size() - builderOffset));
+        const Util::Span<BvhBuilder> buildersToDispatch(builders.Data() + builderOffset, numBuildersToDispatch);
+#else
+    static constexpr size_t DefaultNumBuildersPerDispatch = 128;
+
+    {
+        const uint32 builderOffset = 0;
+        const uint32 numBuildersToDispatch = static_cast<uint32>(builders.size());
+        const Util::Span<BvhBuilder> buildersToDispatch(builders.Data(), numBuildersToDispatch);
+
+        const uint32 bufferSizeInBytes = numBuildersToDispatch * AlignedConstantsSizeBytes;
+        pConstantsBufferMap = m_pDevice->AllocateTemporaryData(m_cmdBuffer, bufferSizeInBytes, &constantsGpuVa);
+#endif
+
+        Util::Vector<BufferViewInfo, DefaultNumBuildersPerDispatch, Internal::Device> constants(m_pDevice);
+        Util::Vector<BufferViewInfo, DefaultNumBuildersPerDispatch, Internal::Device> headerBuffers(m_pDevice);
+        Util::Vector<BufferViewInfo, DefaultNumBuildersPerDispatch, Internal::Device> scratchBuffers(m_pDevice);
+        Util::Vector<BufferViewInfo, DefaultNumBuildersPerDispatch, Internal::Device> scratchGlobals(m_pDevice);
 
         const InitAccelerationStructure::RootConstants rootConstants
         {
@@ -386,9 +399,16 @@ void BvhBatcher::DispatchInitAccelerationStructure(
                                                       &rootConstants,
                                                       InitAccelerationStructure::NumRootEntries,
                                                       entryOffset);
-        for (auto& builder : buildersToDispatch)
+        for (size_t builderIdx = builderOffset; builderIdx < (builderOffset + numBuildersToDispatch); ++builderIdx)
         {
+            auto& builder = builders[builderIdx];
             scratchBuffers.EmplaceBack(BufferViewInfo
+            {
+                .gpuAddr = builder.RemappedScratchBufferBaseVa(),
+                .range = 0xFFFFFFFF,
+            });
+
+            scratchGlobals.EmplaceBack(BufferViewInfo
             {
                 .gpuAddr = builder.ScratchBufferBaseVa(),
                 .range = 0xFFFFFFFF,
@@ -415,19 +435,22 @@ void BvhBatcher::DispatchInitAccelerationStructure(
                     .header                               = builder.InitAccelStructHeader(),
                     .metadataHeader                       = builder.InitAccelStructMetadataHeader(),
                 };
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 46
+                const size_t currBuilderConstantsOffsetBytes = 0;
+                pConstantsBufferMap =
+                    m_pDevice->AllocateTemporaryData(m_cmdBuffer, AlignedConstantsSizeBytes, &constantsGpuVa);
+#else
+                const size_t currBuilderConstantsOffsetBytes = builderIdx * AlignedConstantsSizeBytes;
+#endif
+                void* pCurrBuilderConstants = Util::VoidPtrInc(pConstantsBufferMap, currBuilderConstantsOffsetBytes);
+                memcpy(pCurrBuilderConstants, &shaderConstants, sizeof(shaderConstants));
+
                 // Set constants CBV table
-                constexpr uint32 AlignedSizeDw = Util::Pow2Align(InitAccelerationStructure::NumEntries, 4);
-
-                gpusize constantsVa;
-                void* pConstants = m_backend.AllocateEmbeddedData(m_cmdBuffer, AlignedSizeDw, 1, &constantsVa);
-
-                memcpy(pConstants, &shaderConstants, sizeof(shaderConstants));
-
                 constants.EmplaceBack(BufferViewInfo
                 {
-                    .gpuAddr = constantsVa,
-                    .range = AlignedSizeDw * sizeof(uint32),
-                    .stride = 16,
+                    .gpuAddr = constantsGpuVa + currBuilderConstantsOffsetBytes,
+                    .range   = AlignedConstantsSizeBytes,
+                    .stride  = 16,
                 });
             }
         }
@@ -435,8 +458,9 @@ void BvhBatcher::DispatchInitAccelerationStructure(
         {
             entryOffset = m_pDevice->WriteBufferSrdTable(m_cmdBuffer, constants.Data(), numBuildersToDispatch, false, entryOffset);
             entryOffset = m_pDevice->WriteBufferSrdTable(m_cmdBuffer, headerBuffers.Data(), numBuildersToDispatch, false, entryOffset);
+            entryOffset = m_pDevice->WriteBufferSrdTable(m_cmdBuffer, scratchBuffers.Data(), numBuildersToDispatch, false, entryOffset);
         }
-        entryOffset = m_pDevice->WriteBufferSrdTable(m_cmdBuffer, scratchBuffers.Data(), numBuildersToDispatch, false, entryOffset);
+        entryOffset = m_pDevice->WriteBufferSrdTable(m_cmdBuffer, scratchGlobals.Data(), numBuildersToDispatch, false, entryOffset);
 
         m_backend.Dispatch(m_cmdBuffer, numBuildersToDispatch, 1, 1);
     }

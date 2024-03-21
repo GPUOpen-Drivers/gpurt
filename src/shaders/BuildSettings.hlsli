@@ -45,7 +45,6 @@
 [[vk::constant_id(BUILD_SETTINGS_DATA_FAST_BUILD_THRESHOLD_ID)]]                   uint fastBuildThreshold            = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_FUSED_INSTANCE_NODE_ID)]]             uint enableFusedInstanceNode       = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_TS_PRIORITY_ID)]]                            float tsPriority                   = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_NO_COPY_SORTED_NODES_ID)]]                   uint noCopySortedNodes             = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_NUM_REBRAID_ITERATIONS_ID)]]                 uint numRebraidIterations          = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_DO_ENCODE_ID)]]                              uint doEncode                      = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_ID)]]          uint enableEarlyPairCompression    = 0;
@@ -81,7 +80,6 @@ static const BuildSettingsData Settings = {
     fastBuildThreshold,
     enableFusedInstanceNode,
     tsPriority,
-    noCopySortedNodes,
     numRebraidIterations,
     0,
     doEncode,
@@ -105,6 +103,7 @@ static const BuildSettingsData Settings = {
     encodeArrayOfPointers,
     sceneBoundsCalculationType,
     rebraidQualityHeuristic,
+    0,
 };
 
 #endif

@@ -83,21 +83,13 @@ public:
 
     virtual uint32 GetMaxDescriptorTableSize(ClientCmdBufferHandle cmdBuffer) const override;
 
-    virtual uint32* AllocateEmbeddedData(
+    virtual uint32* RequestTemporaryGpuMemory(
         ClientCmdBufferHandle cmdBuffer,
         uint32                sizeInDwords,
-        uint32                alignment,
         gpusize*              pGpuAddress
     ) const override;
 
     virtual void InsertBarrier(ClientCmdBufferHandle cmdBuffer, uint32 flags) const override;
-
-    virtual uint32* AllocateDescriptorTable(
-        ClientCmdBufferHandle cmdBuffer,
-        uint32                count,
-        gpusize*              pGpuAddress,
-        uint32*               pSrdSizeOut
-    ) const override;
 
     virtual void CreateBufferViewSrds(
         uint32                count,
@@ -161,6 +153,28 @@ private:
         { Pal::ChannelSwizzle::X, Pal::ChannelSwizzle::Y, Pal::ChannelSwizzle::Z, Pal::ChannelSwizzle::Zero };
 
     static Pal::BufferViewInfo ConvertBufferViewToPalBufferView(const BufferViewInfo& bufferViewInfo);
+
+    // Queries how many DWORDs of embedded data the command buffer can allocate in one call to AllocateEmbeddedData.
+    uint32 GetEmbeddedDataLimit(ClientCmdBufferHandle cmdBuffer) const;
+
+    // Allocates embedded data.
+    uint32* AllocateEmbeddedData(
+        ClientCmdBufferHandle cmdBuffer,
+        uint32                sizeInDwords,
+        uint32                alignment,
+        gpusize*              pGpuAddress
+    ) const;
+
+    // Queries how many DWORDs of embedded data the command buffer can allocate in one call to AllocateLargeEmbeddedData.
+    uint32 GetLargeEmbeddedDataLimit(ClientCmdBufferHandle cmdBuffer) const;
+
+    // Allocates embedded data.
+    uint32* AllocateLargeEmbeddedData(
+        ClientCmdBufferHandle cmdBuffer,
+        uint32                sizeInDwords,
+        uint32                alignment,
+        gpusize*              pGpuAddress
+    ) const;
 };
 
 } // namespace GpuRt

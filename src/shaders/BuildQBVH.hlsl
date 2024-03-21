@@ -381,11 +381,10 @@ void PostHwBvhBuild(
                 // command buffer. Overwrite the GPU VA to 0 to properly designate the TLAS as empty.
                 DstMetadata.Store<GpuVirtualAddress>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, 0);
             }
+            WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET, numActivePrims);
         }
-        else
+        else if (Settings.triangleCompressionMode != PAIR_TRIANGLE_COMPRESSION)
         {
-            if ((Settings.triangleCompressionMode != PAIR_TRIANGLE_COMPRESSION)
-                )
             {
                 // When compression is disabled, the final leaf node count is the active prim count.
                 WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET, numActivePrims);
@@ -783,9 +782,11 @@ static void PullUpChildren(
         }
         else
         {
-            // Note, box node flags are combined together by using an AND operation. Thus, we need to initialise
-            // invalid child flags as 0xff
-            boxNodeFlags = SetBoxNodeFlagsField(boxNodeFlags, 0xff, i);
+            {
+                // Note, box node flags are combined together by using an AND operation. Thus, we need to initialise
+                // invalid child flags as 0xff
+                boxNodeFlags = SetBoxNodeFlagsField(boxNodeFlags, 0xff, i);
+            }
         }
     }
 

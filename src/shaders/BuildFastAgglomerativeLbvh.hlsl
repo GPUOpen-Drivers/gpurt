@@ -63,7 +63,6 @@ struct FastLBVHArgs
     uint baseBatchIndicesOffset;
     uint fp16BoxNodesMode;
     float fp16BoxModeMixedSaThreshold;
-    bool noCopySortedNodes;
     uint sortedPrimIndicesOffset;
     uint enablePairCompression;
     uint enablePairCostCheck;
@@ -94,7 +93,6 @@ FastLBVHArgs GetFastLbvhArgs(uint numActivePrims)
     args.baseBatchIndicesOffset      = ShaderConstants.offsets.batchIndices;
     args.fp16BoxNodesMode            = Settings.fp16BoxNodesMode;
     args.fp16BoxModeMixedSaThreshold = Settings.fp16BoxModeMixedSaThreshold;
-    args.noCopySortedNodes           = Settings.noCopySortedNodes;
     args.sortedPrimIndicesOffset     = ShaderConstants.offsets.primIndicesSorted;
     args.enableEarlyPairCompression  = Settings.enableEarlyPairCompression;
     args.unsortedNodesBaseOffset     = ShaderConstants.offsets.bvhLeafNodeData,
@@ -200,8 +198,7 @@ void FastAgglomerativeLbvhImpl(
     // keys covered by the respective node.
 
     // Leaf nodes cover exactly one range of keys indexed by the primitive index
-    const uint sortedPrimitiveIndex = args.noCopySortedNodes ?
-        FetchSortedPrimIndex(args.sortedPrimIndicesOffset, primitiveIndex) : primitiveIndex;
+    const uint sortedPrimitiveIndex = FetchSortedPrimIndex(args.sortedPrimIndicesOffset, primitiveIndex);
     uint left  = primitiveIndex;
     uint right = primitiveIndex;
 

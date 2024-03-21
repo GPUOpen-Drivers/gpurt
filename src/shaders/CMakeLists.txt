@@ -96,6 +96,11 @@ set(gpurtHlsl
     UpdateQBVH.hlsl
     UpdateQBVH1_1.hlsl
     UpdateQBVHImpl.hlsl
+#if GPURT_BUILD_CONTINUATION
+    GpuRtLibraryCont.hlsl
+    Continuations1_1.hlsl
+    Continuations2_0.hlsl
+#endif
 )
 set(otherDeps
     ../../gpurt/gpurtAccelStruct.h

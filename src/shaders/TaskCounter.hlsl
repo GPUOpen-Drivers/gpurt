@@ -38,3 +38,9 @@ uint FetchTaskCounter(uint offset)
 {
     return ScratchGlobal.Load(offset);
 }
+
+//=====================================================================================================================
+void WriteTaskCounterData(uint offset, uint dataOffset, uint data)
+{
+    ScratchGlobal.Store(offset + dataOffset, data);
+}

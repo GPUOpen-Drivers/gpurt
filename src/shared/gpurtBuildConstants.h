@@ -98,11 +98,11 @@ struct RayTracingScratchDataOffsets
     uint32 reserved8;
     uint32 reserved9;
     uint32 reserved10;
+    uint32 reserved11;
     uint32 taskLoopCounters;
     uint32 debugCounters;
     uint32 padding0;
     uint32 padding1;
-    uint32 padding2;
 };
 
 struct BuildShaderConstants

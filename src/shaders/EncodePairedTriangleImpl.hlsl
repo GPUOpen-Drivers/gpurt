@@ -59,27 +59,6 @@ void WriteScratchTriangleNode(
 }
 
 //=====================================================================================================================
-void WriteScratchInactiveTriangleNode(
-    GeometryArgs        geometryArgs,
-    uint                flattenedPrimitiveIndex, // primitiveOffset + primitiveIndex,
-    uint                primNodePointerOffset)
-{
-    if (IsUpdate() == false)
-    {
-        WriteScratchNodeData(geometryArgs.LeafNodeDataByteOffset,
-                             flattenedPrimitiveIndex,
-                             0,
-                             NaN);
-
-        DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
-    }
-    else if (Settings.isUpdateInPlace == false)
-    {
-        DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
-    }
-}
-
-//=====================================================================================================================
 void WriteScratchQuadNode(
     uint         leafNodeDataOffset,
     uint         dstScratchNodeIdx,
@@ -386,7 +365,9 @@ void EncodePairedTriangleNodeImpl(
     uint                       primitiveIndex,
     uint                       globalId,
     uint                       primitiveOffset,
-    uint                       vertexOffset)
+    uint                       vertexOffset,
+    uint                       indexOffsetInBytes,
+    uint                       transformOffestInElements)
 {
     const uint metadataSize = geometryArgs.metadataSizeInBytes;
 
@@ -408,7 +389,7 @@ void EncodePairedTriangleNodeImpl(
     // Fetch face indices from index buffer
     uint3 faceIndices = FetchFaceIndices(IndexBuffer,
                                          primitiveIndex,
-                                         geometryArgs.IndexBufferByteOffset,
+                                         geometryArgs.IndexBufferByteOffset + indexOffsetInBytes,
                                          geometryArgs.IndexBufferFormat);
 
     const bool isIndexed = (geometryArgs.IndexBufferFormat != IndexFormatInvalid);
@@ -432,7 +413,8 @@ void EncodePairedTriangleNodeImpl(
                                            geometryArgs.GeometryStride,
                                            vertexOffset,
                                            geometryArgs.HasValidTransform,
-                                           TransformBuffer);
+                                           TransformBuffer,
+                                           transformOffestInElements);
 
         // Generate triangle bounds and update scene bounding box
         const BoundingBox boundingBox = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
@@ -538,12 +520,14 @@ uint TryPairTriangleImpl(
     RWStructuredBuffer<float4> TransformBuffer,
     GeometryArgs               geometryArgs,
     uint                       primitiveIndex,
-    uint                       vertexOffset)
+    uint                       vertexOffset,
+    uint                       indexOffsetInBytes,
+    uint                       transformOffsetInElements)
 {
     // Fetch face indices from index buffer
     uint3 faceIndices = FetchFaceIndices(IndexBuffer,
                                          primitiveIndex,
-                                         geometryArgs.IndexBufferByteOffset,
+                                         geometryArgs.IndexBufferByteOffset + indexOffsetInBytes,
                                          geometryArgs.IndexBufferFormat);
 
     const bool isIndexed = (geometryArgs.IndexBufferFormat != IndexFormatInvalid);
@@ -568,7 +552,8 @@ uint TryPairTriangleImpl(
                                                             geometryArgs.GeometryStride,
                                                             vertexOffset,
                                                             geometryArgs.HasValidTransform,
-                                                            TransformBuffer);
+                                                            TransformBuffer,
+                                                            transformOffsetInElements);
 
             float3x3 faceVertices;
             faceVertices[0] = tri.v0;
