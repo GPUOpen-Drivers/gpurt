@@ -159,6 +159,18 @@ static const BoundingBox InvalidBoundingBox =
 #define D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE                           0x1
 #define D3D12_RAYTRACING_GEOMETRY_FLAG_NO_DUPLICATE_ANYHIT_INVOCATION   0x2
 
+// Workaround for newer DXC, which aborts with error when firstbit*() is used with 64-bit type. That is because
+// officially SPIR-V spec limits FindUMsb/FindSMsb to 32-bit width components. But internally we already support
+// FindUMsb/FindSMsb/FindILsb with 64-bit type, so use GL_EXT_spirv_intrinsics to bypass the check.
+[[vk::ext_instruction(/* FindUMsb */ 75, "GLSL.std.450")]]
+uint spirv_FindUMsb(uint64_t value);
+
+[[vk::ext_instruction(/* FindILsb */ 73, "GLSL.std.450")]]
+uint spirv_FindILsb(uint64_t value);
+
+#define FIRSTBITHIGH_U64(val) spirv_FindUMsb(val)
+#define FIRSTBITLOW_U64(val) spirv_FindILsb(val)
+
 //=====================================================================================================================
 // The following functions depend on static flags
 static uint IsBvhRebraid()
@@ -577,7 +589,7 @@ static int clz(int value)
 //=====================================================================================================================
 static int clz64(uint64_t value)
 {
-    return (63 - firstbithigh(value));
+    return (63 - FIRSTBITHIGH_U64(value));
 }
 
 //=====================================================================================================================

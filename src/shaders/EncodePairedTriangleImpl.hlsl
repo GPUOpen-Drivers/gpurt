@@ -212,7 +212,7 @@ int PairTriangles(
             packedOffset = TryPairTriangles(broadcastTriangle, tri);
         }
 
-        const uint firstPairedLane = firstbitlow(WaveActiveBallot64((packedOffset != -1)));
+        const uint firstPairedLane = FIRSTBITLOW_U64(WaveActiveBallot64((packedOffset != -1)));
 
         if (firstPairedLane < WaveGetLaneCount())
         {
@@ -323,7 +323,7 @@ int PairTrianglesIndexed(
             packedOffset = TryPairTrianglesIndexed(broadcastTriangle, tri);
         }
 
-        const uint firstPairedLane = firstbitlow(WaveActiveBallot64((packedOffset != -1)));
+        const uint firstPairedLane = FIRSTBITLOW_U64(WaveActiveBallot64((packedOffset != -1)));
 
         if (firstPairedLane < WaveGetLaneCount())
         {
