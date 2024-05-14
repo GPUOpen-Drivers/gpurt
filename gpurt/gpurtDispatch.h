@@ -90,8 +90,6 @@ struct DispatchRaysConstantData
     uint32 cpsGlobalMemoryAddressLo;    // Separate CPS stack memory base address low 32-bits
     uint32 cpsGlobalMemoryAddressHi;    // Separate CPS stack memory base address high 32-bits
     uint32 counterMask;                 // Mask for filtering ray history token
-    uint32 cpsSortingMemoryAddressLo;   // Continuations ray sorting memory base address low 32-bits
-    uint32 cpsSortingMemoryAddressHi;   // Continuations ray sorting memory base address high 32-bits
 };
 #pragma pack(pop)
 

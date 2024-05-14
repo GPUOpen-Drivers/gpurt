@@ -549,7 +549,7 @@ float2 FetchSceneSize(uint sceneBoundsOffset)
 //======================================================================================================================
 uint GetBvhNodesOffset(
     uint numActivePrims,
-    uint numLeafNodes,
+    uint maxNumPrimitives,
     uint bvhNodeDataOffset,
     uint bvhLeafNodeDataOffset,
     uint primIndicesSortedOffset)
@@ -557,7 +557,7 @@ uint GetBvhNodesOffset(
     if ((Settings.enableTopDownBuild == false) &&
         (Settings.enableFastLBVH == false) &&
         (numActivePrims == 1) &&
-        (numLeafNodes > 1))
+        (maxNumPrimitives > 1))
     {
         // If there is one active primitive among a number of inactive primitives and
         // the top down builder is disabled, then we need to move the root to match the
@@ -571,7 +571,7 @@ uint GetBvhNodesOffset(
     {
         return CalculateScratchBvhNodesOffset(
                    numActivePrims,
-                   numLeafNodes,
+                   maxNumPrimitives,
                    bvhNodeDataOffset,
                    Settings.enableTopDownBuild);
     }
@@ -584,10 +584,35 @@ static uint CalculateBvhNodesOffset(
 {
     return GetBvhNodesOffset(
                numActivePrims,
-               shaderConstants.numLeafNodes,
+               shaderConstants.maxNumPrimitives,
                shaderConstants.offsets.bvhNodeData,
                shaderConstants.offsets.bvhLeafNodeData,
                shaderConstants.offsets.primIndicesSorted);
+}
+
+//=====================================================================================================================
+bool IsLeafOrIsCollapsed(
+    in uint nodeIndex,
+    in uint baseScratchNodesOffset,
+    in uint numActivePrims)
+{
+    bool result = false;
+
+    if (IsLeafNode(nodeIndex, numActivePrims))
+    {
+        result = true;
+    }
+    else
+    {
+        const ScratchNode node = FetchScratchNode(baseScratchNodesOffset, nodeIndex);
+
+        if (node.numPrimitivesAndDoCollapse & 1)
+        {
+            result = true;
+        }
+    }
+
+    return result;
 }
 
 //=====================================================================================================================
@@ -602,7 +627,8 @@ void MergeScratchNodes(
     BoundingBox leftBounds,
     uint        rightNodeIndex,
     ScratchNode rightNode,
-    BoundingBox rightBounds)
+    BoundingBox rightBounds,
+    uint        rootIndex)
 {
     BoundingBox mergedBounds = CombineAABB(leftBounds, rightBounds);
     const float mergedBoxSurfaceArea = ComputeBoxSurfaceArea(mergedBounds);
@@ -612,82 +638,86 @@ void MergeScratchNodes(
                                 mergedBounds.min,
                                 mergedBounds.max);
 
-    const uint numLeft  = FetchScratchNodeNumPrimitives(leftNode, IsLeafNode(leftNodeIndex, numActivePrims));
-    const uint numRight = FetchScratchNodeNumPrimitives(rightNode, IsLeafNode(rightNodeIndex, numActivePrims));
-    const uint numTris  = numLeft + numRight;
-
-    const float Ct =
-        SAH_COST_TRIANGLE_INTERSECTION;
-
-    const float Ci = SAH_COST_AABBB_INTERSECTION;
-
-    const float leftCost =
-        IsLeafNode(leftNodeIndex, numActivePrims) ?
-            (Ct * ComputeBoxSurfaceArea(leftBounds)) : FetchScratchNodeCost(scratchNodesOffset, leftNodeIndex);
-
-    const float rightCost =
-        IsLeafNode(rightNodeIndex, numActivePrims) ?
-            (Ct * ComputeBoxSurfaceArea(rightBounds)) : FetchScratchNodeCost(scratchNodesOffset, rightNodeIndex);
-
-    const bool leftCollapse      = (leftNode.numPrimitivesAndDoCollapse & 0x1) ||
-                                    IsLeafNode(leftNodeIndex, numActivePrims);
-    const bool rightCollapse     = (rightNode.numPrimitivesAndDoCollapse & 0x1) ||
-                                    IsLeafNode(rightNodeIndex, numActivePrims);
-    const bool collapseBothSides = leftCollapse && rightCollapse;
-
-    float bestCost = leftCost + rightCost + Ci * mergedBoxSurfaceArea;
-
-    const float collapseCost = Ct * numTris;
-
-    const float splitCost    = Ci + leftCost / mergedBoxSurfaceArea + rightCost / mergedBoxSurfaceArea;
-
-    bool isCollapsed = false;
-
-    if (EnableLatePairCompression()
-    )
-    {
-        const bool useCostCheck = Settings.enablePairCostCheck;
-
-        if ((useCostCheck && (collapseCost > splitCost)) ||
-            (numTris > LATE_PAIR_COMP_BATCH_SIZE) ||
-            (collapseBothSides == false) ||
-            (mergedNodeIndex == 0))
-        {
-            if (leftCollapse)
-            {
-                WriteScratchBatchIndex(numBatchesScratchOffset,
-                                       batchIndicesScratchOffset,
-                                       leftNodeIndex);
-            }
-
-            if (rightCollapse)
-            {
-                WriteScratchBatchIndex(numBatchesScratchOffset,
-                                       batchIndicesScratchOffset,
-                                       rightNodeIndex);
-            }
-        }
-        else // do collapse
-        {
-            bestCost = collapseCost * mergedBoxSurfaceArea;
-            isCollapsed = true;
-        }
-    }
-
     WriteScratchNodeFlagsFromNodes(scratchNodesOffset,
                                    mergedNodeIndex,
                                    leftNode,
                                    rightNode);
-    WriteScratchNodeSurfaceArea(scratchNodesOffset,
-                                mergedNodeIndex,
-                                mergedBoxSurfaceArea);
 
-    const float largestLength = 0;
+    WriteScratchNodeSurfaceArea(scratchNodesOffset, mergedNodeIndex, mergedBoxSurfaceArea);
 
-    WriteScratchNodeLargestLength(scratchNodesOffset, mergedNodeIndex, largestLength);
-    WriteScratchNodeCost(scratchNodesOffset, mergedNodeIndex, bestCost);
-    WriteScratchNodeNumPrimitives(scratchNodesOffset, mergedNodeIndex, numTris, isCollapsed);
+    if (Settings.topLevelBuild)
+    {
+        uint numPrims = 0;
 
+        WriteScratchNodeNumPrimitives(scratchNodesOffset, mergedNodeIndex, numPrims, false);
+    }
+    else
+    {
+        const uint numLeft  = FetchScratchNodeNumPrimitives(leftNode, IsLeafNode(leftNodeIndex, numActivePrims));
+        const uint numRight = FetchScratchNodeNumPrimitives(rightNode, IsLeafNode(rightNodeIndex, numActivePrims));
+        const uint numTris = numLeft + numRight;
+
+        const float Ct =
+            SAH_COST_TRIANGLE_INTERSECTION;
+
+        const float Ci = SAH_COST_AABBB_INTERSECTION;
+
+        const float leftCost =
+            IsLeafNode(leftNodeIndex, numActivePrims) ?
+                (Ct * ComputeBoxSurfaceArea(leftBounds)) : FetchScratchNodeCost(scratchNodesOffset, leftNodeIndex);
+
+        const float rightCost =
+            IsLeafNode(rightNodeIndex, numActivePrims) ?
+                (Ct * ComputeBoxSurfaceArea(rightBounds)) : FetchScratchNodeCost(scratchNodesOffset, rightNodeIndex);
+
+        const bool leftCollapse      = (leftNode.numPrimitivesAndDoCollapse & 0x1) ||
+                                        IsLeafNode(leftNodeIndex, numActivePrims);
+        const bool rightCollapse     = (rightNode.numPrimitivesAndDoCollapse & 0x1) ||
+                                        IsLeafNode(rightNodeIndex, numActivePrims);
+        const bool collapseBothSides = leftCollapse && rightCollapse;
+
+        float bestCost = leftCost + rightCost + Ci * mergedBoxSurfaceArea;
+
+        const float collapseCost = Ct * numTris;
+
+        const float splitCost    = Ci + leftCost / mergedBoxSurfaceArea + rightCost / mergedBoxSurfaceArea;
+
+        bool isCollapsed = false;
+
+        if (EnableLatePairCompression()
+        )
+        {
+            const bool useCostCheck = Settings.enablePairCostCheck;
+
+            if ((useCostCheck && (collapseCost > splitCost)) ||
+                (numTris > LATE_PAIR_COMP_BATCH_SIZE) ||
+                (collapseBothSides == false) ||
+                (mergedNodeIndex == rootIndex))
+            {
+                if (leftCollapse)
+                {
+                    WriteScratchBatchIndex(numBatchesScratchOffset,
+                                           batchIndicesScratchOffset,
+                                           leftNodeIndex);
+                }
+
+                if (rightCollapse)
+                {
+                    WriteScratchBatchIndex(numBatchesScratchOffset,
+                                           batchIndicesScratchOffset,
+                                           rightNodeIndex);
+                }
+            }
+            else // do collapse
+            {
+                bestCost = collapseCost * mergedBoxSurfaceArea;
+                isCollapsed = true;
+            }
+        }
+
+        WriteScratchNodeCost(scratchNodesOffset, mergedNodeIndex, bestCost);
+        WriteScratchNodeNumPrimitives(scratchNodesOffset, mergedNodeIndex, numTris, isCollapsed);
+    }
 }
 
 //=====================================================================================================================
@@ -726,8 +756,6 @@ void RefitNode(
     float rightCost;
     float leftCost;
 
-    uint numMortonCells = 0;
-
     // Right child
     // need to fetch "other paired node" if earlyPairCompression is enabled
     {
@@ -738,7 +766,6 @@ void RefitNode(
                                                    args.splitBoxesOffset,
                                                    args.enableEarlyPairCompression,
                                                    args.unsortedNodesBaseOffset);
-        numMortonCells += isLeafNode ? 1 : rightNode.splitBox_or_nodePointer;
     }
 
     // Left child
@@ -751,7 +778,6 @@ void RefitNode(
                                                   args.splitBoxesOffset,
                                                   args.enableEarlyPairCompression,
                                                   args.unsortedNodesBaseOffset);
-        numMortonCells += isLeafNode ? 1 : leftNode.splitBox_or_nodePointer;
     }
 
     MergeScratchNodes(
@@ -765,7 +791,8 @@ void RefitNode(
         bboxLeftChild,
         rc,
         rightNode,
-        bboxRightChild);
+        bboxRightChild,
+        rootIndex);
 }
 
 #endif

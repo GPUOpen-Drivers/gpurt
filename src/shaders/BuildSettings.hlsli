@@ -30,6 +30,7 @@
 [[vk::constant_id(BUILD_SETTINGS_DATA_BUILD_MODE_ID)]]                             uint buildMode                     = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_TRIANGLE_COMPRESSION_MODE_ID)]]              uint triangleCompressionMode       = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_DO_TRIANGLE_SPLITTING_ID)]]                  uint doTriangleSplitting           = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_IS_INDIRECT_BUILD_ID)]]                      uint isIndirectBuild               = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_FP16_BOX_NODES_MODE_ID)]]                    uint fp16BoxNodesMode              = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_FP16_BOX_MODE_MIXED_SA_THRESHOLD_ID)]]       float fp16BoxModeMixedSaThreshold  = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_RADIX_SORT_SCAN_LEVEL_ID)]]                  uint radixSortScanLevel            = 0;
@@ -53,7 +54,7 @@
 [[vk::constant_id(BUILD_SETTINGS_DATA_GEOMETRY_TYPE_ID)]]                          uint geometryType                  = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_INSTANCE_REBRAID_ID)]]                uint enableInstanceRebraid         = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_GPU_DEBUG_FLAGS_ID)]]                        uint gpuDebugFlags                 = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_IS_UPDATE_ID)]]                              uint isUpdate                      = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_UPDATE_FLAGS_ID)]]                           uint updateFlags                   = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_IS_UPDATE_IN_PLACE_ID)]]                     uint isUpdateInPlace               = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENCODE_ARRAY_OF_POINTERS_ID)]]               uint encodeArrayOfPointers         = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_SCENE_BOUNDS_CALCULATION_TYPE_ID)]]          uint sceneBoundsCalculationType    = 0;
@@ -64,7 +65,7 @@ static const BuildSettingsData Settings = {
     buildMode,
     triangleCompressionMode,
     doTriangleSplitting,
-    0,
+    isIndirectBuild,
     fp16BoxNodesMode,
     fp16BoxModeMixedSaThreshold,
     radixSortScanLevel,
@@ -98,7 +99,7 @@ static const BuildSettingsData Settings = {
     0,
     enableInstanceRebraid,
     gpuDebugFlags,
-    isUpdate,
+    updateFlags,
     isUpdateInPlace,
     encodeArrayOfPointers,
     sceneBoundsCalculationType,

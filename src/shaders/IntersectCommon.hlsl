@@ -669,7 +669,9 @@ static void PerformTriangleCulling(
         (FLAG_IS_CLEAR(hwNodePtr, NODE_POINTER_FORCE_NON_OPAQUE) &&
             isOpaque);
 
-    const bool opaqueCulled = opaque && FLAG_IS_SET(hwNodePtr, NODE_POINTER_CULL_OPAQUE);
+    const bool opaqueCulled =
+        (opaque && FLAG_IS_SET(hwNodePtr, NODE_POINTER_CULL_OPAQUE)) ||
+        ((opaque == false) && FLAG_IS_SET(hwNodePtr, NODE_POINTER_CULL_NON_OPAQUE));
 
     if (triangleCulled || opaqueCulled)
     {

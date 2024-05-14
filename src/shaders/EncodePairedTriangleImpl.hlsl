@@ -359,8 +359,6 @@ uint ComputePrimRefCountBlockOffset(
 //======================================================================================================================
 void EncodePairedTriangleNodeImpl(
     RWBuffer<float3>           GeometryBuffer,
-    RWByteAddressBuffer        IndexBuffer,
-    RWStructuredBuffer<float4> TransformBuffer,
     GeometryArgs               geometryArgs,
     uint                       primitiveIndex,
     uint                       globalId,
@@ -386,11 +384,16 @@ void EncodePairedTriangleNodeImpl(
 
     const uint dstScratchNodeOffset = DstMetadata.Load(primRefCountOffset);
 
+    const IndexBufferInfo indexBufferInfo =
+    {
+        geometryArgs.IndexBufferVaLo,
+        geometryArgs.IndexBufferVaHi,
+        geometryArgs.IndexBufferByteOffset + indexOffsetInBytes,
+        geometryArgs.IndexBufferFormat,
+    };
+
     // Fetch face indices from index buffer
-    uint3 faceIndices = FetchFaceIndices(IndexBuffer,
-                                         primitiveIndex,
-                                         geometryArgs.IndexBufferByteOffset + indexOffsetInBytes,
-                                         geometryArgs.IndexBufferFormat);
+    uint3 faceIndices = FetchFaceIndices(primitiveIndex, indexBufferInfo);
 
     const bool isIndexed = (geometryArgs.IndexBufferFormat != IndexFormatInvalid);
 
@@ -406,14 +409,16 @@ void EncodePairedTriangleNodeImpl(
     const uint maxIndex = max(faceIndices.x, max(faceIndices.y, faceIndices.z));
     if (maxIndex < geometryArgs.vertexCount)
     {
+        const uint64_t transformBufferGpuVa =
+            PackUint64(geometryArgs.TransformBufferGpuVaLo, geometryArgs.TransformBufferGpuVaHi);
+
         // Fetch triangle vertex data from vertex buffer
-        tri = FetchTransformedTriangleData(geometryArgs,
-                                           GeometryBuffer,
+        tri = FetchTransformedTriangleData(GeometryBuffer,
                                            faceIndices,
                                            geometryArgs.GeometryStride,
                                            vertexOffset,
-                                           geometryArgs.HasValidTransform,
-                                           TransformBuffer,
+                                           geometryArgs.VertexComponentCount,
+                                           transformBufferGpuVa,
                                            transformOffestInElements);
 
         // Generate triangle bounds and update scene bounding box
@@ -465,7 +470,7 @@ void EncodePairedTriangleNodeImpl(
 
     // Allocate scratch nodes for active triangle primitives using the precomputed block offset for each
     // triangle geometry
-    const uint laneActivePrimIdx = WavePrefixSum(isActiveTriangle ? 1 : 0);
+    const uint laneActivePrimIdx = WavePrefixCountBits(isActiveTriangle);
     const uint dstScratchNodeIdx = dstScratchNodeOffset + laneActivePrimIdx;
 
     const bool hasValidQuad = (pairInfo >= 0);
@@ -516,19 +521,22 @@ void EncodePairedTriangleNodeImpl(
 //======================================================================================================================
 uint TryPairTriangleImpl(
     RWBuffer<float3>           GeometryBuffer,
-    RWByteAddressBuffer        IndexBuffer,
-    RWStructuredBuffer<float4> TransformBuffer,
     GeometryArgs               geometryArgs,
     uint                       primitiveIndex,
     uint                       vertexOffset,
     uint                       indexOffsetInBytes,
-    uint                       transformOffsetInElements)
+    uint                       transformOffsetInBytes)
 {
+    const IndexBufferInfo indexBufferInfo =
+    {
+        geometryArgs.IndexBufferVaLo,
+        geometryArgs.IndexBufferVaHi,
+        geometryArgs.IndexBufferByteOffset + indexOffsetInBytes,
+        geometryArgs.IndexBufferFormat,
+    };
+
     // Fetch face indices from index buffer
-    uint3 faceIndices = FetchFaceIndices(IndexBuffer,
-                                         primitiveIndex,
-                                         geometryArgs.IndexBufferByteOffset + indexOffsetInBytes,
-                                         geometryArgs.IndexBufferFormat);
+    uint3 faceIndices = FetchFaceIndices(primitiveIndex, indexBufferInfo);
 
     const bool isIndexed = (geometryArgs.IndexBufferFormat != IndexFormatInvalid);
 
@@ -545,15 +553,17 @@ uint TryPairTriangleImpl(
         }
         else
         {
+            const uint64_t transformBufferGpuVa =
+                PackUint64(geometryArgs.TransformBufferGpuVaLo, geometryArgs.TransformBufferGpuVaHi);
+
             // Fetch triangle vertex data from vertex buffer
-            TriangleData tri = FetchTransformedTriangleData(geometryArgs,
-                                                            GeometryBuffer,
+            TriangleData tri = FetchTransformedTriangleData(GeometryBuffer,
                                                             faceIndices,
                                                             geometryArgs.GeometryStride,
                                                             vertexOffset,
-                                                            geometryArgs.HasValidTransform,
-                                                            TransformBuffer,
-                                                            transformOffsetInElements);
+                                                            geometryArgs.VertexComponentCount,
+                                                            transformBufferGpuVa,
+                                                            transformOffsetInBytes);
 
             float3x3 faceVertices;
             faceVertices[0] = tri.v0;

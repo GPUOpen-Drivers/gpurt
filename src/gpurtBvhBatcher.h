@@ -67,7 +67,7 @@ private:
     void DispatchInitAccelerationStructure(
         Util::Span<BvhBuilder> builders);
 
-    void Barrier(uint32 flags = 0);
+    void Barrier(uint32 flags = BarrierFlagSyncDispatch);
 
     bool PhaseEnabled(BuildPhaseFlags phase);
 

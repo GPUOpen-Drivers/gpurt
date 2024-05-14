@@ -65,10 +65,7 @@ struct BuildPlocArgs
     uint  splitBoxesByteOffset;
     uint  plocRadius;
     uint  primIndicesSortedScratchOffset;
-    uint  numLeafNodes;
     uint  unsortedBvhLeafNodesOffset;
-    uint reserved0;
-    uint reserved1;
 };
 
 #if NO_SHADER_ENTRYPOINT == 0
@@ -581,7 +578,8 @@ void FindNearestNeighbour(
                 aabbLeft,
                 rightNodeIndex,
                 rightNode,
-                aabbRight);
+                aabbRight,
+                0);
 
             WriteScratchNodeDataAtOffset(leftNodeOffset, SCRATCH_NODE_PARENT_OFFSET, mergedNodeIndex);
             WriteScratchNodeDataAtOffset(rightNodeOffset, SCRATCH_NODE_PARENT_OFFSET, mergedNodeIndex);
@@ -907,9 +905,7 @@ void BuildBVHPLOC(
     plocArgs.plocRadius                     = Settings.plocRadius;
     plocArgs.splitBoxesByteOffset           = ShaderConstants.offsets.triangleSplitBoxes;
     plocArgs.primIndicesSortedScratchOffset = ShaderConstants.offsets.primIndicesSorted;
-    plocArgs.numLeafNodes                   = ShaderConstants.numLeafNodes;
     plocArgs.unsortedBvhLeafNodesOffset     = ShaderConstants.offsets.bvhLeafNodeData;
-
     plocArgs.scratchNodesScratchOffset = CalculateBvhNodesOffset(ShaderConstants, numActivePrims);
 
     if (numActivePrims > 0)

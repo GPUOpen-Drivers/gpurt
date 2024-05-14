@@ -18,6 +18,8 @@ The primary functionality provided by GPURT includes the following:
 * Acceleration structure capture and decode.
 * Ray tracing traversal counter and ray history data capture.
 
+GPURT follows [PAL Coding Standards](https://github.com/GPUOpen-Drivers/pal/blob/dev/doc/process/palCodingStandards.md) whenever possible.
+
 ## Acceleration Structure
 
 GPURT interfaces support various acceleration structure operations including:

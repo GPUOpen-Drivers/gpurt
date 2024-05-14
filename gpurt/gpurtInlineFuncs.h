@@ -228,4 +228,13 @@ inline BufferViewFormat VertexFormatToBufferViewFormat(VertexFormat format)
 #undef FORMAT_CASE
 }
 
+//=====================================================================================================================
+// A helper function for converting VertexFormat to size of its component in bytes.
+inline uint8 GetBytesPerComponentForFormat(VertexFormat format)
+{
+    return GetBytesPerPixelForFormat(
+        GetSingleComponentFormatForFormat(
+            VertexFormatToBufferViewFormat(format)));
+}
+
 }

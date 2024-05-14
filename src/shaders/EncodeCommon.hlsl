@@ -32,188 +32,56 @@ struct IndirectBuildOffset
     uint transformOffset;
 };
 
-struct GeometryArgs
+#include "TrianglePrimitive.hlsl"
+
+//=====================================================================================================================
+GeometryArgs GetGeometryArgsFromConstants(
+    uint geometryIndex,
+    BuildShaderGeometryConstants geomConstants)
 {
-    uint metadataSizeInBytes;           // Size of the metadata header
-    uint NumPrimitives;                 // Number of primitives
-    uint LeafNodeDataByteOffset;        // Leaf node data byte offset
-    uint PrimitiveOffset;               // Primitive Offset
-    uint SceneBoundsByteOffset;         // Scene bounds byte offset
-    uint PropagationFlagsScratchOffset; // Flags byte offset
-    uint BaseUpdateStackScratchOffset;  // Update stack offset
-    uint IndexBufferByteOffset;         // Index buffer byte offset
-    uint HasValidTransform;             // Has a valid transform
-    uint IndexBufferFormat;             // Index buffer format
-    uint GeometryStride;                // Geometry buffer stride in terms of components for vertices. 0 if the
-                                        // stride is accounted for in the SRD. R32G32 elements for AABBs.
-    uint GeometryIndex;                 // Index of the geometry description that owns this node
-    uint BaseGeometryInfoOffset;        // Base offset for the geometry info
-    uint BasePrimNodePtrOffset;         // Base offset for the prim nodes
-    uint BuildFlags;                    // DDI acceleration structure build flags
-    uint GeometryFlags;                 // Geometry flags (D3D12_RAYTRACING_GEOMETRY_FLAGS)
-    uint VertexComponentCount;          // Components in vertex buffer format
-    uint vertexCount;                   // Vertex count
-    uint DestLeafByteOffset;            // Destination buffer leaf node data section offset
-    uint LeafNodeExpansionFactor;       // Leaf node expansion factor (> 1 for triangle splitting)
-    uint IndexBufferInfoScratchOffset;
-    uint IndexBufferVaLo;
-    uint IndexBufferVaHi;
-    uint blockOffset;                    // Starting block index for current geometry
-    uint encodeTaskCounterScratchOffset;
-};
+    GeometryArgs args = (GeometryArgs)0;
 
-//======================================================================================================================
-// Get face indices from 16-bit index buffer
-uint3 GetFaceIndices16(RWByteAddressBuffer buffer, uint faceIndex, uint indexBufferByteOffset)
-{
-    const uint stride = 6; // 3 vertices per triangle with 2-byte indices
-    uint address = (faceIndex * stride) + indexBufferByteOffset;
+    args.metadataSizeInBytes            = ShaderConstants.header.metadataSizeInBytes;
+    args.NumPrimitives                  = geomConstants.numPrimitives;
+    args.LeafNodeDataByteOffset         = ShaderConstants.offsets.bvhLeafNodeData;
+    args.PrimitiveOffset                = geomConstants.primitiveOffset;
+    args.SceneBoundsByteOffset          = ShaderConstants.offsets.sceneBounds;
+    args.PropagationFlagsScratchOffset  = ShaderConstants.offsets.propagationFlags;
+    args.BaseUpdateStackScratchOffset   = ShaderConstants.offsets.updateStack;
+    args.IndexBufferByteOffset          = geomConstants.indexBufferByteOffset;
+    args.IndexBufferFormat              = geomConstants.indexBufferFormat;
+    args.GeometryStride                 = geomConstants.geometryStride;
+    args.GeometryIndex                  = geometryIndex;
+    args.BaseGeometryInfoOffset         = ShaderConstants.header.offsets.geometryInfo;
+    args.BasePrimNodePtrOffset          = ShaderConstants.header.offsets.primNodePtrs;
+    args.GeometryFlags                  = geomConstants.geometryFlags;
+    args.VertexComponentCount           = geomConstants.vertexComponentCount;
+    args.VertexComponentSize            = geomConstants.vertexComponentSize;
+    args.vertexCount                    = geomConstants.vertexCount;
+    args.DestLeafByteOffset             = ShaderConstants.header.offsets.leafNodes;
+    args.LeafNodeExpansionFactor        = ShaderConstants.leafNodeExpansionFactor;
+    args.IndexBufferVaLo                = geomConstants.indexBufferGpuVaLo;
+    args.IndexBufferVaHi                = geomConstants.indexBufferGpuVaHi;
+    args.TransformBufferGpuVaLo         = geomConstants.transformBufferGpuVaLo;
+    args.TransformBufferGpuVaHi         = geomConstants.transformBufferGpuVaHi;
+    args.blockOffset                    = geomConstants.blockOffset;
+    args.encodeTaskCounterScratchOffset = ShaderConstants.offsets.encodeTaskCounter;
 
-    // Load address must be 4-byte aligned
-    const bool unalignedRead = (address % 4 == 2);
-    if (unalignedRead)
-    {
-        // Align down load address
-        address -= 2;
-    }
-
-    // Load index buffer data
-    const uint2 data = buffer.Load2(address);
-
-    uint3 faceIndices;
-    if (unalignedRead == false)
-    {
-        faceIndices.x = (data.x & 0xFFFF);
-        faceIndices.y = (data.x >> 16);
-        faceIndices.z = (data.y & 0xFFFF);
-    }
-    else
-    {
-        faceIndices.x = (data.x >> 16);
-        faceIndices.y = (data.y & 0xFFFF);
-        faceIndices.z = (data.y >> 16);
-    }
-
-    return faceIndices;
+    return args;
 }
 
 //=====================================================================================================================
-// Get face indices from 16-bit index buffer
-uint FetchIndex16(RWByteAddressBuffer buffer, uint faceIndex, uint indexOffset, uint indexBufferByteOffset)
+GeometryArgs InitGeometryArgs(
+    in uint geometryIndex)
 {
-    const uint indexStride = 2;
-    const uint faceStride = 3 * indexStride; // 3 vertices per triangle with 2-byte indices
-    uint address = (faceIndex * faceStride) + (indexOffset * indexStride) + indexBufferByteOffset;
-
-    // Load address must be 4-byte aligned
-    const bool unalignedRead = (address % 4 == 2);
-    if (unalignedRead)
-    {
-        // Align down load address
-        address -= 2;
-    }
-
-    // Load index buffer data
-    const uint data = buffer.Load(address);
-
-    uint index;
-    if (unalignedRead == false)
-    {
-        index = (data & 0xFFFF);
-    }
-    else
-    {
-        index = (data >> 16);
-    }
-
-    return index;
+    return GetGeometryArgsFromConstants(geometryIndex, GeometryConstants[geometryIndex]);
 }
 
 //=====================================================================================================================
-// Get face indices from 32-bit index buffer
-uint FetchIndex32(RWByteAddressBuffer buffer, uint faceIndex, uint indexOffset, uint indexBufferByteOffset)
+GeometryArgs InitGeometryArgsNonUniform(
+    in uint geometryIndex)
 {
-    const uint indexStride = 4;
-    const uint faceStride = 3 * indexStride; // 3 vertices per triangle with 4-byte indices
-
-    const uint baseOffset = (faceIndex * faceStride) + (indexOffset * indexStride) + indexBufferByteOffset;
-    return buffer.Load(baseOffset);
-}
-
-//=====================================================================================================================
-// Get face indices from 32-bit index buffer
-uint3 GetFaceIndices32(RWByteAddressBuffer buffer, uint faceIndex, uint indexBufferByteOffset)
-{
-    const uint stride = 12; // 3 vertices per triangle with 4-byte indices
-
-    const uint baseOffset = (faceIndex * 12) + indexBufferByteOffset;
-    return buffer.Load3(baseOffset);
-}
-
-//=====================================================================================================================
-// Vertex buffers only require an address and stride alignment of the format component size not the entire element size.
-// If the input data is not naturally aligned, we cannot use a single typed fetch for the 2-3 components. In this case,
-// we need to fetch each component separately.
-float3 FetchVertexPerComponent(GeometryArgs geometryArgs, RWBuffer<float3> buffer, uint index, uint strideInComponents)
-{
-    const uint firstComponentIndex = index * strideInComponents;
-
-    float3 vertex;
-    vertex.x = buffer[firstComponentIndex+0].x;
-    vertex.y = buffer[firstComponentIndex+1].x;
-    if (geometryArgs.VertexComponentCount > 2)
-    {
-        vertex.z = buffer[firstComponentIndex+2].x;
-    }
-    else
-    {
-        vertex.z = 0;
-    }
-
-    return vertex;
-}
-
-//=====================================================================================================================
-TriangleData FetchTriangleData(
-    GeometryArgs     geometryArgs,
-    RWBuffer<float3> buffer,
-    uint3            index,
-    uint             strideInComponents,
-    uint             vertexOffset)
-{
-    TriangleData tri;
-
-    const uint3 i = index + vertexOffset;
-
-    if (strideInComponents == 0)
-    {
-        tri.v0 = buffer[i.x];
-        tri.v1 = buffer[i.y];
-        tri.v2 = buffer[i.z];
-    }
-    else
-    {
-        tri.v0 = FetchVertexPerComponent(geometryArgs, buffer, i.x, strideInComponents);
-        tri.v1 = FetchVertexPerComponent(geometryArgs, buffer, i.y, strideInComponents);
-        tri.v2 = FetchVertexPerComponent(geometryArgs, buffer, i.z, strideInComponents);
-    }
-
-    return tri;
-}
-
-//======================================================================================================================
-uint CalcTriangleBoxNodeFlags(
-    in uint geometryFlags)
-{
-    // Determine opacity from geometry flags
-    uint nodeFlags =
-        (geometryFlags & D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE) ? 1u << BOX_NODE_FLAGS_ONLY_OPAQUE_SHIFT :
-                                                                  1u << BOX_NODE_FLAGS_ONLY_NON_OPAQUE_SHIFT;
-
-    // Note, a bottom-level acceleration structure can only contain a single geometry type.
-    nodeFlags |= 1u << BOX_NODE_FLAGS_ONLY_TRIANGLES_SHIFT;
-
-    return nodeFlags;
+    return GetGeometryArgsFromConstants(geometryIndex, GeometryConstants[NonUniformResourceIndex(geometryIndex)]);
 }
 
 //======================================================================================================================
@@ -260,7 +128,7 @@ void WriteScratchTriangleNode(
 }
 
 //=====================================================================================================================
-#if INDIRECT_BUILD
+// Used by indirect build
 uint ComputePrimitiveOffset(
     GeometryArgs geometryArgs)
 {
@@ -290,7 +158,6 @@ uint ComputePrimitiveOffset(
 
     return primitiveOffset;
 }
-#endif
 
 //======================================================================================================================
 void WriteGeometryInfo(
@@ -325,120 +192,6 @@ void WriteGeometryInfo(
 
         DstMetadata.Store<GeometryInfo>(geometryInfoOffset, info);
     }
-
-    if ((IsUpdate() == false) &&
-        (Settings.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
-        // when enableEarlyTriangleCompression, we don't allocate scratch space for indexbuffer info
-        (Settings.enableEarlyPairCompression == false))
-    {
-        IndexBufferInfo indexBufferInfo;
-        indexBufferInfo.gpuVaLo    = geometryArgs.IndexBufferVaLo;
-        indexBufferInfo.gpuVaHi    = geometryArgs.IndexBufferVaHi;
-        indexBufferInfo.byteOffset = geometryArgs.IndexBufferByteOffset;
-        indexBufferInfo.format     = geometryArgs.IndexBufferFormat;
-
-        const uint indexBufferInfoOffset = geometryArgs.IndexBufferInfoScratchOffset +
-                                            (geometryArgs.GeometryIndex * sizeof(IndexBufferInfo));
-        ScratchBuffer.Store<IndexBufferInfo>(indexBufferInfoOffset, indexBufferInfo);
-    }
-}
-
-//======================================================================================================================
-TriangleData FetchTransformedTriangleData(
-    in GeometryArgs               geometryArgs,
-    in RWBuffer<float3>           geometryBuffer,
-    in uint3                      faceIndices,
-    in uint                       geometryStride,
-    in uint                       vertexOffset,
-    in bool                       hasValidTransform,
-    in RWStructuredBuffer<float4> transformBuffer,
-    in uint                       transformOffsetInElements)
-{
-    // Fetch triangle vertex data from vertex buffer
-    TriangleData tri =
-        FetchTriangleData(geometryArgs, geometryBuffer, faceIndices, geometryStride, vertexOffset);
-
-    // If this geometry has a valid transformation matrix. Transform each vertex using this matrix.
-    if (hasValidTransform)
-    {
-        float4x4 transform;
-        transform[0] = transformBuffer[transformOffsetInElements + 0];
-        transform[1] = transformBuffer[transformOffsetInElements + 1];
-        transform[2] = transformBuffer[transformOffsetInElements + 2];
-        transform[3] = float4(0, 0, 0, 1);
-
-        tri.v0 = mul(transform, float4(tri.v0, 1)).xyz;
-        tri.v1 = mul(transform, float4(tri.v1, 1)).xyz;
-        tri.v2 = mul(transform, float4(tri.v2, 1)).xyz;
-    }
-
-    if (any(isinf(tri.v0)) || any(isinf(tri.v1)) || any(isinf(tri.v2)))
-    {
-        tri.v0 = float3(0, 0, 0);
-        tri.v1 = float3(0, 0, 0);
-        tri.v2 = float3(0, 0, 0);
-    }
-
-    return tri;
-}
-
-//======================================================================================================================
-uint3 FetchFaceIndices(
-    in RWByteAddressBuffer buffer,
-    in uint                index,
-    in uint                indexBufferByteOffset,
-    in uint                indexBufferFormat)
-{
-    // Fetch face indices from index buffer
-    uint3 faceIndices;
-    if (indexBufferFormat == IndexFormatU16)
-    {
-        faceIndices = GetFaceIndices16(buffer, index, indexBufferByteOffset);
-    }
-    else if (indexBufferFormat == IndexFormatU32)
-    {
-        faceIndices = GetFaceIndices32(buffer, index, indexBufferByteOffset);
-    }
-    else
-    {
-        const uint startIndex = (index * 3);
-        faceIndices.x = startIndex;
-        faceIndices.y = startIndex + 1;
-        faceIndices.z = startIndex + 2;
-    }
-    return faceIndices;
-}
-
-//=====================================================================================================================
-uint FetchIndex(
-    in RWByteAddressBuffer buffer,
-    in uint                primitiveIndex,
-    in uint                indexOffset,
-    in uint                indexBufferByteOffset,
-    in uint                indexBufferFormat)
-{
-    // Fetch face indices from index buffer
-    uint index;
-    if (indexBufferFormat == IndexFormatU16)
-    {
-        index = FetchIndex16(buffer, primitiveIndex, indexOffset, indexBufferByteOffset);
-    }
-    else if (indexBufferFormat == IndexFormatU32)
-    {
-        index = FetchIndex32(buffer, primitiveIndex, indexOffset, indexBufferByteOffset);
-    }
-    else
-    {
-        index = (primitiveIndex * 3) + indexOffset;
-    }
-
-    return index;
-}
-
-//======================================================================================================================
-bool IsActive(TriangleData tri)
-{
-    return ((isnan(tri.v0.x) == false) && (isnan(tri.v1.x) == false) && (isnan(tri.v2.x) == false));
 }
 
 //=====================================================================================================================
@@ -534,16 +287,17 @@ void ClearFlagsForRefitAndUpdate(
     const uint      flattenedPrimitiveIndex,
     const bool      isAABB)
 {
+    const uint initValue = Settings.enableFastLBVH ? 0xffffffffu : 0;
+
     if (isAABB)
     {
         const uint flagOffset = geometryArgs.PropagationFlagsScratchOffset + (flattenedPrimitiveIndex * sizeof(uint));
-        ScratchBuffer.Store(flagOffset, 0);
+        ScratchBuffer.Store(flagOffset, initValue);
     }
     else // Triangle
     {
         const uint stride = geometryArgs.LeafNodeExpansionFactor * sizeof(uint);
         const uint flagOffset = geometryArgs.PropagationFlagsScratchOffset + (flattenedPrimitiveIndex * stride);
-        const uint initValue = Settings.enableFastLBVH ? 0xffffffffu : 0;
         for (uint i = 0; i < geometryArgs.LeafNodeExpansionFactor; ++i)
         {
             ScratchBuffer.Store(flagOffset + (i * sizeof(uint)), initValue);
@@ -554,14 +308,12 @@ void ClearFlagsForRefitAndUpdate(
 //======================================================================================================================
 void EncodeTriangleNode(
     RWBuffer<float3>           GeometryBuffer,
-    RWByteAddressBuffer        IndexBuffer,
-    RWStructuredBuffer<float4> TransformBuffer,
     GeometryArgs               geometryArgs,
     uint                       primitiveIndex,
     uint                       primitiveOffset,
-    uint                       vertexOffset,
+    uint                       vertexOffsetInComponents,
     uint                       indexOffsetInBytes,
-    uint                       transformOffsetInElements,
+    uint                       transformOffsetInBytes,
     bool                       writeNodesToUpdateStack)
 {
     const uint metadataSize = IsUpdate() ?
@@ -579,24 +331,31 @@ void EncodeTriangleNode(
         metadataSize + basePrimNodePtr + (flattenedPrimitiveIndex * sizeof(uint));
 
     // Fetch face indices from index buffer
-    uint3 faceIndices = FetchFaceIndices(IndexBuffer,
-                                         primitiveIndex,
-                                         geometryArgs.IndexBufferByteOffset + indexOffsetInBytes,
-                                         geometryArgs.IndexBufferFormat);
+    const IndexBufferInfo indexBufferInfo =
+    {
+        geometryArgs.IndexBufferVaLo,
+        geometryArgs.IndexBufferVaHi,
+        geometryArgs.IndexBufferByteOffset + indexOffsetInBytes,
+        geometryArgs.IndexBufferFormat,
+    };
+
+    uint3 faceIndices = FetchFaceIndices(primitiveIndex, indexBufferInfo);
 
     // Check if vertex indices are within bounds, otherwise make the triangle inactive
     const uint maxIndex = max(faceIndices.x, max(faceIndices.y, faceIndices.z));
     if (maxIndex < geometryArgs.vertexCount)
     {
+        const uint64_t transformBufferGpuVa =
+            PackUint64(geometryArgs.TransformBufferGpuVaLo, geometryArgs.TransformBufferGpuVaHi);
+
         // Fetch triangle vertex data from vertex buffer
-        TriangleData tri = FetchTransformedTriangleData(geometryArgs,
-                                                        GeometryBuffer,
+        TriangleData tri = FetchTransformedTriangleData(GeometryBuffer,
                                                         faceIndices,
                                                         geometryArgs.GeometryStride,
-                                                        vertexOffset,
-                                                        geometryArgs.HasValidTransform,
-                                                        TransformBuffer,
-                                                        transformOffsetInElements);
+                                                        vertexOffsetInComponents,
+                                                        geometryArgs.VertexComponentCount,
+                                                        transformBufferGpuVa,
+                                                        transformOffsetInBytes);
 
         uint nodePointer = INVALID_IDX;
         uint triangleId  = 0;
@@ -688,25 +447,32 @@ void EncodeTriangleNode(
                         uint otherPrimIndexOffset = TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET;
                         const uint otherPrimIndex = SrcBuffer.Load(triNodeOffset + otherPrimIndexOffset);
 
+                        const IndexBufferInfo indexBufferInfo =
+                        {
+                            geometryArgs.IndexBufferVaLo,
+                            geometryArgs.IndexBufferVaHi,
+                            geometryArgs.IndexBufferByteOffset,
+                            geometryArgs.IndexBufferFormat,
+                        };
+
                         // Fetch face indices from index buffer.
-                        const uint3 faceIndices = FetchFaceIndices(IndexBuffer,
-                                                                   otherPrimIndex,
-                                                                   geometryArgs.IndexBufferByteOffset,
-                                                                   geometryArgs.IndexBufferFormat);
+                        const uint3 faceIndices = FetchFaceIndices(otherPrimIndex, indexBufferInfo);
 
                         // Check if vertex indices are within bounds.
                         const uint maxIndex = max(faceIndices.x, max(faceIndices.y, faceIndices.z));
                         if (maxIndex < geometryArgs.vertexCount)
                         {
+                            const uint64_t transformBufferGpuVa =
+                                PackUint64(geometryArgs.TransformBufferGpuVaLo, geometryArgs.TransformBufferGpuVaHi);
+
                             // Fetch triangle vertex data from vertex buffer.
-                            const TriangleData tri = FetchTransformedTriangleData(geometryArgs,
-                                                                                  GeometryBuffer,
+                            const TriangleData tri = FetchTransformedTriangleData(GeometryBuffer,
                                                                                   faceIndices,
                                                                                   geometryArgs.GeometryStride,
-                                                                                  vertexOffset,
-                                                                                  geometryArgs.HasValidTransform,
-                                                                                  TransformBuffer,
-                                                                                  transformOffsetInElements);
+                                                                                  vertexOffsetInComponents,
+                                                                                  geometryArgs.VertexComponentCount,
+                                                                                  transformBufferGpuVa,
+                                                                                  transformOffsetInBytes);
 
                             const BoundingBox otherBox = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
 
@@ -793,9 +559,9 @@ void EncodeTriangleNode(
 
 //=====================================================================================================================
 // Fetch API bounding box from source buffer which is a typed R32G32 buffer.
-BoundingBox FetchBoundingBoxData(RWBuffer<float3> buffer, uint index, uint boxStrideInElements)
+BoundingBox FetchBoundingBoxData(RWBuffer<float3> buffer, uint index, uint offsetInElements, uint boxStrideInElements)
 {
-    const uint baseElementIndex = index * boxStrideInElements;
+    const uint baseElementIndex = index * boxStrideInElements + offsetInElements;
 
     float2 data[3];
     data[0] = buffer[baseElementIndex+0].xy;
@@ -901,11 +667,10 @@ void WriteProceduralNodePrimitiveData(
 //======================================================================================================================
 void EncodeAabbNode(
     RWBuffer<float3>           GeometryBuffer,
-    RWByteAddressBuffer        IndexBuffer,
-    RWStructuredBuffer<float4> TransformBuffer,
     GeometryArgs               geometryArgs,
     uint                       primitiveIndex,
     uint                       primitiveOffset,
+    uint                       geometryOffsetInComponents,
     bool                       writeNodesToUpdateStack)
 {
     const uint metadataSize =
@@ -918,9 +683,12 @@ void EncodeAabbNode(
     const uint basePrimNodePtr =
         IsUpdate() ? offsets.primNodePtrs : geometryArgs.BasePrimNodePtrOffset;
 
+    // Typed buffer view for AABBs uses two channels (X32Y32) - each element has 2 components.
+    const uint geometryOffsetInElements = geometryOffsetInComponents / 2;
     // Get bounds for this thread
     const BoundingBox boundingBox = FetchBoundingBoxData(GeometryBuffer,
                                                          primitiveIndex,
+                                                         geometryOffsetInElements,
                                                          geometryArgs.GeometryStride);
 
     // Set the instance inclusion mask to 0 for degenerate procedural nodes so that they are culled out.

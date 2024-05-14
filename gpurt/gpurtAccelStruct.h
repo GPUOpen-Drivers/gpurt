@@ -250,6 +250,14 @@ struct AccelStructHeader
             ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_MASK);
     }
 
+    uint32 BuildFlags()
+    {
+#ifdef __cplusplus
+        return info.flags;
+#else
+        return (info >> 16u);
+#endif
+    }
 };
 
 #define ACCEL_STRUCT_HEADER_SIZE                               128

@@ -91,6 +91,7 @@ set(gpurtHlsl
     TraceRay2_0.hlsl
     TraceRayCommon.hlsl
     TriangleSplitting.hlsl
+    TrianglePrimitive.hlsl
     Update.hlsl
     UpdateParallel.hlsl
     UpdateQBVH.hlsl
@@ -107,6 +108,7 @@ set(otherDeps
     ../../gpurt/gpurtBuildSettings.h
     ../../gpurt/gpurtCounter.h
     ../../gpurt/gpurtDispatch.h
+    ../../gpurt/gpurtTraceSettings.h
     ../shared/accelStruct.h
     ../shared/debugBuffer.h
     ../shared/gpurtBuildConstants.h

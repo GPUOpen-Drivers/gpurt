@@ -30,6 +30,7 @@
 #include "../../gpurt/gpurtAccelStruct.h"
 #include "../../gpurt/gpurtBuildSettings.h"
 #include "../../gpurt/gpurtDispatch.h"
+#include "../../gpurt/gpurtTraceSettings.h"
 #include "accelStruct.h"
 #include "gpurtBuildConstants.h"
 #ifdef __cplusplus
@@ -179,7 +180,8 @@ enum SceneBoundsCalculation : uint
 #define MIXED_NODES_IN_BLAS_AS_FP16        2
 #define ALL_INTERIOR_NODES_IN_BLAS_AS_FP16 3
 
-// Mask for MSB within node pointer - used to mark nodes in RefitBounds
+// The highest 3 bits are zero after the right shift in PackNodePointer and may be repurposed.
+// Mask for MSB within node pointer
 #define NODE_POINTER_MASK_MSB              0x80000000u
 
 //=====================================================================================================================
@@ -194,12 +196,6 @@ static const uint ByteStrideU32         = 12;
 static const uint IndexFormatInvalid    = 0;
 static const uint IndexFormatU32        = 1;
 static const uint IndexFormatU16        = 2;
-
-// To be used by the ray sorting algorithm which uses bins to sort rays:
-// the size of a bin to store rays that are related
-static const uint RegroupingBinSize               = 64;
-// The count of the bins used in the ray sorting algorithm.
-static const uint RegroupingBinCount              = 64;
 
 const static uint TILE_WIDTH = 256;
 const static uint TILE_SIZE  = TILE_WIDTH * TILE_WIDTH;
@@ -223,6 +219,13 @@ struct BoundingBox // matches D3D12_RAYTRACING_AABB
 {
     float3 min;
     float3 max;
+};
+
+//=====================================================================================================================
+struct BoundingBox4
+{
+    float4 min;
+    float4 max;
 };
 
 //=====================================================================================================================
@@ -629,7 +632,8 @@ static uint ClearNodeType(uint nodePointer)
 }
 
 //=====================================================================================================================
-// TODO: The highest 3 bits are not handled since they currently aren't written when building the QBVH.
+// NOTE: The highest 3 bits are excluded. They aren't written when building the QBVH and may have been repurposed. See
+// NODE_POINTER_MASK_MSB
 static uint ExtractNodePointerOffset(uint nodePointer)
 {
     // From the HW raytracing spec:
@@ -926,7 +930,7 @@ struct StackPtrs
 #define STACK_PTRS_SRC_PTR_OFFSET         0
 #define STACK_PTRS_DST_PTR_OFFSET         4
 #define STACK_PTRS_NUM_LEAFS_DONE_OFFSET  8
-#define STACK_PTR_SIZE                    12
+#define STACK_PTR_SIZE                     12
 
 #ifdef __cplusplus
 static_assert(STACK_PTR_SIZE                   == sizeof(StackPtrs), "StackPtrs structure mismatch");
@@ -1043,14 +1047,30 @@ struct StateTaskQueueCounter
 
 //=====================================================================================================================
 // Counters used in encode phase
-struct EncodeTaskCounters
+
+//=====================================================================================================================
+struct EncodeTaskCountersBuildParallel
 {
     uint numPrimitives;
     uint primRefs;
 };
 
+//=====================================================================================================================
+struct EncodeTaskCounters
+{
+    uint numPrimitives;
+    uint primRefs;
+
+    // The following indirect arguments are only used in mult-dispatch path. Note, currently only HPLOC dispatch uses
+    // these, but it will be extended to other passes when early pair compression is enabled.
+    uint groupCountX;
+    uint groupCountY;
+    uint groupCountZ;
+};
+
 #define ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET 0
 #define ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET      4
+#define ENCODE_TASK_COUNTER_INDIRECT_ARGS         8
 #define ENCODE_TASK_COUNTER_NUM_DWORDS            (sizeof(EncodeTaskCounters) / sizeof(uint))
 
 //=====================================================================================================================
@@ -1527,5 +1547,36 @@ struct TriangleData
 };
 
 //=====================================================================================================================
+
+//=====================================================================================================================
+struct GeometryArgs
+{
+    uint metadataSizeInBytes;           // Size of the metadata header
+    uint NumPrimitives;                 // Number of primitives
+    uint LeafNodeDataByteOffset;        // Leaf node data byte offset
+    uint PrimitiveOffset;               // Primitive Offset
+    uint SceneBoundsByteOffset;         // Scene bounds byte offset
+    uint PropagationFlagsScratchOffset; // Flags byte offset
+    uint BaseUpdateStackScratchOffset;  // Update stack offset
+    uint IndexBufferByteOffset;         // Index buffer byte offset
+    uint IndexBufferFormat;             // Index buffer format
+    uint GeometryStride;                // Geometry buffer stride in terms of components for vertices. 0 if the
+                                        // stride is accounted for in the SRD. R32G32 elements for AABBs.
+    uint GeometryIndex;                 // Index of the geometry description that owns this node
+    uint BaseGeometryInfoOffset;        // Base offset for the geometry info
+    uint BasePrimNodePtrOffset;         // Base offset for the prim nodes
+    uint GeometryFlags;                 // Geometry flags (D3D12_RAYTRACING_GEOMETRY_FLAGS)
+    uint VertexComponentCount;          // Components in vertex buffer format
+    uint VertexComponentSize;           // Size of component (in bytes) in vertex buffer format.
+    uint vertexCount;                   // Vertex count
+    uint DestLeafByteOffset;            // Destination buffer leaf node data section offset
+    uint LeafNodeExpansionFactor;       // Leaf node expansion factor (> 1 for triangle splitting)
+    uint IndexBufferVaLo;
+    uint IndexBufferVaHi;
+    uint TransformBufferGpuVaLo;
+    uint TransformBufferGpuVaHi;
+    uint blockOffset;                    // Starting block index for current geometry
+    uint encodeTaskCounterScratchOffset;
+};
 
 #endif

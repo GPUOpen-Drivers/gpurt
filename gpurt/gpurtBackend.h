@@ -87,9 +87,9 @@ enum class HwPipePoint : uint32
 // =====================================================================================================================
 enum BarrierFlags : uint32
 {
-    BarrierFlagNone            = 0x0,
-    BarrierFlagSyncIndirectArg = 0x1, // Prepare previous shader output for indirect argument use
-    BarrierFlagSyncPostCopy    = 0x2, // Prepare copy to dispatch barrier
+    BarrierFlagSyncDispatch    = 0x1, // Stall the following dispatch until all previous dispatch done
+    BarrierFlagSyncIndirectArg = 0x2, // Prepare previous shader output for indirect argument use
+    BarrierFlagSyncPostCpWrite = 0x4, // Prepare data set by CP for shader use
 };
 
 // =====================================================================================================================
@@ -164,13 +164,6 @@ public:
     // Computes a hash value for build settings.
     virtual uint32 HashBuildSettings(const CompileTimeBuildSettings& buildSettings) const = 0;
 
-    // Uploads CPU memory to a GPU buffer
-    virtual void UploadCpuMemory(
-        ClientCmdBufferHandle cmdBuffer,
-        gpusize               dstBufferVa,
-        const void*           pSrcData,
-        uint32                sizeInBytes) const = 0;
-
     // Copies memory from one slice of GPU memory to another.
     virtual void CopyGpuMemoryRegion(
         ClientCmdBufferHandle cmdBuffer,
@@ -179,6 +172,14 @@ public:
         gpusize               dstVa,
         gpusize               dstOffset,
         gpusize               copySize) const = 0;
+
+    // Uploads data to video memory using CP DMA.
+    virtual void UpdateMemory(
+        ClientCmdBufferHandle  cmdBuffer,
+        const Pal::IGpuMemory& cpsVidMem,
+        Pal::gpusize           offset,
+        Pal::gpusize           size,
+        const uint32_t*        pData) const = 0;
 
     // Writes a timestamp at a given offset into video memory.
     // Will eventually replaced with a callback or other abstraction to avoid referencing video memory.

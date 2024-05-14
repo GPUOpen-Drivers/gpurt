@@ -145,7 +145,7 @@ static bool RayQueryProceedImpl2_0(
     in    uint3                   dispatchThreadId)
 {
 #if DEVELOPER
-    uint64_t timerBegin = SampleGpuTimer();
+    uint64_t timerBegin = AmdTraceRaySampleGpuTimer();
     uint rayId = 0;
     if (EnableTraversalCounter())
     {
@@ -258,6 +258,14 @@ static bool RayQueryProceedImpl2_0(
 
                 rayQuery.currNodePtr = FetchParentNodePointer(bvhAddress, rayQuery.prevNodePtr);
 
+#if GPURT_ENABLE_GPU_DEBUG
+                // Check if parent pointer fetched is valid.
+                OutOfRangeNodePointerAssert(GPURT_RTIP2_0,
+                                            rayQuery.currNodePtr,
+                                            resetRay ? topBvhAddress : bvhAddress,
+                                            topBvhAddress);
+#endif
+
                 if (rayQuery.currNodePtr == INVALID_NODE)
                 {
                     break;
@@ -328,6 +336,17 @@ static bool RayQueryProceedImpl2_0(
                                           rayQuery.candidate.origin,
                                           rayQuery.candidate.direction,
                                           rcp(rayQuery.candidate.direction));
+
+#if GPURT_ENABLE_GPU_DEBUG
+        // Check if the child pointers returned are valid.
+        if (IsBoxNode1_1(nodePointer))
+        {
+            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.x, bvhAddress, topBvhAddress);
+            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.y, bvhAddress, topBvhAddress);
+            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.z, bvhAddress, topBvhAddress);
+            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.w, bvhAddress, topBvhAddress);
+        }
+#endif
 
         rayQuery.currNodePtr = INVALID_NODE;
 
@@ -561,6 +580,14 @@ static bool RayQueryProceedImpl2_0(
         rayQuery.currNodePtr = ds_store_stack(rayQuery.stackPtr, lastNodePtr, intersectionResult);
 #endif
 
+#if GPURT_ENABLE_GPU_DEBUG
+        // Check if the node pointer popped from stack is valid.
+        OutOfRangeNodePointerAssert(GPURT_RTIP2_0,
+                                    rayQuery.currNodePtr,
+                                    (rayQuery.stackPtr < rayQuery.stackPtrTop) ? topBvhAddress : bvhAddress,
+                                    topBvhAddress);
+#endif
+
         lastNodePtr = INVALID_NODE;
 
         // RayFlag check ensures that continueTraversal will never be read as long as the following RayFlags are set:
@@ -587,7 +614,7 @@ static bool RayQueryProceedImpl2_0(
 #if DEVELOPER
     if (EnableTraversalCounter())
     {
-        uint64_t timerEnd = SampleGpuTimer();
+        uint64_t timerEnd = AmdTraceRaySampleGpuTimer();
         rayQuery.clocks += (uint)(timerEnd - timerBegin);
     }
 #endif

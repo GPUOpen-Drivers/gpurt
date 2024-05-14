@@ -22,35 +22,40 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#define RootSig "RootConstants(num32BitConstants=26, b0, visibility=SHADER_VISIBILITY_ALL), "\
-                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 1)),"\
-                "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u6, visibility=SHADER_VISIBILITY_ALL),"\
+#define RootSig "RootConstants(num32BitConstants=1, b0),"\
+                "CBV(b1),"\
+                "DescriptorTable(CBV(b0, numDescriptors = 4294967295, space = 1)),"\
+                "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
+                "UAV(u0),"\
+                "UAV(u1),"\
+                "UAV(u2),"\
+                "UAV(u3),"\
+                "UAV(u4),"\
+                "UAV(u5),"\
+                "UAV(u6),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b255),"\
-                "UAV(u7, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u8, visibility=SHADER_VISIBILITY_ALL)"
+                "CBV(b255)"
 
-[[vk::binding(0, 2)]] RWBuffer<float3>                     GeometryBuffer    : register(u0, space1);
+#include "..\shared\rayTracingDefs.h"
 
-// Triangle nodes only
-[[vk::binding(0, 0)]] RWByteAddressBuffer                  IndexBuffer       : register(u0);
-[[vk::binding(1, 0)]] RWStructuredBuffer<float4>           TransformBuffer   : register(u1);
+//======================================================================================================================
+struct RootConstants
+{
+    uint geometryIndex;
+};
 
-[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer DstMetadata       : register(u2);
-[[vk::binding(3, 0)]] RWByteAddressBuffer                  ScratchBuffer     : register(u3);
-[[vk::binding(4, 0)]] RWByteAddressBuffer                  ScratchGlobal     : register(u4);
-[[vk::binding(5, 0)]] RWByteAddressBuffer                  SrcBuffer         : register(u5);
-[[vk::binding(6, 0)]] RWByteAddressBuffer                  IndirectArgBuffer : register(u6);
-
+[[vk::push_constant]] ConstantBuffer<RootConstants>                 ShaderRootConstants : register(b0);
+[[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants>          ShaderConstants     : register(b1);
+[[vk::binding(0, 2)]] ConstantBuffer<BuildShaderGeometryConstants>  GeometryConstants[] : register(b0, space1);
+[[vk::binding(0, 3)]] RWBuffer<float3>                              GeometryBuffer[]    : register(u0, space1);
+[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer          DstMetadata         : register(u0);
+[[vk::binding(1, 0)]] RWByteAddressBuffer                           ScratchBuffer       : register(u1);
+[[vk::binding(2, 0)]] RWByteAddressBuffer                           ScratchGlobal       : register(u2);
+[[vk::binding(3, 0)]] RWByteAddressBuffer                           SrcBuffer           : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer                           IndirectArgBuffer   : register(u4);
 // unused buffer
-[[vk::binding(7, 0)]] globallycoherent RWByteAddressBuffer DstBuffer         : register(u7);
-[[vk::binding(8, 0)]] RWByteAddressBuffer                  EmitBuffer        : register(u8);
+[[vk::binding(5, 0)]] globallycoherent RWByteAddressBuffer          DstBuffer           : register(u5);
+[[vk::binding(6, 0)]] RWByteAddressBuffer                           EmitBuffer          : register(u6);
 
 #include "Common.hlsl"
 #include "BuildCommon.hlsl"
@@ -58,38 +63,98 @@
 #include "EncodeCommon.hlsl"
 #include "EncodePairedTriangle.hlsl"
 
-[[vk::binding(0, 1)]] ConstantBuffer<GeometryArgs> ShaderConstants : register(b0);
-
+//======================================================================================================================
 struct InputOffsetsAndNumPrim
 {
     uint numPrimitives;
     uint primitiveOffset;
-    uint vertexOffset;
+    uint vertexOffsetInComponents;
     uint indexOffsetInBytes;
-    uint transformOffsetInElements;
+    uint transformOffsetInBytes;
 };
 
 //======================================================================================================================
 // Helper function that fetches data from IndirectArgBuffer when needed, uses sane defaults for direct path otherwise.
-InputOffsetsAndNumPrim GetInputOffsetsAndNumPrim()
+InputOffsetsAndNumPrim GetInputOffsetsAndNumPrim(GeometryArgs args)
 {
-    InputOffsetsAndNumPrim result;
-#if INDIRECT_BUILD
-    // Sourced from Indirect Buffers
-    const IndirectBuildOffset buildOffsetInfo = IndirectArgBuffer.Load<IndirectBuildOffset>(0);
-    result.numPrimitives             = buildOffsetInfo.primitiveCount;
-    result.primitiveOffset           = ComputePrimitiveOffset(ShaderConstants);
-    result.vertexOffset              = buildOffsetInfo.firstVertex;
-    result.indexOffsetInBytes        = (ShaderConstants.IndexBufferFormat != IndexFormatInvalid) ? buildOffsetInfo.primitiveOffset : 0;
-    result.transformOffsetInElements = buildOffsetInfo.transformOffset / sizeof(float4);
-#else
-    result.numPrimitives = ShaderConstants.NumPrimitives;
-    result.primitiveOffset = ShaderConstants.PrimitiveOffset;
-    result.vertexOffset = 0;
-    result.indexOffsetInBytes = 0;
-    result.transformOffsetInElements = 0;
-#endif
+    InputOffsetsAndNumPrim result = (InputOffsetsAndNumPrim)0;
+
+    if (Settings.isIndirectBuild)
+    {
+        // Sourced from Indirect Buffers
+        const IndirectBuildOffset buildOffsetInfo =
+            IndirectArgBuffer.Load<IndirectBuildOffset>(ShaderConstants.indirectArgBufferStride * args.GeometryIndex);
+        const uint firstVertexInComponents = buildOffsetInfo.firstVertex * args.VertexComponentCount;
+
+        result.numPrimitives             = buildOffsetInfo.primitiveCount;
+        result.primitiveOffset           = ComputePrimitiveOffset(args);
+        if (Settings.geometryType == GEOMETRY_TYPE_TRIANGLES)
+        {
+            if (args.IndexBufferFormat != IndexFormatInvalid)
+            {
+                result.vertexOffsetInComponents = firstVertexInComponents;
+                result.indexOffsetInBytes       = buildOffsetInfo.primitiveOffset;
+            }
+            else
+            {
+                const uint primitiveOffsetInComponents = buildOffsetInfo.primitiveOffset / args.VertexComponentSize;
+
+                result.vertexOffsetInComponents = primitiveOffsetInComponents + firstVertexInComponents;
+                result.indexOffsetInBytes       = 0;
+            }
+            result.transformOffsetInBytes = buildOffsetInfo.transformOffset;
+        }
+        else
+        {
+            GPU_ASSERT(Settings.geometryType == GEOMETRY_TYPE_AABBS);
+            result.vertexOffsetInComponents = buildOffsetInfo.primitiveOffset / sizeof(float);
+
+            result.indexOffsetInBytes       = 0;
+            result.transformOffsetInBytes   = 0;
+        }
+    }
+    else
+    {
+        result.numPrimitives            = args.NumPrimitives;
+        result.primitiveOffset          = args.PrimitiveOffset;
+        result.vertexOffsetInComponents = 0;
+        result.indexOffsetInBytes       = 0;
+        result.transformOffsetInBytes   = 0;
+    }
+
     return result;
+}
+
+//======================================================================================================================
+// Helper function that increments ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET
+// and ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET for INDIRECT_BUILD.
+// Direct builds have access to primitive count during dispatch cmd recording and set
+// ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET to correct value beforehand.
+void IncrementPrimitiveTaskCounters(
+    in uint encodeTaskCounterScratchOffset,
+    in uint primitiveIndex,
+    in uint numPrimitives,
+    in uint maxNumPrimitives)
+{
+    // 1st task counter is being used as primitive counter, it means how many triangles is there to build
+    // in case of indirect build we dispatch maxPrimCount waves, but less that that can be encoded
+    const uint encodedPrimCount = WaveActiveCountBits(primitiveIndex < numPrimitives);
+    // 2nd task counter is being used as spin-lock that build step waits for,
+    // counter=GeometryConstants.numPrimitives means encoding is done
+    const uint dispatchedPrimCount = WaveActiveCountBits(primitiveIndex < maxNumPrimitives);
+    if (WaveIsFirstLane())
+    {
+        // compression and splitting update primRefCounter on their own,
+        // direct builds set ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET to correct value during cmd recording
+        if (Settings.isIndirectBuild && !Settings.enableEarlyPairCompression && !Settings.doTriangleSplitting)
+        {
+            IncrementTaskCounter(encodeTaskCounterScratchOffset + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET,
+                                 encodedPrimCount);
+        }
+
+        IncrementTaskCounter(encodeTaskCounterScratchOffset + ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET,
+                             dispatchedPrimCount);
+    }
 }
 
 //=====================================================================================================================
@@ -100,7 +165,8 @@ void EncodeTriangleNodes(
     in uint3 globalThreadId : SV_DispatchThreadID,
     in uint localId : SV_GroupThreadID)
 {
-    const InputOffsetsAndNumPrim inputOffsets = GetInputOffsetsAndNumPrim();
+    const GeometryArgs args = InitGeometryArgs(ShaderRootConstants.geometryIndex);
+    const InputOffsetsAndNumPrim inputOffsets = GetInputOffsetsAndNumPrim(args);
 
     const bool enableEarlyPairCompression =
         (Settings.enableEarlyPairCompression == true) && (IsUpdate() == false);
@@ -108,7 +174,7 @@ void EncodeTriangleNodes(
     if (globalThreadId.x == 0)
     {
         WriteGeometryInfo(
-            ShaderConstants, inputOffsets.primitiveOffset, ShaderConstants.NumPrimitives, DECODE_PRIMITIVE_STRIDE_TRIANGLE);
+            args, inputOffsets.primitiveOffset, inputOffsets.numPrimitives, DECODE_PRIMITIVE_STRIDE_TRIANGLE);
     }
 
     uint primitiveIndex = globalThreadId.x;
@@ -117,38 +183,32 @@ void EncodeTriangleNodes(
     {
         if (enableEarlyPairCompression)
         {
-            EncodePairedTriangleNode(GeometryBuffer,
-                                     IndexBuffer,
-                                     TransformBuffer,
-                                     ShaderConstants,
+            EncodePairedTriangleNode(GeometryBuffer[ShaderRootConstants.geometryIndex],
+                                     args,
                                      primitiveIndex,
                                      globalThreadId.x,
                                      inputOffsets.primitiveOffset,
-                                     inputOffsets.vertexOffset,
+                                     inputOffsets.vertexOffsetInComponents,
                                      inputOffsets.indexOffsetInBytes,
-                                     inputOffsets.transformOffsetInElements);
+                                     inputOffsets.transformOffsetInBytes);
         }
         else
         {
-            EncodeTriangleNode(GeometryBuffer,
-                               IndexBuffer,
-                               TransformBuffer,
-                               ShaderConstants,
+            EncodeTriangleNode(GeometryBuffer[ShaderRootConstants.geometryIndex],
+                               args,
                                primitiveIndex,
                                inputOffsets.primitiveOffset,
-                               inputOffsets.vertexOffset,
+                               inputOffsets.vertexOffsetInComponents,
                                inputOffsets.indexOffsetInBytes,
-                               inputOffsets.transformOffsetInElements,
+                               inputOffsets.transformOffsetInBytes,
                                true);
         }
     }
 
-    const uint wavePrimCount = WaveActiveCountBits(primitiveIndex < inputOffsets.numPrimitives);
-    if (WaveIsFirstLane())
-    {
-        IncrementTaskCounter(ShaderConstants.encodeTaskCounterScratchOffset + ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET,
-                             wavePrimCount);
-    }
+    IncrementPrimitiveTaskCounters(args.encodeTaskCounterScratchOffset,
+                                   primitiveIndex,
+                                   inputOffsets.numPrimitives,
+                                   args.NumPrimitives);
 }
 
 //=====================================================================================================================
@@ -158,31 +218,29 @@ void EncodeTriangleNodes(
 void EncodeAABBNodes(
     in uint3 globalThreadId : SV_DispatchThreadID)
 {
-    const InputOffsetsAndNumPrim inputOffsets = GetInputOffsetsAndNumPrim();
+    const GeometryArgs args = InitGeometryArgs(ShaderRootConstants.geometryIndex);
+    const InputOffsetsAndNumPrim inputOffsets = GetInputOffsetsAndNumPrim(args);
 
     if (globalThreadId.x == 0)
     {
-        WriteGeometryInfo(ShaderConstants, inputOffsets.primitiveOffset, inputOffsets.numPrimitives, DECODE_PRIMITIVE_STRIDE_AABB);
+        WriteGeometryInfo(args, inputOffsets.primitiveOffset, inputOffsets.numPrimitives, DECODE_PRIMITIVE_STRIDE_AABB);
     }
 
     uint primitiveIndex = globalThreadId.x;
-    if (primitiveIndex < ShaderConstants.NumPrimitives)
+    if (primitiveIndex < inputOffsets.numPrimitives)
     {
-        EncodeAabbNode(GeometryBuffer,
-                       IndexBuffer,
-                       TransformBuffer,
-                       ShaderConstants,
+        EncodeAabbNode(GeometryBuffer[ShaderRootConstants.geometryIndex],
+                       args,
                        primitiveIndex,
                        inputOffsets.primitiveOffset,
+                       inputOffsets.vertexOffsetInComponents,
                        true);
     }
 
-    const uint wavePrimCount = WaveActiveCountBits(primitiveIndex < ShaderConstants.NumPrimitives);
-    if (WaveIsFirstLane())
-    {
-        IncrementTaskCounter(ShaderConstants.encodeTaskCounterScratchOffset + ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET,
-                             wavePrimCount);
-    }
+    IncrementPrimitiveTaskCounters(args.encodeTaskCounterScratchOffset,
+                                   primitiveIndex,
+                                   inputOffsets.numPrimitives,
+                                   args.NumPrimitives);
 }
 
 //=====================================================================================================================
@@ -193,25 +251,24 @@ void CountTrianglePairs(
     in uint globalId : SV_DispatchThreadID,
     in uint localId : SV_GroupThreadID)
 {
-    const InputOffsetsAndNumPrim inputOffsets = GetInputOffsetsAndNumPrim();
+    const GeometryArgs args = InitGeometryArgs(ShaderRootConstants.geometryIndex);
+    const InputOffsetsAndNumPrim inputOffsets = GetInputOffsetsAndNumPrim(args);
 
     // Reset geometry primitive reference count in result buffer
     const uint basePrimRefCountOffset =
-        ShaderConstants.metadataSizeInBytes + ShaderConstants.DestLeafByteOffset;
+        args.metadataSizeInBytes + args.DestLeafByteOffset;
 
     const uint primRefCountOffset =
-        basePrimRefCountOffset + ComputePrimRefCountBlockOffset(ShaderConstants.blockOffset, globalId);
+        basePrimRefCountOffset + ComputePrimRefCountBlockOffset(args.blockOffset, globalId);
 
     if (globalId < inputOffsets.numPrimitives)
     {
-        const int pairInfo = TryPairTriangleImpl(GeometryBuffer,
-                                                 IndexBuffer,
-                                                 TransformBuffer,
-                                                 ShaderConstants,
+        const int pairInfo = TryPairTriangleImpl(GeometryBuffer[ShaderRootConstants.geometryIndex],
+                                                 args,
                                                  globalId,
-                                                 inputOffsets.vertexOffset,
+                                                 inputOffsets.vertexOffsetInComponents,
                                                  inputOffsets.indexOffsetInBytes,
-                                                 inputOffsets.transformOffsetInElements);
+                                                 inputOffsets.transformOffsetInBytes);
 
         // Count quads produced by the current wave. Note, this includes unpaired triangles as well
         // (marked with a value of -1).

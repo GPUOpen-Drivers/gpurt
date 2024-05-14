@@ -22,7 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#define RootSig "RootConstants(num32BitConstants=11, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "CBV(b0),"\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
@@ -33,34 +33,17 @@
                 "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u6, visibility=SHADER_VISIBILITY_ALL)"
 
-//=====================================================================================================================
-// 32 bit constants
-struct Constants
-{
-    uint metadataSizeInBytes;           // Size of the metadata header
-    uint basePrimNodePtrOffset;         // Offset of the prim node pointeres
-    uint numPrimitives;                 // Number of instances
-    uint leafNodeDataByteOffset;        // Leaf node data byte offset
-    uint sceneBoundsByteOffset;         // Scene bounds byte offset
-    uint propagationFlagsScratchOffset; // Offset of update flags in scratch memory
-    uint baseUpdateStackScratchOffset;  // Offset of update scratch
-    uint buildFlags;                    // Build flags
-    uint leafNodeExpansionFactor;       // Leaf node expansion factor (> 1 for rebraid)
-    uint enableFastLBVH;
-    uint encodeTaskCounterScratchOffset;
-};
+#include "..\shared\rayTracingDefs.h"
 
-[[vk::push_constant]] ConstantBuffer<Constants> ShaderConstants : register(b0);
-
-[[vk::binding(0, 0)]] RWByteAddressBuffer                 DstMetadata        : register(u0);
-[[vk::binding(1, 0)]] RWByteAddressBuffer                 ScratchBuffer      : register(u1);
-[[vk::binding(2, 0)]] RWByteAddressBuffer                 ScratchGlobal      : register(u2);
-[[vk::binding(3, 0)]] RWByteAddressBuffer                 SrcBuffer          : register(u3);
-[[vk::binding(4, 0)]] RWByteAddressBuffer                 InstanceDescBuffer : register(u4);
-
+[[vk::binding(0, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants    : register(b0);
+[[vk::binding(0, 0)]] RWByteAddressBuffer                  DstMetadata        : register(u0);
+[[vk::binding(1, 0)]] RWByteAddressBuffer                  ScratchBuffer      : register(u1);
+[[vk::binding(2, 0)]] RWByteAddressBuffer                  ScratchGlobal      : register(u2);
+[[vk::binding(3, 0)]] RWByteAddressBuffer                  SrcBuffer          : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer                  InstanceDescBuffer : register(u4);
 // unused buffer
-[[vk::binding(5, 0)]] RWByteAddressBuffer                 DstBuffer          : register(u5);
-[[vk::binding(6, 0)]] RWByteAddressBuffer                 EmitBuffer         : register(u6);
+[[vk::binding(5, 0)]] RWByteAddressBuffer                  DstBuffer          : register(u5);
+[[vk::binding(6, 0)]] RWByteAddressBuffer                  EmitBuffer         : register(u6);
 
 #include "IntersectCommon.hlsl"
 #include "BuildCommonScratch.hlsl"
@@ -74,7 +57,7 @@ struct Constants
 void EncodeInstances(
     in uint3 globalThreadId : SV_DispatchThreadID)
 {
-    const bool allowUpdate = AllowUpdate(ShaderConstants.buildFlags);
+    const bool allowUpdate = IsUpdateAllowed();
 
     uint index = globalThreadId.x;
 
@@ -93,18 +76,20 @@ void EncodeInstances(
         }
 
         const uint tlasMetadataSize =
-            IsUpdate() ? SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : ShaderConstants.metadataSizeInBytes;
+            IsUpdate() ? SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : ShaderConstants.header.metadataSizeInBytes;
 
         // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
-        const AccelStructOffsets offsets =
-            SrcBuffer.Load<AccelStructOffsets>(tlasMetadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
+        AccelStructOffsets offsets = ShaderConstants.header.offsets;
+        if (IsUpdate())
+        {
+            offsets = SrcBuffer.Load<AccelStructOffsets>(tlasMetadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
+        }
 
-        const uint basePrimNodePointersOffset =
-            IsUpdate() ? offsets.primNodePtrs : ShaderConstants.basePrimNodePtrOffset;
+        const uint basePrimNodePointersOffset = offsets.primNodePtrs;
 
-        const uint primNodePointerOffset = tlasMetadataSize + basePrimNodePointersOffset + (index * sizeof(uint));
+        const uint primNodePointerOffset = tlasMetadataSize + offsets.primNodePtrs + (index * sizeof(uint));
 
-        const uint destScratchNodeOffset = (index * ByteStrideScratchNode) + ShaderConstants.leafNodeDataByteOffset;
+        const uint destScratchNodeOffset = (index * ByteStrideScratchNode) + ShaderConstants.offsets.bvhLeafNodeData;
 
         uint64_t baseAddrAccelStructHeader = GetAccelStructBaseAddr(desc, allowUpdate);
 
@@ -141,8 +126,9 @@ void EncodeInstances(
 
         // ClearFlags for refit and update
         const uint stride = ShaderConstants.leafNodeExpansionFactor * sizeof(uint);
-        const uint flagOffset = ShaderConstants.propagationFlagsScratchOffset + (index * stride);
-        const uint initValue = ShaderConstants.enableFastLBVH ? 0xffffffffu : 0;
+        const uint flagOffset = ShaderConstants.offsets.propagationFlags + (index * stride);
+        const uint initValue = Settings.enableFastLBVH ? 0xffffffffu : 0;
+
         for (uint i = 0; i < ShaderConstants.leafNodeExpansionFactor; ++i)
         {
             ScratchBuffer.Store(flagOffset + (i * sizeof(uint)), initValue);
@@ -152,7 +138,7 @@ void EncodeInstances(
     const uint wavePrimCount = WaveActiveCountBits(index < ShaderConstants.numPrimitives);
     if (WaveIsFirstLane())
     {
-        IncrementTaskCounter(ShaderConstants.encodeTaskCounterScratchOffset + ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET,
+        IncrementTaskCounter(ShaderConstants.offsets.encodeTaskCounter + ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET,
                              wavePrimCount);
     }
 }

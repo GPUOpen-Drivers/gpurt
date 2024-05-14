@@ -81,9 +81,8 @@ uint CalcCompactedSize(
 
     {
         metadataSizeInBytes = CalcMetadataSizeInBytes(internalNodeSize, leafNodeSize);
+        metadataSizeInBytes = Pow2Align(metadataSizeInBytes, 128);
     }
-
-    metadataSizeInBytes = Pow2Align(metadataSizeInBytes, 128);
 
     dstOffsets = offsets;
 

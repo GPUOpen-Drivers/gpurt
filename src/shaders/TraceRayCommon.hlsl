@@ -99,17 +99,9 @@ static uint CalculateHitGroupRecordAddress(
 }
 
 //=====================================================================================================================
-static HitGroupInfo GetHitGroupInfo(
-    uint RayContributionToHitGroupIndex,
-    uint MultiplierForGeometryContributionToHitGroupIndex,
-    uint GeometryContributionToHitGroupIndex,
-    uint InstanceContributionToHitGroupIndex)
+static HitGroupInfo FetchHitGroupInfo(
+    uint hitGroupRecordIndex)
 {
-    const uint hitGroupRecordIndex = CalculateHitGroupRecordAddress(RayContributionToHitGroupIndex,
-                                                                    MultiplierForGeometryContributionToHitGroupIndex,
-                                                                    GeometryContributionToHitGroupIndex,
-                                                                    InstanceContributionToHitGroupIndex);
-
 #if __cplusplus
     HitGroupInfo hitInfo;
     hitInfo.tableIndex = hitGroupRecordIndex;
@@ -140,6 +132,21 @@ static HitGroupInfo GetHitGroupInfo(
 }
 
 //=====================================================================================================================
+static HitGroupInfo GetHitGroupInfo(
+    uint RayContributionToHitGroupIndex,
+    uint MultiplierForGeometryContributionToHitGroupIndex,
+    uint GeometryContributionToHitGroupIndex,
+    uint InstanceContributionToHitGroupIndex)
+{
+    const uint hitGroupRecordIndex = CalculateHitGroupRecordAddress(RayContributionToHitGroupIndex,
+                                                                    MultiplierForGeometryContributionToHitGroupIndex,
+                                                                    GeometryContributionToHitGroupIndex,
+                                                                    InstanceContributionToHitGroupIndex);
+
+    return FetchHitGroupInfo(hitGroupRecordIndex);
+}
+
+//=====================================================================================================================
 static uint64_t CalculateInstanceNodePtr64(
     in uint32_t rtIpLevel,
     in uint64_t instanceBaseAddr,
@@ -148,7 +155,23 @@ static uint64_t CalculateInstanceNodePtr64(
     return CalculateNodeAddr64(instanceBaseAddr, instanceNodePtr);
 }
 
-#if DEVELOPER
+//=====================================================================================================================
+static uint FetchInstanceIdx(
+    in uint     rtIpLevel,
+    in uint64_t accelStruct,
+    in uint     instNodePtr)
+{
+    uint instNodeIndex = 0;
+    {
+        GpuVirtualAddress instanceNodePtr = accelStruct + ExtractNodePointerOffset(instNodePtr);
+        instNodeIndex = LoadDwordAtAddr(instanceNodePtr +
+                                        INSTANCE_DESC_SIZE +
+                                        RTIP1_1_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET);
+    }
+    return instNodeIndex;
+}
+
+#if DEVELOPER|| (0 && !defined(__cplusplus))
 //=====================================================================================================================
 static uint GetRayId(in uint3 dispatchRaysIndex)
 {
@@ -158,7 +181,9 @@ static uint GetRayId(in uint3 dispatchRaysIndex)
 
     return flatRayIndex;
 }
+#endif
 
+#if DEVELOPER
 //=====================================================================================================================
 static uint AllocateRayHistoryDynamicId()
 {
@@ -668,6 +693,31 @@ static void WriteRayHistoryTokenAnyHitStatus(
 }
 
 //=====================================================================================================================
+// Write per-ray Triangle candidates hit result
+//
+// id     : Unique caller generated ray identifier
+// hit    : Whether this triangle was hit or missed
+// hitT   : hit distance as reported by the intersection shader
+//
+static void WriteRayHistoryTokenTriangleHitResult(
+    in uint  id,
+    in uint  hit,
+    in float hitT)
+{
+    if (LogCountersRayHistory(id, RAY_HISTORY_TOKEN_TYPE_TRIANGLE_HIT_RESULT))
+    {
+        uint offset = WriteRayHistoryControlToken(id,
+                                                  RAY_HISTORY_TOKEN_TYPE_TRIANGLE_HIT_RESULT,
+                                                  RAY_HISTORY_TOKEN_TRIANGLE_HIT_RESULT_SIZE,
+                                                  hit);
+        if (offset != 0xFFFFFFFF)
+        {
+            Counters.Store(offset, asuint(hitT));
+        }
+    }
+}
+
+//=====================================================================================================================
 // Write per-ray Intersection shader call status
 //
 // id     : Unique caller generated ray identifier
@@ -698,7 +748,7 @@ static void WriteRayHistoryTokenProceduralIntersectionStatus(
 // Write per-ray gpu timestamp
 //
 // id        : Unique caller generated ray identifier
-// timeStamp : 64-bit timestamp provided by SampleGpuTimer()
+// timeStamp : 64-bit timestamp provided by AmdTraceRaySampleGpuTimer()
 static void WriteRayHistoryTokenTimeStamp(
     in uint     id,
     in uint64_t timeStamp)
@@ -759,18 +809,6 @@ static void WriteTraversalCounter(inout_param(RayQueryInternal) rayQuery, in uin
     counter.data[TCID_INSTANCE_INTERSECTIONS] = rayQuery.instanceIntersections;
 
     WriteTraversalCounter(rayId, counter);
-}
-
-//=====================================================================================================================
-static uint64_t SampleGpuTimer()
-{
-    uint clocksHi = 0;
-    uint clocksLo = 0;
-    AmdTraceRaySampleGpuTimer(clocksHi, clocksLo);
-    uint64_t clocks = clocksHi;
-    clocks = (clocks << 32) | clocksLo;
-
-    return clocks;
 }
 
 //=====================================================================================================================

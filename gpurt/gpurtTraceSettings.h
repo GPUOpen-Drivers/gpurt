@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -22,25 +22,13 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "EncodePairedTriangleImpl.hlsl"
+#ifndef _GPURT_TRACE_SETTINGS_H
+#define _GPURT_TRACE_SETTINGS_H
 
-//======================================================================================================================
-void EncodePairedTriangleNode(
-    RWBuffer<float3>           GeometryBuffer,
-    GeometryArgs               geometryArgs,
-    uint                       primitiveIndex,
-    uint                       globalId,
-    uint                       primitiveOffset,
-    uint                       vertexOffset,
-    uint                       indexOffsetInBytes,
-    uint                       transformOffestInElements)
-{
-    EncodePairedTriangleNodeImpl(GeometryBuffer,
-                                 geometryArgs,
-                                 primitiveIndex,
-                                 globalId,
-                                 primitiveOffset,
-                                 vertexOffset,
-                                 indexOffsetInBytes,
-                                 transformOffestInElements);
-}
+// This file provides definition used by the GPURT BVH traversal shader code.
+//
+// Note this file is designed to be compilable as HLSL.
+
+#include "g_gpurtOptions.h"
+
+#endif

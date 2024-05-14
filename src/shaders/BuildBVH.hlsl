@@ -33,7 +33,7 @@
                 "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
 
 #include "../shared/rayTracingDefs.h"
-[[vk::binding(1, 0)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b0);
+[[vk::binding(0, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b0);
 
 [[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer     : register(u0);
 [[vk::binding(1, 0)]] RWByteAddressBuffer DstMetadata   : register(u1);
@@ -245,11 +245,8 @@ void BuildBVH(
     if (numActivePrims > 0)
     {
 #if USE_BUILD_LBVH == 1
-        const uint bvhNodes = CalculateScratchBvhNodesOffset(
-                                  numActivePrims,
-                                  ShaderConstants.numLeafNodes,
-                                  ShaderConstants.offsets.bvhNodeData,
-                                  Settings.enableTopDownBuild);
+        const uint bvhNodes = CalculateBvhNodesOffset(ShaderConstants, numActivePrims);
+
         // Set internal nodes
         if (globalId < (numActivePrims - 1))
         {

@@ -22,7 +22,8 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#define RootSig "RootConstants(num32BitConstants=7, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "RootConstants(num32BitConstants=1, b0),"\
+                "CBV(b1),"\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
@@ -31,19 +32,17 @@
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
 
-//=====================================================================================================================
-struct Constants
+//======================================================================================================================
+// 32 bit constants
+struct RootConstants
 {
-    uint addressLo;
-    uint addressHi;
-    uint propagationFlagsScratchOffset; // Offset to flags in scratch buffer
-    uint baseUpdateStackScratchOffset;
-    uint triangleCompressionMode;
-    uint fp16BoxNodesInBlasMode;
-    uint numPrimitives;
+    uint numThreads;
 };
 
-[[vk::push_constant]] ConstantBuffer<Constants> ShaderConstants : register(b0);
+#include "../shared/rayTracingDefs.h"
+
+[[vk::push_constant]] ConstantBuffer<RootConstants>        ShaderRootConstants : register(b0);
+[[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants     : register(b1);
 
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstMetadata     : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer   : register(u1);
@@ -74,7 +73,6 @@ void UpdateQBVH(
     }
 
     UpdateQBVHImpl(globalThreadId.x,
-                   ShaderConstants.propagationFlagsScratchOffset,
                    numWorkItems,
                    numWorkItems);
 }

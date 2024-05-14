@@ -22,31 +22,27 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#define RootSig "RootConstants(num32BitConstants=9, b0, visibility=SHADER_VISIBILITY_ALL), "\
-                "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
+#define RootSig "RootConstants(num32BitConstants=1, b0),"\
+                "CBV(b1),"\
+                "UAV(u0),"\
+                "UAV(u1),"\
+                "UAV(u2),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
                 "CBV(b255),"\
-                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u3),"\
+                "UAV(u4)"
 
-//=====================================================================================================================
+//======================================================================================================================
 // 32 bit constants
-struct InputArgs
+struct RootConstants
 {
-    uint addressLo;
-    uint addressHi;
-    uint propagationFlagsScratchOffset;
-    uint baseUpdateStackScratchOffset;
-    uint triangleCompressionMode;
-    uint fp16BoxNodesInBlasMode;
     uint numThreads;
-    uint numPrimitives;
-    uint numDescs;
 };
 
-[[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
+#include "../shared/rayTracingDefs.h"
+
+[[vk::push_constant]] ConstantBuffer<RootConstants>        ShaderRootConstants : register(b0);
+[[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants     : register(b1);
 
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstMetadata   : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer : register(u1);
@@ -88,7 +84,6 @@ void UpdateParallel(
     uint numWorkItems = ScratchBuffer.Load(UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET);
 
     UpdateQBVHImpl(globalThreadId,
-                   ShaderConstants.propagationFlagsScratchOffset,
                    numWorkItems,
-                   ShaderConstants.numThreads);
+                   ShaderRootConstants.numThreads);
 }

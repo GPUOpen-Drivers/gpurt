@@ -142,7 +142,6 @@ struct TraversalStack
 
 //=====================================================================================================================
 static _AmdTraversalState InitTraversalState1_1(
-    uint64_t accelStruct,
     uint     instanceInclusionMask,
     RayDesc  ray,
     bool     isValid)
@@ -184,17 +183,13 @@ static _AmdTraversalState InitTraversalState1_1(
 
 //=====================================================================================================================
 static void TraversalInternal1_1(
-    CSP_ARG_DEFINITION(csp)
     inout_param(_AmdSystemData) data,
     inout_param(uint) state,
     inout_param(_AmdPrimitiveSystemState) candidate,
     inout_param(float2) candidateBarycentrics
 )
 {
-    uint rayFlags = data.ray.flags;
-     // OR compile time pipeline config flags into the ray flags
-    rayFlags |=
-        (AmdTraceRayGetStaticFlags() & (PIPELINE_FLAG_SKIP_PROCEDURAL_PRIMITIVES | PIPELINE_FLAG_SKIP_TRIANGLES));
+    uint rayFlags = data.ray.Flags();
 
     // Initialise box sort mode based on ray flags and compile time constant flags (constRayFlags)
     uint boxSortMode = AmdTraceRayGetBoxSortHeuristicMode();
@@ -208,7 +203,7 @@ static void TraversalInternal1_1(
     }
 
     // Root bvh address for reuse
-    const GpuVirtualAddress topBvhAddress = data.ray.accelStruct;
+    const GpuVirtualAddress topBvhAddress = data.ray.AccelStruct();
     // Updateable bottom level bvh for reuse
     GpuVirtualAddress bvhAddress;
 
@@ -255,7 +250,7 @@ static void TraversalInternal1_1(
     {
         candidate.instNodePtr = data.traversal.instNodePtr;
         // Restore after AnyHit or Intersection was called
-        const GpuVirtualAddress nodeAddr64  = data.ray.accelStruct + ExtractNodePointerOffset(data.traversal.instNodePtr);
+        const GpuVirtualAddress nodeAddr64  = data.ray.AccelStruct() + ExtractNodePointerOffset(data.traversal.instNodePtr);
         InstanceDesc desc                   = FetchInstanceDescAddr(nodeAddr64);
         bvhAddress                          = GetInstanceAddr(desc);
         instanceFlags                       = desc.InstanceContributionToHitGroupIndex_and_Flags >> 24;
@@ -274,7 +269,7 @@ static void TraversalInternal1_1(
     }
     else
     {
-        bvhAddress = data.ray.accelStruct;
+        bvhAddress = data.ray.AccelStruct();
     }
 
     // Traverse acceleration structure while we have valid nodes to intersect. Note, the traversal routine is
@@ -420,7 +415,7 @@ static void TraversalInternal1_1(
 
             if (isCulled == false)
             {
-                candidate.PackState(TRAVERSAL_STATE_COMMITTED_TRIANGLE_HIT);
+                candidate.PackState(TRAVERSAL_STATE_COMMITTED_PROCEDURAL_PRIMITIVE_HIT);
                 candidate.primitiveIndex = primitiveData.primitiveIndex;
                 candidate.PackGeometryIndex(primitiveData.geometryIndex);
                 candidate.PackIsOpaque(isOpaque);

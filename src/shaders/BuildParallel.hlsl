@@ -25,27 +25,28 @@
 #define BUILD_PARALLEL 1
 
 #if GPURT_ENABLE_GPU_DEBUG
-#define DEBUG_BUFFER "UAV(u6),"
+#define str(a)  #a
+#define xstr(a) str(a)
+
+#define DEBUG_BUFFER_SLOT u7
+#define DEBUG_BUFFER      "UAV(" xstr(DEBUG_BUFFER_SLOT) "),"
 #else
 #define DEBUG_BUFFER
 #endif
 
-#define LUT_BUFFER
-
 #define RootSig "RootConstants(num32BitConstants=1, b0),"\
                 "CBV(b1),"\
-                LUT_BUFFER \
+                "CBV(b2)," \
                 "UAV(u0),"\
                 "UAV(u1),"\
                 "UAV(u2),"\
                 "UAV(u3),"\
                 "UAV(u4),"\
                 "UAV(u5),"\
-                 DEBUG_BUFFER \
-                "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
-                "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 2)),"\
-                "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 3)),"\
+                "UAV(u6),"\
+                DEBUG_BUFFER\
                 "DescriptorTable(CBV(b0, numDescriptors = 4294967295, space = 1)),"\
+                "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
                 "CBV(b255)"\
 
@@ -60,15 +61,18 @@ struct RootConstants
     uint numThreadGroups;
 };
 
-[[vk::push_constant]] ConstantBuffer<RootConstants>        ShaderRootConstants : register(b0);
-[[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants     : register(b1);
-
-[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstBuffer          : register(u0);
-[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata        : register(u1);
-[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer      : register(u2);
-[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer ScratchGlobal      : register(u3);
-[[vk::binding(4, 0)]] RWByteAddressBuffer                  InstanceDescBuffer : register(u4);
-[[vk::binding(5, 0)]] RWByteAddressBuffer                  EmitBuffer         : register(u5);
+[[vk::push_constant]] ConstantBuffer<RootConstants>                ShaderRootConstants : register(b0);
+[[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants>         ShaderConstants     : register(b1);
+[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer         DstBuffer           : register(u0);
+[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer         DstMetadata         : register(u1);
+[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer         ScratchBuffer       : register(u2);
+[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer         ScratchGlobal       : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer                          InstanceDescBuffer  : register(u4);
+[[vk::binding(5, 0)]] RWByteAddressBuffer                          EmitBuffer          : register(u5);
+[[vk::binding(6, 0)]] RWByteAddressBuffer                          IndirectArgBuffer   : register(u6);
+// Debug Buffer
+[[vk::binding(0, 2)]] ConstantBuffer<BuildShaderGeometryConstants> GeometryConstants[] : register(b0, space1);
+[[vk::binding(0, 3)]] RWBuffer<float3>                             GeometryBuffer[]    : register(u0, space1);
 
 #define SrcBuffer InstanceDescBuffer
 #include "BuildCommonScratch.hlsl"
@@ -85,15 +89,6 @@ groupshared uint SharedMem[MAX_LDS_ELEMENTS];
 #include "EncodeCommon.hlsl"
 #include "EncodePairedTriangleImpl.hlsl"
 #undef SrcBuffer
-
-[[vk::binding(0, 2)]] ConstantBuffer<GeometryArgs> GeometryConstants[] : register(b0, space1);
-
-[[vk::binding(0, 3)]] RWBuffer<float3>           GeometryBuffer[]  : register(u0, space1);
-[[vk::binding(0, 4)]] RWByteAddressBuffer        IndexBuffer[]     : register(u0, space2);
-#if !AMD_VULKAN
-// DXC does not support arrays of structured buffers for SPIRV currently. See issue 3281 / PR 4663).
-[[vk::binding(0, 5)]] RWStructuredBuffer<float4> TransformBuffer[] : register(u0, space3);
-#endif
 
 //======================================================================================================================
 // Returns number of threads launched
@@ -230,9 +225,7 @@ void RefitBounds(
             ShaderConstants.offsets.numBatches,
             ShaderConstants.offsets.batchIndices,
             Settings.fp16BoxNodesMode,
-            Settings.fp16BoxModeMixedSaThreshold,
-            0xFFFFFFFF,
-            0
+            Settings.fp16BoxModeMixedSaThreshold
         );
     }
 }
@@ -306,7 +299,6 @@ void BuildBvhPloc(
     plocArgs.plocRadius                     = Settings.plocRadius;
     plocArgs.splitBoxesByteOffset           = ShaderConstants.offsets.triangleSplitBoxes;
     plocArgs.primIndicesSortedScratchOffset = ShaderConstants.offsets.primIndicesSorted;
-    plocArgs.numLeafNodes                   = ShaderConstants.numLeafNodes;
     plocArgs.unsortedBvhLeafNodesOffset     = ShaderConstants.offsets.bvhLeafNodeData;
 
     BuildBvhPlocImpl(globalId, localId, groupId, numActivePrims, plocArgs);
@@ -368,59 +360,15 @@ void PairCompression(
     uint localId,
     uint numActivePrims)
 {
-    const uint buildInfo  = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_INFO_OFFSET);
-    const uint buildFlags = (buildInfo >> ACCEL_STRUCT_HEADER_INFO_FLAGS_SHIFT) & ACCEL_STRUCT_HEADER_INFO_FLAGS_MASK;
-
-    PairCompressionArgs args;
-
-    args.scratchNodesScratchOffset    = CalculateBvhNodesOffset(ShaderConstants, numActivePrims);
-    args.numBatchesScratchOffset      = ShaderConstants.offsets.numBatches;
-    args.batchIndicesScratchOffset    = ShaderConstants.offsets.batchIndices;
-    args.indexBufferInfoScratchOffset = ShaderConstants.offsets.indexBufferInfo;
-    args.flagsScratchOffset           = ShaderConstants.offsets.propagationFlags;
-    args.buildFlags                   = buildFlags;
-
-    PairCompressionImpl(globalId, localId, args);
-}
-
-//======================================================================================================================
-BuildQbvhArgs GetBuildQbvhArgs(
-    uint numLeafNodes,
-    uint numActivePrims)
-{
-    BuildQbvhArgs qbvhArgs;
-
-    const uint rootNodeIndex = FetchRootNodeIndex(
-        Settings.enableFastLBVH, ShaderConstants.offsets.fastLBVHRootNodeIndex);
-
-    qbvhArgs.numPrimitives               = numLeafNodes;
-    qbvhArgs.metadataSizeInBytes         = DstMetadata.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
-    qbvhArgs.numThreads                  = GetNumThreads();
-    qbvhArgs.scratchNodesScratchOffset   = CalculateBvhNodesOffset(ShaderConstants, numActivePrims);
-    qbvhArgs.qbvhStackScratchOffset      = ShaderConstants.offsets.qbvhGlobalStack;
-    qbvhArgs.stackPtrsScratchOffset      = ShaderConstants.offsets.qbvhGlobalStackPtrs;
-    qbvhArgs.splitBoxesByteOffset        = ShaderConstants.offsets.triangleSplitBoxes;
-    qbvhArgs.triangleCompressionMode     = Settings.triangleCompressionMode;
-    qbvhArgs.fp16BoxNodesInBlasMode      = Settings.fp16BoxNodesMode;
-    qbvhArgs.encodeArrayOfPointers       = ShaderConstants.encodeArrayOfPointers;
-    qbvhArgs.rebraidEnabled              = (Settings.rebraidType != RebraidType::Off);
-    qbvhArgs.enableFusedInstanceNode     = Settings.enableFusedInstanceNode;
-    qbvhArgs.enableFastLBVH              = Settings.enableFastLBVH;
-    qbvhArgs.fastLBVHRootNodeIndex       = rootNodeIndex;
-    qbvhArgs.unsortedBvhLeafNodesOffset  = ShaderConstants.offsets.bvhLeafNodeData;
-
-    return qbvhArgs;
-
+    PairCompressionImpl(globalId, localId, numActivePrims);
 }
 
 //======================================================================================================================
 void InitBuildQbvh(
     uint globalId,
-    uint numLeafNodes,
-    uint numActivePrims)
+    uint numLeafNodes)
 {
-    const BuildQbvhArgs qbvhArgs = GetBuildQbvhArgs(numLeafNodes, numActivePrims);
-    InitBuildQbvhImpl(globalId, qbvhArgs);
+    InitBuildQbvhImpl(globalId, numLeafNodes, GetNumThreads());
 }
 
 //======================================================================================================================
@@ -430,10 +378,10 @@ void BuildQbvh(
     uint numLeafNodes,
     uint numActivePrims)
 {
-    const BuildQbvhArgs qbvhArgs = GetBuildQbvhArgs(numLeafNodes, numActivePrims);
-
     {
-        BuildQbvhImpl(globalId, localId, numActivePrims, qbvhArgs, (Settings.topLevelBuild != 0));
+        {
+            BuildQbvhImpl(globalId, localId, numLeafNodes, numActivePrims, (Settings.topLevelBuild != 0));
+        }
     }
 }
 
@@ -527,31 +475,25 @@ void EncodePrimitives(
 {
     for (uint geometryIndex = 0; geometryIndex < ShaderConstants.numDescs; geometryIndex++)
     {
-        const uint numPrimitives = GeometryConstants[geometryIndex].NumPrimitives;
-        const uint primitiveOffset = GeometryConstants[geometryIndex].PrimitiveOffset;
-
-        GeometryArgs geometryArgs = GeometryConstants[geometryIndex];
-        geometryArgs.BuildFlags = 0; // Indicate this is not an update
+        GeometryArgs geometryArgs = InitGeometryArgs(geometryIndex);
 
         if (globalId == 0)
         {
             WriteGeometryInfo(
-                geometryArgs, primitiveOffset, geometryArgs.NumPrimitives, DECODE_PRIMITIVE_STRIDE_TRIANGLE);
+                geometryArgs, geometryArgs.PrimitiveOffset, geometryArgs.NumPrimitives, DECODE_PRIMITIVE_STRIDE_TRIANGLE);
         }
 
-        for (uint primitiveIndex = globalId; primitiveIndex < numPrimitives; primitiveIndex += GetNumThreads())
+        for (uint primitiveIndex = globalId; primitiveIndex < geometryArgs.NumPrimitives; primitiveIndex += GetNumThreads())
         {
             // not an update, just check the "enableEarlyPairCompression" and decide which Encode path to use
             if (Settings.enableEarlyPairCompression == true)
             {
                 EncodePairedTriangleNodeImpl(
                     GeometryBuffer[geometryIndex],
-                    IndexBuffer[geometryIndex],
-                    TransformBuffer[geometryIndex],
                     geometryArgs,
                     primitiveIndex,
                     globalId,
-                    primitiveOffset,
+                    geometryArgs.PrimitiveOffset,
                     0,
                     0,
                     0);
@@ -560,11 +502,9 @@ void EncodePrimitives(
             {
                 EncodeTriangleNode(
                     GeometryBuffer[geometryIndex],
-                    IndexBuffer[geometryIndex],
-                    TransformBuffer[geometryIndex],
                     geometryArgs,
                     primitiveIndex,
-                    primitiveOffset,
+                    geometryArgs.PrimitiveOffset,
                     0,
                     0,
                     0,
@@ -772,7 +712,7 @@ void BuildBvh(
 
         BEGIN_TASK(ShaderRootConstants.numThreadGroups);
 
-        InitBuildQbvh(globalId, numLeafNodes, numActivePrims);
+        InitBuildQbvh(globalId, numLeafNodes);
 
         END_TASK(ShaderRootConstants.numThreadGroups);
         writeDebugCounter(COUNTER_INITQBVH_OFFSET);

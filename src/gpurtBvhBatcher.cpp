@@ -194,7 +194,10 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
             Barrier();
         }
 
-        BuildPhase("EncodePrimitives", builders, &BvhBuilder::EncodePrimitives);
+        if (PhaseEnabled(BuildPhaseFlags::EncodePrimitives))
+        {
+            BuildPhase("EncodePrimitives", builders, &BvhBuilder::EncodePrimitives);
+        }
 
         if (m_deviceSettings.enableParallelBuild)
         {
@@ -232,7 +235,10 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
     {
         RGP_PUSH_MARKER("Updates");
 
-        BuildPhase("EncodePrimitives", updaters, &BvhBuilder::EncodePrimitives);
+        if (PhaseEnabled(BuildPhaseFlags::EncodePrimitives))
+        {
+            BuildPhase("EncodePrimitives", updaters, &BvhBuilder::EncodePrimitives);
+        }
 
         BuildPhase("UpdateAccelerationStructure", updaters, &BvhBuilder::UpdateAccelerationStructure);
 
@@ -389,16 +395,6 @@ void BvhBatcher::DispatchInitAccelerationStructure(
         Util::Vector<BufferViewInfo, DefaultNumBuildersPerDispatch, Internal::Device> scratchBuffers(m_pDevice);
         Util::Vector<BufferViewInfo, DefaultNumBuildersPerDispatch, Internal::Device> scratchGlobals(m_pDevice);
 
-        const InitAccelerationStructure::RootConstants rootConstants
-        {
-            numBuildersToDispatch,
-        };
-
-        uint32 entryOffset = 0;
-        entryOffset = m_pDevice->WriteUserDataEntries(m_cmdBuffer,
-                                                      &rootConstants,
-                                                      InitAccelerationStructure::NumRootEntries,
-                                                      entryOffset);
         for (size_t builderIdx = builderOffset; builderIdx < (builderOffset + numBuildersToDispatch); ++builderIdx)
         {
             auto& builder = builders[builderIdx];
@@ -421,9 +417,14 @@ void BvhBatcher::DispatchInitAccelerationStructure(
                     .gpuAddr = builder.HeaderBufferBaseVa(),
                     .range = 0xFFFFFFFF,
                 });
+                // Early triangle pairing, triangle splitting and indirect BLAS builds dynamically increment
+                // primitive reference counter. Initialise counters to 0 when these features are enabled.
+                const bool dynamicallyIncrementsPrimRefCount = builder.m_buildConfig.enableEarlyPairCompression
+                    || builder.m_buildConfig.triangleSplitting
+                    || (!builder.m_buildConfig.topLevelBuild && builder.m_buildSettings.isIndirectBuild);
                 const InitAccelerationStructure::Constants shaderConstants =
                 {
-                    .numLeafNodes                         = builder.m_buildConfig.numLeafNodes,
+                    .maxNumPrimitives                     = builder.m_buildConfig.maxNumPrimitives,
                     .debugCountersScratchOffset           = builder.m_scratchOffsets.debugCounters,
                     .sceneBoundsScratchOffset             = builder.m_scratchOffsets.sceneBounds,
                     .numBatchesScratchOffset              = builder.m_scratchOffsets.numBatches,
@@ -432,6 +433,8 @@ void BvhBatcher::DispatchInitAccelerationStructure(
                     .plocTaskQueueCounterScratchOffset    = builder.m_scratchOffsets.plocTaskQueueCounter,
                     .encodeTaskCounterScratchOffset       = builder.m_scratchOffsets.encodeTaskCounter,
                     .taskLoopCountersOffset               = builder.m_scratchOffsets.taskLoopCounters,
+                    .isIndirectBuild                      = builder.m_buildSettings.isIndirectBuild,
+                    .dynamicallyIncrementsPrimRefCount    = dynamicallyIncrementsPrimRefCount ? 1u : 0u,
                     .header                               = builder.InitAccelStructHeader(),
                     .metadataHeader                       = builder.InitAccelStructMetadataHeader(),
                 };
@@ -454,13 +457,15 @@ void BvhBatcher::DispatchInitAccelerationStructure(
                 });
             }
         }
+        uint32 entryOffset = 0;
+
+        entryOffset = m_pDevice->WriteBufferSrdTable(m_cmdBuffer, scratchGlobals.Data(), numBuildersToDispatch, false, entryOffset);
         if constexpr (IsUpdate == false)
         {
             entryOffset = m_pDevice->WriteBufferSrdTable(m_cmdBuffer, constants.Data(), numBuildersToDispatch, false, entryOffset);
             entryOffset = m_pDevice->WriteBufferSrdTable(m_cmdBuffer, headerBuffers.Data(), numBuildersToDispatch, false, entryOffset);
             entryOffset = m_pDevice->WriteBufferSrdTable(m_cmdBuffer, scratchBuffers.Data(), numBuildersToDispatch, false, entryOffset);
         }
-        entryOffset = m_pDevice->WriteBufferSrdTable(m_cmdBuffer, scratchGlobals.Data(), numBuildersToDispatch, false, entryOffset);
 
         m_backend.Dispatch(m_cmdBuffer, numBuildersToDispatch, 1, 1);
     }
@@ -483,7 +488,7 @@ void BvhBatcher::RadixSort(Util::Span<BvhBuilder> builders)
     {
         BuildFunction("BitHistogram", builders, [&](BvhBuilder& builder)
         {
-            builder.BitHistogram(bitShiftSize, builder.m_buildConfig.numLeafNodes);
+            builder.BitHistogram(bitShiftSize, builder.m_buildConfig.maxNumPrimitives);
         });
 
         // Wait for the bit histogram to complete
@@ -499,7 +504,7 @@ void BvhBatcher::RadixSort(Util::Span<BvhBuilder> builders)
 
         BuildFunction("ScatterKeysAndValues", builders, [&](BvhBuilder& builder)
         {
-            builder.ScatterKeysAndValues(bitShiftSize, builder.m_buildConfig.numLeafNodes);
+            builder.ScatterKeysAndValues(bitShiftSize, builder.m_buildConfig.maxNumPrimitives);
         });
 
         // If this isn't the last pass, then issue a barrier before we continue so the passes don't overlap.

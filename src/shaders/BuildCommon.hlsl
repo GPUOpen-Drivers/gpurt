@@ -60,8 +60,6 @@ struct RefitArgs
     int4 numMortonBits;
     uint unsortedNodesBaseOffset;
     uint enableEarlyPairCompression;
-    uint reserved0;
-    uint reserved1;
 };
 
 //=====================================================================================================================
@@ -422,7 +420,13 @@ uint64_t RoundUpQuotient(
 static uint32_t GetNumInternalNodeCount(
     in uint32_t primitiveCount)
 {
-    return CalcAccelStructInternalNodeCount(primitiveCount, 4, 2);
+    uint32_t maxNumChildren = 4u;
+    uint32_t minPrimsPerLastInternalNode = 2u;
+
+    {
+    }
+
+    return CalcAccelStructInternalNodeCount(primitiveCount, maxNumChildren, minPrimsPerLastInternalNode);
 }
 
 //=====================================================================================================================
@@ -459,24 +463,6 @@ uint64_t spirv_OpGroupNonUniformBitwiseOr(uint scope, [[vk::ext_literal]] uint o
 uint3 spirv_OpGroupNonUniformBitwiseOr(uint scope, [[vk::ext_literal]] uint op, uint3 value);
 
 #define WAVE_POSTFIX_OR(val) spirv_OpGroupNonUniformBitwiseOr(/* Subgroup */ 3, /* InclusiveScan */ 1, (val))
-
-//=====================================================================================================================
-TriangleData FetchTriangleFromNode(
-    RWByteAddressBuffer DstBuffer,
-    uint                metadataSize,
-    uint                nodePointer)
-{
-    const uint  nodeOffset    = metadataSize + ExtractNodePointerOffset(nodePointer);
-    const uint  nodeType      = GetNodeType(nodePointer);
-    const uint3 vertexOffsets = CalcTriangleVertexOffsets(nodeType);
-
-    TriangleData tri;
-    tri.v0 = DstBuffer.Load<float3>(nodeOffset + vertexOffsets.x);
-    tri.v1 = DstBuffer.Load<float3>(nodeOffset + vertexOffsets.y);
-    tri.v2 = DstBuffer.Load<float3>(nodeOffset + vertexOffsets.z);
-
-    return tri;
-}
 
 //=====================================================================================================================
 uint GetUpdateStackOffset(
@@ -619,7 +605,7 @@ void WriteBoxNode(
     in uint             offset,
     in Float32BoxNode   f32BoxNode)
 {
-    DstMetadata.Store<Float32BoxNode>(offset, f32BoxNode);
+    DstBuffer.Store<Float32BoxNode>(offset, f32BoxNode);
 }
 
 //=====================================================================================================================
@@ -627,7 +613,7 @@ void WriteFp16BoxNode(
     in uint             offset,
     in Float16BoxNode   f16BoxNode)
 {
-    DstMetadata.Store<Float16BoxNode>(offset, f16BoxNode);
+    DstBuffer.Store<Float16BoxNode>(offset, f16BoxNode);
 }
 
 //=====================================================================================================================
@@ -668,172 +654,242 @@ static Float32BoxNode FetchFloat32BoxNode(
 }
 
 //=====================================================================================================================
-void WriteInstanceDescriptor(
+uint GetInstanceMask(InstanceDesc desc)
+{
+    return desc.InstanceID_and_Mask >> 24;
+}
+
+//=====================================================================================================================
+uint64_t GetAccelStructBaseAddr(InstanceDesc desc, bool allowUpdate)
+{
+    bool forceInactive = false;
+    if (allowUpdate == false)
+    {
+        const bool isTransformZero = !any(desc.Transform[0].xyz) &&
+                                     !any(desc.Transform[1].xyz) &&
+                                     !any(desc.Transform[2].xyz);
+        if (isTransformZero || (GetInstanceMask(desc) == 0))
+        {
+            // Mark instance inactive with a NULL address
+            forceInactive = true;
+        }
+    }
+
+    uint64_t baseAddrAccelStructHeader = 0;
+    if (forceInactive == false)
+    {
+        GpuVirtualAddress baseAddr = MakeGpuVirtualAddress(desc.accelStructureAddressLo,
+                                                           desc.accelStructureAddressHiAndFlags);
+        if (baseAddr != 0)
+        {
+            baseAddrAccelStructHeader = MakeGpuVirtualAddress(
+                LoadDwordAtAddr(baseAddr + ACCEL_STRUCT_METADATA_VA_LO_OFFSET),
+                LoadDwordAtAddr(baseAddr + ACCEL_STRUCT_METADATA_VA_HI_OFFSET));
+
+            // In some odd cases where the BLAS memory gets trampled, this is a failsafe to skip such BLAS
+            // and treat them as inactive rather than causing a page fault.
+            const uint metadataSizeInBytes = LoadDwordAtAddr(baseAddr + ACCEL_STRUCT_METADATA_SIZE_OFFSET);
+            const uint64_t expectedBaseAddr = baseAddr + metadataSizeInBytes;
+
+            if (baseAddrAccelStructHeader != expectedBaseAddr)
+            {
+                baseAddrAccelStructHeader = 0;
+            }
+        }
+    }
+
+    return baseAddrAccelStructHeader;
+}
+
+//=====================================================================================================================
+void WriteInstanceNode1_1(
     in uint               bufferOffset,   // Additional buffer offset
-    in InstanceDesc       desc,
+    in uint64_t           blasBaseAddr,
+    in uint               instanceContributionToHitGroupIndexAndFlags,
+    in uint               instanceIdAndMask,
+    in float4             transform[3],
     in uint               instanceIndex,
     in uint               instNodePtr,
-    in uint               blasMetadataSize,
-    in uint               blasRootNodePointer,
-    in bool               isFusedInstanceNode)
+    in uint               blasRootNodePointer)
 {
+    const uint geometryType = FetchHeaderField(blasBaseAddr, ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET);
+    const uint blasMetadataSize = FetchHeaderField(blasBaseAddr, ACCEL_STRUCT_HEADER_METADATA_SIZE_OFFSET);
+
+    const uint64_t childBasePtr =
+        PackInstanceBasePointer(blasBaseAddr,
+                                instanceContributionToHitGroupIndexAndFlags >> 24,
+                                geometryType);
+
     const uint instanceNodeOffset = ExtractNodePointerOffset(instNodePtr);
     const uint dstNodeOffset = bufferOffset + instanceNodeOffset;
-    const GpuVirtualAddress blasBaseAddr =
-        GetInstanceAddr(desc.accelStructureAddressLo, desc.accelStructureAddressHiAndFlags);
 
+    InstanceNode node = (InstanceNode)0;
+
+    node.desc.InstanceID_and_Mask                           = instanceIdAndMask;
+    node.desc.InstanceContributionToHitGroupIndex_and_Flags = instanceContributionToHitGroupIndexAndFlags;
+    node.desc.accelStructureAddressLo                       = LowPart(childBasePtr);
+    node.desc.accelStructureAddressHiAndFlags               = HighPart(childBasePtr);
+
+    node.sideband.Transform[0]     = transform[0];
+    node.sideband.Transform[1]     = transform[1];
+    node.sideband.Transform[2]     = transform[2];
+    node.sideband.instanceIndex    = instanceIndex;
+    node.sideband.padding0         = 0;
+    node.sideband.blasMetadataSize = blasMetadataSize;
+    node.sideband.blasNodePointer  = blasRootNodePointer;
+
+    // invert matrix
+    float3x4 temp    = CreateMatrix(transform);
+    float3x4 inverse = Inverse3x4(temp);
+
+    node.desc.Transform[0] = inverse[0];
+    node.desc.Transform[1] = inverse[1];
+    node.desc.Transform[2] = inverse[2];
+
+    DstMetadata.Store<InstanceNode>(dstNodeOffset, node);
+
+    // Write bottom-level root box node into fused instance node
+    if (Settings.enableFusedInstanceNode)
     {
-        InstanceNode node;
+        Float32BoxNode blasRootNode = (Float32BoxNode)0;
 
-        node.desc.InstanceID_and_Mask                           = desc.InstanceID_and_Mask;
-        node.desc.InstanceContributionToHitGroupIndex_and_Flags = desc.InstanceContributionToHitGroupIndex_and_Flags;
-        node.desc.accelStructureAddressLo                       = desc.accelStructureAddressLo;
-        node.desc.accelStructureAddressHiAndFlags               = desc.accelStructureAddressHiAndFlags;
-
-        node.sideband.Transform[0]     = desc.Transform[0];
-        node.sideband.Transform[1]     = desc.Transform[1];
-        node.sideband.Transform[2]     = desc.Transform[2];
-        node.sideband.instanceIndex    = instanceIndex;
-        node.sideband.padding0         = 0;
-        node.sideband.blasMetadataSize = blasMetadataSize;
-        node.sideband.blasNodePointer  = blasRootNodePointer;
-
-        // invert matrix
-        float3x4 temp    = CreateMatrix(desc.Transform);
-        float3x4 inverse = Inverse3x4(temp);
-
-        node.desc.Transform[0] = inverse[0];
-        node.desc.Transform[1] = inverse[1];
-        node.desc.Transform[2] = inverse[2];
-
-        DstMetadata.Store<InstanceNode>(dstNodeOffset, node);
-
-        // Write bottom-level root box node into fused instance node
-        if (isFusedInstanceNode)
+        if (IsBoxNode32(blasRootNodePointer))
         {
-            Float32BoxNode blasRootNode = (Float32BoxNode)0;
-
-            if (IsBoxNode32(blasRootNodePointer))
-            {
-                blasRootNode = FetchFloat32BoxNode(blasBaseAddr,
-                                                   blasRootNodePointer);
-            }
-            else if (IsBoxNode16(blasRootNodePointer))
-            {
-                blasRootNode = FetchFloat16BoxNodeAsFp32(blasBaseAddr, blasRootNodePointer);
-            }
-            else
-            {
-                // Procedural or triangle node
-                //
-                // Note, we only rebraid one level of the BLAS, the parent pointer is guaranteed to be the
-                // root node pointer.
-                blasRootNode = FetchFloat32BoxNode(blasBaseAddr,
-                                                   CreateRootNodePointer());
-
-                // Copy triangle box data from root node
-                if (blasRootNode.child1 == blasRootNodePointer)
-                {
-                    blasRootNode.bbox0_min = blasRootNode.bbox1_min;
-                    blasRootNode.bbox0_max = blasRootNode.bbox1_max;
-                }
-                if (blasRootNode.child2 == blasRootNodePointer)
-                {
-                    blasRootNode.bbox0_min = blasRootNode.bbox2_min;
-                    blasRootNode.bbox0_max = blasRootNode.bbox2_max;
-                }
-                if (blasRootNode.child3 == blasRootNodePointer)
-                {
-                    blasRootNode.bbox0_min = blasRootNode.bbox3_min;
-                    blasRootNode.bbox0_max = blasRootNode.bbox3_max;
-                }
-
-                // Disable all other child nodes
-                blasRootNode.child0 = blasRootNodePointer;
-                blasRootNode.child1 = INVALID_IDX;
-                blasRootNode.child2 = INVALID_IDX;
-                blasRootNode.child3 = INVALID_IDX;
-            }
-
-            // Transform child boxes
-            //
-
-            // Child 0
-            BoundingBox transformedBounds = (BoundingBox)0;
-            transformedBounds.min = blasRootNode.bbox0_min;
-            transformedBounds.max = blasRootNode.bbox0_max;
-
-            transformedBounds = TransformBoundingBox(transformedBounds, desc.Transform);
-
-            blasRootNode.bbox0_min = transformedBounds.min;
-            blasRootNode.bbox0_max = transformedBounds.max;
-
-            // Child 1
-            if (blasRootNode.child1 != INVALID_IDX)
-            {
-                transformedBounds.min = blasRootNode.bbox1_min;
-                transformedBounds.max = blasRootNode.bbox1_max;
-
-                transformedBounds = TransformBoundingBox(transformedBounds, desc.Transform);
-
-                blasRootNode.bbox1_min = transformedBounds.min;
-                blasRootNode.bbox1_max = transformedBounds.max;
-            }
-
-            // Child 2
-            if (blasRootNode.child2 != INVALID_IDX)
-            {
-                transformedBounds.min = blasRootNode.bbox2_min;
-                transformedBounds.max = blasRootNode.bbox2_max;
-
-                transformedBounds = TransformBoundingBox(transformedBounds, desc.Transform);
-
-                blasRootNode.bbox2_min = transformedBounds.min;
-                blasRootNode.bbox2_max = transformedBounds.max;
-            }
-
-            // Child 3
-            if (blasRootNode.child3 != INVALID_IDX)
-            {
-                transformedBounds.min = blasRootNode.bbox3_min;
-                transformedBounds.max = blasRootNode.bbox3_max;
-
-                transformedBounds = TransformBoundingBox(transformedBounds, desc.Transform);
-
-                blasRootNode.bbox3_min = transformedBounds.min;
-                blasRootNode.bbox3_max = transformedBounds.max;
-            }
-
-            // Clear flags in box node. During traversal the pointer flags are not updated at the time of
-            // fused instance intersection. It is better to disable node culling for this intersection
-            // than using accurate pointer flags (which requires an early fetch prior to intersection)
-            //
-            blasRootNode.flags = 0;
-
-            const uint fusedBoxNodeOffset = dstNodeOffset + FUSED_INSTANCE_NODE_ROOT_OFFSET;
-
-            // The DXC compiler fails validation due to undefined writes to UAV if we use the templated Store
-            // instruction. Unrolling the stores works around this issue.
-#if 0
-            DstMetadata.Store<Float32BoxNode>(fusedBoxNodeOffset, blasRootNode);
-#else
-            DstMetadata.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD0_OFFSET, blasRootNode.child0);
-            DstMetadata.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD1_OFFSET, blasRootNode.child1);
-            DstMetadata.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD2_OFFSET, blasRootNode.child2);
-            DstMetadata.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD3_OFFSET, blasRootNode.child3);
-
-            DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET, blasRootNode.bbox0_min);
-            DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET, blasRootNode.bbox0_max);
-            DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB1_MIN_OFFSET, blasRootNode.bbox1_min);
-            DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB1_MAX_OFFSET, blasRootNode.bbox1_max);
-            DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB2_MIN_OFFSET, blasRootNode.bbox2_min);
-            DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB2_MAX_OFFSET, blasRootNode.bbox2_max);
-            DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB3_MIN_OFFSET, blasRootNode.bbox3_min);
-            DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB3_MAX_OFFSET, blasRootNode.bbox3_max);
-
-            DstMetadata.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, blasRootNode.flags);
-#endif
+            blasRootNode = FetchFloat32BoxNode(blasBaseAddr,
+                                               blasRootNodePointer);
         }
+        else if (IsBoxNode16(blasRootNodePointer))
+        {
+            blasRootNode = FetchFloat16BoxNodeAsFp32(blasBaseAddr, blasRootNodePointer);
+        }
+        else
+        {
+            // Procedural or triangle node
+            //
+            // Note, we only rebraid one level of the BLAS, the parent pointer is guaranteed to be the
+            // root node pointer.
+            blasRootNode = FetchFloat32BoxNode(blasBaseAddr,
+                                               CreateRootNodePointer());
+
+            // Copy triangle box data from root node
+            if (blasRootNode.child1 == blasRootNodePointer)
+            {
+                blasRootNode.bbox0_min = blasRootNode.bbox1_min;
+                blasRootNode.bbox0_max = blasRootNode.bbox1_max;
+            }
+            if (blasRootNode.child2 == blasRootNodePointer)
+            {
+                blasRootNode.bbox0_min = blasRootNode.bbox2_min;
+                blasRootNode.bbox0_max = blasRootNode.bbox2_max;
+            }
+            if (blasRootNode.child3 == blasRootNodePointer)
+            {
+                blasRootNode.bbox0_min = blasRootNode.bbox3_min;
+                blasRootNode.bbox0_max = blasRootNode.bbox3_max;
+            }
+
+            // Disable all other child nodes
+            blasRootNode.child0 = blasRootNodePointer;
+            blasRootNode.child1 = INVALID_IDX;
+            blasRootNode.child2 = INVALID_IDX;
+            blasRootNode.child3 = INVALID_IDX;
+        }
+
+        // Transform child boxes
+        //
+
+        // Child 0
+        BoundingBox transformedBounds = (BoundingBox)0;
+        transformedBounds.min = blasRootNode.bbox0_min;
+        transformedBounds.max = blasRootNode.bbox0_max;
+
+        transformedBounds = TransformBoundingBox(transformedBounds, transform);
+
+        blasRootNode.bbox0_min = transformedBounds.min;
+        blasRootNode.bbox0_max = transformedBounds.max;
+
+        // Child 1
+        if (blasRootNode.child1 != INVALID_IDX)
+        {
+            transformedBounds.min = blasRootNode.bbox1_min;
+            transformedBounds.max = blasRootNode.bbox1_max;
+
+            transformedBounds = TransformBoundingBox(transformedBounds, transform);
+
+            blasRootNode.bbox1_min = transformedBounds.min;
+            blasRootNode.bbox1_max = transformedBounds.max;
+        }
+
+        // Child 2
+        if (blasRootNode.child2 != INVALID_IDX)
+        {
+            transformedBounds.min = blasRootNode.bbox2_min;
+            transformedBounds.max = blasRootNode.bbox2_max;
+
+            transformedBounds = TransformBoundingBox(transformedBounds, transform);
+
+            blasRootNode.bbox2_min = transformedBounds.min;
+            blasRootNode.bbox2_max = transformedBounds.max;
+        }
+
+        // Child 3
+        if (blasRootNode.child3 != INVALID_IDX)
+        {
+            transformedBounds.min = blasRootNode.bbox3_min;
+            transformedBounds.max = blasRootNode.bbox3_max;
+
+            transformedBounds = TransformBoundingBox(transformedBounds, transform);
+
+            blasRootNode.bbox3_min = transformedBounds.min;
+            blasRootNode.bbox3_max = transformedBounds.max;
+        }
+
+        // Clear flags in box node. During traversal the pointer flags are not updated at the time of
+        // fused instance intersection. It is better to disable node culling for this intersection
+        // than using accurate pointer flags (which requires an early fetch prior to intersection)
+        //
+        blasRootNode.flags = 0;
+
+        const uint fusedBoxNodeOffset = dstNodeOffset + FUSED_INSTANCE_NODE_ROOT_OFFSET;
+
+        DstMetadata.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD0_OFFSET, blasRootNode.child0);
+        DstMetadata.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD1_OFFSET, blasRootNode.child1);
+        DstMetadata.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD2_OFFSET, blasRootNode.child2);
+        DstMetadata.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD3_OFFSET, blasRootNode.child3);
+
+        DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET, blasRootNode.bbox0_min);
+        DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET, blasRootNode.bbox0_max);
+        DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB1_MIN_OFFSET, blasRootNode.bbox1_min);
+        DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB1_MAX_OFFSET, blasRootNode.bbox1_max);
+        DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB2_MIN_OFFSET, blasRootNode.bbox2_min);
+        DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB2_MAX_OFFSET, blasRootNode.bbox2_max);
+        DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB3_MIN_OFFSET, blasRootNode.bbox3_min);
+        DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB3_MAX_OFFSET, blasRootNode.bbox3_max);
+
+        DstMetadata.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, blasRootNode.flags);
+    }
+}
+
+//=====================================================================================================================
+void WriteInstanceDescriptor(
+    in uint               bufferOffset,   // Additional buffer offset
+    in uint64_t           blasBaseAddr,
+    in uint               instanceContributionToHitGroupIndexAndFlags,
+    in uint               instanceIdAndMask,
+    in float4             transform[3],
+    in uint               instanceIndex,
+    in uint               instNodePtr,
+    in uint               blasRootNodePointer)
+{
+    {
+        WriteInstanceNode1_1(bufferOffset,
+                             blasBaseAddr,
+                             instanceContributionToHitGroupIndexAndFlags,
+                             instanceIdAndMask,
+                             transform,
+                             instanceIndex,
+                             instNodePtr,
+                             blasRootNodePointer);
     }
 }
 

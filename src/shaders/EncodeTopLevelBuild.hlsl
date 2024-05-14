@@ -58,7 +58,6 @@ void EncodeInstancesBuild(
             const BoundingBox rootBbox = FetchHeaderRootBoundingBox(baseAddrAccelStructHeader);
 
             boundingBox = GenerateInstanceBoundingBox(desc.Transform, rootBbox);
-
         }
         else
         {
@@ -102,11 +101,11 @@ void EncodeInstancesBuild(
                     // Update scene bounding box
                     if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
                     {
-                        UpdateSceneBoundsWithSize(ShaderConstants.sceneBoundsByteOffset, boundingBox);
+                        UpdateSceneBoundsWithSize(ShaderConstants.offsets.sceneBounds, boundingBox);
                     }
                     else
                     {
-                        UpdateSceneBounds(ShaderConstants.sceneBoundsByteOffset, boundingBox);
+                        UpdateSceneBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
                     }
                 }
             }

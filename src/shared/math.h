@@ -110,6 +110,16 @@ static uint32_t bitFieldExtract(
 }
 
 //=====================================================================================================================
+// Helper function for extracting data from a uint64_t src bitfield
+static uint64_t bitFieldExtract64(
+    in uint64_t src,
+    in uint64_t bitOffset,
+    in uint64_t numBits)
+{
+    return (src >> bitOffset) & bits64(numBits);
+}
+
+//=====================================================================================================================
 static uint32_t Pow2Align(
     uint32_t value,      ///< Value to align.
     uint32_t alignment)  ///< Desired alignment (must be a power of 2).

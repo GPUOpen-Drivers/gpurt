@@ -23,32 +23,22 @@
  *
  **********************************************************************************************************************/
 #ifdef IS_UPDATE
-#define RootSig "RootConstants(num32BitConstants=1, b0, visibility=SHADER_VISIBILITY_ALL), "\
-                "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 3)),"
+#define RootSig "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1))"
 #else
-#define RootSig "RootConstants(num32BitConstants=1, b0, visibility=SHADER_VISIBILITY_ALL), "\
+#define RootSig "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
                 "DescriptorTable(CBV(b0, numDescriptors = 4294967295, space = 1)),"\
-                "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 2)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 3)),"\
                 "CBV(b255)"
 #endif
 
-//=====================================================================================================================
-
-struct RootConstants
-{
-    uint numBuilders;
-};
-
-[[vk::push_constant]] ConstantBuffer<RootConstants> ShaderRootConstants : register(b0);
-
 #include "Common.hlsl"
 
+[[vk::binding(0, 2)]] RWByteAddressBuffer       BatchScratchGlobals[]   : register(u0, space1);
 #ifndef IS_UPDATE
 struct Constants
 {
-    uint numLeafNodes;
+    uint maxNumPrimitives;
     uint debugCountersScratchOffset;
     uint sceneBoundsScratchOffset;
     uint numBatchesScratchOffset;
@@ -59,20 +49,20 @@ struct Constants
     uint encodeTaskCounterScratchOffset;
 
     uint taskLoopCountersOffset;
-    uint padding0;
+    uint isIndirectBuild;
+    uint dynamicallyIncrementsPrimRefCount;
     uint padding1;
-    uint padding2;
 
     AccelStructHeader header;
     AccelStructMetadataHeader metadataHeader;
 };
 
-[[vk::binding(0, 1)]] ConstantBuffer<Constants> BatchBuilderConstants[] : register(b0, space1);
-[[vk::binding(0, 0)]] RWByteAddressBuffer       BatchHeaderBuffers[]    : register(u0, space1);
-[[vk::binding(1, 0)]] RWByteAddressBuffer       BatchScratchBuffers[]   : register(u0, space2);
+[[vk::binding(0, 3)]] ConstantBuffer<Constants> BatchBuilderConstants[] : register(b0, space1);
+[[vk::binding(0, 4)]] RWByteAddressBuffer       BatchHeaderBuffers[]    : register(u0, space2);
+[[vk::binding(0, 5)]] RWByteAddressBuffer       BatchScratchBuffers[]   : register(u0, space3);
 #endif
-[[vk::binding(2, 0)]] RWByteAddressBuffer       BatchScratchGlobals[]   : register(u0, space3);
 
+static const uint INVALID_SCRATCH_OFFSET = 0xFFFFFFFF;
 // =====================================================================================================================
 // Reset counters
 void ResetCounters(
@@ -80,19 +70,19 @@ void ResetCounters(
     uint                counterOffset,
     uint                numDwords)
 {
-    for (uint i = 0; i < numDwords; ++i)
+    if (counterOffset != INVALID_SCRATCH_OFFSET)
     {
-        scratchBuffer.Store(counterOffset + (i * sizeof(uint)), 0u);
+        for (uint i = 0; i < numDwords; ++i)
+        {
+            scratchBuffer.Store(counterOffset + (i * sizeof(uint)), 0u);
+        }
     }
 }
-
-static const uint INVALID_SCRATCH_OFFSET = 0xFFFFFFFF;
 
 // =====================================================================================================================
 [RootSignature(RootSig)]
 [numthreads(1, 1, 1)]
 void InitAccelerationStructure(
-    uint globalId : SV_DispatchThreadID,
     uint groupId  : SV_GroupId)
 {
 #ifdef IS_UPDATE
@@ -119,7 +109,7 @@ void InitAccelerationStructure(
     const uint InitialMax = FloatToUint(-FLT_MAX);
     const uint InitialMin = FloatToUint(FLT_MAX);
 
-    if (BuilderConstants.numLeafNodes != 0)
+    if (BuilderConstants.maxNumPrimitives != 0)
     {
         const bool isRebraidEnabled = BuilderConstants.rebraidTaskQueueCounterScratchOffset != INVALID_SCRATCH_OFFSET;
         if (isRebraidEnabled)
@@ -155,28 +145,23 @@ void InitAccelerationStructure(
             ScratchGlobal.Store(BuilderConstants.numBatchesScratchOffset, 0);
         }
 
-        const bool isTopDownBuild = BuilderConstants.tdTaskQueueCounterScratchOffset != INVALID_SCRATCH_OFFSET;
-        if (isTopDownBuild)
-        {
-            ResetCounters(ScratchGlobal, BuilderConstants.tdTaskQueueCounterScratchOffset, RayTracingTaskQueueCounters);
-        }
-        else if (BuilderConstants.plocTaskQueueCounterScratchOffset != INVALID_SCRATCH_OFFSET)
-        {
-            ResetCounters(ScratchGlobal, BuilderConstants.plocTaskQueueCounterScratchOffset, RayTracingTaskQueueCounters);
-        }
+        ResetCounters(ScratchGlobal, BuilderConstants.tdTaskQueueCounterScratchOffset, RayTracingTaskQueueCounters);
+        ResetCounters(ScratchGlobal, BuilderConstants.plocTaskQueueCounterScratchOffset, RayTracingTaskQueueCounters);
 
         // Initialise encode counters
         ScratchGlobal.Store(
             BuilderConstants.encodeTaskCounterScratchOffset + ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET, 0);
 
-        // Early triangle pairing and triangle splitting dynamically increment primitive reference counter. Initialise
-        // counters to 0 when these features are enabled
-        const uint primRefInitCount =
-            (Settings.enableEarlyPairCompression || Settings.doTriangleSplitting) ?
-                0 : BuilderConstants.header.numPrimitives;
+        // Early triangle pairing, triangle splitting and indirect BLAS builds dynamically increment
+        // primitive reference counter. Initialise counters to 0 when these features are enabled.
+        const uint primRefInitCount = (BuilderConstants.dynamicallyIncrementsPrimRefCount == 0) ?
+            BuilderConstants.header.numPrimitives : 0;
 
         ScratchGlobal.Store(
             BuilderConstants.encodeTaskCounterScratchOffset + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET, primRefInitCount);
+
+        ScratchGlobal.Store3(
+            BuilderConstants.encodeTaskCounterScratchOffset + ENCODE_TASK_COUNTER_INDIRECT_ARGS, uint3(0, 1, 1));
 
         ResetCounters(ScratchGlobal, BuilderConstants.taskLoopCountersOffset, TASK_LOOP_COUNTERS_NUM_DWORDS);
     }

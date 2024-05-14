@@ -35,15 +35,23 @@ find_package(Python3
 
 get_target_property(COMPILE_DEFINITIONS gpurt COMPILE_DEFINITIONS)
 set(gpurtDefines "${COMPILE_DEFINITIONS}")
-set(gpurtIncludeDirectories "")
+# For including generated headers
+set(gpurtIncludeDirectories "${CMAKE_CURRENT_BINARY_DIR}")
+# In CMake, we have to add target AND file dependencies here.
+# See also https://gitlab.kitware.com/cmake/cmake/-/issues/20828
+# or https://samthursfield.wordpress.com/2015/11/21/cmake-dependencies-between-targets-and-files-and-custom-commands/
+set(gpurtSharedDependencies generate_gpurtOptions_h ${GPURTOPTIONS_OUTPUT})
 
 if (TARGET llpc_version)
     # Propagate include directories and defines from llpc_version into the HLSL code
     get_target_property(LLPC_VERSION_INCLUDE_DIRS llpc_version INTERFACE_INCLUDE_DIRECTORIES)
     get_target_property(LLPC_VERSION_DEFS llpc_version INTERFACE_COMPILE_DEFINITIONS)
+    get_target_property(LLPC_VERSION_SOURCE llpc_version SOURCE_DIR)
+
     list(APPEND gpurtDefines "${LLPC_VERSION_DEFS}")
-    set(gpurtIncludeDirectories "${LLPC_VERSION_INCLUDE_DIRS}")
-    set(gpurtSharedDependencies llpc_version)
+    list(APPEND gpurtIncludeDirectories "${LLPC_VERSION_INCLUDE_DIRS}")
+    # Need to add target AND file dependencies. See comment on gpurtSharedDependencies.
+    list(APPEND gpurtSharedDependencies llpc_version "${LLPC_VERSION_SOURCE}/include/llpc/GpurtIntrinsics.h")
 endif()
 
 set(gpurtToolsDir "${GPU_RAY_TRACING_SOURCE_DIR}/tools")
@@ -86,8 +94,7 @@ else()
     set(gpurtShadersSourceDir "${originalShaderSourceDir}")
 endif()
 
-set(gpurtSharedDependencies
-    ${gpurtSharedDependencies}
+list(APPEND gpurtSharedDependencies
     ${gpurtShaderSource}
     ${gpurtCompileScript}
 )

@@ -99,10 +99,8 @@ bvhShaderConfigs = [
     ShaderConfig(path="Update.hlsl", entryPoint="UpdateTriangles"),
     ShaderConfig(path="Update.hlsl", entryPoint="UpdateAabbs"),
     ShaderConfig(path="EncodeNodes.hlsl", entryPoint="EncodeTriangleNodes"),
-    ShaderConfig(path="EncodeNodes.hlsl", entryPoint="EncodeTriangleNodes", outputName="EncodeTriangleNodesIndirect", defines="INDIRECT_BUILD=1"),
     ShaderConfig(path="EncodeNodes.hlsl", entryPoint="EncodeAABBNodes"),
     ShaderConfig(path="EncodeNodes.hlsl", entryPoint="CountTrianglePairs"),
-    ShaderConfig(path="EncodeNodes.hlsl", entryPoint="CountTrianglePairs", outputName="CountTrianglePairsIndirect", defines="INDIRECT_BUILD=1"),
     ShaderConfig(path="CountTrianglePairsPrefixSum.hlsl", entryPoint="CountTrianglePairsPrefixSum"),
     ShaderConfig(path="EncodeTopLevel.hlsl", entryPoint="EncodeInstances"),
     ShaderConfig(path="BuildParallel.hlsl", entryPoint="BuildBvh", outputName="BuildParallel"),
@@ -342,6 +340,12 @@ def RunCompiler(outputDir, compilerPath, inShaderConfig, inShaderBasePath, inDXC
 
     for p in inShaderConfig.includePaths.split(','):
         commandArgs += ['-I', p]
+
+    commandArgs += ['-enable-16bit-types']
+    if inShaderConfig.isBVH():
+        commandArgs += ['-HV', '2021']
+    else:
+        commandArgs += ['-HV', '2018']
 
     if inDXC:
         isLibrary = inShaderConfig.isLibrary()

@@ -22,44 +22,41 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-struct PairCompressionArgs
-{
-    uint scratchNodesScratchOffset;
-    uint numBatchesScratchOffset;
-    uint batchIndicesScratchOffset;
-    uint indexBufferInfoScratchOffset;
-    uint flagsScratchOffset;
-    uint buildFlags;
-    uint numLeafNodes;
-};
-
 #if NO_SHADER_ENTRYPOINT == 0
 #define RootSig "CBV(b0), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
+                "DescriptorTable(CBV(b0, numDescriptors = 4294967295, space = 1)),"\
+                "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
                 "CBV(b255),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u6, visibility=SHADER_VISIBILITY_ALL)"
 
 //=====================================================================================================================
 #include "../shared/rayTracingDefs.h"
 
 [[vk::binding(1, 0)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b0);
 
-[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer  DstBuffer     : register(u0);
-[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer  DstMetadata   : register(u1);
-[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer  ScratchBuffer : register(u2);
-[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer  ScratchGlobal : register(u3);
+[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer  DstBuffer         : register(u0);
+[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer  DstMetadata       : register(u1);
+[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer  ScratchBuffer     : register(u2);
+[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer  ScratchGlobal     : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer                   IndirectArgBuffer : register(u4);
+
+[[vk::binding(0, 2)]] ConstantBuffer<BuildShaderGeometryConstants> GeometryConstants[] : register(b0, space1);
+[[vk::binding(0, 3)]] RWBuffer<float3>                             GeometryBuffer[]    : register(u0, space1);
 
 // unused buffer
-[[vk::binding(4, 0)]] RWByteAddressBuffer                   SrcBuffer     : register(u4);
-[[vk::binding(5, 0)]] RWByteAddressBuffer                   EmitBuffer    : register(u5);
+[[vk::binding(5, 0)]] RWByteAddressBuffer                   SrcBuffer     : register(u5);
+[[vk::binding(6, 0)]] RWByteAddressBuffer                   EmitBuffer    : register(u6);
 
 #include "Common.hlsl"
 #include "BuildCommonScratch.hlsl"
+#include "EncodeCommon.hlsl"
 
 #define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
 groupshared uint SharedMem[MAX_LDS_ELEMENTS];
@@ -118,90 +115,6 @@ uint GetQuadScratchNodeIndex(in uint packedNodeIndex)
 uint GetQuadScratchNodeVertexOffset(in uint packedNodeIndex)
 {
     return (packedNodeIndex >> 30);
-}
-
-//=====================================================================================================================
-// Get face indices from 16-bit index buffer
-uint3 GetFaceIndices16(GpuVirtualAddress bufferVa, uint faceIndex, uint indexBufferByteOffset)
-{
-    // 3 vertices per triangle with 2-byte indices
-    uint baseOffset = (faceIndex * 6) + indexBufferByteOffset;
-
-    // Load address must be 4-byte aligned
-    const bool unalignedRead = (baseOffset % 4 == 2);
-    if (unalignedRead)
-    {
-        // Align down load address
-        baseOffset -= 2;
-    }
-
-    const GpuVirtualAddress baseAddr = bufferVa + baseOffset;
-
-    // Load index buffer data
-    uint2 data;
-    data.x = LoadDwordAtAddr(baseAddr);
-    data.y = LoadDwordAtAddr(baseAddr + 0x4);
-
-    uint3 faceIndices;
-    if (unalignedRead == false)
-    {
-        faceIndices.x = (data.x & 0xFFFF);
-        faceIndices.y = (data.x >> 16);
-        faceIndices.z = (data.y & 0xFFFF);
-    }
-    else
-    {
-        faceIndices.x = (data.x >> 16);
-        faceIndices.y = (data.y & 0xFFFF);
-        faceIndices.z = (data.y >> 16);
-    }
-
-    return faceIndices;
-}
-
-//=====================================================================================================================
-// Get face indices from 32-bit index buffer
-uint3 GetFaceIndices32(GpuVirtualAddress bufferVa, uint faceIndex, uint indexBufferByteOffset)
-{
-    // 3 vertices per triangle with 4-byte indices
-    const uint baseOffset = (faceIndex * 12) + indexBufferByteOffset;
-
-    const GpuVirtualAddress baseAddr = bufferVa + baseOffset;
-
-    uint3 faceIndices;
-    faceIndices.x = LoadDwordAtAddr(baseAddr);
-    faceIndices.y = LoadDwordAtAddr(baseAddr + 0x4);
-    faceIndices.z = LoadDwordAtAddr(baseAddr + 0x8);
-
-    return faceIndices;
-}
-
-//=====================================================================================================================
-uint3 FetchFaceIndices(
-    uint            primitiveIndex,
-    IndexBufferInfo indexBufferInfo)
-{
-    const GpuVirtualAddress indexBufferVa = MakeGpuVirtualAddress(indexBufferInfo.gpuVaLo, indexBufferInfo.gpuVaHi);
-
-    // Fetch face indices from index buffer
-    uint3 faceIndices;
-    if (indexBufferInfo.format == IndexFormatU16)
-    {
-        faceIndices = GetFaceIndices16(indexBufferVa, primitiveIndex, indexBufferInfo.byteOffset);
-    }
-    else if (indexBufferInfo.format == IndexFormatU32)
-    {
-        faceIndices = GetFaceIndices32(indexBufferVa, primitiveIndex, indexBufferInfo.byteOffset);
-    }
-    else
-    {
-        const uint startIndex = (primitiveIndex * 3);
-        faceIndices.x = startIndex;
-        faceIndices.y = startIndex + 1;
-        faceIndices.z = startIndex + 2;
-    }
-
-    return faceIndices;
 }
 
 //=====================================================================================================================
@@ -280,13 +193,14 @@ void WriteCompressedNodes(
 //=====================================================================================================================
 // Returns true if vertexIndex0 and vertexIndex1 are equivalent for compression purposes.
 bool CompareVertices(
-    uint                vertexIndex0,
-    uint                vertexIndex1,
-    uint                scratchIndex0,
-    uint                scratchIndex1,
-    uint                scratchVertex0,
-    uint                scratchVertex1,
-    PairCompressionArgs args)
+    uint vertexIndex0,
+    uint vertexIndex1,
+    uint scratchIndex0,
+    uint scratchIndex1,
+    uint scratchVertex0,
+    uint scratchVertex1,
+    uint scratchNodesScratchOffset,
+    uint buildFlags)
 {
     // Vertices match if they have the same vertex index.
     if (vertexIndex0 == vertexIndex1)
@@ -296,14 +210,14 @@ bool CompareVertices(
 
     // If we decide to not rerun triangle compression on BVH Updates, we can't assume two vertices
     // with the same position but different vertex indices are the same.
-    if ((args.buildFlags & DDI_BUILD_FLAG_ALLOW_UPDATE) ||
-        (args.buildFlags & DDI_BUILD_FLAG_PERFORM_UPDATE))
+    if ((buildFlags & DDI_BUILD_FLAG_ALLOW_UPDATE) ||
+        (buildFlags & DDI_BUILD_FLAG_PERFORM_UPDATE))
     {
         return false;
     }
 
     // Speedup triangle compression when FAST_BUILD is used by not comparing vertices of different indices.
-    if (args.buildFlags & DDI_BUILD_FLAG_PREFER_FAST_BUILD)
+    if (buildFlags & DDI_BUILD_FLAG_PREFER_FAST_BUILD)
     {
         return false;
     }
@@ -314,14 +228,14 @@ bool CompareVertices(
     float3 vertex0 =
         FETCH_SCRATCH_NODE_DATA(
             float3,
-            args.scratchNodesScratchOffset,
+            scratchNodesScratchOffset,
             scratchIndex0,
             scratchVertex0 * scratchVertexStride);
 
     float3 vertex1 =
         FETCH_SCRATCH_NODE_DATA(
             float3,
-            args.scratchNodesScratchOffset,
+            scratchNodesScratchOffset,
             scratchIndex1,
             scratchVertex1 * scratchVertexStride);
 
@@ -335,29 +249,44 @@ bool CompareVertices(
 
 //=====================================================================================================================
 uint EncodeTwoTrianglesPerNodeQBVHCompression(
-    uint                localId,
-    uint                batchSize,
-    PairCompressionArgs args)
+    uint localId,
+    uint batchSize,
+    uint scratchNodesScratchOffset)
 {
     const uint numIndices = 3;
 
     uint quadIndex = 0;
+
+    const uint buildInfo = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_INFO_OFFSET);
+    const uint buildFlags = (buildInfo >> ACCEL_STRUCT_HEADER_INFO_FLAGS_SHIFT) & ACCEL_STRUCT_HEADER_INFO_FLAGS_MASK;
 
     // Loop over every triangle in the triangle group to compress into quads.
     for (uint batchIndex = 0; batchIndex < batchSize; batchIndex++)
     {
         const uint scratchIndex = ReadBatchIndex(localId, batchIndex);
 
-        const ScratchNode node = FetchScratchNode(args.scratchNodesScratchOffset, scratchIndex);
+        const ScratchNode node = FetchScratchNode(scratchNodesScratchOffset, scratchIndex);
 
         const uint geometryIndex  = node.right_or_geometryIndex;
         const uint primitiveIndex = node.left_or_primIndex_or_instIndex;
 
-        // Fetch primitive vertex indices
-        const uint indexBufferInfoOffset = args.indexBufferInfoScratchOffset +
-                                           (geometryIndex * sizeof(IndexBufferInfo));
+        uint indexOffsetInBytes = 0;
 
-        const IndexBufferInfo indexBufferInfo = ScratchBuffer.Load<IndexBufferInfo>(indexBufferInfoOffset);
+        if (Settings.isIndirectBuild)
+        {
+            const IndirectBuildOffset buildOffsetInfo =
+                IndirectArgBuffer.Load<IndirectBuildOffset>(ShaderConstants.indirectArgBufferStride * geometryIndex);
+
+            indexOffsetInBytes = buildOffsetInfo.primitiveOffset;
+        }
+
+        const IndexBufferInfo indexBufferInfo =
+        {
+            GeometryConstants[geometryIndex].indexBufferGpuVaLo,
+            GeometryConstants[geometryIndex].indexBufferGpuVaHi,
+            GeometryConstants[geometryIndex].indexBufferByteOffset + indexOffsetInBytes,
+            GeometryConstants[geometryIndex].indexBufferFormat,
+        };
 
         const uint3 faceIndices = FetchFaceIndices(primitiveIndex, indexBufferInfo);
 
@@ -375,7 +304,7 @@ uint EncodeTwoTrianglesPerNodeQBVHCompression(
             }
 
             const uint quadScratchIndex = GetQuadScratchNodeIndex(quadArray[n].scratchNodeIndexAndOffset[0]);
-            const ScratchNode triangleNode = FetchScratchNode(args.scratchNodesScratchOffset, quadScratchIndex);
+            const ScratchNode triangleNode = FetchScratchNode(scratchNodesScratchOffset, quadScratchIndex);
 
             // Do not compress triangles from different geometries
             if (geometryIndex != triangleNode.right_or_geometryIndex)
@@ -394,9 +323,9 @@ uint EncodeTwoTrianglesPerNodeQBVHCompression(
                 const uint index1 = quadFaceIndices[indexOffset1];
 
                 // Compare all three matching vertex conditions with triangle 0
-                if (CompareVertices(ind[2], index0, scratchIndex, quadScratchIndex, 2, indexOffset0, args))
+                if (CompareVertices(ind[2], index0, scratchIndex, quadScratchIndex, 2, indexOffset0, scratchNodesScratchOffset, buildFlags))
                 {
-                    if (CompareVertices(ind[1], index1, scratchIndex, quadScratchIndex, 1, indexOffset1, args))
+                    if (CompareVertices(ind[1], index1, scratchIndex, quadScratchIndex, 1, indexOffset1, scratchNodesScratchOffset, buildFlags))
                     {
                         bestQuad = n;
                         indOff   = i;
@@ -405,9 +334,9 @@ uint EncodeTwoTrianglesPerNodeQBVHCompression(
                     }
                 }
 
-                if (CompareVertices(ind[1], index0, scratchIndex, quadScratchIndex, 1, indexOffset0, args))
+                if (CompareVertices(ind[1], index0, scratchIndex, quadScratchIndex, 1, indexOffset0, scratchNodesScratchOffset, buildFlags))
                 {
-                    if (CompareVertices(ind[0], index1, scratchIndex, quadScratchIndex, 0, indexOffset1, args))
+                    if (CompareVertices(ind[0], index1, scratchIndex, quadScratchIndex, 0, indexOffset1, scratchNodesScratchOffset, buildFlags))
                     {
                         bestQuad = n;
                         indOff   = i;
@@ -416,9 +345,9 @@ uint EncodeTwoTrianglesPerNodeQBVHCompression(
                     }
                 }
 
-                if (CompareVertices(ind[0], index0, scratchIndex, quadScratchIndex, 0, indexOffset0, args))
+                if (CompareVertices(ind[0], index0, scratchIndex, quadScratchIndex, 0, indexOffset0, scratchNodesScratchOffset, buildFlags))
                 {
-                    if (CompareVertices(ind[2], index1, scratchIndex, quadScratchIndex, 2, indexOffset1, args))
+                    if (CompareVertices(ind[2], index1, scratchIndex, quadScratchIndex, 2, indexOffset1, scratchNodesScratchOffset, buildFlags))
                     {
                         bestQuad = n;
                         indOff   = i;
@@ -465,7 +394,7 @@ uint EncodeTwoTrianglesPerNodeQBVHCompression(
         }
     }
 
-    WriteCompressedNodes(localId, args.scratchNodesScratchOffset, quadIndex);
+    WriteCompressedNodes(localId, scratchNodesScratchOffset, quadIndex);
 
     // Return the number of result nodes
     return quadIndex;
@@ -473,19 +402,20 @@ uint EncodeTwoTrianglesPerNodeQBVHCompression(
 
 //=====================================================================================================================
 void PairCompressionImpl(
-    uint                globalId,
-    uint                localId,
-    PairCompressionArgs args)
+    uint globalId,
+    uint localId,
+    uint numActivePrims)
 {
-    const uint numBatches = FetchNumBatches(args.numBatchesScratchOffset);
+    const uint scratchNodesScratchOffset = CalculateBvhNodesOffset(ShaderConstants, numActivePrims);
+
+    const uint numBatches = FetchNumBatches(ShaderConstants.offsets.numBatches);
 
     if (globalId >= numBatches)
     {
         return;
     }
 
-    const uint batchRootIndex = ScratchBuffer.Load(args.batchIndicesScratchOffset + (globalId * sizeof(uint)));
-    const uint numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+    const uint batchRootIndex = ScratchBuffer.Load(ShaderConstants.offsets.batchIndices + (globalId * sizeof(uint)));
 
     uint batchSize = 0;
     uint stackPtr = 1;
@@ -506,10 +436,10 @@ void PairCompressionImpl(
         }
         else
         {
-            const ScratchNode node = FetchScratchNode(args.scratchNodesScratchOffset, index);
+            const ScratchNode node = FetchScratchNode(scratchNodesScratchOffset, index);
 
             // Clear flags for refit.
-            ScratchBuffer.Store(args.flagsScratchOffset + (index * sizeof(uint)), 0);
+            ScratchBuffer.Store(ShaderConstants.offsets.propagationFlags + (index * sizeof(uint)), 0);
 
             const uint left  = node.left_or_primIndex_or_instIndex;
             const uint right = node.right_or_geometryIndex;
@@ -542,7 +472,7 @@ void PairCompressionImpl(
     GroupMemoryBarrierWithGroupSync();
 
     // Compress batch and write out BVH4 nodes
-    const uint numNodes = EncodeTwoTrianglesPerNodeQBVHCompression(localId, batchSize, args);
+    const uint numNodes = EncodeTwoTrianglesPerNodeQBVHCompression(localId, batchSize, scratchNodesScratchOffset);
 
     // Wait for batches to be updated in groupshared memory by WriteCompressedNodes()
     GroupMemoryBarrierWithGroupSync();
@@ -558,27 +488,27 @@ void PairCompressionImpl(
         // Batch Indices now contains the scratch node indices which will no longer be directly linked in the BVH.
         const uint eliminatedIndex = ReadBatchIndex(localId, i);
 
-        const ScratchNode eliminatedNode = FetchScratchNode(args.scratchNodesScratchOffset,
+        const ScratchNode eliminatedNode = FetchScratchNode(scratchNodesScratchOffset,
                                                             eliminatedIndex);
-        const ScratchNode parentNode     = FetchScratchNode(args.scratchNodesScratchOffset,
+        const ScratchNode parentNode     = FetchScratchNode(scratchNodesScratchOffset,
                                                             eliminatedNode.parent);
 
         const uint possiblyNotEliminatedIndex = (parentNode.left_or_primIndex_or_instIndex == eliminatedIndex) ?
                                                 parentNode.right_or_geometryIndex :
                                                 parentNode.left_or_primIndex_or_instIndex;
 
-        const ScratchNode grandParentNode = FetchScratchNode(args.scratchNodesScratchOffset,
+        const ScratchNode grandParentNode = FetchScratchNode(scratchNodesScratchOffset,
                                                              parentNode.parent);
 
         WriteScratchNodeData(
-            args.scratchNodesScratchOffset,
+            scratchNodesScratchOffset,
             parentNode.parent,
             (grandParentNode.left_or_primIndex_or_instIndex == eliminatedNode.parent ?
                 SCRATCH_NODE_LEFT_OFFSET : SCRATCH_NODE_RIGHT_OFFSET),
             possiblyNotEliminatedIndex);
 
         WriteScratchNodeData(
-            args.scratchNodesScratchOffset,
+            scratchNodesScratchOffset,
             possiblyNotEliminatedIndex,
             SCRATCH_NODE_PARENT_OFFSET,
             parentNode.parent);
@@ -600,10 +530,10 @@ void PairCompressionImpl(
         DeviceMemoryBarrier();
 
         // Move to parent node
-        const uint parentNodeIndex = FetchScratchNode(args.scratchNodesScratchOffset, nodeIndex).parent;
+        const uint parentNodeIndex = FetchScratchNode(scratchNodesScratchOffset, nodeIndex).parent;
 
         // Check parent node's flag
-        const uint flagOffset = args.flagsScratchOffset + (parentNodeIndex * sizeof(uint));
+        const uint flagOffset = ShaderConstants.offsets.propagationFlags + (parentNodeIndex * sizeof(uint));
         uint originalFlagValue = 0;
 
         ScratchBuffer.InterlockedAdd(flagOffset, 1, originalFlagValue);
@@ -621,15 +551,15 @@ void PairCompressionImpl(
         {
             // If the flag was 1 the second child is ready and this iteration calculates and writes
             // bbox data for the parent node.
-            const ScratchNode parentNode = FetchScratchNode(args.scratchNodesScratchOffset,
+            const ScratchNode parentNode = FetchScratchNode(scratchNodesScratchOffset,
                                                             parentNodeIndex);
 
             // Fetch child indices
             const uint lc = parentNode.left_or_primIndex_or_instIndex;
             const uint rc = parentNode.right_or_geometryIndex;
 
-            const ScratchNode leftNode  = FetchScratchNode(args.scratchNodesScratchOffset, lc);
-            const ScratchNode rightNode = FetchScratchNode(args.scratchNodesScratchOffset, rc);
+            const ScratchNode leftNode  = FetchScratchNode(scratchNodesScratchOffset, lc);
+            const ScratchNode rightNode = FetchScratchNode(scratchNodesScratchOffset, rc);
 
             // Fetch bounding children bounding boxes
             BoundingBox bboxRightChild = GetScratchNodeBoundingBox(rightNode,
@@ -637,19 +567,19 @@ void PairCompressionImpl(
                                                                    false,
                                                                    0,
                                                                    true,
-                                                                   args.scratchNodesScratchOffset);
+                                                                   scratchNodesScratchOffset);
 
             BoundingBox bboxLeftChild = GetScratchNodeBoundingBox(leftNode,
                                                                   IsLeafNode(lc, numActivePrims),
                                                                   false,
                                                                   0,
                                                                   true,
-                                                                  args.scratchNodesScratchOffset);
+                                                                  scratchNodesScratchOffset);
 
             // Merge bounding boxes up to parent
             const float3 bboxMinParent = min(bboxLeftChild.min, bboxRightChild.min);
             const float3 bboxMaxParent = max(bboxLeftChild.max, bboxRightChild.max);
-            WriteScratchNodeBoundingBox(args.scratchNodesScratchOffset,
+            WriteScratchNodeBoundingBox(scratchNodesScratchOffset,
                                         parentNodeIndex,
                                         bboxMinParent,
                                         bboxMaxParent);
@@ -673,21 +603,7 @@ void PairCompression(
     if (geometryType == GEOMETRY_TYPE_TRIANGLES)
     {
         const uint numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
-
-        PairCompressionArgs args;
-
-        args.numBatchesScratchOffset      = ShaderConstants.offsets.numBatches;
-        args.batchIndicesScratchOffset    = ShaderConstants.offsets.batchIndices;
-        args.indexBufferInfoScratchOffset = ShaderConstants.offsets.indexBufferInfo;
-        args.flagsScratchOffset           = ShaderConstants.offsets.propagationFlags;
-
-        args.scratchNodesScratchOffset = CalculateBvhNodesOffset(ShaderConstants, numActivePrims);
-
-        const uint buildInfo = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_INFO_OFFSET);
-        const uint buildFlags = (buildInfo >> ACCEL_STRUCT_HEADER_INFO_FLAGS_SHIFT) & ACCEL_STRUCT_HEADER_INFO_FLAGS_MASK;
-        args.buildFlags = buildFlags;
-
-        PairCompressionImpl(globalThreadId, localThreadId, args);
+        PairCompressionImpl(globalThreadId, localThreadId, numActivePrims);
     }
 }
 #endif

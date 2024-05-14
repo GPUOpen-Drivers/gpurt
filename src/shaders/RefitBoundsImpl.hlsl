@@ -40,9 +40,7 @@ void RefitBoundsImpl(
     uint                numBatchesOffset,
     uint                baseBatchIndicesOffset,
     uint                fp16BoxNodeMode,
-    float               fp16BoxModeMixedSaThreshold,
-    uint                reservedUint0,
-    uint                reservedUint1
+    float               fp16BoxModeMixedSaThreshold
 )
 {
     const bool doLatePairCompression = enablePairCompression && (!enableEarlyPairCompression);
@@ -135,7 +133,8 @@ void RefitBoundsImpl(
                 bboxLeftChild,
                 rc,
                 rightNode,
-                bboxRightChild);
+                bboxRightChild,
+                0);
         }
 
         DeviceMemoryBarrier();

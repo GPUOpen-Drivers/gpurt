@@ -95,7 +95,6 @@ void UpdateRootNode1_1(
 //=====================================================================================================================
 void UpdateQBVHImpl1_1(
     uint                globalID,
-    uint                baseFlagsOffset,
     uint                numWorkItems,
     uint                numThreads)
 {
@@ -115,7 +114,8 @@ void UpdateQBVHImpl1_1(
 
             if ((Settings.topLevelBuild == 0) || (header.numActivePrims > 0))
             {
-                GpuVirtualAddress bvhVa = MakeGpuVirtualAddress(ShaderConstants.addressLo, ShaderConstants.addressHi);
+                uint64_t bvhVa =
+                    PackUint64(ShaderConstants.resultBufferAddrLo, ShaderConstants.resultBufferAddrHi);
 
                 bvhVa += metadataSize;
 
@@ -157,7 +157,7 @@ void UpdateQBVHImpl1_1(
     }
 
     // initialise node pointer from stack
-    uint offset = GetUpdateStackOffset(ShaderConstants.baseUpdateStackScratchOffset, globalID);
+    uint offset = GetUpdateStackOffset(ShaderConstants.offsets.updateStack, globalID);
     uint nodePointer = ScratchBuffer.Load(offset);
 
     // The last child of the root node updates the root bounding box in the header
@@ -169,7 +169,7 @@ void UpdateQBVHImpl1_1(
     // Choice to decode parent pointer into node index using fp16. Mixing interior node types
     // relies on fp16 node size chunks for decoding (only in BLAS)
     const bool decodeNodePtrAsFp16 = (Settings.topLevelBuild == 0) &&
-                                     (ShaderConstants.fp16BoxNodesInBlasMode != NO_NODES_IN_BLAS_AS_FP16);
+                                     (Settings.fp16BoxNodesMode != NO_NODES_IN_BLAS_AS_FP16);
 
     // Build tree up until we hit root node
     while (1)
@@ -184,7 +184,7 @@ void UpdateQBVHImpl1_1(
 
             if (nextIndex < numWorkItems)
             {
-                offset = GetUpdateStackOffset(ShaderConstants.baseUpdateStackScratchOffset, nextIndex);
+                offset = GetUpdateStackOffset(ShaderConstants.offsets.updateStack, nextIndex);
                 nodePointer = ScratchBuffer.Load(offset);
             }
             else
@@ -211,7 +211,7 @@ void UpdateQBVHImpl1_1(
         // Ensure the child bounding box write is done
         DeviceMemoryBarrier();
 
-        uint originalFlagValue = SignalParentNode(baseFlagsOffset,
+        uint originalFlagValue = SignalParentNode(ShaderConstants.offsets.propagationFlags,
                                                   parentNodePointer,
                                                   decodeNodePtrAsFp16);
 

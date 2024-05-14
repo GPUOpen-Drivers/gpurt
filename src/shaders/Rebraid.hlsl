@@ -149,7 +149,6 @@ float CalculateInstanceChildrenSA(RebraidArgs args, uint nodePtr, ScratchNode le
     FetchBlasRootChildInfo(address, nodePtr, bbox, child);
 
     float surfaceArea = 0;
-
     for (uint i = 0; i < 4; i++)
     {
         if (child[i] != INVALID_IDX)

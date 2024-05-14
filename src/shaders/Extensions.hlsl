@@ -41,6 +41,9 @@ __decl uint AmdExtD3DShaderIntrinsics_LoadDwordAtAddr(
 __decl uint2 AmdExtD3DShaderIntrinsics_LoadDwordAtAddrx2(
     uint gpuVaLoBits, uint gpuVaHiBits, uint offset) DUMMY_UINT2_FUNC
 
+__decl uint3 AmdExtD3DShaderIntrinsics_LoadDwordAtAddrx3(
+    uint gpuVaLoBits, uint gpuVaHiBits, uint offset) DUMMY_UINT3_FUNC
+
 __decl uint4 AmdExtD3DShaderIntrinsics_LoadDwordAtAddrx4(
     uint gpuVaLoBits, uint gpuVaHiBits, uint offset) DUMMY_UINT4_FUNC
 
@@ -56,11 +59,20 @@ __decl uint4 AmdExtD3DShaderIntrinsics_ConstantLoadDwordAtAddrx4(
 __decl uint2 AmdExtD3DShaderIntrinsics_AtomicMinU64(
     RWByteAddressBuffer uav, uint address, uint2 value) DUMMY_UINT2_FUNC
 
+#define AmdExtD3DShaderIntrinsicsWaveOp_MinF        0x07
+#define AmdExtD3DShaderIntrinsicsWaveOp_MaxF        0x0a
+#define AmdExtD3DShaderIntrinsicsWaveOp_Inclusive   0x01
+
+__decl float3 AmdExtD3DShaderIntrinsics_WaveScan(
+    uint waveOp, uint flags, float3 src) DUMMY_FLOAT3_FUNC
+
 // globallycoherent version
 __decl uint2 AmdExtD3DShaderIntrinsics_AtomicMinU64_gc(
     globallycoherent RWByteAddressBuffer uav, uint address, uint2 value) DUMMY_UINT2_FUNC
 
 __decl void AmdExtD3DShaderIntrinsics_Halt() DUMMY_VOID_FUNC
+
+__decl void AmdExtD3DShaderIntrinsics_ShaderMarker(in uint data) DUMMY_VOID_FUNC
 
 #ifdef AMD_VULKAN // To fix Vulkan compilation
 /**
@@ -162,11 +174,14 @@ __decl void AmdTraceRaySetHitAttributes(
     in uint   geometryIndex      ///< Current geometry index
 ) DUMMY_VOID_FUNC
 
+#pragma dxc diagnostic push
+#pragma dxc diagnostic ignored "-Wparameter-usage"
 __decl void AmdTraceRayGetHitAttributes(
     inout_param(float) tCurrent,    ///< Current parametric hit distance relative to TMin
     inout_param(uint)  kind,        ///< Intersection hit kind
     out_param(uint)    status       ///< Hit status
 ) DUMMY_VOID_FUNC
+#pragma dxc diagnostic pop
 
 // Driver notification of trace input parameters.
 __decl void AmdTraceRaySetTraceParams(
@@ -208,7 +223,11 @@ __decl uint AmdTraceRayLdsRead(uint offset) DUMMY_UINT_FUNC
 __decl uint AmdTraceRayLdsWrite(uint offset, uint data) DUMMY_UINT_FUNC
 __decl uint AmdTraceRayLdsStackStore(inout_param(uint) stackAddr, uint lastVisited, uint4 data) DUMMY_UINT_FUNC
 __decl uint AmdTraceRayLdsStackInit() DUMMY_UINT_FUNC
-__decl void AmdTraceRaySampleGpuTimer(out_param(uint) timerHi, out_param(uint) timerLo) DUMMY_VOID_FUNC
+#pragma dxc diagnostic push
+#pragma dxc diagnostic ignored "-Wparameter-usage"
+__decl void     AmdTraceRaySampleGpuTimer(out_param(uint) timerHi, out_param(uint) timerLo) DUMMY_VOID_FUNC
+__decl uint64_t AmdTraceRaySampleGpuTimer() DUMMY_UINT_FUNC
+#pragma dxc diagnostic pop
 __decl uint AmdTraceRayGetHwCuId() DUMMY_UINT_FUNC
 __decl uint AmdTraceRayGetHwWaveId() DUMMY_UINT_FUNC
 __decl uint AmdTraceRayGetHwSimdId() DUMMY_UINT_FUNC
@@ -218,6 +237,7 @@ __decl uint AmdTraceRayGetBoxSortHeuristicMode() DUMMY_UINT_FUNC
 __decl uint2 AmdTraceRayMakePC(uint pcVaLow) DUMMY_UINT2_FUNC
 __decl uint AmdTraceRayGetKnownSetRayFlags() DUMMY_UINT_FUNC
 __decl uint AmdTraceRayGetKnownUnsetRayFlags() DUMMY_UINT_FUNC
+__decl void AmdTraceRayInitStaticId() DUMMY_VOID_FUNC
 
 //=====================================================================================================================
 // Ref: GpuRt::Device::GetStaticPipelineFlags
@@ -243,6 +263,16 @@ __decl uint64_t AmdExtConstantLoad64AtAddr(GpuVirtualAddress addr, uint offset) 
 //=====================================================================================================================
 // Loads from reserved register the dispath thread id as a single value computed from the dispatch dimensions.
 __decl uint AmdExtDispatchThreadIdFlat() DUMMY_UINT_FUNC;
+
+//=====================================================================================================================
+__decl uint64_t AmdExtAtomic64AddAtAddr(uint64_t gpuVa, uint offset, uint64_t value) DUMMY_UINT_FUNC
+__decl uint64_t AmdExtAtomic64CmpXchgAtAddr(uint64_t gpuVa, uint offset, uint64_t compare_value, uint64_t value) DUMMY_UINT_FUNC
+__decl uint64_t AmdExtLoad64AtAddrUncached(uint64_t gpuVa, uint offset) DUMMY_UINT_FUNC
+__decl uint  AmdExtLoadDwordAtAddrUncached(uint64_t addr, uint offset) DUMMY_UINT_FUNC
+__decl void  AmdExtStoreDwordAtAddrUncached(uint64_t addr, uint offset, uint value) DUMMY_VOID_FUNC
+__decl uint3 AmdExtGroupIdCompute() DUMMY_UINT3_FUNC
+__decl uint3 AmdExtGroupDimCompute() DUMMY_UINT3_FUNC
+__decl void AmdExtSleep(uint value) DUMMY_VOID_FUNC
 
 #if USE_TEMP_ARRAY_STACK
 //=====================================================================================================================
@@ -311,6 +341,21 @@ static uint2 LoadDwordAtAddrx2(GpuVirtualAddress addr)
     uint2 retVal;
     retVal.x = LoadDwordAtAddr(addr);
     retVal.y = LoadDwordAtAddr(addr + 4);
+
+    return retVal;
+#endif
+}
+
+//=====================================================================================================================
+static uint3 LoadDwordAtAddrx3(GpuVirtualAddress addr)
+{
+#if !defined(__cplusplus)
+    return AmdExtD3DShaderIntrinsics_LoadDwordAtAddrx3(LowPart(addr), HighPart(addr), 0);
+#else
+    uint3 retVal;
+    retVal.x = LoadDwordAtAddr(addr);
+    retVal.y = LoadDwordAtAddr(addr + 4);
+    retVal.z = LoadDwordAtAddr(addr + 8);
 
     return retVal;
 #endif

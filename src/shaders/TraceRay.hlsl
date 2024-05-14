@@ -35,7 +35,7 @@ static IntersectionResult TraceRayInternal(
     in uint              rayId,                   // Ray ID for profiling
     in uint              rtIpLevel                // HW version to determine TraceRay implementation
 )
-#if GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
+#if GPURT_BUILD_CONTINUATION && GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
 {
     return TraceRayInternalCPSDebug(topLevelBvh,
                                     rayFlags,
@@ -46,9 +46,12 @@ static IntersectionResult TraceRayInternal(
 
     );
 }
-#else // GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
+#else // GPURT_BUILD_CONTINUATION && GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
 // Default path
 {
+#ifdef __cplusplus
+    _AmdSetRtip(rtIpLevel);
+#endif
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION  >= 41
     rayFlags = (rayFlags & ~AmdTraceRayGetKnownUnsetRayFlags()) | AmdTraceRayGetKnownSetRayFlags();
 #endif
@@ -119,7 +122,7 @@ static bool TraceRayCommon(
 #if DEVELOPER
     rayFlags |= DispatchRaysConstBuf.profileRayFlags;
     TraversalCounter counter;
-    uint64_t timerBegin   = SampleGpuTimer();
+    uint64_t timerBegin   = AmdTraceRaySampleGpuTimer();
     uint parentId = AmdTraceRayGetParentId();
 #endif
 
@@ -204,7 +207,7 @@ static bool TraceRayCommon(
     {
         WriteDispatchCounters(result.numIterations);
 
-        uint64_t timerEnd = SampleGpuTimer();
+        uint64_t timerEnd = AmdTraceRaySampleGpuTimer();
         WriteRayHistoryTokenTimeStamp(rayId, timerEnd);
 
         if (timerEnd > timerBegin)
@@ -218,8 +221,7 @@ static bool TraceRayCommon(
 
         if (result.nodeIndex != INVALID_NODE)
         {
-            const GpuVirtualAddress nodeAddr64 = accelStruct + ExtractNodePointerOffset(result.instNodePtr);
-            uint instNodeIndex = FetchInstanceIdx(nodeAddr64);
+            uint instNodeIndex = FetchInstanceIdx(rtIpLevel, accelStruct, result.instNodePtr);
 
             WriteRayHistoryTokenEnd(rayId,
                                     uint2(result.primitiveIndex, result.geometryIndex),
@@ -261,8 +263,11 @@ static bool TraceRayCommon(
                                                          multiplierForGeometryContributionToShaderIndex,
                                                          result.geometryIndex,
                                                          instanceContribution);
+            uint64_t instNodePtr64 = 0;
+            {
+                instNodePtr64 = CalculateInstanceNodePtr64(rtIpLevel, accelStruct, result.instNodePtr);
+            }
 
-            const uint64_t instNodePtr64 = CalculateInstanceNodePtr64(rtIpLevel, accelStruct, result.instNodePtr);
 #if DEVELOPER
             if (EnableTraversalCounter())
             {

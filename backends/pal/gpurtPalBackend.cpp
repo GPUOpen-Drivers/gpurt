@@ -234,52 +234,69 @@ void PalBackend::InsertBarrier(
     uint32                flags
     ) const
 {
+    const bool syncDispatch     = flags & BarrierFlagSyncDispatch;
     const bool syncIndirectArgs = flags & BarrierFlagSyncIndirectArg;
-    const bool syncPostCopy     = flags & BarrierFlagSyncPostCopy;
+    const bool syncPostCpWrite  = flags & BarrierFlagSyncPostCpWrite;
 
     Pal::ICmdBuffer* pCmdBuffer = GetCmdBuffer(cmdBuffer);
     if (m_deviceSettings.enableAcquireReleaseInterface)
     {
         Pal::AcquireReleaseInfo acqRelInfo  = {};
-        acqRelInfo.dstGlobalStageMask       = Pal::PipelineStageCs;
-        acqRelInfo.dstGlobalAccessMask      = Pal::CoherShader;
+        Pal::MemBarrier memoryBarrier       = {};
 
-        if (syncPostCopy)
+        if (syncDispatch || syncIndirectArgs)
         {
-            acqRelInfo.srcGlobalStageMask   = Pal::PipelineStageBlt;
-            acqRelInfo.srcGlobalAccessMask  = Pal::CoherCopy;
+            memoryBarrier.srcStageMask  = Pal::PipelineStageCs;
+            memoryBarrier.srcAccessMask = Pal::CoherShader;
         }
-        else
+
+        if (syncPostCpWrite)
         {
-            acqRelInfo.srcGlobalStageMask   = Pal::PipelineStageCs;
-            acqRelInfo.srcGlobalAccessMask  = Pal::CoherShader;
+            memoryBarrier.srcStageMask  |= Pal::PipelineStagePostPrefetch;
+            memoryBarrier.srcAccessMask |= Pal::CoherCp;
+        }
+
+        if (syncDispatch || syncPostCpWrite)
+        {
+            memoryBarrier.dstStageMask  = Pal::PipelineStageCs;
+            memoryBarrier.dstAccessMask = Pal::CoherShader;
         }
 
         if (syncIndirectArgs)
         {
-            acqRelInfo.dstGlobalStageMask  |= Pal::PipelineStageFetchIndirectArgs;
-            acqRelInfo.dstGlobalAccessMask |= Pal::CoherIndirectArgs;
+            memoryBarrier.dstStageMask  |= Pal::PipelineStageFetchIndirectArgs;
+            memoryBarrier.dstAccessMask |= Pal::CoherIndirectArgs;
         }
 
-        acqRelInfo.reason = m_deviceSettings.rgpBarrierReason;
+        acqRelInfo.memoryBarrierCount = 1;
+        acqRelInfo.pMemoryBarriers    = &memoryBarrier;
+        acqRelInfo.reason             = m_deviceSettings.rgpBarrierReason;
 
         pCmdBuffer->CmdReleaseThenAcquire(acqRelInfo);
     }
     else
     {
         Pal::BarrierInfo barrierInfo = {};
-        barrierInfo.waitPoint        = Pal::HwPipePreCs;
 
+        const uint32 pipePointCount  = (syncDispatch || syncIndirectArgs) ? 1 : 0;
         Pal::HwPipePoint pipePoint   = Pal::HwPipePostCs;
 
         Pal::BarrierTransition transition = {};
-        transition.srcCacheMask = Pal::CoherShader;
-        transition.dstCacheMask = Pal::CoherShader;
 
-        if (syncPostCopy)
+        if (syncDispatch)
         {
-            pipePoint               = Pal::HwPipePostBlt;
-            transition.srcCacheMask = Pal::CoherCopy;
+            transition.srcCacheMask = Pal::CoherShader;
+        }
+
+        if (syncPostCpWrite)
+        {
+            transition.srcCacheMask |= Pal::CoherCp;
+        }
+
+        if (syncDispatch || syncPostCpWrite)
+        {
+            barrierInfo.waitPoint   = Pal::HwPipePreCs;
+            transition.dstCacheMask = Pal::CoherShader;
         }
 
         if (syncIndirectArgs)
@@ -288,7 +305,7 @@ void PalBackend::InsertBarrier(
             transition.dstCacheMask |= Pal::CoherIndirectArgs;
         }
 
-        barrierInfo.pipePointWaitCount  = 1;
+        barrierInfo.pipePointWaitCount  = pipePointCount;
         barrierInfo.pPipePoints         = &pipePoint;
         barrierInfo.transitionCount     = 1;
         barrierInfo.pTransitions        = &transition;
@@ -348,26 +365,6 @@ uint32 PalBackend::HashBuildSettings(
 }
 
 // =====================================================================================================================
-void PalBackend::UploadCpuMemory(
-    ClientCmdBufferHandle cmdBuffer,
-    gpusize               dstBufferVa,
-    const void*           pSrcData,
-    uint32                sizeInBytes
-    ) const
-{
-    Pal::ICmdBuffer* pCmdBuffer = GetCmdBuffer(cmdBuffer);
-    const uint32 embeddedDataLimitDwords = pCmdBuffer->GetEmbeddedDataLimit();
-    const uint32 uploadSizeDwords = Util::RoundUpQuotient(sizeInBytes, 4u);
-    PAL_ASSERT(uploadSizeDwords <= embeddedDataLimitDwords);
-
-    gpusize srcGpuVa = 0;
-    uint32* pMappedData = pCmdBuffer->CmdAllocateEmbeddedData(uploadSizeDwords, 1, &srcGpuVa);
-    std::memcpy(pMappedData, pSrcData, sizeInBytes);
-
-    CopyGpuMemoryRegion(cmdBuffer, srcGpuVa, 0, dstBufferVa, 0, sizeInBytes);
-}
-
-// =====================================================================================================================
 void PalBackend::CopyGpuMemoryRegion(
     ClientCmdBufferHandle cmdBuffer,
     gpusize               srcVa,
@@ -382,6 +379,17 @@ void PalBackend::CopyGpuMemoryRegion(
     region.dstOffset = dstOffset;
     region.copySize  = copySize;
     GetCmdBuffer(cmdBuffer)->CmdCopyMemoryByGpuVa(srcVa, dstVa, 1, &region);
+}
+
+// =====================================================================================================================
+void PalBackend::UpdateMemory(
+    ClientCmdBufferHandle  cmdBuffer,
+    const Pal::IGpuMemory& cpsVidMem,
+    Pal::gpusize           offset,
+    Pal::gpusize           size,
+    const uint32_t*        pData) const
+{
+    GetCmdBuffer(cmdBuffer)->CmdUpdateMemory(cpsVidMem, offset, size, pData);
 }
 
 // =====================================================================================================================

@@ -57,11 +57,7 @@ void RefitBounds(
     in uint globalId : SV_DispatchThreadID)
 {
     const uint numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
-    const uint bvhNodes = CalculateScratchBvhNodesOffset(
-                              numActivePrims,
-                              ShaderConstants.numLeafNodes,
-                              ShaderConstants.offsets.bvhNodeData,
-                              Settings.enableTopDownBuild);
+    const uint bvhNodes = CalculateBvhNodesOffset(ShaderConstants, numActivePrims);
     if (globalId < numActivePrims)
     {
         RefitBoundsImpl(globalId,
@@ -78,9 +74,6 @@ void RefitBounds(
                         ShaderConstants.offsets.numBatches,
                         ShaderConstants.offsets.batchIndices,
                         Settings.fp16BoxNodesMode,
-                        Settings.fp16BoxModeMixedSaThreshold,
-                        0,
-                        0
-        );
+                        Settings.fp16BoxModeMixedSaThreshold);
     }
 }

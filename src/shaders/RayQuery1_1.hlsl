@@ -231,7 +231,7 @@ static bool RayQueryProceedImpl1_1(
     in    uint3                   dispatchThreadId)
 {
 #if DEVELOPER
-    uint64_t timerBegin = SampleGpuTimer();
+    uint64_t timerBegin = AmdTraceRaySampleGpuTimer();
     uint rayId = 0;
     if (EnableTraversalCounter())
     {
@@ -636,7 +636,7 @@ static bool RayQueryProceedImpl1_1(
 #if DEVELOPER
     if (EnableTraversalCounter())
     {
-        uint64_t timerEnd = SampleGpuTimer();
+        uint64_t timerEnd = AmdTraceRaySampleGpuTimer();
         rayQuery.clocks += (uint)(timerEnd - timerBegin);
     }
 #endif

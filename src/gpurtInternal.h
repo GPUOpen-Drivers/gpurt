@@ -275,6 +275,7 @@ Pal::Result GPURT_API_ENTRY QueryRayTracingEntryFunctionTable(
 class Device : public IDevice
 {
 public:
+
     Device(const DeviceInitInfo& info, const ClientCallbacks& clientCb, const IBackend* pBackend);
 
     // Destroy device
@@ -308,40 +309,45 @@ public:
         const Pal::RayTracingIpLevel   rayTracingIpLevel,
         EntryFunctionTable* const      pEntryFunctionTable) override;
 
-    // Returns Cps Bin Header Size.
-    //
-    // @return Cps Bin Header Size
-    const gpusize QueryCpsBinHeaderSize() const
-    {
-        return RegroupingBinCount * 2 * sizeof(uint64);
-    }
-
     // Determines required memory allocation size for use by ray continuation stacks
-    // and other memory needed for ray sorting
     //
-    // @param cpsStackSize  (in) Maximum CPS stack size per thread, in bytes.
-    // @param numThreads    (in) Number of Threads.
+    // Note: this method is non-trivial, i.e. it returns a different number than cpsThreadStackBytes * numThreads, that
+    // encompasses other memory requirements as well.
+    //
+    // @param cpsThreadStackBytes (in) Maximum CPS stack size per thread, in bytes.
+    // @param numThreads          (in) Number of Threads.
     //
     // @return the required global memory allocation size in bytes
-    virtual gpusize QueryCpsScratchMemorySize(uint32 cpsStackSize, uint32 numThreads) override
+    virtual gpusize GetCpsMemoryBytes(gpusize cpsThreadStackBytes, uint32 numThreads) override
     {
-        gpusize memorySize = (numThreads * static_cast<gpusize>(cpsStackSize)) + // size of the total continuation stack
-               (RegroupingBinSize * RegroupingBinCount * sizeof(uint32)) +       // size of the ray sorting memory
-               QueryCpsBinHeaderSize();                                          // size of the header of the bins
+        const gpusize stackTotalBytes = numThreads * cpsThreadStackBytes;
+        const gpusize requestedMemoryBytes = stackTotalBytes;
 
-        return memorySize;
+        // Bin headers must be 8-byte aligned due to atomic 64-bit operations, and come at the end of the memory.
+        // Ensure the end boundary of the memory is itself 8-byte aligned:
+        return Util::Pow2Align(requestedMemoryBytes, sizeof(uint64));
     }
 
-    // Initializes ray sorting memory.
+    // Populates the GPU addresses in the DispatchRaysConstants structure
     //
-    // @param cmdBuffer            [in] Opaque handle to command buffer where commands will be written
-    // @param cpsGpuMemAddr        [in] GPU address pointing to cps memory.
-    // @param cpsMemorySize        [in] The required global memory allocation size in bytes
-    virtual void InitializeCpsMemory(
-        ClientCmdBufferHandle   cmdBuffer,
-        const gpusize           cpsGpuMemAddr,
-        const gpusize           cpsMemorySize
-    ) override;
+    // @param pDispatchRaysConstants  (in/out) Non-null pointer to a DispatchRaysConstants
+    // @param cpsMemoryGpuAddr        (in) GPU address pointing to the beginning of cps memory
+    // @param cpsMemoryBytes          (in) Cps allocated memory size in bytes
+    //
+    // @return the required global memory allocation size in bytes
+    virtual void PatchDispatchRaysConstants(
+        DispatchRaysConstants* pDispatchRaysConstants,
+        const gpusize          cpsMemoryGpuAddr,
+        const gpusize          cpsMemoryBytes) override;
+
+    //
+    // @param cpsVideoMem          [in] Cps video memory
+    // @param cpsMemoryBytes       [in] Cps allocated memory size in bytes
+    //
+    // @return whether the memory initialization was uploaded successfully
+    virtual Pal::Result InitializeCpsMemory(
+        const Pal::IGpuMemory& cpsVideoMem,
+        const gpusize          cpsMemoryBytes) override;
 
     // Returns the static pipeline mask shader constant values for a particular pipeline given a compatible
     // AS memory layout parameters.

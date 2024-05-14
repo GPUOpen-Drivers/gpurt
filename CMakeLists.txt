@@ -38,8 +38,8 @@ target_link_libraries(gpurt PUBLIC gpurt_internal)
 add_library(AMD::gpurt ALIAS gpurt)
 
 function(gpurt_add_compile_definitions)
-    target_compile_definitions(gpurt          PUBLIC ${ARGV})
-    target_compile_definitions(gpurt_internal PUBLIC ${ARGV})
+    target_compile_definitions(gpurt          PUBLIC ${ARGV} NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_definitions(gpurt_internal PUBLIC ${ARGV} NOMINMAX WIN32_LEAN_AND_MEAN)
 endfunction()
 
 function(gpurt_add_compile_options)
@@ -81,6 +81,9 @@ endif()
 # GPU Ray Tracing requires PAL as a dependency
 target_link_libraries(gpurt PUBLIC pal)
 target_link_libraries(gpurt_internal PUBLIC pal)
+
+# Default PAL variables are not visible here, but sometimes they are set explicitly by the user or build configuration.
+# Implicitly enable the related RTIPs in this case.
 
 # Enable gpu developer mode if the client wants it.
 if (GPURT_DEVELOPER_MODE)

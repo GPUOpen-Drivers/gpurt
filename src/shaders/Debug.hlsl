@@ -42,11 +42,22 @@
         #define GPU_ASSERT_IMPL(id, cond) \
         do \
         {  \
-            if ((Settings.gpuDebugFlags & GpuDebugFlags::ShaderHalt) && !(cond)) { Halt(); } \
+            if (IsDebugHaltEnabled() && !(cond)) { Halt(); } \
         } while (false)
 
         #define GPU_DPF_IMPL(msg, ...)
     #endif
+
+//======================================================================================================================
+inline bool IsDebugHaltEnabled()
+{
+#if GPURT_BVH_BUILD_SHADER
+    return (Settings.gpuDebugFlags & GpuDebugFlags::ShaderHalt);
+#else
+    return (AmdTraceRayGetStaticFlags() & PIPELINE_FLAG_DEBUG_ASSERTS_HALT);
+#endif
+}
+
 #else
     #define GPU_ASSERT(cond)  do {} while (false)
     #define GPU_DPF(msg, ...) do {} while (false)
@@ -60,7 +71,7 @@ void Halt()
 
 #if GPURT_ENABLE_GPU_DEBUG && BUILD_PARALLEL
 
-globallycoherent RWByteAddressBuffer DebugBuffer : register(u6);
+globallycoherent RWByteAddressBuffer DebugBuffer : register( DEBUG_BUFFER_SLOT );
 
 //======================================================================================================================
 // Reserve write space in the debug ring buffer
@@ -191,7 +202,7 @@ void DoGpuAssert(
             }
         }
 
-        if (Settings.gpuDebugFlags & GpuDebugFlags::ShaderHalt)
+        if (IsDebugHaltEnabled())
         {
             Halt();
         }

@@ -65,8 +65,8 @@ void CountTrianglePairsPrefixSum(
 {
     uint globalCount = 0;
 
-    // Compute wave size aligned block count
-    const uint alignedBlockCount = Pow2Align(ShaderRootConstants.numBlocks, WaveGetLaneCount());
+    // Compute thread group size aligned block count
+    const uint alignedBlockCount = Pow2Align(ShaderRootConstants.numBlocks, PREFIX_SUM_THREADGROUP_SIZE);
 
     // Compute maximum number of active waves within this workgroup. This is used to clamp out of bounds read from
     // LDS below in case where numBlocks < PREFIX_SUM_THREADGROUP_COUNT
@@ -81,11 +81,15 @@ void CountTrianglePairsPrefixSum(
     // geom_1_wave_0
     // geom_1_wave_1
     // ...
-    for (uint blockID = localID; blockID < ShaderRootConstants.numBlocks; blockID += PREFIX_SUM_THREADGROUP_SIZE)
+    for (uint blockID = localID; blockID < alignedBlockCount; blockID += PREFIX_SUM_THREADGROUP_SIZE)
     {
         const uint primRefCountOffset = ShaderRootConstants.basePrimRefCountOffset + blockID * sizeof(uint);
 
-        const uint primRefCount = DstBuffer.Load(primRefCountOffset);
+        uint primRefCount = 0;
+        if (blockID < ShaderRootConstants.numBlocks)
+        {
+            primRefCount = DstBuffer.Load(primRefCountOffset);
+        }
 
         // Prefix sum primitive reference count across geometries within this wave
         const uint laneOffset = WavePrefixSum(primRefCount);
@@ -105,8 +109,11 @@ void CountTrianglePairsPrefixSum(
         const uint threadGroupOffset = laneOffset + WaveReadLaneAt(waveOffset, waveID);
         const uint threadGroupCount = WaveActiveSum(waveCount);
 
-        const uint blockOffset = globalCount + threadGroupOffset;
-        DstBuffer.Store(primRefCountOffset, blockOffset);
+        if (blockID < ShaderRootConstants.numBlocks)
+        {
+            const uint blockOffset = globalCount + threadGroupOffset;
+            DstBuffer.Store(primRefCountOffset, blockOffset);
+        }
 
         globalCount += threadGroupCount;
     }
@@ -116,5 +123,12 @@ void CountTrianglePairsPrefixSum(
     {
         WriteTaskCounterData(
             ShaderRootConstants.encodeTaskCounterScratchOffset, ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET, globalCount);
+
+        // This is hard coded for HPLOC, need pass in block count for the build phase?
+        //
+        const uint buildBlockCount = Pow2Align(globalCount, 32u) / 32u;
+
+        WriteTaskCounterData(
+            ShaderRootConstants.encodeTaskCounterScratchOffset, ENCODE_TASK_COUNTER_INDIRECT_ARGS, buildBlockCount);
     }
 }

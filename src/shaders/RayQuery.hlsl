@@ -89,7 +89,8 @@ static bool RayQueryProceedCommon(
                                                        constRayFlags,
                                                        dispatchThreadId);
             break;
-        default: break;
+        default:
+            break;
     }
 
 #if DEVELOPER
@@ -107,9 +108,7 @@ static bool RayQueryProceedCommon(
 
             if (rayQuery.committed.currNodePtr != INVALID_NODE)
             {
-                const GpuVirtualAddress nodeAddr64 =
-                    GetRayQueryTopBvhAddress(rayQuery) + ExtractNodePointerOffset(rayQuery.lastInstanceNode);
-                uint instNodeIndex = FetchInstanceIdx(nodeAddr64);
+                uint instNodeIndex = FetchInstanceIdx(rtIpLevel, GetRayQueryTopBvhAddress(rayQuery), rayQuery.lastInstanceNode);
 
                 WriteRayHistoryTokenEnd(
                     rayId,

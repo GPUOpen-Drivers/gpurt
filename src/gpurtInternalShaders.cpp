@@ -60,7 +60,6 @@ const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsTyp
 {
     PIPELINE_BUILD_INFO(BuildParallel),
     PIPELINE_BUILD_INFO(EncodeTriangleNodes),
-    PIPELINE_BUILD_INFO(EncodeTriangleNodesIndirect),
     PIPELINE_BUILD_INFO(EncodeAABBNodes),
     PIPELINE_BUILD_INFO(EncodeInstances),
     PIPELINE_BUILD_INFO(Rebraid),
@@ -101,7 +100,6 @@ const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsTyp
     PIPELINE_BUILD_INFO(InitUpdateAccelerationStructure),
     PIPELINE_BUILD_INFO(BuildFastAgglomerativeLbvh),
     PIPELINE_BUILD_INFO(CountTrianglePairs),
-    PIPELINE_BUILD_INFO(CountTrianglePairsIndirect),
     PIPELINE_BUILD_INFO(CountTrianglePairsPrefixSum),
 };
 

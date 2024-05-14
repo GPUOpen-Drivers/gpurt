@@ -40,23 +40,13 @@ void EncodeInstancesUpdate(
         const uint geometryType =
             FetchHeaderField(baseAddrAccelStructHeader, ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET);
 
-        const uint64_t instanceBasePointer =
-            PackInstanceBasePointer(baseAddrAccelStructHeader,
-                                    desc.InstanceContributionToHitGroupIndex_and_Flags >> 24,
-                                    geometryType);
-
-        desc.accelStructureAddressLo         = LowPart(instanceBasePointer);
-        desc.accelStructureAddressHiAndFlags = HighPart(instanceBasePointer);
-
         // calc transformed AABB
         BoundingBox boundingBox;
 
         if (numActivePrims != 0)
         {
             // Fetch root bounds from BLAS header
-            const uint64_t instanceBaseAddr = GetInstanceAddr(LowPart(instanceBasePointer),
-                                                              HighPart(instanceBasePointer));
-            const BoundingBox rootBbox = FetchHeaderRootBoundingBox(instanceBaseAddr);
+            const BoundingBox rootBbox = FetchHeaderRootBoundingBox(baseAddrAccelStructHeader);
 
             boundingBox = GenerateInstanceBoundingBox(desc.Transform, rootBbox);
         }
@@ -75,8 +65,6 @@ void EncodeInstancesUpdate(
 
         if (numActivePrims != 0)
         {
-            const uint blasMetadataSize = FetchHeaderField(baseAddrAccelStructHeader,
-                                                            ACCEL_STRUCT_HEADER_METADATA_SIZE_OFFSET);
             const uint nodePointer = SrcBuffer.Load(primNodePointerOffset);
 
             uint parentNodePointer;
@@ -143,16 +131,17 @@ void EncodeInstancesUpdate(
             // stack in scratch memory
             if (pushNodeToUpdateStack)
             {
-                PushNodeToUpdateStack(ShaderConstants.baseUpdateStackScratchOffset, parentNodePointer);
+                PushNodeToUpdateStack(ShaderConstants.offsets.updateStack, parentNodePointer);
             }
 
             WriteInstanceDescriptor(tlasMetadataSize,
-                                    desc,
+                                    baseAddrAccelStructHeader,
+                                    desc.InstanceContributionToHitGroupIndex_and_Flags,
+                                    desc.InstanceID_and_Mask,
+                                    desc.Transform,
                                     index,
                                     nodePointer,
-                                    blasMetadataSize,
-                                    CreateRootNodePointer(),
-                                    IsFusedInstanceNode());
+                                    CreateRootNodePointer());
         }
     }
 }

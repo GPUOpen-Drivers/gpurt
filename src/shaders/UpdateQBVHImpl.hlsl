@@ -89,15 +89,14 @@ void UpdateNodeFlagsTopLevel(
 
 //=====================================================================================================================
 void UpdateQBVHImpl(
-    uint                globalID,
-    uint                baseFlagsOffset,
-    uint                numWorkItems,
-    uint                numThreads)
+    uint globalID,
+    uint numWorkItems,
+    uint numThreads)
 {
     switch (Settings.rtIpLevel)
     {
         default:
-            UpdateQBVHImpl1_1(globalID, baseFlagsOffset, numWorkItems, numThreads);
+            UpdateQBVHImpl1_1(globalID, numWorkItems, numThreads);
             return;
     }
 }

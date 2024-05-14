@@ -102,13 +102,6 @@ public:
 
     virtual uint32 HashBuildSettings(const CompileTimeBuildSettings& buildSettings) const override;
 
-    virtual void UploadCpuMemory(
-        ClientCmdBufferHandle cmdBuffer,
-        gpusize               dstBufferVa,
-        const void*           pSrcData,
-        uint32                sizeInBytes
-    ) const override;
-
     virtual void CopyGpuMemoryRegion(
         ClientCmdBufferHandle cmdBuffer,
         gpusize               srcVa,
@@ -116,6 +109,14 @@ public:
         gpusize               dstVa,
         gpusize               dstOffset,
         gpusize               copySize
+    ) const override;
+
+    virtual void UpdateMemory(
+        ClientCmdBufferHandle  cmdBuffer,
+        const Pal::IGpuMemory& cpsVidMem,
+        Pal::gpusize           offset,
+        Pal::gpusize           size,
+        const uint32_t*        pData
     ) const override;
 
     virtual void WriteTimestamp(

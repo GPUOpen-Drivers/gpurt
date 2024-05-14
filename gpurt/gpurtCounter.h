@@ -166,6 +166,7 @@ struct TraversalCounter
 #define RAY_HISTORY_TOKEN_TYPE_INTERSECTION_RESULT_V2                9
 #define RAY_HISTORY_TOKEN_TYPE_BEGIN_V2                              10
 #define RAY_HISTORY_TOKEN_TYPE_WAVE_BEGIN                            11
+#define RAY_HISTORY_TOKEN_TYPE_TRIANGLE_HIT_RESULT                   12
 #define RAY_HISTORY_TOKEN_TYPE_RESERVED                              0x8000
 #define RAY_HISTORY_TOKEN_TYPE_UNKNOWN                               0xffff
 
@@ -182,6 +183,7 @@ struct TraversalCounter
 #define RAY_HISTORY_TOKEN_BEGIN_V2_SIZE                              19
 #define RAY_HISTORY_WAVE_BEGIN_PACKET_HEADER_SIZE                    6
 #define RAY_HISTORY_WAVE_BEGIN_PACKET_DATA_SIZE                      7
+#define RAY_HISTORY_TOKEN_TRIANGLE_HIT_RESULT_SIZE                   1
 
 #define RAY_HISTORY_CONTROL_TOKEN_TYPE_MASK    0xFFFF
 #define RAY_HISTORY_CONTROL_TOKEN_LENGTH_MASK  0xFF
@@ -351,6 +353,7 @@ enum RayHistoryTokenType : uint16
     RayHistoryTokenIntersectionResult_v2,
     RayHistoryTokenBegin_v2,
     RayHistoryTokenWaveBegin,
+    RayHistoryTokenTriangleHitResult,
 
     // Custom application tokens starting here
     RayHistoryTokenCustom = 0x4000,
@@ -469,8 +472,15 @@ struct RayHistoryTokenFunctionCallData_v2 : RayHistoryTokenFunctionCallData
 // Ray history token candidate intersection data format
 struct RayHistoryTokenCandidateIntersectionResultData
 {
-    float  hitT;     // Hit T as reported by the intersection shader or determined by fixed function triangle intersector
+    float  hitT;     // Hit T as reported by the intersection shader
     uint32 hitKind;  // Hit kind (only lower 8-bits are valid)
+};
+
+// ====================================================================================================================
+// Ray history token for triangle intersection data format
+struct RayHistoryTokenTriangleHitResultData
+{
+    float  hitT;   // Closest intersection distance on ray
 };
 
 // ====================================================================================================================

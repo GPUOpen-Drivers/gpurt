@@ -78,10 +78,6 @@ enum class RtIntrinsicFunction : uint32
     GetWorldToObjectTransform,
     FetchTrianglePositionFromNodePointer,
     FetchTrianglePositionFromRayQuery,
-#if GPURT_BUILD_CONTINUATION
-    ContTraceRay,
-    ContTraversal,
-#endif
     GetRayQuery64BitInstanceNodePtr,
     _Count
 };
@@ -103,10 +99,6 @@ constexpr const char* FunctionTableRTIP1_1[] =
     "\01?GetWorldToObjectTransform@@YAM_KII@Z",
     "\01?FetchTrianglePositionFromNodePointer@@YA?AUTriangleData@@_KI@Z",
     "\01?FetchTrianglePositionFromRayQuery@@YA?AUTriangleData@@URayQueryInternal@@_N@Z",
-#if GPURT_BUILD_CONTINUATION
-    "\01?_cont_TraceRayCont1_1@@YAXU_AmdDispatchSystemData@@_KIIIIIMMMMMMMM@Z",
-    "\01?TraversalImpl1_1@@YA?AU_AmdTraversalResultData@@IU_AmdSystemData@@@Z",
-#endif
     "\01?GetRayQuery64BitInstanceNodePtr@@YA_K_KI@Z",
 };
 
@@ -127,10 +119,6 @@ constexpr const char* FunctionTableRTIP2_0[] =
     "\01?GetWorldToObjectTransform@@YAM_KII@Z",
     "\01?FetchTrianglePositionFromNodePointer@@YA?AUTriangleData@@_KI@Z",
     "\01?FetchTrianglePositionFromRayQuery@@YA?AUTriangleData@@URayQueryInternal@@_N@Z",
-#if GPURT_BUILD_CONTINUATION
-    "\01?_cont_TraceRayCont2_0@@YAXU_AmdDispatchSystemData@@_KIIIIIMMMMMMMM@Z",
-    "\01?TraversalImpl2_0@@YA?AU_AmdTraversalResultData@@IU_AmdSystemData@@@Z",
-#endif
     "\01?GetRayQuery64BitInstanceNodePtr@@YA_K_KI@Z",
 };
 
@@ -190,12 +178,6 @@ static Pal::Result QueryRayTracingEntryFunctionTableInternal(
             ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::FetchTrianglePositionFromNodePointer)];
         pEntryFunctionTable->intrinsic.pFetchTrianglePositionFromRayQuery =
             ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::FetchTrianglePositionFromRayQuery)];
-#if GPURT_BUILD_CONTINUATION
-        pEntryFunctionTable->cps.pContTraceRay =
-            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::ContTraceRay)];
-        pEntryFunctionTable->cps.pContTraversal =
-            ppFuncTable[static_cast<uint32>(RtIntrinsicFunction::ContTraversal)];
-#endif
     }
 
     return result;
@@ -337,6 +319,12 @@ uint32 Device::GetStaticPipelineFlags(
     {
         pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::EnableFusedInstanceNodes);
     }
+#if GPURT_ENABLE_GPU_DEBUG
+    if (m_info.deviceSettings.gpuDebugFlags & GpuDebugFlags::ShaderHalt)
+    {
+        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::DebugAssertsHalt);
+    }
+#endif
 
     return pipelineFlags;
 }
@@ -448,36 +436,25 @@ Pal::Result Device::Init()
 }
 
 // =====================================================================================================================
-// Initializes ray sorting memory.
-void Device::InitializeCpsMemory(
-    ClientCmdBufferHandle   cmdBuffer,
-    const gpusize           cpsGpuMemAddr,
-    const gpusize           cpsMemorySize)
+Pal::Result Device::InitializeCpsMemory(
+    const Pal::IGpuMemory&  cpsVideoMem,
+    const gpusize           cpsMemoryBytes)
 {
-    const gpusize binHeaderSize = QueryCpsBinHeaderSize();
-    const gpusize binHeaderOffset = cpsMemorySize - binHeaderSize;
-    const gpusize binHeaderAddr = cpsGpuMemAddr + binHeaderOffset;
+    Pal::Result result = Pal::Result::Success;
 
-    // write_count needs to be initialized to RegroupingBinSize, other sections to 0
-    // | write_count       |  write_start |  read_count |  read_start |
-    // | RegroupingBinSize |       0      |      0      |      0      |
-    const uint64 writeReadWindow[2] = { static_cast<uint64>(RegroupingBinSize) << 32 , 0 };
-    const uint32 writeReadWindowSize = sizeof(writeReadWindow);
+    return result;
+}
 
-    const uint32 binCount = 2 * RegroupingBinCount;
-    uint64 binHeader[binCount];
-    uint64* pCurrent = binHeader;
-    const uint64* pEnd = binHeader + binCount;
-    while (pCurrent < pEnd)
-    {
-        memcpy(pCurrent, writeReadWindow, writeReadWindowSize);
-        pCurrent += 2;
-    }
+//=====================================================================================================================
+// Populates the GPU addresses in the DispatchRaysConstants structure
+void Device::PatchDispatchRaysConstants(
+    DispatchRaysConstants* pDispatchRaysConstants,
+    const gpusize          cpsMemoryGpuAddr,
+    const gpusize          cpsMemoryBytes)
+{
+    pDispatchRaysConstants->constData.cpsGlobalMemoryAddressLo = Util::LowPart(cpsMemoryGpuAddr);
+    pDispatchRaysConstants->constData.cpsGlobalMemoryAddressHi = Util::HighPart(cpsMemoryGpuAddr);
 
-    // Initialize GPU Ray Sorting Memory
-    m_pBackend->UploadCpuMemory(cmdBuffer, binHeaderAddr, binHeader, binHeaderSize);
-    // Wait for the copy operation to complete to synchronize the copy and dispatch
-    RaytracingBarrier(cmdBuffer, BarrierFlagSyncPostCopy);
 }
 
 //=====================================================================================================================
@@ -554,6 +531,16 @@ ClientPipelineHandle Device::GetInternalPipeline(
             uint32 cbvCount         = 0;
             uint32 cbvBindingCount  = 0;
 
+            // Descriptor sets are assigned as follows:
+            // 0  Root UAVs
+            // 1  Root constants and CBVs
+            // 2+ Desciptor tables (UAV or CBV)
+            constexpr uint32 DescriptorSetUAV    = 0;
+            constexpr uint32 DescriptorSetCBV    = 1;
+            constexpr uint32 DescriptorSetTables = 2;
+
+            uint32 tableSet = DescriptorSetTables;
+
             for (uint32 nodeIndex = 0; nodeIndex < pipelineBuildInfo.nodeCount; ++nodeIndex)
             {
                 // Make sure we haven't exceeded our maximum number of nodes.
@@ -570,11 +557,6 @@ ClientPipelineHandle Device::GetInternalPipeline(
                 PAL_ASSERT(nodes[nodeIndex].logicalId == 0);
                 nodes[nodeIndex].dwOffset  = nodeOffset;
                 nodes[nodeIndex].srdStride = nodeSize;
-                // Descriptor sets are assigned as follows:
-                // 0  Root UAVs
-                // 1  Root constants and CBVs
-                // 2+ Desciptor tables (UAV or CBV)
-                uint32 tableSet = 2;
                 switch (nodeType)
                 {
                 case NodeType::Constant:
@@ -582,7 +564,7 @@ ClientPipelineHandle Device::GetInternalPipeline(
                     nodes[nodeIndex].logicalId     = cbvCount + ReservedLogicalIdCount;
                     nodes[nodeIndex].srdStartIndex = cbvBindingCount;
                     nodes[nodeIndex].binding       = cbvBindingCount;
-                    nodes[nodeIndex].descSet       = 1;
+                    nodes[nodeIndex].descSet       = DescriptorSetCBV;
                     cbvCount++;
                     cbvBindingCount++;
                     break;
@@ -597,7 +579,7 @@ ClientPipelineHandle Device::GetInternalPipeline(
                     nodes[nodeIndex].logicalId     = uavCount + ReservedLogicalIdCount;
                     nodes[nodeIndex].srdStartIndex = uavBindingCount;
                     nodes[nodeIndex].binding       = uavBindingCount;
-                    nodes[nodeIndex].descSet       = 0;
+                    nodes[nodeIndex].descSet       = DescriptorSetUAV;
                     uavCount++;
                     uavBindingCount++;
                     break;
@@ -645,9 +627,7 @@ ClientPipelineHandle Device::GetInternalPipeline(
                 switch (pipelineBuildInfo.shaderType)
                 {
                     case InternalRayTracingCsType::EncodeTriangleNodes:
-                    case InternalRayTracingCsType::EncodeTriangleNodesIndirect:
                     case InternalRayTracingCsType::CountTrianglePairs:
-                    case InternalRayTracingCsType::CountTrianglePairsIndirect:
                     case InternalRayTracingCsType::CountTrianglePairsPrefixSum:
                         newBuildInfo.hashedCompilerOptionCount = 1;
                         newBuildInfo.pHashedCompilerOptions = wave64Option;
@@ -692,7 +672,7 @@ ClientPipelineHandle Device::GetInternalPipeline(
                 constexpr const char* BuildModeStr[] =
                 {
                     "LBVH",     // BvhBuildMode::Linear,
-                    "Reserved", // BvhBuildMode::Reserved,
+                    "Reserved", // BvhBuildMode::Reserved
                     "PLOC",     // BvhBuildMode::PLOC,
                     "Reserved",
                     "Auto",     // BvhBuildMode::Auto,
@@ -2027,7 +2007,11 @@ void Device::UploadCpuMemory(
     const void*           pSrcData,
     uint32                sizeInBytes)
 {
-    m_pBackend->UploadCpuMemory(cmdBuffer, dstBufferVa, pSrcData, sizeInBytes);
+    gpusize srcGpuVa = 0;
+    void* pMappedData = AllocateTemporaryData(cmdBuffer, sizeInBytes, &srcGpuVa);
+    std::memcpy(pMappedData, pSrcData, sizeInBytes);
+
+    m_pBackend->CopyGpuMemoryRegion(cmdBuffer, srcGpuVa, 0, dstBufferVa, 0, sizeInBytes);
 }
 
 // =====================================================================================================================

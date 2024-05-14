@@ -75,10 +75,6 @@ public:
     static uint32 CalculateGeometryInfoSize(
         uint32 numGeometryDescs);
 
-    // Helper function to determine index buffer info size
-    static uint32 CalculateIndexBufferInfoSize(
-        uint32 numGeometryDescs);
-
     // Builds or updates an acceleration structure and stores it in a result buffer
     void BuildRaytracingAccelerationStructure();
 
@@ -90,7 +86,7 @@ public:
 
     void InitializeBuildConfigs();
 
-    uint32 EncodePrimitives();
+    void EncodePrimitives();
 
     void CountTrianglePairs();
     void CountTrianglePairsPrefixSum();
@@ -129,24 +125,6 @@ public:
     uint32 CalculateUpdateScratchBufferInfo(
         RayTracingScratchDataOffsets* pOffsets);
 
-    // Encodes triangle nodes into a scratch buffer
-    void EncodeTriangleNodes(
-        uint32                                             primitiveOffset,
-        const GeometryTriangles*                           pDesc,
-        uint32                                             primitiveCount,
-        uint32                                             geometryIndex,
-        GeometryFlags                                      geometryFlags,
-        uint32                                             blockOffset,
-        gpusize                                            indirectGpuVa);
-
-    // Encodes AABB nodes into a scratch buffer
-    void EncodeAABBNodes(
-        uint32                                         primitiveOffset,
-        const GeometryAabbs*                           pDesc,
-        uint32                                         primitiveCount,
-        uint32                                         geometryIndex,
-        GeometryFlags                                  geometryFlags);
-
     // Encodes instance nodes into a scratch buffer
     void EncodeInstances(
         gpusize            instanceDescVa,
@@ -158,7 +136,7 @@ public:
         AccelStructPrebuildInfo*      pPrebuildInfo);
 
     // Performs a barrier that synchronizes any active BVH builder operations.
-    void Barrier();
+    void Barrier(uint32 flags = BarrierFlagSyncDispatch);
 
     // Emit postbuild info
     void EmitAccelerationStructurePostBuildInfo(
@@ -206,7 +184,7 @@ private:
         BvhCpuBuildMode                 cpuBuildMode;
 
         uint32                          numPrimitives;
-        uint32                          numLeafNodes;
+        uint32                          maxNumPrimitives;
 
         // All function calls requiring Geometry/RebraidType should pass it in instead. For now leave this.
         GeometryType                    geometryType;
@@ -251,6 +229,8 @@ private:
         const AccelStructBuildInfo& buildArgs);
 
     void InitBuildShaderConstants();
+
+    void InitGeometryConstants();
 
     void UpdateBuildConfig();
 
@@ -312,22 +292,6 @@ private:
     void UpdateAccelerationStructure();
 
     void EmitPostBuildInfo();
-
-    BufferViewInfo AllocGeometryConstants(
-        const Geometry& geometry,
-        uint32  geometryIndex,
-        uint32* pPrimitiveOffset,
-        uint32  stride,
-        uint32  vertexCompCount,
-        uint64* pIbVa);
-
-    uint32 WriteBufferSrdTable(
-        const BufferViewInfo*      pBufferViews,
-        uint32                     count,
-        bool                       typedBuffer,
-        uint32                     entryOffset);
-
-    uint32 WriteGeometrySrdTables(uint32 entryOffset);
 
     void EncodeUpdate();
 
@@ -496,19 +460,9 @@ private:
         uint32* pStride,
         uint32* pVertexCompCount) const;
 
-    uint32 WriteVertexBufferTable(
-        const GeometryTriangles* pDesc,
-        EncodeNodes::Constants*  pEncodeConstants,
-        uint32                   entryoffset);
-
     BufferViewInfo SetupAabbBuffer(
         const GeometryAabbs& desc,
         uint32* pStride) const;
-
-    uint32 WriteAabbGeometryTable(
-        const GeometryAabbs* pAabbGeometry,
-        uint32*              pStrideConstant,
-        uint32               userDataOffset);
 
     uint32 GetLeafNodeExpansion() const;
 
@@ -545,6 +499,8 @@ private:
     CompileTimeBuildSettings          m_buildSettings;
     BuildShaderConstants              m_buildShaderConstants;
     gpusize                           m_shaderConstantsGpuVa{};
+    gpusize                           m_geomConstSrdTable{};
+    gpusize                           m_geomBufferSrdTable{};
     const RadixSortConfig             m_radixSortConfig;
     uint64                            m_emitCompactDstGpuVa;
     uint32                            m_buildSettingsHash;

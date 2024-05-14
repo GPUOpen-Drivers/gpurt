@@ -33,10 +33,6 @@ static IntersectionResult TraceRayImpl2_0(
     in uint              rayId                      ///< Ray ID for profiling
 )
 {
-#if DEVELOPER
-    const uint64_t rayTraceStartTime = SampleGpuTimer();
-#endif
-
     uint boxHeuristicMode = AmdTraceRayGetBoxSortHeuristicMode();
     if ((boxHeuristicMode == BoxSortHeuristic::LargestFirstOrClosest) ||
         (boxHeuristicMode == BoxSortHeuristic::LargestFirstOrClosestMidPoint))
@@ -121,9 +117,7 @@ static IntersectionResult TraceRayImpl2_0(
             WriteRayHistoryTokenNodePtr(rayId, nodePtr);
             UpdateWaveTraversalStatistics(GPURT_RTIP2_0, nodePtr);
         }
-#endif
 
-#if DEVELOPER
         intersection.numIterations++;
 #endif
 
@@ -160,6 +154,18 @@ static IntersectionResult TraceRayImpl2_0(
                                           localRay.Origin,
                                           localRay.Direction,
                                           rcp(localRay.Direction));
+
+#if GPURT_ENABLE_GPU_DEBUG
+        // Check if the child pointers returned are valid.
+        if (IsBoxNode1_1(nodePtr))
+        {
+            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.x, currentBvh, topLevelBvh);
+            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.y, currentBvh, topLevelBvh);
+            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.z, currentBvh, topLevelBvh);
+            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.w, currentBvh, topLevelBvh);
+        }
+#endif
+
 #if DEVELOPER
         if (EnableTraversalCounter() && IsBoxNode1_1(prevNodePtr))
         {
@@ -321,6 +327,15 @@ static IntersectionResult TraceRayImpl2_0(
                     }
                 }
 
+#if DEVELOPER
+                if (EnableTraversalCounter())
+                {
+                    WriteRayHistoryTokenTriangleHitResult(rayId,
+                                                          uint(status > HIT_STATUS_IGNORE),
+                                                          candidateT);
+                }
+#endif
+
                 if (status != HIT_STATUS_IGNORE)
                 {
                     intersection.barycentrics.x    = asfloat(intersectionResult.z) / asfloat(intersectionResult.y);
@@ -479,6 +494,14 @@ static IntersectionResult TraceRayImpl2_0(
         // BLAS->TLAS Transition condition
         bool resetRay = (stackAddr < stackPtrTop);
 
+#if GPURT_ENABLE_GPU_DEBUG
+        // Check if the node pointer popped from stack is valid.
+        OutOfRangeNodePointerAssert(GPURT_RTIP2_0,
+                                    nodePtr,
+                                    resetRay ? topLevelBvh : currentBvh,
+                                    topLevelBvh);
+#endif
+
 #if DEVELOPER
         if (EnableTraversalCounter())
         {
@@ -512,6 +535,14 @@ static IntersectionResult TraceRayImpl2_0(
                 }
 
                 nodePtr = FetchParentNodePointer(currentBvh, prevNodePtr);
+
+#if GPURT_ENABLE_GPU_DEBUG
+                // Check if parent pointer fetched is valid.
+                OutOfRangeNodePointerAssert(GPURT_RTIP2_0,
+                                            nodePtr,
+                                            resetRay ? topLevelBvh : currentBvh,
+                                            topLevelBvh);
+#endif
 
                 lastNodePtr = trianglePairIntersected ? (prevNodePtr + 1) : prevNodePtr;
             }

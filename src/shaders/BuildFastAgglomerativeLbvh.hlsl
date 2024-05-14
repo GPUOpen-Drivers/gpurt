@@ -33,12 +33,12 @@
                 "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
 
 #include "../shared/rayTracingDefs.h"
-[[vk::binding(1, 0)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b0);
+[[vk::binding(0, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b0);
 
-[[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer     : register(u0);
-[[vk::binding(1, 0)]] RWByteAddressBuffer DstMetadata   : register(u1);
-[[vk::binding(2, 0)]] RWByteAddressBuffer ScratchBuffer : register(u2);
-[[vk::binding(3, 0)]] RWByteAddressBuffer ScratchGlobal : register(u3);
+[[vk::binding(0, 0)]] RWByteAddressBuffer                  DstBuffer     : register(u0);
+[[vk::binding(1, 0)]] RWByteAddressBuffer                  DstMetadata   : register(u1);
+[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer : register(u2);
+[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer ScratchGlobal : register(u3);
 
 // unused buffer
 [[vk::binding(4, 0)]] RWByteAddressBuffer SrcBuffer     : register(u4);
@@ -72,8 +72,6 @@ struct FastLBVHArgs
     int4 numMortonBits;
     uint enableEarlyPairCompression;
     uint unsortedNodesBaseOffset;
-    uint reserved0;
-    uint reserved1;
 };
 
 FastLBVHArgs GetFastLbvhArgs(uint numActivePrims)
@@ -186,6 +184,7 @@ void FastAgglomerativeLbvhImpl(
     refitArgs.numMortonBits               = args.numMortonBits;
     refitArgs.unsortedNodesBaseOffset     = args.unsortedNodesBaseOffset;
     refitArgs.enableEarlyPairCompression  = args.enableEarlyPairCompression;
+
     // Total number of internal nodes is N - 1
     const uint numInternalNodes = args.numActivePrims - 1;
 

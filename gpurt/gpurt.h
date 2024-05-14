@@ -93,7 +93,12 @@ enum class StaticPipelineFlag : uint32
     Reserved2                      = (1u << 25),
     Reserved3                      = (1u << 24),
     Reserved4                      = (1u << 23),
-    Reserved6                      = (1u << 22),
+    Reserved5                      = (1u << 22),
+#if GPURT_ENABLE_GPU_DEBUG
+    DebugAssertsHalt               = (1u << 21),
+#else
+    Reserved6                      = (1u << 21),
+#endif
 };
 
 // TODO #gpurt: Abstract these?  Some of these probably should come from PAL device properties
@@ -270,7 +275,6 @@ enum class InternalRayTracingCsType : uint32
 {
     BuildParallel,
     EncodeTriangleNodes,
-    EncodeTriangleNodesIndirect,
     EncodeAABBNodes,
     EncodeInstances,
     Rebraid,
@@ -311,7 +315,6 @@ enum class InternalRayTracingCsType : uint32
     InitUpdateAccelerationStructure,
     BuildFastAgglomerativeLbvh,
     CountTrianglePairs,
-    CountTrianglePairsIndirect,
     CountTrianglePairsPrefixSum,
     Count
 };
@@ -896,13 +899,6 @@ struct EntryFunctionTable
         const char* pFetchTrianglePositionFromNodePointer;
         const char* pFetchTrianglePositionFromRayQuery;
     } intrinsic;
-#if GPURT_BUILD_CONTINUATION
-    struct
-    {
-        const char* pContTraceRay;
-        const char* pContTraversal;
-    } cps;
-#endif
 };
 
 // Input flags to enable/disable GPURT shader library features
@@ -1420,23 +1416,36 @@ public:
         EntryFunctionTable* const      pEntryFunctionTable) = 0;
 
     // Determines required memory allocation size for use by ray continuation stacks
-    // and other memory needed for ray sorting
     //
-    // @param cpsStackSize  (in) Maximum CPS stack size per thread, in bytes.
-    // @param numThreads    (in) Number of Threads.
+    // Note: this method is non-trivial, i.e. it returns a different number than cpsThreadStackBytes * numThreads, that
+    // encompasses other memory requirements as well.
+    //
+    // @param cpsThreadStackBytes (in) Maximum CPS stack size per thread, in bytes.
+    // @param numThreads          (in) Number of Threads.
     //
     // @return the required global memory allocation size in bytes
-    virtual gpusize QueryCpsScratchMemorySize(uint32 cpsStackSize, uint32 numThreads) = 0;
+    virtual gpusize GetCpsMemoryBytes(gpusize cpsThreadStackBytes, uint32 numThreads) = 0;
 
-    // Initializes ray sorting memory.
+    // Populates the GPU addresses in the DispatchRaysConstants structure
     //
-    // @param cmdBuffer            [in] Opaque handle to command buffer where commands will be written
-    // @param cpsGpuMemAddr        [in] GPU address pointing to cps memory.
-    // @param cpsMemorySize        [in] The required global memory allocation size in bytes
-    virtual void InitializeCpsMemory(
-        ClientCmdBufferHandle   cmdBuffer,
-        const gpusize           cpsGpuMemAddr,
-        const gpusize           cpsMemorySize) = 0;
+    // @param pDispatchRaysConstants  (in/out) Non-null pointer to a DispatchRaysConstants
+    // @param cpsMemoryGpuAddr        (in) GPU address pointing to the beginning of cps memory
+    // @param cpsMemoryBytes          (in) Cps allocated memory size in bytes
+    //
+    // @return the required global memory allocation size in bytes
+    virtual void PatchDispatchRaysConstants(
+        DispatchRaysConstants* pDispatchRaysConstants,
+        const gpusize          cpsMemoryGpuAddr,
+        const gpusize          cpsMemoryBytes) = 0;
+
+    //
+    // @param cpsVideoMem          [in] Cps video memory
+    // @param cpsMemoryBytes       [in] Cps allocated memory size in bytes
+    //
+    // @return whether the memory initialization was uploaded successfully
+    virtual Pal::Result InitializeCpsMemory(
+        const Pal::IGpuMemory& cpsVideoMem,
+        const gpusize          cpsMemoryBytes) = 0;
 
     // Returns the static pipeline mask shader constant values for a particular pipeline given a compatible
     // AS memory layout parameters.

@@ -389,6 +389,15 @@ static IntersectionResult TraceRayImpl1_1(
                     }
                 }
 
+#if DEVELOPER
+                if (EnableTraversalCounter())
+                {
+                    WriteRayHistoryTokenTriangleHitResult(rayId,
+                                                          uint(status > HIT_STATUS_IGNORE),
+                                                          candidateT);
+                }
+#endif
+
                 if (status != HIT_STATUS_IGNORE)
                 {
                     intersection.barycentrics.x    = asfloat(intersectionResult.z) / asfloat(intersectionResult.y);

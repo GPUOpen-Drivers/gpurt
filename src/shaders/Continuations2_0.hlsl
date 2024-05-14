@@ -27,7 +27,6 @@
 
 //=====================================================================================================================
 static _AmdTraversalState InitTraversalState2_0(
-    uint64_t accelStruct,
     uint     instanceInclusionMask,
     RayDesc  ray,
     bool     isValid)
@@ -69,17 +68,12 @@ static _AmdTraversalState InitTraversalState2_0(
 
 //=====================================================================================================================
 static void TraversalInternal2_0(
-    CSP_ARG_DEFINITION(csp)
     inout_param(_AmdSystemData) data,
     inout_param(uint) state,
     inout_param(_AmdPrimitiveSystemState) candidate,
-    inout_param(float2) candidateBarycentrics
-)
+    inout_param(float2) candidateBarycentrics)
 {
-    uint rayFlags = data.ray.flags;
-     // OR compile time pipeline config flags into the ray flags
-    rayFlags |=
-        (AmdTraceRayGetStaticFlags() & (PIPELINE_FLAG_SKIP_PROCEDURAL_PRIMITIVES | PIPELINE_FLAG_SKIP_TRIANGLES));
+    uint rayFlags = data.ray.Flags();
 
     uint boxHeuristicMode = AmdTraceRayGetBoxSortHeuristicMode();
     if ((boxHeuristicMode == BoxSortHeuristic::LargestFirstOrClosest) ||
@@ -89,7 +83,7 @@ static void TraversalInternal2_0(
     }
 
     // Root bvh address for reuse
-    const GpuVirtualAddress topBvhAddress = data.ray.accelStruct;
+    const GpuVirtualAddress topBvhAddress = data.ray.AccelStruct();
     // Updateable bottom level bvh for reuse
     GpuVirtualAddress bvhAddress;
 
@@ -145,7 +139,7 @@ static void TraversalInternal2_0(
     {
         candidate.instNodePtr = data.traversal.instNodePtr;
         // Restore after AnyHit or Intersection was called
-        const GpuVirtualAddress nodeAddr64  = data.ray.accelStruct + ExtractNodePointerOffset(data.traversal.instNodePtr);
+        const GpuVirtualAddress nodeAddr64  = data.ray.AccelStruct() + ExtractNodePointerOffset(data.traversal.instNodePtr);
         InstanceDesc desc                   = FetchInstanceDescAddr(nodeAddr64);
         bvhAddress                          = GetInstanceAddr(desc);
         instanceFlags                       = desc.InstanceContributionToHitGroupIndex_and_Flags >> 24;
@@ -167,7 +161,7 @@ static void TraversalInternal2_0(
     }
     else
     {
-        bvhAddress = data.ray.accelStruct;
+        bvhAddress = data.ray.AccelStruct();
     }
 
     // Shift 8-bit instance mask into upper 8-bits to align with instance mask from instance node
@@ -177,6 +171,8 @@ static void TraversalInternal2_0(
     // re-entrant and AnyHit shaders may set nextNodePtr to invalid when AcceptHitAndEndSearch() is called.
     while (IsValidNode(nextNodePtr))
     {
+        RayHistoryHandleIteration(data, nextNodePtr);
+
         // Backup last traversed node pointer
         uint nodePtr = nextNodePtr;
 
@@ -215,11 +211,18 @@ static void TraversalInternal2_0(
                                           candidateRayDirection,
                                           rcp(candidateRayDirection));
 
+        if (IsBoxNode1_1(nodePtr))
+        {
+            RayHistoryIncNumRayBoxTest(data);
+        }
+
         // Trigger node search for next iteration
         nextNodePtr = INVALID_NODE;
 
         if (IsUserNodeInstance(nodePtr))
         {
+            RayHistoryIncInstanceIntersections(data);
+
             InstanceDesc desc = FetchInstanceDescAddr(nodeAddr64);
 
             candidate.instNodePtr      = nodePtr;
@@ -271,11 +274,18 @@ static void TraversalInternal2_0(
             // Reverting the transforms done above when an instance is culled.
             // Setting to stackAddr postpones the BLAS->TLAS transition until we pop a BLAS node from the stack.
             stackPtrTop = isInstanceCulled ? INVALID_NODE : stackPtr;
+
+            if (isInstanceCulled == false)
+            {
+                RayHistoryWriteBottomLevel(data, bvhAddress);
+            }
         }
 
         // Check if it is an triangle node
         if (CheckHandleTriangleNode(nodePtr))
         {
+            RayHistoryIncNumRayTriangleTest(data);
+
             const float t_num   = asfloat(intersectionResult.x);
             const float t_denom = asfloat(intersectionResult.y);
 
@@ -283,6 +293,8 @@ static void TraversalInternal2_0(
             const float candidateT = (t_num / t_denom);
             if (candidateT < committed.rayTCurrent)
             {
+                RayHistorySetCandidateTCurrent(data, candidateT);
+
                 const PrimitiveData primitiveData = FetchPrimitiveDataAddr(nodePtr, nodeAddr64);
                 const uint geometryFlags = primitiveData.geometryFlags;
 
@@ -317,6 +329,8 @@ static void TraversalInternal2_0(
                 // DXR spec: if there is no any hit shader, the geometry is considered opaque.
                 if (rayForceOpaque || isOpaque || (anyHitIdLow == 0))
                 {
+                    RayHistoryWriteTriangleHitResult(data, true);
+
                     // Let the app know an opaque triangle hit was detected. The primitive index and geometry
                     // index are loaded after the traversal loop.
                     committed = candidate;
@@ -369,7 +383,7 @@ static void TraversalInternal2_0(
 
             if (isCulled == false)
             {
-                candidate.PackState(TRAVERSAL_STATE_COMMITTED_TRIANGLE_HIT);
+                candidate.PackState(TRAVERSAL_STATE_COMMITTED_PROCEDURAL_PRIMITIVE_HIT);
                 candidate.primitiveIndex = primitiveData.primitiveIndex;
                 candidate.PackGeometryIndex(primitiveData.geometryIndex);
                 candidate.PackIsOpaque(isOpaque);
@@ -408,6 +422,8 @@ static void TraversalInternal2_0(
 
         // BLAS->TLAS Transition condition
         bool resetRay = (stackPtr < stackPtrTop);
+
+        RayHistorySetMaxStackDepth(data, stackPtr);
 
         // Can possibly compute next node to traverse just before exiting the traversal loop (similar to 1.0)
         if (resetRay || (nextNodePtr == INVALID_NODE))
@@ -450,13 +466,20 @@ static void TraversalInternal2_0(
 
             if (resetRay)
             {
-                bvhAddress = topBvhAddress;
+                bvhAddress  = topBvhAddress;
                 stackPtrTop = 0;
 
-                pointerFlags = rayFlagsSetBits;
-                candidateRayOrigin = topLevelRayOrigin;
-                candidateRayDirection = topLevelRayDirection;
+                pointerFlags               = rayFlagsSetBits;
+                candidateRayOrigin         = topLevelRayOrigin;
+                candidateRayDirection      = topLevelRayDirection;
                 data.traversal.instNodePtr = 0;
+
+                RayHistorySetWriteTopLevel(data);
+                if (state >= TRAVERSAL_STATE_COMMITTED_NOTHING)
+                {
+                    // Write the top level when resumes for AHS and IS cases, otherwise write it immediately
+                    RayHistoryWriteTopLevel(data);
+                }
             }
         }
 

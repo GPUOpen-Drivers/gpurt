@@ -45,11 +45,6 @@ typedef CompileTimeBuildSettings BuildSettingsData;
 #define inout_param(x) inout x
 #endif
 
-#if !defined(__cplusplus)
-#include "BuildSettings.hlsli"
-#include "Debug.hlsl"
-#endif
-
 #ifdef AMD_VULKAN_GLSLANG
 // Vulkan workarounds for glslangValidator.
 #define export
@@ -129,6 +124,17 @@ static const BoundingBox InvalidBoundingBox =
 #define PIPELINE_FLAG_RESERVED1                      0x02000000
 #define PIPELINE_FLAG_RESERVED2                      0x01000000
 #define PIPELINE_FLAG_RESERVED3                      0x00800000
+#define PIPELINE_FLAG_RESERVED5                      0x00400000
+#ifdef GPURT_ENABLE_GPU_DEBUG
+#define PIPELINE_FLAG_DEBUG_ASSERTS_HALT             0x00200000
+#else
+#define PIPELINE_FLAG_RESERVED6                      0x00200000
+#endif
+
+#if !defined(__cplusplus)
+#include "BuildSettings.hlsli"
+#include "Debug.hlsl"
+#endif
 
 #define HIT_KIND_TRIANGLE_FRONT_FACE 0xFE
 #define HIT_KIND_TRIANGLE_BACK_FACE  0xFF
@@ -259,12 +265,6 @@ static uint64_t GetInstanceBasePointer(in InstanceDesc desc)
 
     return PackUint64(desc.accelStructureAddressLo,
                       desc.accelStructureAddressHiAndFlags & highMask);
-}
-
-//=====================================================================================================================
-static uint FetchInstanceIdx(in uint64_t instanceNodePtr)
-{
-    return LoadDwordAtAddr(instanceNodePtr + INSTANCE_DESC_SIZE + RTIP1_1_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET);
 }
 
 //=====================================================================================================================
@@ -609,13 +609,13 @@ static float max3(float3 val)
 //=====================================================================================================================
 static bool IsUpdate()
 {
-    return Settings.isUpdate;
+    return (Settings.updateFlags & DDI_BUILD_FLAG_PERFORM_UPDATE);
 }
 
 //=====================================================================================================================
-static bool AllowUpdate(uint buildFlags)
+static bool IsUpdateAllowed()
 {
-    return buildFlags & DDI_BUILD_FLAG_ALLOW_UPDATE;
+    return (Settings.updateFlags & DDI_BUILD_FLAG_ALLOW_UPDATE);
 }
 
 //=====================================================================================================================
@@ -801,6 +801,31 @@ static uint32_t GetInstanceSidebandOffset(
 static bool IsValidNode(uint nodePtr)
 {
     return nodePtr < END_SEARCH;
+}
+
+//======================================================================================================================
+static void OutOfRangeNodePointerAssert(
+    in uint     rtIpLevel,
+    in uint     nodePointer,
+    in uint64_t currBvhAddr,
+    in uint64_t tlasAddr)
+{
+    uint nodeOffset = ExtractNodePointerOffset(nodePointer);
+
+    GpuVirtualAddress offsetAddress = currBvhAddr + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET;
+    if ((currBvhAddr == tlasAddr)
+        )
+    {
+        offsetAddress += ACCEL_STRUCT_OFFSETS_PRIM_NODE_PTRS_OFFSET;
+    }
+    else
+    {
+        offsetAddress += ACCEL_STRUCT_OFFSETS_GEOMETRY_INFO_OFFSET;
+    }
+    const uint endOfNodes = LoadDwordAtAddr(offsetAddress);
+
+    GPU_ASSERT((nodePointer >= END_SEARCH) ||
+               ((nodeOffset >= ACCEL_STRUCT_HEADER_SIZE) && (nodeOffset < endOfNodes)));
 }
 
 #endif

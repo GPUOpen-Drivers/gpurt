@@ -84,7 +84,7 @@ struct RayTracingScratchDataOffsets
     uint32 propagationFlags;
     uint32 numBatches;
     uint32 batchIndices;
-    uint32 indexBufferInfo;
+    uint32 unused0;
     uint32 updateStack;
     uint32 histogram;
     uint32 tempKeys;
@@ -101,8 +101,8 @@ struct RayTracingScratchDataOffsets
     uint32 reserved11;
     uint32 taskLoopCounters;
     uint32 debugCounters;
-    uint32 padding0;
-    uint32 padding1;
+    uint32 reserved12;
+    uint32 reserved13;
 };
 
 struct BuildShaderConstants
@@ -118,19 +118,45 @@ struct BuildShaderConstants
     uint32 numMortonSizeBits;
 
     float reservedFloat;
-    uint32 numLeafNodes;
+    uint32 indirectArgBufferStride;
     uint32 numDescs;
-    uint32 padding0;
+    uint32 leafNodeExpansionFactor;
 
     // Align the following struct to 4 dwords due to HLSL constant buffer packing rules
     AccelStructHeader header;
     RayTracingScratchDataOffsets offsets;
 };
 
+// =====================================================================================================================
+// Geometry constants for GPURT build shaders
+struct BuildShaderGeometryConstants
+{
+    uint32 numPrimitives;                 // Number of primitives
+    uint32 primitiveOffset;               // Per-geometry primitive offset
+    uint32 blockOffset;                   // Starting block index for current geometry
+    uint32 geometryStride;                // Geometry buffer stride in terms of components for vertices. 0 if the
+                                          // stride is accounted for in the SRD. R32G32 elements for AABBs.
+    uint32 indexBufferGpuVaLo;
+    uint32 indexBufferGpuVaHi;
+    uint32 indexBufferByteOffset;         // Index buffer byte offset
+    uint32 indexBufferFormat;             // Index buffer format
+
+    uint32 transformBufferGpuVaLo;
+    uint32 transformBufferGpuVaHi;
+    uint32 geometryFlags;
+    uint32 vertexCount;                   // Vertex count
+
+    uint32 vertexComponentCount;          // Valid components in vertex buffer format
+    uint32 vertexComponentSize;           // Size of component (in bytes) in vertex buffer format.
+    uint32 padding0;
+    uint32 padding1;
+};
+
 #ifdef __cplusplus
 static_assert(sizeof(AccelStructHeader) % 16 == 0, "AccelStructHeader must be 16-byte aligned");
 static_assert(sizeof(RayTracingScratchDataOffsets) % 16 == 0, "RayTracingScratchDataOffsets must be 16-byte aligned");
 static_assert(sizeof(BuildShaderConstants) % 16 == 0, "BuildShaderConstants must be 16-byte aligned");
+static_assert(sizeof(BuildShaderGeometryConstants) % 16 == 0, "BuildShaderGeometryConstants must be 16-byte aligned");
 
 static_assert(offsetof(BuildShaderConstants, header) % 16 == 0, "AccelStructHeader must be 16-byte aligned");
 static_assert(offsetof(BuildShaderConstants, offsets) % 16 == 0, "RayTracingScratchDataOffsets must be 16-byte aligned");
