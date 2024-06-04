@@ -288,7 +288,6 @@ enum class InternalRayTracingCsType : uint32
     RefitBounds,
     ClearBuffer,
     CopyBufferRaw,
-    InitBuildQBVH,
     BuildQBVH,
     BitHistogram,
     ScatterKeysAndValues,
@@ -314,8 +313,7 @@ enum class InternalRayTracingCsType : uint32
     InitAccelerationStructure,
     InitUpdateAccelerationStructure,
     BuildFastAgglomerativeLbvh,
-    CountTrianglePairs,
-    CountTrianglePairsPrefixSum,
+    EncodeQuadNodes,
     Count
 };
 

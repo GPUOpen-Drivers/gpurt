@@ -28,21 +28,23 @@
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "CBV(b255),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u6, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u7, visibility=SHADER_VISIBILITY_ALL),"\
+                "CBV(b255)"
 
 #include "../shared/rayTracingDefs.h"
 [[vk::binding(0, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b0);
 
-[[vk::binding(0, 0)]] RWByteAddressBuffer                  DstBuffer     : register(u0);
-[[vk::binding(1, 0)]] RWByteAddressBuffer                  DstMetadata   : register(u1);
-[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer : register(u2);
-[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer ScratchGlobal : register(u3);
-
-// unused buffer
-[[vk::binding(4, 0)]] RWByteAddressBuffer SrcBuffer     : register(u4);
-[[vk::binding(5, 0)]] RWByteAddressBuffer EmitBuffer    : register(u5);
+[[vk::binding(0, 0)]] RWByteAddressBuffer                  SrcBuffer           : register(u0);
+[[vk::binding(1, 0)]] RWByteAddressBuffer                  DstBuffer           : register(u1);
+[[vk::binding(2, 0)]] RWByteAddressBuffer                  DstMetadata         : register(u2);
+[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer       : register(u3);
+[[vk::binding(4, 0)]] globallycoherent RWByteAddressBuffer ScratchGlobal       : register(u4);
+[[vk::binding(5, 0)]] RWByteAddressBuffer                  InstanceDescBuffer  : register(u5);
+[[vk::binding(6, 0)]] RWByteAddressBuffer                  EmitBuffer          : register(u6);
+[[vk::binding(7, 0)]] RWByteAddressBuffer                  IndirectArgBuffer   : register(u7);
 
 #include "Common.hlsl"
 #include "BuildCommonScratch.hlsl"
@@ -222,9 +224,22 @@ void FastAgglomerativeLbvhImpl(
         {
             // Make the parent node point to the current child
             WriteScratchNodeData(args.baseScratchNodesOffset, parentNodeIndex, childOffset, currentNodeIndex);
-            // Link the child to its parent
-            WriteScratchNodeData(args.baseScratchNodesOffset, currentNodeIndex, SCRATCH_NODE_PARENT_OFFSET, parentNodeIndex);
+
+            {
+                // Link the child to its parent
+                WriteScratchNodeData(args.baseScratchNodesOffset, currentNodeIndex, SCRATCH_NODE_PARENT_OFFSET, parentNodeIndex);
+            }
+
+            if (childOffset == SCRATCH_NODE_LEFT_OFFSET)
+            {
+                WriteScratchNodeData(args.baseScratchNodesOffset, parentNodeIndex, SCRATCH_NODE_SORTED_PRIM_INDEX_OFFSET, primitiveIndex);
+            }
         }
+
+        // The atomic exchange below guarantees a child has written its addresses to its parent before the parent tries
+        // to read the address, but a memory barrier is needed to ensure the write is ordered before the atomic
+        // operation in other threads.
+        DeviceMemoryBarrier();
 
         // ... and pass the opposite range of keys to the parent
         const uint flagOffset = args.baseFlagsOffset + (parentNodeIndex * sizeof(uint));

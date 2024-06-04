@@ -60,7 +60,7 @@
 [[vk::constant_id(BUILD_SETTINGS_DATA_SCENE_BOUNDS_CALCULATION_TYPE_ID)]]          uint sceneBoundsCalculationType    = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_REBRAID_QUALITY_HEURISTIC_ID)]]              uint rebraidQualityHeuristic       = 0;
 
-static const BuildSettingsData Settings = {
+static const CompileTimeBuildSettings Settings = {
     topLevelBuild,
     buildMode,
     triangleCompressionMode,
@@ -97,6 +97,7 @@ static const BuildSettingsData Settings = {
     0,
     0,
     0,
+    0,
     enableInstanceRebraid,
     gpuDebugFlags,
     updateFlags,
@@ -104,6 +105,7 @@ static const BuildSettingsData Settings = {
     encodeArrayOfPointers,
     sceneBoundsCalculationType,
     rebraidQualityHeuristic,
+    0,
     0,
 };
 

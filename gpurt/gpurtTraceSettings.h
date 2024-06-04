@@ -28,7 +28,8 @@
 // This file provides definition used by the GPURT BVH traversal shader code.
 //
 // Note this file is designed to be compilable as HLSL.
-
+#ifndef __cplusplus
 #include "g_gpurtOptions.h"
+#endif
 
 #endif

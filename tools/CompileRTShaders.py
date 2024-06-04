@@ -100,8 +100,7 @@ bvhShaderConfigs = [
     ShaderConfig(path="Update.hlsl", entryPoint="UpdateAabbs"),
     ShaderConfig(path="EncodeNodes.hlsl", entryPoint="EncodeTriangleNodes"),
     ShaderConfig(path="EncodeNodes.hlsl", entryPoint="EncodeAABBNodes"),
-    ShaderConfig(path="EncodeNodes.hlsl", entryPoint="CountTrianglePairs"),
-    ShaderConfig(path="CountTrianglePairsPrefixSum.hlsl", entryPoint="CountTrianglePairsPrefixSum"),
+    ShaderConfig(path="EncodeNodes.hlsl", entryPoint="EncodeQuadNodes"),
     ShaderConfig(path="EncodeTopLevel.hlsl", entryPoint="EncodeInstances"),
     ShaderConfig(path="BuildParallel.hlsl", entryPoint="BuildBvh", outputName="BuildParallel"),
     ShaderConfig(path="UpdateParallel.hlsl", entryPoint="UpdateParallel"),
@@ -115,7 +114,6 @@ bvhShaderConfigs = [
     ShaderConfig(path="RefitBounds.hlsl", entryPoint="RefitBounds"),
     ShaderConfig(path="ClearBuffer.hlsl", entryPoint="ClearBuffer"),
     ShaderConfig(path="CopyBufferRaw.hlsl", entryPoint="CopyBufferRaw"),
-    ShaderConfig(path="BuildQBVH.hlsl", entryPoint="InitBuildQBVH"),
     ShaderConfig(path="BuildQBVH.hlsl", entryPoint="BuildQBVH"),
     ShaderConfig(path="RadixSort/BitHistogram.hlsl", entryPoint="BitHistogram"),
     ShaderConfig(path="RadixSort/ScatterKeysAndValues.hlsl", entryPoint="ScatterKeysAndValues"),
@@ -265,12 +263,16 @@ def ConvertSpvFile(disableDebugStripping, spvRemap, whiteListFile, inSpvFilename
         threadOutput.append(f"Error: {e}")
         return False
 
-def ConvertDxilFile(inDxilFilename, inOutputName, threadOutput):
+def ConvertDxilFile(inDxilFilename, inOutputName, threadOutput, addDxilPostfix):
     try:
+        postfix = ''
         # Generate file name with *_dxil.h and file header name with Cs*_dxil[] for DXIL shaders to distinguish
         # them with the AMDIL header
-        outputFileName = "g_" + inOutputName + '_dxil.h'
-        conversionOutputFilename = inOutputName + '_dxil'
+        if (addDxilPostfix):
+            postfix = '_dxil'
+
+        outputFileName = "g_" + inOutputName + postfix + '.h'
+        conversionOutputFilename = inOutputName + postfix
 
         dxilBinaryFile = open(f"{inDxilFilename}", "rb")
         dxilBinData = dxilBinaryFile.read()
@@ -305,7 +307,7 @@ def ConvertDxilFile(inDxilFilename, inOutputName, threadOutput):
         threadOutput.append(f"Error: {e}")
         return False
 
-def RunCompiler(outputDir, compilerPath, inShaderConfig, inShaderBasePath, inDXC, inVerbose, threadOutput, spirv):
+def RunCompiler(outputDir, compilerPath, inShaderConfig, inShaderBasePath, inDXC, inVerbose, threadOutput, spirv, dxilPostfix):
     shaderPath = os.path.join(inShaderBasePath, inShaderConfig.path).replace('\\', '/')
     shaderFilename = os.path.basename(inShaderConfig.path)
 
@@ -314,7 +316,7 @@ def RunCompiler(outputDir, compilerPath, inShaderConfig, inShaderBasePath, inDXC
     if inDXC:
         if spirv:
             ext = "_spv" + ext
-        else:
+        elif dxilPostfix:
             ext = "_dxil" + ext
     genFileName = inShaderConfig.getName() + ext
     compilerName = os.path.split(compilerPath)[1]
@@ -438,7 +440,8 @@ def CompileShaderConfig(shaderConfig, args, shadersOutputDir,
         if False:
             pass
         else:
-            if not RunCompiler(tempDirPath, compilerPath, shaderConfig, shadersBasePath, (not args.glslang or isBVH), args.verbose, threadOutput, args.spirv):
+            addDxilPostfix = True
+            if not RunCompiler(tempDirPath, compilerPath, shaderConfig, shadersBasePath, (not args.glslang or isBVH), args.verbose, threadOutput, args.spirv, addDxilPostfix):
                 threadOutput.append("Failed to compile Vulkan shader config %s" % shaderConfig)
                 return (False, os.linesep.join(threadOutput))
 
@@ -461,7 +464,8 @@ def CompileShaderConfig(shaderConfig, args, shadersOutputDir,
                 conversionResult = ConvertSpvFile(args.disableDebugStripping, spvRemap, whiteListPath, compiledSpvFilename, conversionOutputFilename, isBVH, tempDirPath, threadOutput)
             else:
                 compiledDxilFileName = f"{tempDirPath}/{conversionOutputFilename}.dxil"
-                conversionResult = ConvertDxilFile(compiledDxilFileName, conversionOutputFilename, threadOutput)
+                addDxilPostfix = True
+                conversionResult = ConvertDxilFile(compiledDxilFileName, conversionOutputFilename, threadOutput, addDxilPostfix)
 
         if not args.interm_only:
             if compiledSpvFilename:
@@ -591,7 +595,6 @@ def main() -> int:
     parser.add_argument('--jobs', help='Number of job threads to compile with', default=os.cpu_count())
     parser.add_argument('--spirv', action='store_true', help='Output SPIR-V for Vulkan for BVH shaders, need to be used with --vulkan', default=False)
     parser.add_argument('--strict', action='store_true', help='Require SSC invocations to finish cleanly without output or warnings.')
-
     originalPath = os.getcwd()
 
     args = parser.parse_args()

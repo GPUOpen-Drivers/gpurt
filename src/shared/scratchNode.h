@@ -46,8 +46,9 @@ struct ScratchNode
     uint   splitBox_or_nodePointer;        // TriangleSplitBox index for triangle nodes /
                                            // BLAS node pointer for instance nodes
     uint   numPrimitivesAndDoCollapse;     // number of tris collapsed, doCollapse is boolean bit in the LSB /
-                                           // scratch node index of the tri in the pair in PAIR_TRIANGLE_COMPRESSION
-    uint   unused;                         // Unused bits
+                                           // scratch node index of the tri in the pair in PAIR_TRIANGLE_COMPRESSION /
+                                           // BLAS metadata size for instance nodes
+    uint   sortedPrimIndex;                // it's the index of the sorted primitive (leaf) or start index of the sorted primitives
     uint   packedFlags;                    // flags [0:7], instanceMask [8:15], triangleId [16:31]
 };
 
@@ -73,7 +74,7 @@ struct ScratchNode
 #define SCRATCH_NODE_NODE_POINTER_OFFSET              SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET
 #define SCRATCH_NODE_NUM_LARGEST_LENGTH_OFFSET        SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET
 #define SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET 52
-#define SCRATCH_NODE_UNUSED_OFFSET                    56
+#define SCRATCH_NODE_SORTED_PRIM_INDEX_OFFSET         56
 #define SCRATCH_NODE_FLAGS_OFFSET                     60
 #define SCRATCH_NODE_SIZE                             64
 #define SCRATCH_NODE_TRIANGLE_VERTEX_STRIDE           16
@@ -82,6 +83,12 @@ struct ScratchNode
 static bool IsLeafNode(in uint x, uint numActivePrims)
 {
     return (x >= (numActivePrims - 1));
+}
+
+//=====================================================================================================================
+static uint GetPrimRefIdx(in uint x, uint numPrims)
+{
+    return (numPrims - 1) + x;
 }
 
 //=====================================================================================================================
@@ -121,10 +128,18 @@ static uint ExtractScratchNodePairPrimOffset(
 
 //=====================================================================================================================
 // Returns whether a scratch leaf node is a triangle pair when early triangle pairing is enabled
-static bool IsScratchNodeEarlyTrianglePair(
+static bool IsQuadPrimitive(
+    in uint packedGeometryIndex)
+{
+    return ((packedGeometryIndex >> 24) != 0);
+}
+
+//=====================================================================================================================
+// Returns whether a scratch leaf node is a triangle pair when early triangle pairing is enabled
+static bool IsScratchNodeQuadPrimitive(
     in ScratchNode node)
 {
-    return ((node.right_or_geometryIndex >> 24) != 0);
+    return IsQuadPrimitive(node.right_or_geometryIndex);
 }
 
 //=====================================================================================================================
@@ -162,18 +177,14 @@ static uint ExtractScratchNodeTriangleId(
 }
 
 //=====================================================================================================================
-static uint FetchScratchNodeNumPrimitives(
-    ScratchNode node,
-    bool        isLeaf)
+// Extract geometry type from node flags from scratch node
+static uint ExtractScratchNodeGeometryType(
+    in uint packedFlags)
 {
-    if (isLeaf)
-    {
-        return 1;
-    }
-    else
-    {
-        return node.numPrimitivesAndDoCollapse >> 1;
-    }
+    const uint boxNodeFlags = ExtractScratchNodeBoxFlags(packedFlags);
+    const uint geometryType = ((boxNodeFlags >> BOX_NODE_FLAGS_ONLY_TRIANGLES_SHIFT) & 1) ? 0 : 1;
+
+    return geometryType;
 }
 
 //=====================================================================================================================
@@ -193,6 +204,36 @@ static bool IsNodeActive(ScratchNode node)
 {
     // Inactive nodes force v0.x to NaN during encode
     return !isnan(node.bbox_min_or_v0.x);
+}
+
+//=====================================================================================================================
+static uint GetScratchNodePrimitiveIndex(
+    in ScratchNode node,
+    in uint triangleIndex)
+{
+    if (triangleIndex == 1)
+    {
+        return node.left_or_primIndex_or_instIndex;
+    }
+    else
+    {
+        return node.left_or_primIndex_or_instIndex - ExtractScratchNodePairPrimOffset(node);
+    }
+}
+
+//=====================================================================================================================
+static bool IsOpaqueNode(
+    in uint packedFlags)
+{
+    return (packedFlags & (1 << BOX_NODE_FLAGS_ONLY_OPAQUE_SHIFT));
+}
+
+//=====================================================================================================================
+// Extract primitive count from internal scratch node
+static uint ExtractScratchNodeNumPrimitives(
+    in uint packedData)
+{
+    return (packedData >> 1);
 }
 
 #endif

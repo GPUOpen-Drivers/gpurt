@@ -38,7 +38,6 @@
 #include "../shared/scratchNode.h"
 
 typedef AccelStructDataOffsets AccelStructOffsets;
-typedef CompileTimeBuildSettings BuildSettingsData;
 
 #if !defined(__cplusplus)
 #define out_param(x) out x
@@ -80,6 +79,7 @@ struct BuiltInTriangleIntersectionAttributes
 #define SKIP_4_7          0xfffffffb
 #define SKIP_0_7          0xfffffff9
 #define END_SEARCH        0xfffffff8
+#define DEAD_LANE         0xfffffff7
 
 #include "Extensions.hlsl"
 #include "../shared/math.h"
@@ -313,15 +313,37 @@ static uint64_t EncodeBasePointer(
 }
 
 //=====================================================================================================================
+static bool NodeTypeIsBoxNode32(uint nodeType)
+{
+    return (nodeType == NODE_TYPE_BOX_FLOAT32);
+}
+
+//=====================================================================================================================
 static bool IsBoxNode32(uint pointer)
 {
-    return (GetNodeType(pointer) == NODE_TYPE_BOX_FLOAT32);
+    return NodeTypeIsBoxNode32(GetNodeType(pointer));
+}
+
+//=====================================================================================================================
+static bool NodeTypeIsBoxNode16(uint nodeType)
+{
+    return (nodeType == NODE_TYPE_BOX_FLOAT16);
 }
 
 //=====================================================================================================================
 static bool IsBoxNode16(uint pointer)
 {
-    return (GetNodeType(pointer) == NODE_TYPE_BOX_FLOAT16);
+    return NodeTypeIsBoxNode16(GetNodeType(pointer));
+}
+
+//=====================================================================================================================
+static bool NodeTypeIsBoxNode(
+    uint nodeType
+)
+{
+    {
+        return NodeTypeIsBoxNode16(nodeType) || NodeTypeIsBoxNode32(nodeType);
+    }
 }
 
 //=====================================================================================================================
@@ -329,9 +351,9 @@ static bool IsBoxNode(
     uint pointer
 )
 {
-    {
-        return IsBoxNode16(pointer) || IsBoxNode32(pointer);
-    }
+    return NodeTypeIsBoxNode(
+        GetNodeType(pointer)
+        );
 }
 
 //=====================================================================================================================
@@ -352,9 +374,15 @@ static bool IsTriangleNode1_1(
 }
 
 //=====================================================================================================================
+static bool NodeTypeIsUserNodeInstance(uint nodeType)
+{
+    return (nodeType == NODE_TYPE_USER_NODE_INSTANCE);
+}
+
+//=====================================================================================================================
 static bool IsUserNodeInstance(uint nodePtr)
 {
-    return (GetNodeType(nodePtr) == NODE_TYPE_USER_NODE_INSTANCE);
+    return NodeTypeIsUserNodeInstance(GetNodeType(nodePtr));
 }
 
 //=====================================================================================================================
@@ -800,7 +828,7 @@ static uint32_t GetInstanceSidebandOffset(
 // Node pointers with all upper bits set are sentinels: INVALID_NODE, TERMINAL_NODE, SKIP_*
 static bool IsValidNode(uint nodePtr)
 {
-    return nodePtr < END_SEARCH;
+    return nodePtr < DEAD_LANE;
 }
 
 //======================================================================================================================
@@ -826,6 +854,30 @@ static void OutOfRangeNodePointerAssert(
 
     GPU_ASSERT((nodePointer >= END_SEARCH) ||
                ((nodeOffset >= ACCEL_STRUCT_HEADER_SIZE) && (nodeOffset < endOfNodes)));
+}
+
+//=====================================================================================================================
+static InstanceDesc FetchInstanceDescAddr(in GpuVirtualAddress instanceAddr)
+{
+    uint4 d0, d1, d2, d3;
+
+    d0 = LoadDwordAtAddrx4(instanceAddr);
+    d1 = LoadDwordAtAddrx4(instanceAddr + 0x10);
+    d2 = LoadDwordAtAddrx4(instanceAddr + 0x20);
+    d3 = LoadDwordAtAddrx4(instanceAddr + 0x30);
+
+    InstanceDesc desc;
+
+    desc.Transform[0] = asfloat(d0);
+    desc.Transform[1] = asfloat(d1);
+    desc.Transform[2] = asfloat(d2);
+
+    desc.InstanceID_and_Mask = d3.x;
+    desc.InstanceContributionToHitGroupIndex_and_Flags = d3.y;
+    desc.accelStructureAddressLo = d3.z;
+    desc.accelStructureAddressHiAndFlags = d3.w;
+
+    return desc;
 }
 
 #endif

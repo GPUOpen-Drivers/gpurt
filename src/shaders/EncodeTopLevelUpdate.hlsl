@@ -22,7 +22,26 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "EncodeTopLevelCommon.hlsl"
+void WriteInstanceDescriptor(
+    in InstanceDesc       instanceDesc,
+    in uint               geometryType,
+    in uint               boxNodeFlags,
+    in uint               instanceIndex,
+    in uint               instNodePtr,
+    in uint               blasRootNodePointer,
+    in uint               blasMetadataSize,
+    in uint               tlasMetadataSize)
+{
+    {
+        WriteInstanceNode1_1(instanceDesc,
+                             geometryType,
+                             instanceIndex,
+                             instNodePtr,
+                             blasRootNodePointer,
+                             blasMetadataSize,
+                             tlasMetadataSize);
+    }
+}
 
 //=====================================================================================================================
 void EncodeInstancesUpdate(
@@ -31,7 +50,8 @@ void EncodeInstancesUpdate(
     uint               tlasMetadataSize,
     uint               primNodePointerOffset,
     uint64_t           baseAddrAccelStructHeader,
-    uint               numActivePrims)
+    uint               numActivePrims,
+    uint               blasMetadataSize)
 {
     // If the BLAS address is NULL, the instance is inactive. Inactive instances cannot be activated during updates
     // so we always exclude them from the build.
@@ -134,14 +154,14 @@ void EncodeInstancesUpdate(
                 PushNodeToUpdateStack(ShaderConstants.offsets.updateStack, parentNodePointer);
             }
 
-            WriteInstanceDescriptor(tlasMetadataSize,
-                                    baseAddrAccelStructHeader,
-                                    desc.InstanceContributionToHitGroupIndex_and_Flags,
-                                    desc.InstanceID_and_Mask,
-                                    desc.Transform,
+            WriteInstanceDescriptor(desc,
+                                    geometryType,
+                                    boxNodeFlags,
                                     index,
                                     nodePointer,
-                                    CreateRootNodePointer());
+                                    CreateRootNodePointer(),
+                                    blasMetadataSize,
+                                    tlasMetadataSize);
         }
     }
 }

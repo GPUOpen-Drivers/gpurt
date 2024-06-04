@@ -106,30 +106,6 @@ static GpuVirtualAddress FetchAccelStructBaseAddr(in uint lowBits, in uint highB
 }
 
 //=====================================================================================================================
-static InstanceDesc FetchInstanceDescAddr(in GpuVirtualAddress instanceAddr)
-{
-    uint4 d0, d1, d2, d3;
-
-    d0 = LoadDwordAtAddrx4(instanceAddr);
-    d1 = LoadDwordAtAddrx4(instanceAddr + 0x10);
-    d2 = LoadDwordAtAddrx4(instanceAddr + 0x20);
-    d3 = LoadDwordAtAddrx4(instanceAddr + 0x30);
-
-    InstanceDesc desc;
-
-    desc.Transform[0] = asfloat(d0);
-    desc.Transform[1] = asfloat(d1);
-    desc.Transform[2] = asfloat(d2);
-
-    desc.InstanceID_and_Mask                           = d3.x;
-    desc.InstanceContributionToHitGroupIndex_and_Flags = d3.y;
-    desc.accelStructureAddressLo                       = d3.z;
-    desc.accelStructureAddressHiAndFlags               = d3.w;
-
-    return desc;
-}
-
-//=====================================================================================================================
 static InstanceDesc FetchInstanceDesc(in GpuVirtualAddress bvhAddress, uint nodePointer)
 {
     const GpuVirtualAddress instanceAddr = bvhAddress + ExtractNodePointerOffset(nodePointer);

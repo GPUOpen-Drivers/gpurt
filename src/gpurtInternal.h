@@ -321,11 +321,15 @@ public:
     virtual gpusize GetCpsMemoryBytes(gpusize cpsThreadStackBytes, uint32 numThreads) override
     {
         const gpusize stackTotalBytes = numThreads * cpsThreadStackBytes;
-        const gpusize requestedMemoryBytes = stackTotalBytes;
+        gpusize requestedMemoryBytes = stackTotalBytes;
 
-        // Bin headers must be 8-byte aligned due to atomic 64-bit operations, and come at the end of the memory.
-        // Ensure the end boundary of the memory is itself 8-byte aligned:
-        return Util::Pow2Align(requestedMemoryBytes, sizeof(uint64));
+        {
+            // Bin headers must be 8-byte aligned due to atomic 64-bit operations, and come at the end of the memory.
+            // Ensure the end boundary of the memory is itself 8-byte aligned:
+            requestedMemoryBytes = Util::Pow2Align(requestedMemoryBytes, sizeof(uint64));
+        }
+
+        return requestedMemoryBytes;
     }
 
     // Populates the GPU addresses in the DispatchRaysConstants structure

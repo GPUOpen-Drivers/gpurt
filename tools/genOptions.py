@@ -95,6 +95,21 @@ WrapperTail = """
 };
 """
 
+OptionDefaultStructHeader = """
+#ifdef __cplusplus
+struct Option {
+  uint32 nameHash;
+  uint64_t value;
+};
+
+constexpr Option OptionDefaults[] = {
+"""
+
+OptionDefaultStructTail = """
+};
+#endif
+"""
+
 ########################################################################################################################
 def IsSequence(obj):
     return obj and isinstance(obj, collections.abc.Sequence) and (not any(isinstance(obj, t) for t in (str, bytes)))
@@ -185,6 +200,8 @@ def ProcessOption(
     intrinsicOutput = ''
     wrapperOutput = ''
 
+    optionDefault = ''
+
     if 'Type' in data.keys() or 'Default' in data.keys():
         assert('Type' in data.keys())
         typ = data['Type']
@@ -192,14 +209,20 @@ def ProcessOption(
         if 'Default' in data.keys():
             default = data['Default']
 
+        # Output name hash and default value in case client may want to use it.
+        intrinsicOutput += f'constexpr uint32 {name}OptionNameHash = {nameHash};\n'
+        intrinsicOutput += f'constexpr {typ} {name}OptionDefault = {default};\n'
+
         intrinsicOutput += f'GPURT_OPTION_DECL {typ} _AmdGetSetting_{nameHash}() DUMMY_OPTION_FUNC({default})\n'
 
+        optionDefault += f'    {{ {name}OptionNameHash, static_cast<uint64_t>({name}OptionDefault) }},\n'
+
         wrapperOutput += OutputComment(comment, '    ')
-        wrapperOutput += f'    static {typ} get{name}() {{ return _AmdGetSetting_{nameHash}(); }}'
+        wrapperOutput += f'    static {typ} get{name}() {{ return _AmdGetSetting_{nameHash}(); }}\n'
     else:
         sys.exit(f"Unknown option type for '{key}'")
 
-    return intrinsicOutput, wrapperOutput
+    return intrinsicOutput, wrapperOutput, optionDefault
 
 ########################################################################################################################
 # Calculate the FNV-1a hash of a string, like Util::HashLiteralString
@@ -225,12 +248,18 @@ def ProcessStruct(
     structName = key[0:1].upper() + key[1:]
     intrinsicOutput = ''
     wrapperOutput = ''
+    optionDefaults = ''
 
     # Output declarations of nested structs.
     for key in data.keys():
-        i, w = ProcessOption(data, key)
+        i, w, o = ProcessOption(data, key)
         intrinsicOutput += i
         wrapperOutput += w
+        optionDefaults += o
+
+    intrinsicOutput += OptionDefaultStructHeader
+    intrinsicOutput += optionDefaults
+    intrinsicOutput += OptionDefaultStructTail
 
     return intrinsicOutput, wrapperOutput
 

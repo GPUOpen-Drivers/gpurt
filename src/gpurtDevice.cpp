@@ -603,6 +603,8 @@ ClientPipelineHandle Device::GetInternalPipeline(
             newBuildInfo.apiPsoHash = GetInternalPsoHash(newBuildInfo.shaderType, buildSettings);
             PipelineCompilerOption wave64Option[1] = {
                 {PipelineOptionName::waveSize, PipelineOptionName::Wave64} };
+            PipelineCompilerOption wave32Option[1] = {
+                {PipelineOptionName::waveSize, PipelineOptionName::Wave32} };
 
             switch (pipelineBuildInfo.shaderType)
             {
@@ -627,8 +629,7 @@ ClientPipelineHandle Device::GetInternalPipeline(
                 switch (pipelineBuildInfo.shaderType)
                 {
                     case InternalRayTracingCsType::EncodeTriangleNodes:
-                    case InternalRayTracingCsType::CountTrianglePairs:
-                    case InternalRayTracingCsType::CountTrianglePairsPrefixSum:
+                    case InternalRayTracingCsType::EncodeQuadNodes:
                         newBuildInfo.hashedCompilerOptionCount = 1;
                         newBuildInfo.pHashedCompilerOptions = wave64Option;
                         break;

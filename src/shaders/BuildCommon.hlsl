@@ -33,6 +33,7 @@
 
 #include "IntersectCommon.hlsl"
 #include "MortonCodes.hlsl"
+#include "../shared/math.h"
 
 //=====================================================================================================================
 #define LEAFIDX(i) ((numActivePrims-1) + (i))
@@ -70,83 +71,6 @@ static float3x4 CreateMatrix(float4 rows[3])
     mat[1] = rows[1];
     mat[2] = rows[2];
     return mat;
-}
-
-//=====================================================================================================================
-//https://github.com/Microsoft/DirectX-Graphics-Samples/blob/master/Libraries/D3D12RaytracingFallback/src/RayTracingHelper.hlsli
-// The MIT License (MIT)
-//
-// Copyright(c) 2015 Microsoft
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files(the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and / or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions :
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-static float Determinant(in float3x4 transform)
-{
-    return transform[0][0] * transform[1][1] * transform[2][2] -
-        transform[0][0] * transform[2][1] * transform[1][2] -
-        transform[1][0] * transform[0][1] * transform[2][2] +
-        transform[1][0] * transform[2][1] * transform[0][2] +
-        transform[2][0] * transform[0][1] * transform[1][2] -
-        transform[2][0] * transform[1][1] * transform[0][2];
-}
-
-//=====================================================================================================================
-//https://github.com/Microsoft/DirectX-Graphics-Samples/blob/master/Libraries/D3D12RaytracingFallback/src/RayTracingHelper.hlsli
-// The MIT License (MIT)
-//
-// Copyright(c) 2015 Microsoft
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files(the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and / or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions :
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-static float3x4 Inverse3x4(in float3x4 transform)
-{
-    const float invDet = rcp(Determinant(transform));
-
-    float3x4 invertedTransform;
-    invertedTransform[0][0] = invDet * (transform[1][1] * (transform[2][2] * 1.0f - 0.0f * transform[2][3]) + transform[2][1] * (0.0f * transform[1][3] - transform[1][2] * 1.0f) + 0.0f * (transform[1][2] * transform[2][3] - transform[2][2] * transform[1][3]));
-    invertedTransform[1][0] = invDet * (transform[1][2] * (transform[2][0] * 1.0f - 0.0f * transform[2][3]) + transform[2][2] * (0.0f * transform[1][3] - transform[1][0] * 1.0f) + 0.0f * (transform[1][0] * transform[2][3] - transform[2][0] * transform[1][3]));
-    invertedTransform[2][0] = invDet * (transform[1][3] * (transform[2][0] * 0.0f - 0.0f * transform[2][1]) + transform[2][3] * (0.0f * transform[1][1] - transform[1][0] * 0.0f) + 1.0f * (transform[1][0] * transform[2][1] - transform[2][0] * transform[1][1]));
-    invertedTransform[0][1] = invDet * (transform[2][1] * (transform[0][2] * 1.0f - 0.0f * transform[0][3]) + 0.0f * (transform[2][2] * transform[0][3] - transform[0][2] * transform[2][3]) + transform[0][1] * (0.0f * transform[2][3] - transform[2][2] * 1.0f));
-    invertedTransform[1][1] = invDet * (transform[2][2] * (transform[0][0] * 1.0f - 0.0f * transform[0][3]) + 0.0f * (transform[2][0] * transform[0][3] - transform[0][0] * transform[2][3]) + transform[0][2] * (0.0f * transform[2][3] - transform[2][0] * 1.0f));
-    invertedTransform[2][1] = invDet * (transform[2][3] * (transform[0][0] * 0.0f - 0.0f * transform[0][1]) + 1.0f * (transform[2][0] * transform[0][1] - transform[0][0] * transform[2][1]) + transform[0][3] * (0.0f * transform[2][1] - transform[2][0] * 0.0f));
-    invertedTransform[0][2] = invDet * (0.0f * (transform[0][2] * transform[1][3] - transform[1][2] * transform[0][3]) + transform[0][1] * (transform[1][2] * 1.0f - 0.0f * transform[1][3]) + transform[1][1] * (0.0f * transform[0][3] - transform[0][2] * 1.0f));
-    invertedTransform[1][2] = invDet * (0.0f * (transform[0][0] * transform[1][3] - transform[1][0] * transform[0][3]) + transform[0][2] * (transform[1][0] * 1.0f - 0.0f * transform[1][3]) + transform[1][2] * (0.0f * transform[0][3] - transform[0][0] * 1.0f));
-    invertedTransform[2][2] = invDet * (1.0f * (transform[0][0] * transform[1][1] - transform[1][0] * transform[0][1]) + transform[0][3] * (transform[1][0] * 0.0f - 0.0f * transform[1][1]) + transform[1][3] * (0.0f * transform[0][1] - transform[0][0] * 0.0f));
-    invertedTransform[0][3] = invDet * (transform[0][1] * (transform[2][2] * transform[1][3] - transform[1][2] * transform[2][3]) + transform[1][1] * (transform[0][2] * transform[2][3] - transform[2][2] * transform[0][3]) + transform[2][1] * (transform[1][2] * transform[0][3] - transform[0][2] * transform[1][3]));
-    invertedTransform[1][3] = invDet * (transform[0][2] * (transform[2][0] * transform[1][3] - transform[1][0] * transform[2][3]) + transform[1][2] * (transform[0][0] * transform[2][3] - transform[2][0] * transform[0][3]) + transform[2][2] * (transform[1][0] * transform[0][3] - transform[0][0] * transform[1][3]));
-    invertedTransform[2][3] = invDet * (transform[0][3] * (transform[2][0] * transform[1][1] - transform[1][0] * transform[2][1]) + transform[1][3] * (transform[0][0] * transform[2][1] - transform[2][0] * transform[0][1]) + transform[2][3] * (transform[1][0] * transform[0][1] - transform[0][0] * transform[1][1]));
-
-    return invertedTransform;
 }
 
 //=====================================================================================================================
@@ -601,22 +525,6 @@ uint GetInternalNodeType()
 }
 
 //=====================================================================================================================
-void WriteBoxNode(
-    in uint             offset,
-    in Float32BoxNode   f32BoxNode)
-{
-    DstBuffer.Store<Float32BoxNode>(offset, f32BoxNode);
-}
-
-//=====================================================================================================================
-void WriteFp16BoxNode(
-    in uint             offset,
-    in Float16BoxNode   f16BoxNode)
-{
-    DstBuffer.Store<Float16BoxNode>(offset, f16BoxNode);
-}
-
-//=====================================================================================================================
 static Float32BoxNode FetchFloat32BoxNode(
     in uint             offset)
 {
@@ -660,93 +568,50 @@ uint GetInstanceMask(InstanceDesc desc)
 }
 
 //=====================================================================================================================
-uint64_t GetAccelStructBaseAddr(InstanceDesc desc, bool allowUpdate)
-{
-    bool forceInactive = false;
-    if (allowUpdate == false)
-    {
-        const bool isTransformZero = !any(desc.Transform[0].xyz) &&
-                                     !any(desc.Transform[1].xyz) &&
-                                     !any(desc.Transform[2].xyz);
-        if (isTransformZero || (GetInstanceMask(desc) == 0))
-        {
-            // Mark instance inactive with a NULL address
-            forceInactive = true;
-        }
-    }
-
-    uint64_t baseAddrAccelStructHeader = 0;
-    if (forceInactive == false)
-    {
-        GpuVirtualAddress baseAddr = MakeGpuVirtualAddress(desc.accelStructureAddressLo,
-                                                           desc.accelStructureAddressHiAndFlags);
-        if (baseAddr != 0)
-        {
-            baseAddrAccelStructHeader = MakeGpuVirtualAddress(
-                LoadDwordAtAddr(baseAddr + ACCEL_STRUCT_METADATA_VA_LO_OFFSET),
-                LoadDwordAtAddr(baseAddr + ACCEL_STRUCT_METADATA_VA_HI_OFFSET));
-
-            // In some odd cases where the BLAS memory gets trampled, this is a failsafe to skip such BLAS
-            // and treat them as inactive rather than causing a page fault.
-            const uint metadataSizeInBytes = LoadDwordAtAddr(baseAddr + ACCEL_STRUCT_METADATA_SIZE_OFFSET);
-            const uint64_t expectedBaseAddr = baseAddr + metadataSizeInBytes;
-
-            if (baseAddrAccelStructHeader != expectedBaseAddr)
-            {
-                baseAddrAccelStructHeader = 0;
-            }
-        }
-    }
-
-    return baseAddrAccelStructHeader;
-}
-
-//=====================================================================================================================
 void WriteInstanceNode1_1(
-    in uint               bufferOffset,   // Additional buffer offset
-    in uint64_t           blasBaseAddr,
-    in uint               instanceContributionToHitGroupIndexAndFlags,
-    in uint               instanceIdAndMask,
-    in float4             transform[3],
-    in uint               instanceIndex,
-    in uint               instNodePtr,
-    in uint               blasRootNodePointer)
+    in InstanceDesc instanceDesc,
+    in uint         geometryType,
+    in uint         instanceIndex,
+    in uint         instNodePtr,
+    in uint         blasRootNodePointer,
+    in uint         blasMetadataSize,
+    in uint         tlasMetadataSize)
 {
-    const uint geometryType = FetchHeaderField(blasBaseAddr, ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET);
-    const uint blasMetadataSize = FetchHeaderField(blasBaseAddr, ACCEL_STRUCT_HEADER_METADATA_SIZE_OFFSET);
+    GpuVirtualAddress blasBaseAddr = MakeGpuVirtualAddress(instanceDesc.accelStructureAddressLo,
+                                                           instanceDesc.accelStructureAddressHiAndFlags);
+    blasBaseAddr += blasMetadataSize;
 
     const uint64_t childBasePtr =
         PackInstanceBasePointer(blasBaseAddr,
-                                instanceContributionToHitGroupIndexAndFlags >> 24,
+                                instanceDesc.InstanceContributionToHitGroupIndex_and_Flags >> 24,
                                 geometryType);
 
-    const uint instanceNodeOffset = ExtractNodePointerOffset(instNodePtr);
-    const uint dstNodeOffset = bufferOffset + instanceNodeOffset;
+    const uint instanceNodeOffset = tlasMetadataSize + ExtractNodePointerOffset(instNodePtr);
 
     InstanceNode node = (InstanceNode)0;
 
-    node.desc.InstanceID_and_Mask                           = instanceIdAndMask;
-    node.desc.InstanceContributionToHitGroupIndex_and_Flags = instanceContributionToHitGroupIndexAndFlags;
+    node.desc.InstanceID_and_Mask                           = instanceDesc.InstanceID_and_Mask;
+    node.desc.InstanceContributionToHitGroupIndex_and_Flags = instanceDesc.InstanceContributionToHitGroupIndex_and_Flags;
     node.desc.accelStructureAddressLo                       = LowPart(childBasePtr);
     node.desc.accelStructureAddressHiAndFlags               = HighPart(childBasePtr);
 
-    node.sideband.Transform[0]     = transform[0];
-    node.sideband.Transform[1]     = transform[1];
-    node.sideband.Transform[2]     = transform[2];
+    node.sideband.Transform[0]     = instanceDesc.Transform[0];
+    node.sideband.Transform[1]     = instanceDesc.Transform[1];
+    node.sideband.Transform[2]     = instanceDesc.Transform[2];
     node.sideband.instanceIndex    = instanceIndex;
     node.sideband.padding0         = 0;
     node.sideband.blasMetadataSize = blasMetadataSize;
     node.sideband.blasNodePointer  = blasRootNodePointer;
 
     // invert matrix
-    float3x4 temp    = CreateMatrix(transform);
+    float3x4 temp    = CreateMatrix(instanceDesc.Transform);
     float3x4 inverse = Inverse3x4(temp);
 
     node.desc.Transform[0] = inverse[0];
     node.desc.Transform[1] = inverse[1];
     node.desc.Transform[2] = inverse[2];
 
-    DstMetadata.Store<InstanceNode>(dstNodeOffset, node);
+    DstMetadata.Store<InstanceNode>(instanceNodeOffset, node);
 
     // Write bottom-level root box node into fused instance node
     if (Settings.enableFusedInstanceNode)
@@ -803,7 +668,7 @@ void WriteInstanceNode1_1(
         transformedBounds.min = blasRootNode.bbox0_min;
         transformedBounds.max = blasRootNode.bbox0_max;
 
-        transformedBounds = TransformBoundingBox(transformedBounds, transform);
+        transformedBounds = TransformBoundingBox(transformedBounds, instanceDesc.Transform);
 
         blasRootNode.bbox0_min = transformedBounds.min;
         blasRootNode.bbox0_max = transformedBounds.max;
@@ -814,7 +679,7 @@ void WriteInstanceNode1_1(
             transformedBounds.min = blasRootNode.bbox1_min;
             transformedBounds.max = blasRootNode.bbox1_max;
 
-            transformedBounds = TransformBoundingBox(transformedBounds, transform);
+            transformedBounds = TransformBoundingBox(transformedBounds, instanceDesc.Transform);
 
             blasRootNode.bbox1_min = transformedBounds.min;
             blasRootNode.bbox1_max = transformedBounds.max;
@@ -826,7 +691,7 @@ void WriteInstanceNode1_1(
             transformedBounds.min = blasRootNode.bbox2_min;
             transformedBounds.max = blasRootNode.bbox2_max;
 
-            transformedBounds = TransformBoundingBox(transformedBounds, transform);
+            transformedBounds = TransformBoundingBox(transformedBounds, instanceDesc.Transform);
 
             blasRootNode.bbox2_min = transformedBounds.min;
             blasRootNode.bbox2_max = transformedBounds.max;
@@ -838,7 +703,7 @@ void WriteInstanceNode1_1(
             transformedBounds.min = blasRootNode.bbox3_min;
             transformedBounds.max = blasRootNode.bbox3_max;
 
-            transformedBounds = TransformBoundingBox(transformedBounds, transform);
+            transformedBounds = TransformBoundingBox(transformedBounds, instanceDesc.Transform);
 
             blasRootNode.bbox3_min = transformedBounds.min;
             blasRootNode.bbox3_max = transformedBounds.max;
@@ -850,7 +715,7 @@ void WriteInstanceNode1_1(
         //
         blasRootNode.flags = 0;
 
-        const uint fusedBoxNodeOffset = dstNodeOffset + FUSED_INSTANCE_NODE_ROOT_OFFSET;
+        const uint fusedBoxNodeOffset = instanceNodeOffset + FUSED_INSTANCE_NODE_ROOT_OFFSET;
 
         DstMetadata.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD0_OFFSET, blasRootNode.child0);
         DstMetadata.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_CHILD1_OFFSET, blasRootNode.child1);
@@ -867,29 +732,6 @@ void WriteInstanceNode1_1(
         DstMetadata.Store<float3>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_BB3_MAX_OFFSET, blasRootNode.bbox3_max);
 
         DstMetadata.Store<uint>(fusedBoxNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, blasRootNode.flags);
-    }
-}
-
-//=====================================================================================================================
-void WriteInstanceDescriptor(
-    in uint               bufferOffset,   // Additional buffer offset
-    in uint64_t           blasBaseAddr,
-    in uint               instanceContributionToHitGroupIndexAndFlags,
-    in uint               instanceIdAndMask,
-    in float4             transform[3],
-    in uint               instanceIndex,
-    in uint               instNodePtr,
-    in uint               blasRootNodePointer)
-{
-    {
-        WriteInstanceNode1_1(bufferOffset,
-                             blasBaseAddr,
-                             instanceContributionToHitGroupIndexAndFlags,
-                             instanceIdAndMask,
-                             transform,
-                             instanceIndex,
-                             instNodePtr,
-                             blasRootNodePointer);
     }
 }
 
@@ -958,6 +800,12 @@ bool EnableLatePairCompression()
 }
 
 //=====================================================================================================================
+bool UsePrimIndicesArray()
+{
+    return false;
+}
+
+//=====================================================================================================================
 uint CalcAtomicFlagsOffset(uint index, uint atomicFlagsScratchOffset, uint type)
 {
     const uint idx = (index * NUM_DLB_VALID_TYPES) + type;
@@ -1005,48 +853,26 @@ uint ReadValidDLB(
 }
 
 //=====================================================================================================================
-// Task Counter Macros
-// INIT_TASK is used at the beginning of a shader to allow for waves to atomically fetch and task index
-// BEGIN_TASK is used at the start of a pass that needs to be completed before the next pass
-// END_TASK is used at the end of of a pass that makes sure the task is completed before moving onto the next pass
-//=====================================================================================================================
-#ifndef TASK_COUNTER_BUFFER
-#define TASK_COUNTER_BUFFER DstMetadata
-#endif
-#ifndef TASK_COUNTER_OFFSET
-#define TASK_COUNTER_OFFSET ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET
-#endif
-#ifndef NUM_TASKS_DONE_OFFSET
-#define NUM_TASKS_DONE_OFFSET ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET
-#endif
+// Loads InstanceDesc from RWByteAddressBuffer InstanceDescBuffer. Takes care of arrayOfPointers case.
+// Requires following forward declarations:
+template<typename T> T LoadInstanceDescBuffer(uint offset);
+static InstanceDesc FetchInstanceDescAddr(in GpuVirtualAddress instanceAddr);
 
-#define INIT_TASK           if(localId == 0)\
-                            {\
-                                TASK_COUNTER_BUFFER.InterlockedAdd(TASK_COUNTER_OFFSET, 1, SharedMem[0]);\
-                            }\
-                            GroupMemoryBarrierWithGroupSync();\
-                            waveId = SharedMem[0];\
-                            GroupMemoryBarrierWithGroupSync();
+InstanceDesc LoadInstanceDesc(
+    in uint instanceId,
+    in uint offsetInBytes)
+{
+    if (Settings.encodeArrayOfPointers != 0)
+    {
+        const GpuVirtualAddress addr = LoadInstanceDescBuffer<GpuVirtualAddress>(
+            instanceId * GPU_VIRTUAL_ADDRESS_SIZE);
 
-#define BEGIN_TASK(n)       while((waveId >= numTasksWait) && (waveId < (numTasksWait + n)))\
-                            {\
-                                uint globalId = (waveId - numTasksWait) * BUILD_THREADGROUP_SIZE + localId;\
-                                uint groupId = (waveId - numTasksWait);
-
-#define END_TASK(n)             DeviceMemoryBarrierWithGroupSync();\
-                                if(localId == 0)\
-                                {\
-                                    TASK_COUNTER_BUFFER.InterlockedAdd(TASK_COUNTER_OFFSET, 1, SharedMem[0]);\
-                                    TASK_COUNTER_BUFFER.InterlockedAdd(NUM_TASKS_DONE_OFFSET, 1);\
-                                }\
-                                GroupMemoryBarrierWithGroupSync();\
-                                waveId = SharedMem[0];\
-                                GroupMemoryBarrierWithGroupSync();\
-                            }\
-                            numTasksWait += n;\
-                            do\
-                            {\
-                                DeviceMemoryBarrier();\
-                            } while (TASK_COUNTER_BUFFER.Load(NUM_TASKS_DONE_OFFSET) < numTasksWait);
+        return FetchInstanceDescAddr(addr + offsetInBytes);
+    }
+    else
+    {
+        return LoadInstanceDescBuffer<InstanceDesc>(instanceId * INSTANCE_DESC_SIZE + offsetInBytes);
+    }
+}
 
 #endif

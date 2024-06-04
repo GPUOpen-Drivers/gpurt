@@ -36,8 +36,10 @@
                 "UAV(u2),"\
                 "UAV(u3),"\
                 "UAV(u4),"\
-                "CBV(b255),"\
-                "UAV(u5)"
+                "UAV(u5),"\
+                "UAV(u6),"\
+                "UAV(u7),"\
+                "CBV(b255)"
 
 #include "../shared/rayTracingDefs.h"
 
@@ -49,16 +51,23 @@ struct RootConstants
 [[vk::push_constant]] ConstantBuffer<RootConstants> ShaderRootConstants    : register(b0);
 [[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b1);
 
-[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstBuffer          : register(u0);
-[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata        : register(u1);
-[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer      : register(u2);
-[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer ScratchGlobal      : register(u3);
-[[vk::binding(4, 0)]]                  RWByteAddressBuffer InstanceDescBuffer : register(u4);
+[[vk::binding(0, 0)]] RWByteAddressBuffer                          SrcBuffer           : register(u0);
+[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer         DstBuffer           : register(u1);
+[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer         DstMetadata         : register(u2);
+[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer         ScratchBuffer       : register(u3);
+[[vk::binding(4, 0)]] globallycoherent RWByteAddressBuffer         ScratchGlobal       : register(u4);
+[[vk::binding(5, 0)]] RWByteAddressBuffer                          InstanceDescBuffer  : register(u5);
+[[vk::binding(6, 0)]] RWByteAddressBuffer                          EmitBuffer          : register(u6);
+[[vk::binding(7, 0)]] RWByteAddressBuffer                          IndirectArgBuffer   : register(u7);
 
-// unused buffer
-[[vk::binding(5, 0)]] RWByteAddressBuffer                  SrcBuffer          : register(u5);
-
+template<typename T>
+T LoadInstanceDescBuffer(uint offset)
+{
+    return InstanceDescBuffer.Load<T>(offset);
+}
+#include "IndirectArgBufferUtils.hlsl"
 #include "BuildCommonScratch.hlsl"
+#include "EncodeTopLevelCommon.hlsl"
 
 #define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
 groupshared uint SharedMem[MAX_LDS_ELEMENTS];
@@ -82,7 +91,6 @@ struct RebraidArgs
     uint stateScratchOffset;
     uint taskQueueCounterScratchOffset;
     uint atomicFlagsScratchOffset;
-    uint encodeArrayOfPointers;
     uint enableMortonSize;
     uint numIterations;
     uint qualityHeuristic;
@@ -125,20 +133,9 @@ void FetchBlasRootChildInfo(
 }
 
 //=====================================================================================================================
-float CalculateInstanceChildrenSA(RebraidArgs args, uint nodePtr, ScratchNode leaf)
+float CalculateInstanceChildrenSA(RebraidArgs args, uint nodePtr, ScratchNode leaf, uint instanceDescOffsetInBytes)
 {
-    InstanceDesc desc;
-
-    if (args.encodeArrayOfPointers != 0)
-    {
-        const GpuVirtualAddress addr = InstanceDescBuffer.Load<GpuVirtualAddress>(leaf.left_or_primIndex_or_instIndex *
-                                                                                  GPU_VIRTUAL_ADDRESS_SIZE);
-        desc = FetchInstanceDescAddr(addr);
-    }
-    else
-    {
-        desc = InstanceDescBuffer.Load<InstanceDesc>(leaf.left_or_primIndex_or_instIndex * INSTANCE_DESC_SIZE);
-    }
+    const InstanceDesc desc = LoadInstanceDesc(leaf.left_or_primIndex_or_instIndex, instanceDescOffsetInBytes);
 
     const GpuVirtualAddress address = GetInstanceAddr(asuint(leaf.sah_or_v2_or_instBasePtr.x),
                                                       asuint(leaf.sah_or_v2_or_instBasePtr.y));
@@ -187,6 +184,8 @@ void RebraidImpl(
     }
 
     ///////// init /////////
+    const uint instanceDescOffsetInBytes = LoadNumPrimAndOffset().primitiveOffset;
+
     const uint numGroups = args.numThreadGroups;
 
     const uint numThreads = numGroups * BUILD_THREADGROUP_SIZE;
@@ -264,7 +263,7 @@ void RebraidImpl(
 
                                 if (args.qualityHeuristic == 0)
                                 {
-                                    const float childSA = CalculateInstanceChildrenSA(args, nodePtr, leaf);
+                                    const float childSA = CalculateInstanceChildrenSA(args, nodePtr, leaf, instanceDescOffsetInBytes);
                                     instanceSA = log(max(0, ComputeBoxSurfaceArea(aabb) - childSA) + 1)
                                                     / log(LOG_BASE_N);
                                 }
@@ -355,7 +354,7 @@ void RebraidImpl(
 
                             if (args.qualityHeuristic == 0)
                             {
-                                const float childSA = CalculateInstanceChildrenSA(args, nodePtr, leaf);
+                                const float childSA = CalculateInstanceChildrenSA(args, nodePtr, leaf, instanceDescOffsetInBytes);
                                 instanceSA = log(max(0, ComputeBoxSurfaceArea(aabb) - childSA) + 1)
                                                 / log(LOG_BASE_N);
                             }
@@ -487,17 +486,7 @@ void RebraidImpl(
                             const GpuVirtualAddress address = GetInstanceAddr(asuint(leaf.sah_or_v2_or_instBasePtr.x),
                                                                               asuint(leaf.sah_or_v2_or_instBasePtr.y));
 
-                            InstanceDesc desc;
-                            if (args.encodeArrayOfPointers != 0)
-                            {
-                                const GpuVirtualAddress addr = InstanceDescBuffer.Load<GpuVirtualAddress>(leaf.left_or_primIndex_or_instIndex *
-                                                                                                          GPU_VIRTUAL_ADDRESS_SIZE);
-                                desc = FetchInstanceDescAddr(addr);
-                            }
-                            else
-                            {
-                                desc = InstanceDescBuffer.Load<InstanceDesc>(leaf.left_or_primIndex_or_instIndex * INSTANCE_DESC_SIZE);
-                            }
+                            const InstanceDesc desc = LoadInstanceDesc(leaf.left_or_primIndex_or_instIndex, instanceDescOffsetInBytes);
 
                             uint4 child = uint4(INVALID_IDX, INVALID_IDX, INVALID_IDX, INVALID_IDX);
 
@@ -557,7 +546,7 @@ void RebraidImpl(
                                                 float instanceSA;
                                                 if (args.qualityHeuristic == 0)
                                                 {
-                                                    const float childSA = CalculateInstanceChildrenSA(args, child[j], leaf);
+                                                    const float childSA = CalculateInstanceChildrenSA(args, child[j], leaf, instanceDescOffsetInBytes);
                                                     instanceSA = log(max(0, ComputeBoxSurfaceArea(temp) - childSA) + 1) / log(LOG_BASE_N);
                                                 }
                                                 else
@@ -617,7 +606,7 @@ void RebraidImpl(
                                     float instanceSA;
                                     if (args.qualityHeuristic == 0)
                                     {
-                                        const float childSA = CalculateInstanceChildrenSA(args, nodePtr, leaf);
+                                        const float childSA = CalculateInstanceChildrenSA(args, nodePtr, leaf, instanceDescOffsetInBytes);
                                         instanceSA = log(max(0, ComputeBoxSurfaceArea(aabb) - childSA) + 1)
                                                         / log(LOG_BASE_N);
                                     }
@@ -723,7 +712,6 @@ void Rebraid(
     args.stateScratchOffset                 = ShaderConstants.offsets.rebraidState;
     args.taskQueueCounterScratchOffset      = ShaderConstants.offsets.rebraidTaskQueueCounter;
     args.atomicFlagsScratchOffset           = ShaderConstants.offsets.splitAtomicFlags;
-    args.encodeArrayOfPointers              = ShaderConstants.encodeArrayOfPointers;
 
     args.numIterations                      = Settings.numRebraidIterations;
     args.qualityHeuristic                   = Settings.rebraidQualityHeuristic;

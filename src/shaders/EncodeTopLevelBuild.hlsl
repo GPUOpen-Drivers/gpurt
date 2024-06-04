@@ -22,7 +22,43 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "EncodeTopLevelCommon.hlsl"
+void WriteScratchInstanceNode(
+    uint                offset,
+    uint                instanceIndex,
+    in BoundingBox      bbox,
+    uint                boxNodeFlags,
+    uint                instanceBasePointerLo,
+    uint                instanceBasePointerHi,
+    uint                instanceMask,
+    uint                numActivePrims,
+    uint                blasMetadataSize)
+{
+    uint4 data;
+
+    // LeafNode.bbox_min_or_v0, instanceIndex
+    data = uint4(asuint(bbox.min), instanceIndex);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V0_OFFSET, data);
+
+    // LeafNode.bbox_max_or_v1, padding
+    data = uint4(asuint(bbox.max), 0);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V1_OFFSET, data);
+
+    // LeafNode.instanceNodeBasePointerLo, instanceNodeBasePointerHi, numActivePrims, parent
+    data = uint4(instanceBasePointerLo, instanceBasePointerHi, numActivePrims, 0xffffffff);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_INSTANCE_BASE_PTR_OFFSET, data);
+
+    // When rebraid might occur, the traversal shader will read the root node pointer of the bottom level from the
+    // instance extra data. If we actually perform rebraid during the build, the node pointer must be set to 0 to
+    // indicate the leaf node is unused. The correct pointer will be filled in later. If we have rebraid support
+    // enabled in traversal but not during this build, we need to set the pointer to the true root of the bottom level.
+    const uint rootNodePointer = IsRebraidEnabled() ? 0 : CreateRootNodePointer();
+
+    const uint packedFlags = PackScratchNodeFlags(instanceMask, boxNodeFlags, 0);
+
+    // BLAS node pointer, BLAS metadata size, unused, packed flags
+    data = uint4(rootNodePointer, blasMetadataSize, 0, packedFlags);
+    WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, data);
+}
 
 //=====================================================================================================================
 void EncodeInstancesBuild(
@@ -32,7 +68,8 @@ void EncodeInstancesBuild(
     uint         destScratchNodeOffset,
     uint64_t     baseAddrAccelStructHeader,
     uint         numActivePrims,
-    bool         allowUpdate)
+    bool         allowUpdate,
+    uint         blasMetadataSize)
 {
     // If the BLAS address is NULL, the instance is inactive. Inactive instances cannot be activated during updates
     // so we always exclude them from the build.
@@ -92,7 +129,8 @@ void EncodeInstancesBuild(
                                      desc.accelStructureAddressLo,
                                      desc.accelStructureAddressHiAndFlags,
                                      instanceMask,
-                                     numActivePrims);
+                                     numActivePrims,
+                                     blasMetadataSize);
 
             if (numActivePrims != 0)
             {
@@ -112,7 +150,7 @@ void EncodeInstancesBuild(
         }
 
         // Store invalid prim node pointer for now during first time builds.
-        // If the instance is active, BuildQBVH will write it in.
+        // If the instance is active, EncodeHwBvh will write it in.
         DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
     }
     else

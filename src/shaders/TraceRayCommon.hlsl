@@ -162,6 +162,7 @@ static uint FetchInstanceIdx(
     in uint     instNodePtr)
 {
     uint instNodeIndex = 0;
+
     {
         GpuVirtualAddress instanceNodePtr = accelStruct + ExtractNodePointerOffset(instNodePtr);
         instNodeIndex = LoadDwordAtAddr(instanceNodePtr +

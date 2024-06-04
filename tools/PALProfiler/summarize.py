@@ -108,7 +108,6 @@ for f in dataFiles:
                 Times[engineKey].append(currTimes)
                 Percs[engineKey].append(currPercs)
 
-
 headers = ["App"] + rtPipelineCategories
 
 files = ["Calls", "Times", "Percs"]

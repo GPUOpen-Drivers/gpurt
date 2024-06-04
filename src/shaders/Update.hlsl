@@ -38,6 +38,7 @@
 #define TASK_COUNTER_BUFFER   ScratchBuffer
 #define TASK_COUNTER_OFFSET   UPDATE_SCRATCH_ENCODE_TASK_COUNT_OFFSET
 #define NUM_TASKS_DONE_OFFSET UPDATE_SCRATCH_ENCODE_TASKS_DONE_OFFSET
+#include "TaskMacros.hlsl"
 
 //======================================================================================================================
 // 32 bit constants

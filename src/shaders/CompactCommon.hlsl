@@ -28,7 +28,7 @@
 //=====================================================================================================================
 uint CalcCompactedSize(
     in  AccelStructHeader  srcHeader,
-    in  uint               accelStructType,
+    in  bool               topLevelBuild,
     out AccelStructOffsets dstOffsets,
     out uint               metadataSizeInBytes)
 {
@@ -39,12 +39,16 @@ uint CalcCompactedSize(
     offsets.internalNodes = runningOffset;
 
     uint internalNodeSize = 0;
-    uint leafNodeSize     = GetBvhNodeSizeLeaf(srcHeader.geometryType, 0);
-    uint boxNodeSize      = sizeof(Float32BoxNode);
+    uint leafNodeSize     = 0;
 
-    if (accelStructType == BOTTOM_LEVEL)
     {
-        internalNodeSize = srcHeader.numInternalNodesFp32 * boxNodeSize +
+        leafNodeSize = GetBvhNodeSizeLeaf(srcHeader.geometryType, 0);
+        internalNodeSize = sizeof(Float32BoxNode);
+    }
+
+    if (topLevelBuild == false)
+    {
+        internalNodeSize = srcHeader.numInternalNodesFp32 * internalNodeSize +
                            srcHeader.numInternalNodesFp16 * sizeof(Float16BoxNode);
         runningOffset += internalNodeSize;
 
@@ -62,18 +66,19 @@ uint CalcCompactedSize(
     }
     else
     {
-        const uint enableFusedInstanceNode = srcHeader.UsesFusedInstanceNode();
-
         // TLAS always uses 32-bit internal nodes
-        internalNodeSize = srcHeader.numInternalNodesFp32 * boxNodeSize;
+        internalNodeSize = srcHeader.numInternalNodesFp32 * internalNodeSize;
         runningOffset += internalNodeSize;
 
         offsets.leafNodes = runningOffset;
-        leafNodeSize = srcHeader.numLeafNodes * GetBvhNodeSizeLeaf(PrimitiveType::Instance, enableFusedInstanceNode);
+        leafNodeSize
+            = srcHeader.numLeafNodes * GetBvhNodeSizeLeaf(PrimitiveType::Instance, Settings.enableFusedInstanceNode);
         runningOffset += leafNodeSize;
 
-        // Top level acceleration structures do not have geometry info.
-        offsets.geometryInfo = 0;
+        {
+            // Top level acceleration structures do not have geometry info.
+            offsets.geometryInfo = 0;
+        }
 
         offsets.primNodePtrs = runningOffset;
         runningOffset += srcHeader.numPrimitives * sizeof(uint);
@@ -84,10 +89,12 @@ uint CalcCompactedSize(
         metadataSizeInBytes = Pow2Align(metadataSizeInBytes, 128);
     }
 
+    uint totalSizeInBytes = runningOffset + metadataSizeInBytes;
+
     dstOffsets = offsets;
 
     // Return total size including metadata
-    return runningOffset + metadataSizeInBytes;
+    return totalSizeInBytes;
 }
 
 #endif

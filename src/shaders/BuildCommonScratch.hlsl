@@ -100,12 +100,11 @@ static BoundingBox GetScratchNodeBoundingBox(
                 if (Settings.enableEarlyPairCompression)
                 {
                     // Early triangle pairing encodes the quad in a single scratch node
-                    const uint primIdOffset = (node.right_or_geometryIndex >> 24);
-                    if (IsScratchNodeEarlyTrianglePair(node))
+                    if (IsScratchNodeQuadPrimitive(node))
                     {
                         const float3 v3 = float3(asfloat(node.splitBox_or_nodePointer),
                                                  asfloat(node.numPrimitivesAndDoCollapse),
-                                                 asfloat(node.unused));
+                                                 asfloat(node.sortedPrimIndex));
 
                         bbox.min = min(v3, bbox.min);
                         bbox.max = max(v3, bbox.max);
@@ -181,7 +180,16 @@ uint FetchScratchNodeNumPrimitives(
 {
     if (isLeaf)
     {
-        return 1;
+        if (Settings.enableEarlyPairCompression)
+        {
+            const uint packedGeometryIndex =
+                FETCH_SCRATCH_NODE_DATA(uint, baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_GEOMETRY_INDEX_OFFSET);
+            return IsQuadPrimitive(packedGeometryIndex) ? 2 : 1;
+        }
+        else
+        {
+            return 1;
+        }
     }
     else
     {
@@ -190,6 +198,28 @@ uint FetchScratchNodeNumPrimitives(
             baseScratchNodesOffset,
             nodeIndex,
             SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET) >> 1);
+    }
+}
+
+//=====================================================================================================================
+static uint FetchScratchNodeNumPrimitives(
+    ScratchNode node,
+    bool        isLeaf)
+{
+    if (isLeaf)
+    {
+        if (Settings.enableEarlyPairCompression)
+        {
+            return IsScratchNodeQuadPrimitive(node) ? 2 : 1;
+        }
+        else
+        {
+            return 1;
+        }
+    }
+    else
+    {
+        return node.numPrimitivesAndDoCollapse >> 1;
     }
 }
 
@@ -295,7 +325,9 @@ void WriteScratchNodeParent(
     uint nodeIndex,
     uint parent)
 {
-    WriteScratchNodeData(baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_PARENT_OFFSET, parent);
+    {
+        WriteScratchNodeData(baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_PARENT_OFFSET, parent);
+    }
 }
 
 //=====================================================================================================================
@@ -602,7 +634,7 @@ bool IsLeafOrIsCollapsed(
     {
         result = true;
     }
-    else
+    else if (Settings.topLevelBuild == false)
     {
         const ScratchNode node = FetchScratchNode(baseScratchNodesOffset, nodeIndex);
 
@@ -733,13 +765,6 @@ void RefitNode(
         WriteScratchBatchIndex(args.numBatchesOffset, args.baseBatchIndicesOffset, 0);
     }
 
-    uint instancePrimCount = 0;
-
-    // Ct is the cost of intersecting triangle
-    // Ci is the cost of interecting bbox
-    const float Ct = SAH_COST_TRIANGLE_INTERSECTION;
-    const float Ci = SAH_COST_AABBB_INTERSECTION;
-
     const ScratchNode node = FetchScratchNode(args.baseScratchNodesOffset, nodeIndex);
 
     // Fetch child indices
@@ -752,9 +777,6 @@ void RefitNode(
     // Fetch bounding children bounding boxes
     BoundingBox bboxRightChild;
     BoundingBox bboxLeftChild;
-
-    float rightCost;
-    float leftCost;
 
     // Right child
     // need to fetch "other paired node" if earlyPairCompression is enabled
@@ -793,6 +815,30 @@ void RefitNode(
         rightNode,
         bboxRightChild,
         rootIndex);
+}
+
+//=====================================================================================================================
+static TriangleData GetScratchNodeTrianglePairVertices(
+    in uint scratchNodesOffset,
+    in uint nodeIndex,
+    in uint triangleIndex)
+{
+    const uint nodeType = (triangleIndex == 0) ? NODE_TYPE_TRIANGLE_0 : NODE_TYPE_TRIANGLE_1;
+
+    const uint packedFlags = FETCH_SCRATCH_NODE_DATA(uint, scratchNodesOffset, nodeIndex, SCRATCH_NODE_FLAGS_OFFSET);
+
+    uint3 indices = CalcTriangleCompressionVertexIndices(nodeType, ExtractScratchNodeTriangleId(packedFlags));
+
+    TriangleData tri;
+
+    tri.v0 = FETCH_SCRATCH_NODE_DATA(
+        float3, scratchNodesOffset, nodeIndex, SCRATCH_NODE_V0_OFFSET + (indices.x * SCRATCH_NODE_TRIANGLE_VERTEX_STRIDE));
+    tri.v1 = FETCH_SCRATCH_NODE_DATA(
+        float3, scratchNodesOffset, nodeIndex, SCRATCH_NODE_V0_OFFSET + (indices.y * SCRATCH_NODE_TRIANGLE_VERTEX_STRIDE));
+    tri.v2 = FETCH_SCRATCH_NODE_DATA(
+        float3, scratchNodesOffset, nodeIndex, SCRATCH_NODE_V0_OFFSET + (indices.z * SCRATCH_NODE_TRIANGLE_VERTEX_STRIDE));
+
+    return tri;
 }
 
 #endif

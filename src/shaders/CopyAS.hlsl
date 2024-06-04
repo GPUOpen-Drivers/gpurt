@@ -29,7 +29,8 @@
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL), "\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)  "
+                "UAV(u4, visibility=SHADER_VISIBILITY_ALL), "\
+                "CBV(b255)"
 
 //=====================================================================================================================
 // 32 bit constants

@@ -89,8 +89,8 @@ static InstanceDesc DecodeApiInstanceDesc(
     in uint nodePtr)
 {
     InstanceDesc apiInstanceDesc = (InstanceDesc)0;
-
-    uint32_t blasMetadataSizeInBytes = 0;
+    uint64_t gpuVa = 0;
+    uint32_t blasMetadataSize = 0;
 
     {
         const uint offset = header.metadataSizeInBytes + ExtractNodePointerOffset(nodePtr);
@@ -103,21 +103,20 @@ static InstanceDesc DecodeApiInstanceDesc(
         apiInstanceDesc.Transform[1] = sideband.Transform[1];
         apiInstanceDesc.Transform[2] = sideband.Transform[2];
 
-        blasMetadataSizeInBytes =
+        gpuVa = PackUint64(apiInstanceDesc.accelStructureAddressLo, apiInstanceDesc.accelStructureAddressHiAndFlags);
+
+        // Mask off instance flags in the upper bits of the acceleration structure address.
+        gpuVa = ExtractInstanceAddr(gpuVa);
+
+        blasMetadataSize =
             SrcBuffer.Load(offset + INSTANCE_NODE_EXTRA_OFFSET + RTIP1_1_INSTANCE_SIDEBAND_CHILD_METADATA_SIZE_OFFSET);
     }
-
-    uint64_t gpuVa =
-        PackUint64(apiInstanceDesc.accelStructureAddressLo, apiInstanceDesc.accelStructureAddressHiAndFlags);
-
-    // Mask off instance flags in the upper bits of the acceleration structure address
-    gpuVa = ExtractInstanceAddr(gpuVa);
 
     // Skip null BLAS
     if (gpuVa != 0)
     {
         // Offset to base of bottom level acceleration structure
-        gpuVa -= blasMetadataSizeInBytes;
+        gpuVa -= blasMetadataSize;
     }
 
     // Patch instance address

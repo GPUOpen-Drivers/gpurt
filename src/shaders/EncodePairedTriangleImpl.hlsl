@@ -52,7 +52,7 @@ void WriteScratchTriangleNode(
 
     // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
     const uint instanceMask = (box.min.x > box.max.x) ? 0 : 0xff;
-    const uint packedFlags = PackScratchNodeFlags(instanceMask, geometryFlags, triangleId);
+    const uint packedFlags = PackScratchNodeFlags(instanceMask, CalcTriangleBoxNodeFlags(geometryFlags), triangleId);
 
     data = uint4(0, 0, 0, packedFlags);
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, data);
@@ -121,15 +121,15 @@ void WriteScratchQuadNode(
     // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
     const uint instanceMask = (box.min.x > box.max.x) ? 0 : 0xff;
 
-    const uint packedFlags = PackScratchNodeFlags(instanceMask, geometryFlags, triangleId);
+    const uint packedFlags = PackScratchNodeFlags(instanceMask, CalcTriangleBoxNodeFlags(geometryFlags), triangleId);
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_FLAGS_OFFSET, packedFlags);
 }
 
 //=====================================================================================================================
-// Note, vulkan shader compilation path does not support HLSL 2021. Hence, we cannot use templated functions here.
+template<typename T>
 uint TryPairTriangles(
-    const float3x3 t0,
-    const float3x3 t1)
+    const T t0,
+    const T t1)
 {
     // Packed triangle vertex offsets
     //
@@ -187,9 +187,23 @@ uint TryPairTriangles(
 }
 
 //======================================================================================================================
-int PairTriangles(
-    float3x3 tri,
-    bool     isActive)
+float ComputePairAreaRatio(
+    BoundingBox bbox0,
+    BoundingBox bbox1)
+{
+    const float tri0Sa = ComputeBoxSurfaceArea(bbox0);
+    const float tri1Sa = ComputeBoxSurfaceArea(bbox1);
+    const float mergedSa = ComputeBoxSurfaceArea(CombineAABB(bbox0, bbox1));
+    const float ratio = (mergedSa / (tri0Sa + tri1Sa));
+    return ratio;
+}
+
+//======================================================================================================================
+template<typename T>
+int PairTrianglesOptimal(
+    T tri,
+    BoundingBox bbox,
+    bool isActive)
 {
     bool valid = isActive;
 
@@ -204,7 +218,72 @@ int PairTriangles(
             valid = false;
         }
 
-        const float3x3 broadcastTriangle = WaveReadLaneFirst(tri);
+        const T broadcastTriangle = WaveReadLaneFirst(tri);
+
+        uint packedOffset = -1;
+        if (valid)
+        {
+            packedOffset = TryPairTriangles(broadcastTriangle, tri);
+        }
+
+        const BoundingBox broadcastTriBounds =
+        {
+            WaveReadLaneFirst(bbox.min),
+            WaveReadLaneFirst(bbox.max),
+        };
+
+        const float ratio = (packedOffset == -1) ? FLT_MAX : ComputePairAreaRatio(broadcastTriBounds, bbox);
+
+        const float waveMinRatio = WaveActiveMin(ratio);
+
+        const float pairingAreaThreshold = 1.15f;
+        const bool isOptimalPair = (waveMinRatio <= pairingAreaThreshold) && (ratio == waveMinRatio);
+
+        const uint firstPairedLane = FIRSTBITLOW_U64(WaveActiveBallot64((packedOffset != -1) && isOptimalPair));
+
+        if (firstPairedLane < WaveGetLaneCount())
+        {
+            if (WaveGetLaneIndex() == firstPairedLane)
+            {
+                valid = false;
+
+                // Mark as triangle 1 in the quad
+                pairInfo = -2;
+            }
+
+            packedOffset = WaveReadLaneAt(packedOffset, firstPairedLane);
+
+            if (isBroadcastLane)
+            {
+                // Mark as triangle 0 in the quad. firstPairedLane denotes lane index with triangle 1
+                pairInfo = (firstPairedLane << 16) | packedOffset;
+            }
+        }
+    }
+
+    return pairInfo;
+}
+
+//======================================================================================================================
+template<typename T>
+int PairTrianglesImpl(
+    T tri,
+    bool isActive)
+{
+    bool valid = isActive;
+
+    // Initialise to unpaired triangle
+    int pairInfo = -1;
+
+    while (valid)
+    {
+        const bool isBroadcastLane = WaveIsFirstLane();
+        if (isBroadcastLane)
+        {
+            valid = false;
+        }
+
+        const T broadcastTriangle = WaveReadLaneFirst(tri);
 
         uint packedOffset = -1;
         if (valid)
@@ -237,111 +316,41 @@ int PairTriangles(
     return pairInfo;
 }
 
-//======================================================================================================================
-int TryPairTrianglesIndexed(
-    const uint3 t0,
-    const uint3 t1)
+//=====================================================================================================================
+int PairTriangles(
+    bool isIndexed,
+    uint3 faceIndices,
+    TriangleData tri)
 {
-    // Packed triangle vertex offsets
-    //
-    // 0:3 : triangle_0_vertex_offset
-    // 4:7 : triangle_1_vertex_offset
-    //
-    int packedOffset = -1;
+    int pairInfo = 0;
 
-    if ((t1[2] == t0[0]) && (t1[1] == t0[1]))
+    if (isIndexed)
     {
-        packedOffset = 0x11;
-    }
-
-    if ((t1[1] == t0[0]) && (t1[0] == t0[1]))
-    {
-        packedOffset = 0x21;
-    }
-
-    if ((t1[0] == t0[0]) && (t1[2] == t0[1]))
-    {
-        packedOffset = 0x01;
-    }
-
-    if ((t1[2] == t0[1]) && (t1[1] == t0[2]))
-    {
-        packedOffset = 0x10;
-    }
-
-    if ((t1[1] == t0[1]) && (t1[0] == t0[2]))
-    {
-        packedOffset = 0x20;
-    }
-
-    if ((t1[0] == t0[1]) && (t1[2] == t0[2]))
-    {
-        packedOffset = 0x00;
-    }
-
-    if ((t1[2] == t0[2]) && (t1[1] == t0[0]))
-    {
-        packedOffset = 0x12;
-    }
-
-    if ((t1[1] == t0[2]) && (t1[0] == t0[0]))
-    {
-        packedOffset = 0x22;
-    }
-
-    if ((t1[0] == t0[2]) && (t1[2] == t0[0]))
-    {
-        packedOffset = 0x02;
-    }
-
-    return packedOffset;
-}
-
-//======================================================================================================================
-int PairTrianglesIndexed(
-    uint3 tri,
-    bool  isActive)
-{
-    bool valid = isActive;
-
-    // Initialise to unpaired triangle
-    int pairInfo = -1;
-
-    while (valid)
-    {
-        const bool isBroadcastLane = WaveIsFirstLane();
-        if (isBroadcastLane)
+        if (Settings.enablePairCostCheck)
         {
-            valid = false;
+            const BoundingBox bbox = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
+            pairInfo = PairTrianglesOptimal(faceIndices, bbox, true);
         }
-
-        const uint3 broadcastTriangle = WaveReadLaneFirst(tri);
-
-        uint packedOffset = -1;
-        if (valid)
+        else
         {
-            packedOffset = TryPairTrianglesIndexed(broadcastTriangle, tri);
+            pairInfo = PairTrianglesImpl(faceIndices, true);
         }
+    }
+    else
+    {
+        float3x3 faceVertices;
+        faceVertices[0] = tri.v0;
+        faceVertices[1] = tri.v1;
+        faceVertices[2] = tri.v2;
 
-        const uint firstPairedLane = FIRSTBITLOW_U64(WaveActiveBallot64((packedOffset != -1)));
-
-        if (firstPairedLane < WaveGetLaneCount())
+        if (Settings.enablePairCostCheck)
         {
-            if (WaveGetLaneIndex() == firstPairedLane)
-            {
-                valid = false;
-
-                // Mark as triangle 1 in the quad
-                pairInfo = -2;
-            }
-
-            packedOffset = WaveReadLaneAt(packedOffset, firstPairedLane);
-
-            if (isBroadcastLane)
-            {
-                // Mark as triangle 0 in the quad. firstPairedLane denotes lane index with triangle 1
-                pairInfo = (firstPairedLane << 16) | packedOffset;
-            }
+            const BoundingBox bbox = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
+            pairInfo = PairTrianglesOptimal(faceVertices, bbox, true);
+        }
+        else
+        {
+            pairInfo = PairTrianglesImpl(faceVertices, IsActive(tri));
         }
     }
 
@@ -444,23 +453,11 @@ void EncodePairedTriangleNodeImpl(
             tri.v0.x = NaN;
         }
 
-        if (isIndexed)
-        {
-            pairInfo = PairTrianglesIndexed(faceIndices, true);
-        }
-        else
-        {
-            float3x3 faceVertices;
-            faceVertices[0] = tri.v0;
-            faceVertices[1] = tri.v1;
-            faceVertices[2] = tri.v2;
-
-            pairInfo = PairTriangles(faceVertices, isActive);
-        }
+        pairInfo = PairTriangles(isIndexed, faceIndices, tri);
     }
 
     // Store invalid prim node pointer for now during first time builds.
-    // If the triangle is active, BuildQBVH will write it in.
+    // If the triangle is active, EncodeHwBvh will write it in.
     DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
 
     // Count quads produced by the current wave. Note, this includes unpaired triangles as well
@@ -516,63 +513,4 @@ void EncodePairedTriangleNodeImpl(
 
     // ClearFlags for refit and update
     ClearFlagsForRefitAndUpdate(geometryArgs, flattenedPrimitiveIndex, false);
-}
-
-//======================================================================================================================
-uint TryPairTriangleImpl(
-    RWBuffer<float3>           GeometryBuffer,
-    GeometryArgs               geometryArgs,
-    uint                       primitiveIndex,
-    uint                       vertexOffset,
-    uint                       indexOffsetInBytes,
-    uint                       transformOffsetInBytes)
-{
-    const IndexBufferInfo indexBufferInfo =
-    {
-        geometryArgs.IndexBufferVaLo,
-        geometryArgs.IndexBufferVaHi,
-        geometryArgs.IndexBufferByteOffset + indexOffsetInBytes,
-        geometryArgs.IndexBufferFormat,
-    };
-
-    // Fetch face indices from index buffer
-    uint3 faceIndices = FetchFaceIndices(primitiveIndex, indexBufferInfo);
-
-    const bool isIndexed = (geometryArgs.IndexBufferFormat != IndexFormatInvalid);
-
-    // Initialise lane as inactive or paired triangle
-    int pairInfo = -2;
-
-    // Check if vertex indices are within bounds, otherwise make the triangle inactive
-    const uint maxIndex = max(faceIndices.x, max(faceIndices.y, faceIndices.z));
-    if (maxIndex < geometryArgs.vertexCount)
-    {
-        if (isIndexed)
-        {
-            pairInfo = PairTrianglesIndexed(faceIndices, true);
-        }
-        else
-        {
-            const uint64_t transformBufferGpuVa =
-                PackUint64(geometryArgs.TransformBufferGpuVaLo, geometryArgs.TransformBufferGpuVaHi);
-
-            // Fetch triangle vertex data from vertex buffer
-            TriangleData tri = FetchTransformedTriangleData(GeometryBuffer,
-                                                            faceIndices,
-                                                            geometryArgs.GeometryStride,
-                                                            vertexOffset,
-                                                            geometryArgs.VertexComponentCount,
-                                                            transformBufferGpuVa,
-                                                            transformOffsetInBytes);
-
-            float3x3 faceVertices;
-            faceVertices[0] = tri.v0;
-            faceVertices[1] = tri.v1;
-            faceVertices[2] = tri.v2;
-
-            pairInfo = PairTriangles(faceVertices, IsActive(tri));
-        }
-    }
-
-    return pairInfo;
 }

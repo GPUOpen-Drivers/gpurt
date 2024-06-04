@@ -28,21 +28,23 @@
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "CBV(b255),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u6, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u7, visibility=SHADER_VISIBILITY_ALL),"\
+                "CBV(b255)"
 
 #include "../shared/rayTracingDefs.h"
 [[vk::binding(0, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b0);
 
-[[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer     : register(u0);
-[[vk::binding(1, 0)]] RWByteAddressBuffer DstMetadata   : register(u1);
-[[vk::binding(2, 0)]] RWByteAddressBuffer ScratchBuffer : register(u2);
-[[vk::binding(3, 0)]] RWByteAddressBuffer ScratchGlobal : register(u3);
-
-// unused buffer
-[[vk::binding(4, 0)]] RWByteAddressBuffer SrcBuffer     : register(u4);
-[[vk::binding(5, 0)]] RWByteAddressBuffer EmitBuffer    : register(u5);
+[[vk::binding(0, 0)]] RWByteAddressBuffer         SrcBuffer           : register(u0);
+[[vk::binding(1, 0)]] RWByteAddressBuffer         DstBuffer           : register(u1);
+[[vk::binding(2, 0)]] RWByteAddressBuffer         DstMetadata         : register(u2);
+[[vk::binding(3, 0)]] RWByteAddressBuffer         ScratchBuffer       : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer         ScratchGlobal       : register(u4);
+[[vk::binding(5, 0)]] RWByteAddressBuffer         InstanceDescBuffer  : register(u5);
+[[vk::binding(6, 0)]] RWByteAddressBuffer         EmitBuffer          : register(u6);
+[[vk::binding(7, 0)]] RWByteAddressBuffer         IndirectArgBuffer   : register(u7);
 
 #include "Common.hlsl"
 #include "BuildCommonScratch.hlsl"
@@ -176,6 +178,8 @@ void SplitInternalNodeLbvh(
     WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_LEFT_OFFSET,  c1idx);
     WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_RIGHT_OFFSET, c2idx);
     WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_FLAGS_OFFSET, 0);
+
+    WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_SORTED_PRIM_INDEX_OFFSET, range.x);
 }
 
 //======================================================================================================================

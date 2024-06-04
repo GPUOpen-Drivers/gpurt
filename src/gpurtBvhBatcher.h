@@ -77,6 +77,18 @@ private:
         Util::Span<BvhBuilder> builders,
         BatchBuilderFunc       func);
 
+    template <typename BatchBuilderFunc>
+    void BuildFunction(
+        BuildPhaseFlags        phase,
+        Util::Span<BvhBuilder> builders,
+        BatchBuilderFunc       func);
+
+    template <typename BuilderPhase>
+    void BuildPhase(
+        BuildPhaseFlags        phase,
+        Util::Span<BvhBuilder> builders,
+        BuilderPhase           pBuilderPhase);
+
     template <typename BuilderPhase>
     void BuildPhase(
         const char*            rgpMarkerName,

@@ -56,7 +56,7 @@
 // avoided by scheduling IS/AHS early. Indirect mode also runs AHS/IS immediately.
 // If AHS is expensive however, then waiting improves AHS execution coherency.
 //
-// This mode potentially has partial support only, e.g. only certain RTIPs, and only scratch-mode CPS stack.
+// This mode potentially has partial support only, e.g. only certain RTIPs.
 #ifndef GPURT_CONT_TRAVERSAL_EARLY_IS_AHS
 #define GPURT_CONT_TRAVERSAL_EARLY_IS_AHS 0
 #endif
@@ -98,6 +98,7 @@
 // Shader priorities for continuation scheduling. Higher values mean higher scheduling precedence.
 // Reserve priority 0 as invalid value. This way, 0-initialized priorities in metadata-annotated
 // function pointers (e.g. from relocations) can be detected.
+// Note: For 32-bit packing of function pointers, we require the scheduling priority to fit into 3 bits.
 #define SCHEDULING_PRIORITY_INVALID   0
 #define SCHEDULING_PRIORITY_RGS       1
 #define SCHEDULING_PRIORITY_CHS       2
@@ -109,6 +110,7 @@
 #define SCHEDULING_PRIORITY_IS        5
 // TODO Decide on the callable shader priority
 #define SCHEDULING_PRIORITY_CALLABLE  6
+// Maximum supported value (3 bits): 7
 
 #if CONTINUATION_ON_GPU == 0
 #ifdef __cplusplus
@@ -134,10 +136,15 @@ static RayTracingIpLevel _AmdGetRtip()
 
     return rtIpLevel;
 }
+
+static bool RtIpIsAtLeast(RayTracingIpLevel level)
+{
+    return ((uint32_t)_AmdGetRtip()) >= ((uint32_t)level);
+}
 #endif
 
 //=====================================================================================================================
-uint ConvertRtIpLevel(RayTracingIpLevel rtIpLevel)
+static uint ConvertRtIpLevel(RayTracingIpLevel rtIpLevel)
 {
     uint level = 0;
 
@@ -175,6 +182,69 @@ static uint GetPriorityForShaderType(
 // Forward declaration for _AmdDispatchSystemData.PackDispatchId() and _AmdDispatchSystemData.DispatchId()
 static uint3 GetDispatchRaysDimensions();
 
+#ifdef AMD_VULKAN
+
+static uint64_t GetVpcWithPriority(uint64_t vpc, uint priority)
+{
+    return vpc;
+}
+
+static uint64_t Unpack32BitVpcTo64BitVpc(uint32_t vpc32, bool /*unpackPriority*/)
+{
+    return vpc32;
+}
+
+static uint32_t Pack64BitVpcTo32Bits(uint64_t vpc)
+{
+    return (vpc & 0xFFFFFFFF);
+}
+
+#else // AMD_VULKAN
+
+//=====================================================================================================================
+static uint64_t GetVpcWithPriority(uint64_t vpc, uint priority)
+{
+    const uint64_t prio64 = priority;
+    const uint firstMetadataBit = 32;
+    const uint firstPriorityBitInMetadata = 16;
+    GPU_ASSERT((vpc & 0xFFFF000000000000) == 0);
+    return vpc | (prio64 << (firstMetadataBit + firstPriorityBitInMetadata));
+}
+
+//=====================================================================================================================
+// 32-bit function pointer packing/unpacking
+//
+static uint64_t Unpack32BitVpcTo64BitVpc(uint32_t vpc32, bool unpackPriority)
+{
+    uint64_t vpc = (vpc32 & 0xFFFFFFC0);
+
+    if (unpackPriority)
+    {
+       // The priority is stored in bits 0..2.
+       uint32_t priority = (vpc32 & 0x7);
+       vpc = GetVpcWithPriority(vpc, priority);
+    }
+
+    return vpc;
+}
+
+static uint32_t Pack64BitVpcTo32Bits(uint64_t vpc)
+{
+    // Incoming metadata is in the high dword
+    uint32_t inMetadata = (uint32_t)(vpc >> 32);
+    uint32_t prio = (inMetadata >> 16);
+    // We only have three bits for the priority:
+    GPU_ASSERT(prio <= 7);
+
+    // Outgoing metadata is in the low 6 bits
+    uint32_t outMetadata = prio;
+
+    GPU_ASSERT((vpc & 0x2F) == 0);
+    return SplitUint64(vpc).x | outMetadata;
+}
+
+#endif
+
 //=====================================================================================================================
 // Dispatch system data. This data is shared between all shader stages and is initialized at the raygeneration shader
 // stage e.g. remapping rays to threads
@@ -196,10 +266,9 @@ struct _AmdDispatchSystemData
         const uint widthBitOffsets  = firstbithigh(dims.x - 1) + 1;
         const uint heightBitOffsets = firstbithigh(dims.y - 1) + 1;
 
-        dispatchLinearId = bitFieldInsert(0, 0, widthBitOffsets, dispatchId.x);
-        dispatchLinearId = bitFieldInsert(dispatchLinearId, widthBitOffsets, heightBitOffsets, dispatchId.y);
-        // dispatchLinearId = bitFieldInsert(dispatchLinearId, widthBitOffsets + heightBitOffsets, 32 - (widthBitOffsets + heightBitOffsets), dispatchId.z);
-        dispatchIdZ = dispatchId.z;
+        // Explicit bit operation is more straight forward, and produces better ISA code than bitFieldInsert.
+        dispatchLinearId =
+            dispatchId.x | (dispatchId.y << widthBitOffsets) | (dispatchId.z << (widthBitOffsets + heightBitOffsets));
 
         GPU_ASSERT(all(DispatchId() == dispatchId));
     }
@@ -212,19 +281,16 @@ struct _AmdDispatchSystemData
         const uint heightBitOffsets = firstbithigh(dims.y - 1) + 1;
 
         uint3 dispatchId;
-        dispatchId.x = bitFieldExtract(dispatchLinearId, 0, widthBitOffsets);
-        dispatchId.y = bitFieldExtract(dispatchLinearId, widthBitOffsets, heightBitOffsets);
-        // dispatchId.z = bitFieldExtract(dispatchLinearId, widthBitOffsets + heightBitOffsets, 32 - (widthBitOffsets + heightBitOffsets));
-        dispatchId.z = dispatchIdZ;
+        dispatchId.x = dispatchLinearId & ((1u << widthBitOffsets) - 1);
+        dispatchId.y = (dispatchLinearId >> widthBitOffsets) & ((1u << heightBitOffsets) - 1);
+        dispatchId.z = dispatchLinearId >> (widthBitOffsets + heightBitOffsets);
 
         return dispatchId;
     }
 
-    uint  dispatchLinearId;   // Packed dispatch linear id. Combine x/y into 1 DWORD.
+    uint  dispatchLinearId;   // Packed dispatch linear id. Combine x/y/z into 1 DWORD.
 
-    uint  dispatchIdZ;
-
-    uint  shaderRecIdx; // Record index for local root parameters. Set by CallShader, or computed by ProcessContinuation
+    uint  shaderRecIdx; // Record index for local root parameters.
 #if DEVELOPER
     uint  parentId;     // Record the parent Id for ray history counter, -1 for RayGen shader.
 #endif
@@ -315,10 +381,12 @@ struct _AmdPrimitiveSystemState
         instNodePtr(val),
         primitiveIndex(INVALID_IDX),
         packedGeometryIndex(0),
-        packedInstanceContribution(0),
-        currNodePtr(INVALID_IDX),
+        packedInstanceContribution(0)
+#if AMD_VULKAN || GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
+      , currNodePtr(INVALID_IDX)
+#endif
 #if GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
-        packedType(0)
+      , packedType(0)
 #endif
     {
     }
@@ -336,7 +404,9 @@ struct _AmdPrimitiveSystemState
     uint packedInstanceContribution;    // instanceContribution [23 :  0]
                                         // hitKind              [31 : 24]
 
+#if AMD_VULKAN || GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
     uint currNodePtr;
+#endif
 
     uint GeometryIndex()
     {
@@ -348,6 +418,17 @@ struct _AmdPrimitiveSystemState
     {
         // To pack "GeometryIndex" - packedGeometryIndex |= (geometryIndex & 0x00FFFFFF);
         packedGeometryIndex = bitFieldInsert(packedGeometryIndex, 0, 24, geometryIndex);
+    }
+
+    // Directly construct packedGeometryIndex when all bit-fields are available
+    void PackGeometryIndex(
+        uint geometryIndex,
+        uint state,
+        bool isOpaque)
+    {
+        packedGeometryIndex = geometryIndex |
+                              (state << 28) |
+                              (isOpaque << 31);
     }
 
     bool IsOpaque()
@@ -384,6 +465,12 @@ struct _AmdPrimitiveSystemState
     {
         // To pack "instanceContribution" - packedInstanceContribution |= (instContribution & 0x00FFFFFF);
         packedInstanceContribution = bitFieldInsert(packedInstanceContribution, 0, 24, instContribution);
+    }
+
+    // Directly construct packedInstanceContribution when all bit-fields are available
+    void PackInstanceContribution(uint instContribution, uint hitKind)
+    {
+        packedInstanceContribution = instContribution | (hitKind << 24);
     }
 
     uint HitKind()
@@ -446,7 +533,7 @@ struct _AmdTraversalState
 
     // The following state is used for triangle hits and procedural geometry. Note, this state can be moved into the
     // register space reserved for ray attributes in general
-    float2 barycentrics;
+    float2 committedBarycentrics;
 
     uint nextNodePtr;
     uint instNodePtr;
@@ -473,11 +560,13 @@ struct _AmdTraversalState
 #endif
 
     // Optional state for advanced features/optimizations
-    uint lastInstanceRootNodePtr; // Rebraid
+    uint lastInstanceRootNodePtr; // Only for rebraid mode.
+                                  // This field currently discarded in non-rebraid mode. Ensure to update that if the
+                                  // field becomes re-used for something else in non-rebraid mode.
     uint reservedNodePtr;         // RTIPv2.0 (lastNodePtr)
 
 #if GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP == 0
-    uint64_t returnAddr; // The address of the function to return to
+    uint32_t packedReturnAddr; // The address of the function to return to, packed into 32 bits.
 #endif
 
     uint InstanceContribution()
@@ -525,6 +614,21 @@ struct _AmdTraversalState
         uint ptr = 0;
         ptr = packedStackTopOrParentPointer;
         return ptr;
+    }
+
+    uint CommittedState()
+    {
+        return committed.State();
+    }
+
+    void PackReturnAddress(uint64_t returnAddr)
+    {
+        packedReturnAddr = Pack64BitVpcTo32Bits(returnAddr);
+    }
+
+    uint64_t ReturnAddress()
+    {
+        return Unpack32BitVpcTo64BitVpc(packedReturnAddr, true);
     }
 };
 
@@ -579,14 +683,29 @@ struct _AmdSystemData
     }
 #endif
 
-    bool IsTraversal()
+    bool IsDeadLane()
     {
-        return (traversal.nextNodePtr < TERMINAL_NODE);
+        return traversal.nextNodePtr == DEAD_LANE;
     }
 
-    bool IsMs(in uint state)
+    bool IsTraversal()
     {
-        return ((state == TRAVERSAL_STATE_COMMITTED_NOTHING) && (traversal.committed.instNodePtr >= TERMINAL_NODE));
+        return IsValidNode(traversal.nextNodePtr);
+    }
+
+    bool IsChsOrMiss(in uint state)
+    {
+        return (state >= TRAVERSAL_STATE_COMMITTED_NOTHING) &&
+#if GPURT_CONT_TRAVERSAL_EARLY_IS_AHS
+               (state < TRAVERSAL_STATE_SUSPEND_TRAVERSAL);
+#else
+               true;
+#endif
+    }
+
+    bool IsMiss(in uint state)
+    {
+        return IsChsOrMiss(state) && !IsValidNode(traversal.committed.instNodePtr);
     }
 
     bool IsAhs(in uint state)
@@ -602,8 +721,10 @@ struct _AmdSystemData
 
     bool IsChs(in uint state)
     {
-        return (!IsMs(state) && !IsAhs(state) && !IsIs(state));
+        return IsChsOrMiss(state) && IsValidNode(traversal.committed.instNodePtr);
     }
+
+    static _AmdSystemData MakeDeadLane();
 
     _AmdDispatchSystemData dispatch;
     _AmdRaySystemState     ray;
@@ -653,14 +774,28 @@ struct _AmdTraversalResultData
 // We use macros because HLSL does not have varargs or generics.
 // The macros and intrinsics are defined by llpc.
 DECLARE_ENQUEUE(, uint64_t returnAddr, _AmdSystemData data)
+
+#ifdef CONTINUATIONS_USE_DUMMY_RET_ADDR
+DECLARE_ENQUEUE(Traversal, uint64_t dummyReturnAddr, _AmdSystemData data)
+DECLARE_ENQUEUE(RayGen, uint64_t dummyReturnAddr, _AmdDispatchSystemData data)
+DECLARE_WAIT_ENQUEUE(Traversal, uint64_t dummyReturnAddr, _AmdSystemData data)
+
+#define DUMMY_RETURN_ADDR _AmdGetUninitializedI64(),
+#else
 DECLARE_ENQUEUE(Traversal, _AmdSystemData data)
+DECLARE_ENQUEUE(RayGen, _AmdDispatchSystemData data)
+DECLARE_WAIT_ENQUEUE(Traversal, _AmdSystemData data)
+
+#define DUMMY_RETURN_ADDR
+#endif
+
 DECLARE_ENQUEUE(AnyHit, uint64_t returnAddr, _AmdAnyHitSystemData data, float2 candidateBarycentrics)
 DECLARE_ENQUEUE(Intersection, uint64_t returnAddr, _AmdAnyHitSystemData data)
-DECLARE_ENQUEUE(RayGen, _AmdDispatchSystemData data)
 DECLARE_WAIT_ENQUEUE(, uint64_t returnAddr, _AmdSystemData data)
 
 DECLARE_AWAIT(AnyHit, _AmdAnyHitSystemData, uint64_t returnAddr, _AmdAnyHitSystemData data)
 DECLARE_AWAIT(CallShader, _AmdDispatchSystemData, uint64_t returnAddr, _AmdDispatchSystemData data)
+
 // No returnAddr argument. The return address is instead included in the passed system data.
 DECLARE_WAIT_AWAIT(Traversal, _AmdDispatchSystemData, _AmdSystemData data)
 
@@ -674,6 +809,8 @@ DECLARE_VALUE_SET_I32(, _AmdSystemData data)
 
 DECLARE_GET_UNINITIALIZED(F32, float)
 DECLARE_GET_UNINITIALIZED(I32, uint32_t)
+DECLARE_GET_UNINITIALIZED(I64, uint64_t)
+DECLARE_GET_UNINITIALIZED(SystemData, _AmdSystemData)
 
 #if CONTINUATIONS_LGC_STACK_LOWERING
 DECLARE_CONT_STACK_LOAD_LAST_USE(U32, uint32_t)
@@ -683,29 +820,11 @@ DECLARE_CONT_STACK_STORE(U64, uint64_t value)
 #endif
 #endif
 
-//=====================================================================================================================
-// The VPC (vector program counter) is a 64-bit value containing the lower half of an actual function pointer in its
-// lower half, and 32 metadata bits in the upper half. The metadata includes a VGPR count and a scheduling priority.
-// This function sets that scheduling priority in a given VPC, and returns the modified value.
-//
-// Upper 32 bits format:
-//  0 -  7 : VGPR count
-//  8 - 15 : Reserved
-// 16 - 31 : CPS scheduling priority encoded as uint16_t. Higher values mean higher priority.
-//
-// We intentionally use uint64_t and not uint2 for better codegen: The VPC value may come from a 64-bit function
-// pointer in after continuation passes, and splitting it into 32-bit values that are merged later leads to
-// multiple references to the 64-bit function pointer, ultimately leading to two relocs instead of one.
-// This is caused by the priority value coming from an intrinsic when compiling the HLSL,
-// so DXC's optimizations can't fold it. Priorities are known after continuation passes, at which point we're
-// currently hesitant to apply general optimizations like InstCombine due to potential Translator issues.
-static uint64_t GetVpcWithPriority(in uint64_t vpc, in uint priority)
+static _AmdSystemData _AmdSystemData::MakeDeadLane()
 {
-    const uint64_t prio64 = priority;
-    const uint firstMetadataBit = 32;
-    const uint firstPriorityBitInMetadata = 16;
-    GPU_ASSERT((vpc & 0xFFFF000000000000) == 0);
-    return vpc | (prio64 << (firstMetadataBit + firstPriorityBitInMetadata));
+    _AmdSystemData data = _AmdGetUninitializedSystemData();
+    data.traversal.nextNodePtr = DEAD_LANE;
+    return data;
 }
 
 //=====================================================================================================================
@@ -715,16 +834,8 @@ static uint64_t GetVpcWithPriority(in uint64_t vpc, in uint priority)
 #endif
 static uint64_t GetVpcFromShaderId(uint32_t shaderId, uint priority)
 {
-#ifdef AMD_VULKAN
-    return shaderId;
-#else
-    uint64_t vpc = 0;
-    {
-        GPU_ASSERT((shaderId & 0xFFFFFFC0) == shaderId);
-        vpc = shaderId;
-    }
+    uint64_t vpc = Unpack32BitVpcTo64BitVpc(shaderId, /* unpackPriority = */ false);
     return GetVpcWithPriority(vpc, priority);
-#endif
 }
 
 //=====================================================================================================================
@@ -751,6 +862,22 @@ static uint64_t GetVpcFromShaderIdTable(
 //=====================================================================================================================
 // Returns the 64-bit VPC for the given AHS by loading its shader address, and setting the AHS priority.
 static uint64_t GetAnyHitAddr(
+    uint hitGroupRecordIndex)
+{
+    const uint offset = DispatchRaysConstBuf.hitGroupTableStrideInBytes * hitGroupRecordIndex;
+
+    const GpuVirtualAddress tableVa =
+        PackUint64(DispatchRaysConstBuf.hitGroupTableBaseAddressLo, DispatchRaysConstBuf.hitGroupTableBaseAddressHi);
+    if (tableVa == 0)
+    {
+        return 0;
+    }
+    return GetVpcFromShaderIdAddr(tableVa + offset + 8, SCHEDULING_PRIORITY_AHS);
+}
+
+//=====================================================================================================================
+// Returns the 64-bit VPC for the given AHS by loading its shader address, and setting the AHS priority.
+static uint64_t GetAnyHitAddr(
     in uint traceParameters,
     in uint geometryContributionToHitGroupIndex,
     in uint instanceContributionToHitGroupIndex)
@@ -761,16 +888,7 @@ static uint64_t GetAnyHitAddr(
                                        geometryContributionToHitGroupIndex,
                                        instanceContributionToHitGroupIndex);
 
-    const uint offset = DispatchRaysConstBuf.hitGroupTableStrideInBytes * hitGroupRecordIndex;
-
-    const GpuVirtualAddress tableVa =
-        PackUint64(DispatchRaysConstBuf.hitGroupTableBaseAddressLo, DispatchRaysConstBuf.hitGroupTableBaseAddressHi);
-    if (tableVa == 0)
-    {
-        return 0;
-    }
-
-    return GetVpcFromShaderIdAddr(tableVa + offset + 8, SCHEDULING_PRIORITY_AHS);
+    return GetAnyHitAddr(hitGroupRecordIndex);
 }
 
 //=====================================================================================================================
@@ -909,8 +1027,13 @@ export float _cont_RayTCurrent(in _AmdSystemData data, in _AmdPrimitiveSystemSta
         primitive = _cont_GetCommittedState(data);
     }
 
+    float tCurrentHw = 0.f;
+    {
+        tCurrentHw = primitive.rayTCurrent;
+    }
+
     // AMD Gpu shifts the origin, so rayTCurrent is between 0 and (tMaxApp - tMinApp). Add tMinApp back for App's use.
-    return primitive.rayTCurrent + data.ray.tMin;
+    return tCurrentHw + data.ray.tMin;
 }
 #endif
 
@@ -974,37 +1097,24 @@ export _AmdDispatchSystemData _cont_SetupRayGen()
     data.parentId = -1;
 #endif
 
-#if GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP == 0
-    // Early terminate the out-of-bound threads.
-    // Fo the simple 1:1 map, x and y test are always false, but it may change for future schemes.
-    const uint3 dims = GetDispatchRaysDimensions();
-
-    if ((dispatchId.x >= dims.x) || (dispatchId.y >= dims.y))
-    {
-        _AmdComplete();
-    }
-#endif
-
     return data;
 }
 
 //=====================================================================================================================
 export uint _cont_InstanceIndex(in _AmdSystemData data, in _AmdPrimitiveSystemState primitive)
 {
-    {
-        return ConstantLoadDwordAtAddr(
-            GetInstanceNodeAddr(data.ray.AccelStruct(), primitive.instNodePtr) +
-                                INSTANCE_NODE_EXTRA_OFFSET + RTIP1_1_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET);
-    }
+
+    return ConstantLoadDwordAtAddr(
+        GetInstanceNodeAddr(data.ray.AccelStruct(), primitive.instNodePtr) +
+        INSTANCE_NODE_EXTRA_OFFSET + RTIP1_1_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET);
 }
 
 //=====================================================================================================================
 export uint _cont_InstanceID(in _AmdSystemData data, in _AmdPrimitiveSystemState primitive)
 {
-    {
-        return ConstantLoadDwordAtAddr(
-            GetInstanceNodeAddr(data.ray.AccelStruct(), primitive.instNodePtr) + INSTANCE_DESC_ID_AND_MASK_OFFSET) & 0x00ffffff;
-    }
+
+    return ConstantLoadDwordAtAddr(
+        GetInstanceNodeAddr(data.ray.AccelStruct(), primitive.instNodePtr) + INSTANCE_DESC_ID_AND_MASK_OFFSET) & 0x00ffffff;
 }
 
 //=====================================================================================================================
@@ -1031,14 +1141,17 @@ export float4x3 _cont_WorldToObject4x3(in _AmdSystemData data, in _AmdPrimitiveS
     return WorldToObject4x3(data.ray.AccelStruct(), primitive.instNodePtr);
 }
 
+#if AMD_VULKAN
+
 //=====================================================================================================================
 export TriangleData _cont_TriangleVertexPositions(in _AmdSystemData data, in _AmdPrimitiveSystemState primitive)
 {
     const GpuVirtualAddress instanceAddr = GetInstanceNodeAddr(data.ray.AccelStruct(), primitive.instNodePtr);
     {
-        return FetchTriangleFromNode(GetInstanceAddr(FetchInstanceDescAddr(instanceAddr)), primitive.instNodePtr);
+        return FetchTriangleFromNode(GetInstanceAddr(FetchInstanceDescAddr(instanceAddr)), primitive.currNodePtr);
     }
 }
+#endif
 
 #ifdef __cplusplus
 //=====================================================================================================================
@@ -1078,8 +1191,8 @@ export uint _cont_HitKind(in _AmdSystemData data, in _AmdPrimitiveSystemState pr
 export BuiltInTriangleIntersectionAttributes _cont_GetTriangleHitAttributes(in _AmdSystemData data)
 {
     BuiltInTriangleIntersectionAttributes attr;
-    attr.barycentrics.x = data.traversal.barycentrics.x;
-    attr.barycentrics.y = data.traversal.barycentrics.y;
+    attr.barycentrics.x = data.traversal.committedBarycentrics.x;
+    attr.barycentrics.y = data.traversal.committedBarycentrics.y;
 
     return attr;
 }
@@ -1088,35 +1201,45 @@ export BuiltInTriangleIntersectionAttributes _cont_GetTriangleHitAttributes(in _
 // Store triangle or procedural hit attributes (first 8 bytes) in system data when a hit is accepted.
 export void _cont_SetTriangleHitAttributes(inout_param(_AmdSystemData) data, BuiltInTriangleIntersectionAttributes attr)
 {
-    data.traversal.barycentrics = attr.barycentrics;
+    data.traversal.committedBarycentrics = attr.barycentrics;
 }
 
 //=====================================================================================================================
-// Called from an AnyHit shader when neither IgnoreHit()/AcceptHitAndEndSearch() is called.
+// Common helper for _cont_AcceptHit and _cont_AcceptHitAndEndSearch
+static void AcceptHit(inout_param(_AmdAnyHitSystemData) data, bool endSearch)
+{
+    {
+        data.base.ray.SetAnyHitDidAccept(true);
+        data.base.traversal.committed = data.candidate;
+        if (endSearch)
+        {
+            data.base.traversal.nextNodePtr = END_SEARCH;     // End search
+        }
+    }
+}
+
+//=====================================================================================================================
+// AcceptFirstHitAndSearch call from an AnyHit shader
 export void _cont_AcceptHit(inout_param(_AmdAnyHitSystemData) data)
 {
-    data.base.traversal.committed = data.candidate;
-    if ((data.base.ray.Flags() & RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH) != 0)
-    {
-        data.base.traversal.nextNodePtr = END_SEARCH;     // End search
-    }
-    data.base.ray.SetAnyHitDidAccept(true);
+    AcceptHit(data, (data.base.ray.Flags() & RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH) != 0);
 }
 
 //=====================================================================================================================
 // AcceptFirstHitAndSearch call from an AnyHit shader
 export void _cont_AcceptHitAndEndSearch(inout_param(_AmdAnyHitSystemData) data)
 {
-    _cont_AcceptHit(data);
-    data.base.traversal.nextNodePtr = END_SEARCH;     // End search
+    AcceptHit(data, true);
 }
 
 //=====================================================================================================================
 // IgnoreHit call from an AnyHit shader
 export void _cont_IgnoreHit(inout_param(_AmdAnyHitSystemData) data)
 {
-    // Do nothing means we ignore the hit
-    data.base.ray.SetAnyHitDidAccept(false);
+    {
+        // Do nothing means we ignore the hit
+        data.base.ray.SetAnyHitDidAccept(false);
+    }
 }
 
 //=====================================================================================================================
@@ -1632,8 +1755,12 @@ export bool _cont_ReportHit(inout_param(_AmdAnyHitSystemData) data, float THit, 
     // TODO Check for closest hit and duplicate anyHit calling
 
     THit -= data.base.ray.tMin;
+    float tCurrentCommitted = 0.f;
+    {
+        tCurrentCommitted = data.base.traversal.committed.rayTCurrent;
+    }
 
-    if ((THit < 0.f) || (THit > data.base.traversal.committed.rayTCurrent))
+    if ((THit < 0.f) || (THit > tCurrentCommitted))
     {
         // Discard the hit candidate and hint the compiler to not keep the
         // values alive, which will remove redundant moves.
@@ -1646,28 +1773,37 @@ export bool _cont_ReportHit(inout_param(_AmdAnyHitSystemData) data, float THit, 
     data.candidate.PackHitKind(HitKind);
 
     uint isOpaque = true;
-    PrimitiveData primitiveData;
-    InstanceDesc desc;
     uint geometryIndex = INVALID_IDX;
     uint instanceContribution = 0;
-
     {
-        // Get primitive nodes to process based on candidate or committed hit
-        const uint tlasNodePtr = data.candidate.instNodePtr;
+        PrimitiveData primitiveData;
+        InstanceDesc desc;
 
-        const GpuVirtualAddress tlasAddr = data.base.ray.AccelStruct() + ExtractNodePointerOffset(tlasNodePtr);
-        desc = FetchInstanceDescAddr(tlasAddr);
-        isOpaque = data.candidate.IsOpaque();
-        geometryIndex = data.candidate.GeometryIndex();
-        instanceContribution = desc.InstanceContributionToHitGroupIndex_and_Flags & 0x00ffffff;
+        {
+            // Get primitive nodes to process based on candidate or committed hit
+            const uint tlasNodePtr = data.candidate.instNodePtr;
+
+            const GpuVirtualAddress tlasAddr = data.base.ray.AccelStruct() + ExtractNodePointerOffset(tlasNodePtr);
+            desc = FetchInstanceDescAddr(tlasAddr);
+            isOpaque = data.candidate.IsOpaque();
+            geometryIndex = data.candidate.GeometryIndex();
+            instanceContribution = desc.InstanceContributionToHitGroupIndex_and_Flags & 0x00ffffff;
+        }
     }
 
     if (!isOpaque)
     {
+        uint hitGroupRecordIndex = 0;
+        {
+            hitGroupRecordIndex = CalculateHitGroupRecordAddress(
+                ExtractRayContributionToHitIndex(data.base.ray.traceParameters),
+                ExtractMultiplierForGeometryContributionToHitIndex(data.base.ray.traceParameters),
+                geometryIndex,
+                instanceContribution);
+        }
         // Compute hit group address and fetch shader identifiers
-        const uint64_t anyHitAddr = GetAnyHitAddr(data.base.ray.traceParameters,
-                                                  geometryIndex,
-                                                  instanceContribution);
+        const uint64_t anyHitAddr = GetAnyHitAddr(hitGroupRecordIndex);
+
         if (SplitUint64(anyHitAddr).x != 0)
         {
             // Call AnyHit
@@ -1681,7 +1817,7 @@ export bool _cont_ReportHit(inout_param(_AmdAnyHitSystemData) data, float THit, 
         else
         {
             _cont_AcceptHit(data);
-            _AmdAcceptHitAttributes(data);
+            _AmdAcceptHitAttributes(data); // changes data.base.traversal.committedBarycentrics plus up-to-6 DW data in payload
             return true;
         }
     }
@@ -1791,93 +1927,6 @@ static HitGroupInfo GetHitGroupInfo(
                            geometryIndex,
                            instanceContribution);
 }
-
-//=====================================================================================================================
-// Process continuations for candidate or committed hits
-static void ProcessContinuation(
-    in _AmdAnyHitSystemData data, in float2 candidateBarycentrics, uint state)
-{
-#if GPURT_CONT_TRAVERSAL_EARLY_IS_AHS
-    if (state == TRAVERSAL_STATE_SUSPEND_TRAVERSAL)
-    {
-        // Resume traversal
-        const uint64_t traversalAddr = _AmdGetCurrentFuncAddr();
-        const uint64_t traversalAddrWithPrio = GetVpcWithPriority(traversalAddr, SCHEDULING_PRIORITY_TRAVERSAL);
-        _AmdEnqueueTraversal(traversalAddr, data.base);
-    }
-#endif
-    if ((state == TRAVERSAL_STATE_COMMITTED_NOTHING) && (data.base.traversal.committed.instNodePtr >= TERMINAL_NODE))
-    {
-        // Write End for miss
-        RayHistoryWriteEnd(data.base, state);
-
-        uint shaderRecIdx;
-        const uint64_t missShaderAddr = SetupMissShader(data.base, shaderRecIdx);
-        if (SplitUint64(missShaderAddr).x != 0)
-        {
-            RayHistoryWriteFunctionCall(data.base,
-                                        RayHistoryGetIdentifierFromVPC(missShaderAddr),
-                                        shaderRecIdx,
-                                        DXILShaderKind::Miss);
-
-            data.base.dispatch.shaderRecIdx = shaderRecIdx;
-            _AmdEnqueue(missShaderAddr, data.base.traversal.returnAddr, data.base);
-        }
-    }
-    else
-    {
-        HitGroupInfo hitInfo = GetHitGroupInfo(data.base, state, data.candidate);
-        data.base.dispatch.shaderRecIdx = hitInfo.tableIndex;
-
-        // AnyHit|Intersection shader calls _AmdTraversal recursively after potentially modifying _AmdTraversalState.
-        if (state == TRAVERSAL_STATE_CANDIDATE_NON_OPAQUE_TRIANGLE)
-        {
-            RayHistoryWriteFunctionCall(data.base,
-                                        RayHistoryGetIdentifierFromShaderId(hitInfo.anyHitId),
-                                        hitInfo.tableIndex,
-                                        DXILShaderKind::AnyHit);
-
-            const uint64_t addr = GetVpcFromShaderId(hitInfo.anyHitId.x, SCHEDULING_PRIORITY_AHS);
-            const uint64_t returnAddr = _AmdGetCurrentFuncAddr();
-            const uint64_t returnAddrWithPrio = GetVpcWithPriority(returnAddr, SCHEDULING_PRIORITY_TRAVERSAL);
-            _AmdEnqueueAnyHit(addr, returnAddrWithPrio, data, candidateBarycentrics);
-        }
-        if ((state == TRAVERSAL_STATE_CANDIDATE_PROCEDURAL_PRIMITIVE) ||
-            (state == TRAVERSAL_STATE_CANDIDATE_NON_OPAQUE_PROCEDURAL_PRIMITIVE))
-        {
-            RayHistoryWriteFunctionCall(data.base,
-                                        RayHistoryGetIdentifierFromShaderId(hitInfo.intersectionId),
-                                        hitInfo.tableIndex,
-                                        DXILShaderKind::Intersection);
-
-            const uint64_t addr = GetVpcFromShaderId(hitInfo.intersectionId.x, SCHEDULING_PRIORITY_IS);
-            const uint64_t returnAddr = _AmdGetCurrentFuncAddr();
-            const uint64_t returnAddrWithPrio = GetVpcWithPriority(returnAddr, SCHEDULING_PRIORITY_TRAVERSAL);
-            _AmdEnqueueIntersection(addr, returnAddrWithPrio, data);
-        }
-
-        // Write End for final committed hits (includes the skipped CHS)
-        RayHistoryWriteEnd(data.base, state);
-
-        if ((data.base.ray.Flags() & RAY_FLAG_SKIP_CLOSEST_HIT_SHADER) == 0)
-        {
-            // Call ClosestHit shader for final committed hits
-            if (hitInfo.closestHitId.x != 0)
-            {
-                RayHistoryWriteFunctionCall(data.base,
-                                            RayHistoryGetIdentifierFromShaderId(hitInfo.closestHitId),
-                                            hitInfo.tableIndex,
-                                            DXILShaderKind::ClosestHit);
-
-                const uint64_t addr = GetVpcFromShaderId(hitInfo.closestHitId.x, SCHEDULING_PRIORITY_CHS);
-                _AmdEnqueue(addr, data.base.traversal.returnAddr, data.base);
-            }
-        }
-    }
-
-    // Return to RayGen. No need to set a priority, as it is already set in the stored return address.
-    _AmdEnqueueRayGen(data.base.traversal.returnAddr, data.base.dispatch);
-}
 #endif
 
 //=====================================================================================================================
@@ -1903,7 +1952,28 @@ export void _cont_KernelEntry()
     }
 
     _AmdContStackSetPtr(_cont_GetContinuationStackAddr());
-    _AmdEnqueueRayGen(GetRayGenVpc(), systemData);
+
+    _AmdEnqueueRayGen(GetRayGenVpc(), DUMMY_RETURN_ADDR systemData);
+}
+
+//=====================================================================================================================
+// Preamble function with overloading that is called at the beginning of each shader
+export void _cont_ShaderStart(inout_param(_AmdDispatchSystemData) data)
+{
+    // TODO: Currently this is an interface that allows compiler to use, add more functionality for specific case later.
+    return;
+}
+
+export void _cont_ShaderStart(inout_param(_AmdSystemData) data)
+{
+    // TODO: Currently this is an interface that allows compiler to use, add more functionality for specific case later.
+    return;
+}
+
+export void _cont_ShaderStart(inout_param(_AmdAnyHitSystemData) data)
+{
+    // TODO: Currently this is an interface that allows compiler to use, add more functionality for specific case later.
+    return;
 }
 
 //=====================================================================================================================
@@ -1987,7 +2057,7 @@ export void _cont_TraceRay(
     const uint           resumePrio          = GetPriorityForShaderType(enclosingShaderType);
     const uint64_t       resumeAddr          = _AmdGetResumePointAddr();
     const uint64_t       resumeAddrWithPrio  = GetVpcWithPriority(resumeAddr, resumePrio);
-    data.traversal.returnAddr                = resumeAddrWithPrio;
+    data.traversal.PackReturnAddress(resumeAddrWithPrio);
 
     RayHistoryInitStaticId();
     RayHistoryWriteBegin(data);
@@ -2003,14 +2073,17 @@ export void _cont_TraceRay(
 }
 
 //=====================================================================================================================
-// Get the address of the function that should be called next. Either a closest hit or a miss shader, or the caller
-// return address if closest hit or miss should be skipped.
-static uint64_t GetNextHitMissPc(inout_param(_AmdSystemData) data, uint state, _AmdPrimitiveSystemState candidate)
+// Get the address of the function that should be called next, either a closest hit or a miss shader. If no hit or miss
+// shader should be called, this method returns false (and in that case it should return to
+// data.traversal.ReturnAddress()), otherwise it returns true.
+static bool GetNextHitMissPc(
+    inout_param(_AmdSystemData) data,
+    uint state,
+    _AmdPrimitiveSystemState candidate,
+    out_param(uint64_t) nextShaderAddr)
 {
-    uint64_t nextShaderAddr = data.traversal.returnAddr;
-
     // MS
-    if (data.IsMs(state))
+    if (data.IsMiss(state))
     {
         uint shaderRecIdx;
         const uint64_t missShaderAddr = SetupMissShader(data, shaderRecIdx);
@@ -2019,13 +2092,17 @@ static uint64_t GetNextHitMissPc(inout_param(_AmdSystemData) data, uint state, _
             // Valid MS
             data.dispatch.shaderRecIdx = shaderRecIdx;
             nextShaderAddr = missShaderAddr;
+            return true;
         }
     }
 
     // CHS
     else if (data.IsChs(state))
     {
-        const HitGroupInfo hitInfo = GetHitGroupInfo(data, state, candidate);
+        HitGroupInfo hitInfo = (HitGroupInfo)0;
+        {
+            hitInfo = GetHitGroupInfo(data, state, candidate);
+        }
         data.dispatch.shaderRecIdx = hitInfo.tableIndex;
 
         if ((data.ray.Flags() & RAY_FLAG_SKIP_CLOSEST_HIT_SHADER) == 0)
@@ -2034,10 +2111,11 @@ static uint64_t GetNextHitMissPc(inout_param(_AmdSystemData) data, uint state, _
             {
                 // Valid CHS
                 nextShaderAddr = GetVpcFromShaderId(hitInfo.closestHitId.x, SCHEDULING_PRIORITY_CHS);
+                return true;
             }
         }
     }
-    return nextShaderAddr;
+    return false;
 }
 
 //=====================================================================================================================
@@ -2061,11 +2139,79 @@ static void TraversalInternal(
     }
 }
 
+static void EnqueueNextShader(bool hasWorkToDo, uint64_t nextShaderAddr, uint64_t returnAddr, _AmdSystemData data)
+{
+    if (!hasWorkToDo)
+    {
+        // No work to do = dead lane, jump to traversal as a synchronization point with an empty system data
+        _AmdWaitEnqueueTraversal(GetTraversalVpc(), -1, DUMMY_RETURN_ADDR _AmdSystemData::MakeDeadLane());
+    }
+
+    const uint newState = data.traversal.committed.State();
+    RayHistoryWriteEnd(data, newState);
+
+    // Finished sorting, previously dead lanes may now have CHS|MS to execute and vice-versa
+    if (nextShaderAddr != returnAddr)
+    {
+        const DXILShaderKind shaderKind = (DXILShaderKind)(data.IsMiss(newState) ?
+                                          (int)DXILShaderKind::Miss : // convert to int to fix linux build error
+                                          (int)DXILShaderKind::ClosestHit);
+        RayHistoryWriteFunctionCall(data,
+                                    RayHistoryGetIdentifierFromVPC(nextShaderAddr),
+                                    data.dispatch.shaderRecIdx,
+                                    shaderKind);
+
+        _AmdEnqueue(nextShaderAddr, returnAddr, data);
+    }
+
+    // Return to RayGen. No need to set a priority, as it is already set in the stored return address.
+    _AmdEnqueueRayGen(returnAddr, DUMMY_RETURN_ADDR data.dispatch);
+}
+
 //=====================================================================================================================
-// GPURT internal scheduler implementation. This path is used when global stack is enabled.
-static void SchedulerInternal(
+// Convenience helper calling Traversal on the debug/emulation path that returns _AmdTraversalResultData.
+static _AmdTraversalResultData TraversalInternalDebugWrapper(
     inout_param(_AmdSystemData) data)
 {
+    uint state                          = TRAVERSAL_STATE_COMMITTED_NOTHING;
+    _AmdPrimitiveSystemState candidate  = (_AmdPrimitiveSystemState)0;
+    float2 candidateBarycentrics        = float2(0.0f, 0.0f);
+
+    TraversalInternal(data, state, candidate, candidateBarycentrics);
+
+    _AmdTraversalResultData result = (_AmdTraversalResultData)0;
+    result.state = state;
+    result.candidate = candidate;
+    result.candidateBarycentrics = candidateBarycentrics;
+
+    return result;
+}
+
+//=====================================================================================================================
+// Re-entrant traversal loop.
+export void _cont_Traversal(
+    inout_param(_AmdSystemData) data)
+{
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION  >= 41
+    data.ray.PackAccelStructAndRayflags(
+        data.ray.AccelStruct(),
+        (data.ray.IncomingFlags() & ~AmdTraceRayGetKnownUnsetRayFlags()) | AmdTraceRayGetKnownSetRayFlags());
+#endif
+    // Discard data that doesn't need to be kept alive during Traversal
+    data.dispatch.shaderRecIdx = _AmdGetUninitializedI32();
+    if (!IsBvhRebraid())
+    {
+        // lastInstanceRootNodePtr is only used for rebraid
+        data.traversal.lastInstanceRootNodePtr = _AmdGetUninitializedI32();
+    }
+
+    // Write AHS/IS returned status
+    if (!data.IsDeadLane())
+    {
+        RayHistoryWriteAnyHitOrProceduralStatus(data);
+    }
+
+    // Handle reordering of rays/threads before processing since dead lanes may become alive after sorting.
     // Execute traversal for active lanes.
     uint state                          = TRAVERSAL_STATE_COMMITTED_NOTHING;
     _AmdPrimitiveSystemState candidate  = (_AmdPrimitiveSystemState)0;
@@ -2073,26 +2219,42 @@ static void SchedulerInternal(
 
     if (data.IsTraversal())
     {
-        // Note, when scheduler is active, traversal implementation will simply return when it reaches a AHS/IS/CHS/MS
-        // instead of calling ProcessContinuation().
         TraversalInternal(data, state, candidate, candidateBarycentrics);
     }
     else
     {
+        // This branch is hit when the traversal for a lane is done:
+        // a) AHS/IS enqueued _cont_Traversal(), for the very last time.
+        // b) _cont_Traversal() enqueued _cont_Traversal() for a lane which is waiting to execute CHS/Miss, but
+        //    scheduled again.
+
         // Retrieve lane state. Note, the state in here is only used to determine
         // whether this lane needs to run CHS or not. It does not matter if the state
         // is a committed triangle or procedural primitive.
-        state = data.traversal.committed.State();
+        state = data.traversal.CommittedState();
 
         // For CHS, get candidate and barycentrics from traversal.
         if (data.IsChs(state))
         {
             candidate                   = data.traversal.committed;
-            candidateBarycentrics       = data.traversal.barycentrics;
+            candidateBarycentrics       = data.traversal.committedBarycentrics;
         }
     }
 
-    if (WaveActiveAllTrue(data.IsMs(state) || data.IsChs(state)))
+    // Result used on the CPU path. This is an unused dummy return value on the GPU path.
+    _AmdTraversalResultData result = (_AmdTraversalResultData)0;
+
+    bool IsChsOrMiss = data.IsChsOrMiss(state);
+    // For sorting-enabled global mem mode, we only enqueue CHS/Miss once all
+    // lanes have arrived in this state.
+    // In non-sorting mode, we immediately enqueue CHS/Miss. This is mostly
+    // to replicate the old ProcessContinuation() behavior for now.
+    // We might want to consider also waiting for all lanes here in the non-global
+    // mem mode for consistency, and potentially also to have a common place
+    // in between Traversal and CHS/Miss where extra work can be done just once
+    // for all lanes, e.g. preparing system data for CHS/Miss.
+    if ((_AmdContinuationStackIsGlobal() && WaveActiveAllTrue(IsChsOrMiss)) ||
+        (!_AmdContinuationStackIsGlobal() && IsChsOrMiss))
     {
         if (Options::getThreadTraceEnabled())
         {
@@ -2106,33 +2268,42 @@ static void SchedulerInternal(
                 (/* exec      */ WaveActiveCountBits(true) << 13));
         }
 
-        uint64_t nextShaderAddr = GetNextHitMissPc(data, state, candidate);
+        uint64_t nextShaderAddr = ~uint64_t(0);
+        const bool nextShaderValid = GetNextHitMissPc(data, state, candidate, nextShaderAddr);
 
-        const uint newState = data.traversal.committed.State();
-        RayHistoryWriteEnd(data, newState);
-
-        // Finished sorting, previously dead lanes may now have CHS|MS to execute and vice-versa
-        if (nextShaderAddr != data.traversal.returnAddr)
+        bool hasWorkToDo = true;
+        // Avoid sorting on return addresses to RayGen (the case nextShaderValid == false), as it may create
+        // unexpected behavior and might increase execution divergence. For example, we might have multiple resume
+        // points due to divergent control flow in the TraceRay call, but those resume points are all copies of the same
+        // code. If we sort and re-read only from one bin, we might prevent future TraceRay calls from reconverging
+        // on traversal.
+        if (_AmdContinuationStackIsGlobal() && nextShaderValid)
         {
-            const DXILShaderKind shaderKind = (DXILShaderKind)(data.IsMs(newState) ?
-                                              (int)DXILShaderKind::Miss : // convert to int to fix linux build error
-                                              (int)DXILShaderKind::ClosestHit);
-            RayHistoryWriteFunctionCall(data,
-                                        RayHistoryGetIdentifierFromVPC(nextShaderAddr),
-                                        data.dispatch.shaderRecIdx,
-                                        shaderKind);
-
-            _AmdEnqueue(nextShaderAddr, data.traversal.returnAddr, data);
         }
 
-        // Return to RayGen. No need to set a priority, as it is already set in the stored return address.
-        _AmdEnqueueRayGen(data.traversal.returnAddr, data.dispatch);
+        const uint64_t returnAddr = data.traversal.ReturnAddress();
+        if (!nextShaderValid)
+        {
+            nextShaderAddr = returnAddr;
+        }
+        EnqueueNextShader(hasWorkToDo, nextShaderAddr, returnAddr, data);
     }
     else
     {
-        if (data.IsAhs(state) || data.IsIs(state))
+        bool earlyIsAhsModeEnabled =
+#if GPURT_CONT_TRAVERSAL_EARLY_IS_AHS
+            true;
+#else
+            false;
+#endif
+        bool mayEnqueueTraversal = (_AmdContinuationStackIsGlobal() || earlyIsAhsModeEnabled);
+        // If we cannot re-enqueue Traversal, then we already know that we are in AHS or IS state.
+        if (!mayEnqueueTraversal || data.IsAhs(state) || data.IsIs(state))
         {
-            const HitGroupInfo hitInfo = GetHitGroupInfo(data, state, candidate);
+            HitGroupInfo hitInfo = (HitGroupInfo)0;
+            {
+                hitInfo = GetHitGroupInfo(data, state, candidate);
+            }
             data.dispatch.shaderRecIdx = hitInfo.tableIndex;
 
             _AmdAnyHitSystemData anyHitData = (_AmdAnyHitSystemData)0;
@@ -2170,66 +2341,20 @@ static void SchedulerInternal(
         }
         else
         {
+            // The last remaining case is that we need to re-enqueue Traversal, because we are waiting for
+            // other lanes to finish BVH traversal before sorting, or to resume suspended lanes that wait for
+            // other lanes to run IS/AHS in early-is-ahs mode.
+            //
             // Everything else needs to go back through scheduling/traversal, regardless of state
             // Note we don't need "Wait" here because priorities run AHS and IS first
-
             const uint64_t traversalAddr = _AmdGetCurrentFuncAddr();
             const uint64_t traversalAddrWithPrio = GetVpcWithPriority(traversalAddr, SCHEDULING_PRIORITY_TRAVERSAL);
-            _AmdEnqueueTraversal(traversalAddrWithPrio, data);
+            _AmdEnqueueTraversal(traversalAddrWithPrio, DUMMY_RETURN_ADDR data);
         }
     }
+    // This is unreachable
 }
 #endif
-
-//=====================================================================================================================
-// Fixed function traversal loop.
-// Common GPURT internal implementation of traversal that switches between scheduler enabled vs disabled traversal loop
-export _AmdTraversalResultData _cont_Traversal(
-    inout_param(_AmdSystemData) data)
-{
-#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION  >= 41
-    data.ray.PackAccelStructAndRayflags(
-        data.ray.AccelStruct(),
-        (data.ray.IncomingFlags() & ~AmdTraceRayGetKnownUnsetRayFlags()) | AmdTraceRayGetKnownSetRayFlags());
-#endif
-
-    // Write AHS/IS returned status
-    RayHistoryWriteAnyHitOrProceduralStatus(data);
-
-    _AmdTraversalResultData result = (_AmdTraversalResultData)0;
-#if CONTINUATION_ON_GPU
-    if (_AmdContinuationStackIsGlobal())
-    {
-        // New path with scheduler
-        SchedulerInternal(data);
-    }
-    else
-#endif
-    {
-        // Old path without scheduler
-        uint state = TRAVERSAL_STATE_COMMITTED_NOTHING;
-        _AmdPrimitiveSystemState candidate = (_AmdPrimitiveSystemState)0;
-        float2 candidateBarycentrics = float2(0.0f, 0.0f);
-
-        if (IsValidNode(data.traversal.nextNodePtr))
-        {
-            TraversalInternal(data, state, candidate, candidateBarycentrics);
-        }
-
-#if CONTINUATION_ON_GPU
-        _AmdAnyHitSystemData anyHitData = (_AmdAnyHitSystemData)0;
-        anyHitData.base = data;
-        anyHitData.candidate = candidate;
-        ProcessContinuation(anyHitData, candidateBarycentrics, state);
-#else
-        result.state = state;
-        result.candidate = candidate;
-        result.candidateBarycentrics = candidateBarycentrics;
-#endif
-    }
-
-    return result;
-}
 
 //=====================================================================================================================
 #if GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
@@ -2285,8 +2410,7 @@ static IntersectionResult TraceRayInternalCPSDebug(
     // Begin outer while loop
     while (sysData.traversal.nextNodePtr < TERMINAL_NODE)
     {
-        _AmdTraversalResultData ret = _cont_Traversal(0, sysData);
-
+        _AmdTraversalResultData ret = TraversalInternalDebugWrapper(sysData);
         uint state = ret.state;
 
         // Process candidate hits
@@ -2346,7 +2470,7 @@ static IntersectionResult TraceRayInternalCPSDebug(
                     if (status != HIT_STATUS_IGNORE)
                     {
                         sysData.traversal.committed = ret.candidate;
-                        sysData.traversal.barycentrics = ret.candidateBarycentrics;
+                        sysData.traversal.committedBarycentrics = ret.candidateBarycentrics;
 
                         if (status == HIT_STATUS_ACCEPT_AND_END_SEARCH)
                         {
@@ -2395,7 +2519,7 @@ static IntersectionResult TraceRayInternalCPSDebug(
     IntersectionResult result   = (IntersectionResult)0;
     result.t                    = sysData.traversal.committed.rayTCurrent;
     result.nodeIndex            = sysData.traversal.committed.currNodePtr;
-    result.barycentrics         = sysData.traversal.barycentrics;
+    result.barycentrics         = sysData.traversal.committedBarycentrics;
     result.instNodePtr          = sysData.traversal.committed.instNodePtr;
     result.hitkind              = sysData.traversal.committed.HitKind();
     result.instanceContribution = 0;

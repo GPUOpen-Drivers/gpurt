@@ -43,6 +43,9 @@ static _AmdTraversalState InitTraversalState2_0(
 
     uint schedulerState = TRAVERSAL_STATE_COMMITTED_NOTHING;
     traversal.committed.PackState(schedulerState);
+#if AMD_VULKAN || GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
+    traversal.committed.currNodePtr = INVALID_NODE;
+#endif
 
     // Start traversing from root node
     traversal.nextNodePtr = isValid ? CreateRootNodePointer1_1() : TERMINAL_NODE;
@@ -59,7 +62,6 @@ static _AmdTraversalState InitTraversalState2_0(
     traversal.PackStackPtrTop(0);
 
 #if GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
-    traversal.committed.currNodePtr = INVALID_NODE;
     traversal.committed.PackAnyHitCallType(0);
 #endif
 
@@ -112,7 +114,7 @@ static void TraversalInternal2_0(
 
     _AmdPrimitiveSystemState committed = data.traversal.committed;
     candidate = (_AmdPrimitiveSystemState)0;
-    float2 barycentrics = data.traversal.barycentrics;
+    float2 committedBarycentrics = data.traversal.committedBarycentrics;
     candidateBarycentrics = float2(0.0f, 0.0f);
 
     // Encode api ray flags into pointer flags resetting accept_first_hit & skip_closest_hit which do not apply here.
@@ -313,8 +315,7 @@ static void TraversalInternal2_0(
                 candidate.PackHitKind(hitKind);
                 candidate.PackGeometryIndex(primitiveData.geometryIndex);
                 candidate.PackIsOpaque(isOpaque);
-
-#if GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
+#if AMD_VULKAN || GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
                 candidate.currNodePtr = nodePtr;
 #endif
 
@@ -334,7 +335,7 @@ static void TraversalInternal2_0(
                     // Let the app know an opaque triangle hit was detected. The primitive index and geometry
                     // index are loaded after the traversal loop.
                     committed = candidate;
-                    barycentrics = candidateBarycentrics;
+                    committedBarycentrics = candidateBarycentrics;
 
                     // Commit an opaque triangle hit
                     state = TRAVERSAL_STATE_COMMITTED_TRIANGLE_HIT;
@@ -387,10 +388,11 @@ static void TraversalInternal2_0(
                 candidate.primitiveIndex = primitiveData.primitiveIndex;
                 candidate.PackGeometryIndex(primitiveData.geometryIndex);
                 candidate.PackIsOpaque(isOpaque);
+#if AMD_VULKAN || GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
+                candidate.currNodePtr = nodePtr;
+#endif
 
 #if GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
-                candidate.currNodePtr = nodePtr;
-
                 // Determine anyHit shader call type
                 uint anyHitCallType = rayForceOpaque ? ANYHIT_CALLTYPE_SKIP : ANYHIT_CALLTYPE_DUPLICATE;
 
@@ -496,10 +498,14 @@ static void TraversalInternal2_0(
             {
                 // Break out of traversal to run AHS/IS
             }
-            else
+            else if (IsValidNode(nextNodePtr))
             {
                 // Break out of traversal so other lanes can run AHS/IS and re-join traversal
                 state = TRAVERSAL_STATE_SUSPEND_TRAVERSAL;
+            }
+            else
+            {
+                // The lane is done with Traversal, and wants to run CHS or Miss
             }
             break;
         }
@@ -515,7 +521,7 @@ static void TraversalInternal2_0(
     // Pack traversal results back into traversal state structure
     data.traversal.nextNodePtr             = nextNodePtr;
     data.traversal.committed               = committed;
-    data.traversal.barycentrics            = barycentrics;
+    data.traversal.committedBarycentrics   = committedBarycentrics;
 #if REMAT_INSTANCE_RAY == 0
     data.traversal.candidateRayOrigin      = candidateRayOrigin;
     data.traversal.candidateRayDirection   = candidateRayDirection;

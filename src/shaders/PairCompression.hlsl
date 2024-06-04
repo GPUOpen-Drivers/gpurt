@@ -29,30 +29,29 @@
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u6, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u7, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(CBV(b0, numDescriptors = 4294967295, space = 1)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b255),"\
-                "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u6, visibility=SHADER_VISIBILITY_ALL)"
-
+                "CBV(b255)"
 //=====================================================================================================================
 #include "../shared/rayTracingDefs.h"
 
 [[vk::binding(1, 0)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b0);
 
-[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer  DstBuffer         : register(u0);
-[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer  DstMetadata       : register(u1);
-[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer  ScratchBuffer     : register(u2);
-[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer  ScratchGlobal     : register(u3);
-[[vk::binding(4, 0)]] RWByteAddressBuffer                   IndirectArgBuffer : register(u4);
+[[vk::binding(0, 0)]] RWByteAddressBuffer                          SrcBuffer           : register(u0);
+[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer         DstBuffer           : register(u1);
+[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer         DstMetadata         : register(u2);
+[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer         ScratchBuffer       : register(u3);
+[[vk::binding(4, 0)]] globallycoherent RWByteAddressBuffer         ScratchGlobal       : register(u4);
+[[vk::binding(5, 0)]] RWByteAddressBuffer                          InstanceDescBuffer  : register(u5);
+[[vk::binding(6, 0)]] RWByteAddressBuffer                          EmitBuffer          : register(u6);
+[[vk::binding(7, 0)]] RWByteAddressBuffer                          IndirectArgBuffer   : register(u7);
 
 [[vk::binding(0, 2)]] ConstantBuffer<BuildShaderGeometryConstants> GeometryConstants[] : register(b0, space1);
 [[vk::binding(0, 3)]] RWBuffer<float3>                             GeometryBuffer[]    : register(u0, space1);
-
-// unused buffer
-[[vk::binding(5, 0)]] RWByteAddressBuffer                   SrcBuffer     : register(u5);
-[[vk::binding(6, 0)]] RWByteAddressBuffer                   EmitBuffer    : register(u6);
 
 #include "Common.hlsl"
 #include "BuildCommonScratch.hlsl"

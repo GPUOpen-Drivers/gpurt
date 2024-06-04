@@ -24,14 +24,6 @@
  **********************************************************************************************************************/
 #include "BuildCommonScratch.hlsl"
 
-struct IndirectBuildOffset
-{
-    uint primitiveCount;
-    uint primitiveOffset;
-    uint firstVertex;
-    uint transformOffset;
-};
-
 #include "TrianglePrimitive.hlsl"
 
 //=====================================================================================================================
@@ -108,7 +100,7 @@ void WriteScratchTriangleNode(
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V1_OFFSET, data);
 
     // LeafNode.v2, parent
-    data = uint4(asuint(tri.v2), 0);
+    data = uint4(asuint(tri.v2), INVALID_IDX);
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V2_OFFSET, data);
 
     // type, flags, splitBox, numPrimitivesAndDoCollapse
@@ -127,36 +119,27 @@ void WriteScratchTriangleNode(
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, data);
 }
 
-//=====================================================================================================================
-// Used by indirect build
-uint ComputePrimitiveOffset(
-    GeometryArgs geometryArgs)
+//======================================================================================================================
+// NOTE: Used by Trivial Builder, so this function should not use SrcBuffer or ScratchBuffer.
+void WriteGeometryInfoForBuildsAndCopies(
+    GeometryArgs       geometryArgs,
+    uint               primitiveOffset,
+    uint               numPrimitives,
+    uint               primitiveStride,
+    uint               metadataSize,
+    uint               baseGeometryInfoOffset)
 {
-    uint primitiveOffset = 0;
+    const uint geometryInfoOffset =
+        metadataSize + baseGeometryInfoOffset +
+        (geometryArgs.GeometryIndex * GEOMETRY_INFO_SIZE);
 
-    const uint metadataSize = IsUpdate() ?
-                              SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : geometryArgs.metadataSizeInBytes;
+    GeometryInfo info;
+    info.geometryBufferOffset = primitiveOffset * primitiveStride;
+    info.primNodePtrsOffset   = primitiveOffset * sizeof(uint);
+    info.geometryFlagsAndNumPrimitives =
+        PackGeometryFlagsAndNumPrimitives(geometryArgs.GeometryFlags, numPrimitives);
 
-    // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
-    const AccelStructOffsets offsets =
-        SrcBuffer.Load<AccelStructOffsets>(metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
-
-    const uint baseGeometryInfoOffset = IsUpdate() ? offsets.geometryInfo : geometryArgs.BaseGeometryInfoOffset;
-
-    for (uint geomIdx = 0; geomIdx < geometryArgs.GeometryIndex; ++geomIdx)
-    {
-        const uint geometryInfoOffset =
-            metadataSize + baseGeometryInfoOffset +
-            (geomIdx * GEOMETRY_INFO_SIZE);
-
-        GeometryInfo info;
-        info = DstMetadata.Load<GeometryInfo>(geometryInfoOffset);
-        uint primitiveCount = ExtractGeometryInfoNumPrimitives(info.geometryFlagsAndNumPrimitives);
-
-        primitiveOffset += primitiveCount;
-    }
-
-    return primitiveOffset;
+    DstMetadata.Store<GeometryInfo>(geometryInfoOffset, info);
 }
 
 //======================================================================================================================
@@ -180,17 +163,12 @@ void WriteGeometryInfo(
         const uint baseGeometryInfoOffset =
             IsUpdate() ? offsets.geometryInfo : geometryArgs.BaseGeometryInfoOffset;
 
-        const uint geometryInfoOffset =
-            metadataSize + baseGeometryInfoOffset +
-            (geometryArgs.GeometryIndex * GEOMETRY_INFO_SIZE);
-
-        GeometryInfo info;
-        info.geometryBufferOffset = primitiveOffset * primitiveStride;
-        info.primNodePtrsOffset   = primitiveOffset * sizeof(uint);
-        info.geometryFlagsAndNumPrimitives  =
-            PackGeometryFlagsAndNumPrimitives(geometryArgs.GeometryFlags, numPrimitives);
-
-        DstMetadata.Store<GeometryInfo>(geometryInfoOffset, info);
+        WriteGeometryInfoForBuildsAndCopies(geometryArgs,
+                                            primitiveOffset,
+                                            numPrimitives,
+                                            primitiveStride,
+                                            metadataSize,
+                                            baseGeometryInfoOffset);
     }
 }
 
@@ -530,7 +508,7 @@ void EncodeTriangleNode(
                                      tri);
 
             // Store invalid prim node pointer for now during first time builds.
-            // If the triangle is active, BuildQBVH will write it in.
+            // If the triangle is active, EncodeHwBvh will write it in.
             DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
         }
     }
@@ -756,7 +734,7 @@ void EncodeAabbNode(
                                    boundingBox);
 
         // Store invalid prim node pointer for now during first time builds.
-        // If the Procedural node is active, BuildQBVH will update it.
+        // If the Procedural node is active, EncodeHwBvh will update it.
         DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
     }
 

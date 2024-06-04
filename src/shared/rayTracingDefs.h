@@ -221,6 +221,16 @@ struct BoundingBox // matches D3D12_RAYTRACING_AABB
     float3 max;
 };
 
+//======================================================================================================================
+// matches VkAccelerationStructureBuildRangeInfoKHR
+struct IndirectBuildOffset
+{
+    uint primitiveCount;
+    uint primitiveOffset;
+    uint firstVertex;
+    uint transformOffset;
+};
+
 //=====================================================================================================================
 struct BoundingBox4
 {
@@ -866,6 +876,16 @@ static uint64_t PackUint64(uint lowBits, uint highBits)
     return addr;
 }
 
+//======================================================================================================================
+// Packs the channels of a uint2 into a single uint64_t.
+static uint64_t PackUint64(uint2 lowHigh)
+{
+    // Note glslang doesn't like uint64_t casts
+    uint64_t addr = lowHigh.y;
+    addr = (addr << 32) | lowHigh.x;
+    return addr;
+}
+
 //=====================================================================================================================
 static uint2 SplitUint64(uint64_t x)
 {
@@ -950,8 +970,8 @@ static_assert(STACK_PTRS_NUM_LEAFS_DONE_OFFSET == offsetof(StackPtrs, numLeafsDo
 #define COUNTER_BUILDPLOC_OFFSET        0xC
 #define COUNTER_BUILDLBVH_OFFSET        0x10
 #define COUNTER_REFIT_OFFSET            0x14
-#define COUNTER_INITQBVH_OFFSET         0x18
-#define COUNTER_BUILDQBVH_OFFSET        0x1C
+#define COUNTER_INITENCODEHWBVH_OFFSET  0x18
+#define COUNTER_ENCODEHWBVH_OFFSET      0x1C
 #define COUNTER_EMPTYPRIM_OFFSET        0x20
 #define COUNTER_EMITCOMPACTSIZE_OFFSET  0x24
 #define COUNTER_BUILDFASTLBVH_OFFSET    0x28

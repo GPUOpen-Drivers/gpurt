@@ -31,8 +31,6 @@
 #define __decl [noinline]
 
 // Dummy implementation for Vulkan build only
-__decl uint AmdExtLaneIndex() DUMMY_UINT_FUNC
-
 __decl uint AmdExtLaneCount() DUMMY_UINT_FUNC
 
 __decl uint AmdExtD3DShaderIntrinsics_LoadDwordAtAddr(
@@ -58,6 +56,9 @@ __decl uint4 AmdExtD3DShaderIntrinsics_ConstantLoadDwordAtAddrx4(
 
 __decl uint2 AmdExtD3DShaderIntrinsics_AtomicMinU64(
     RWByteAddressBuffer uav, uint address, uint2 value) DUMMY_UINT2_FUNC
+
+__decl uint2 AmdExtD3DShaderIntrinsics_ShaderClock() DUMMY_UINT2_FUNC
+__decl uint2 AmdExtD3DShaderIntrinsics_ShaderRealtimeClock() DUMMY_UINT2_FUNC
 
 #define AmdExtD3DShaderIntrinsicsWaveOp_MinF        0x07
 #define AmdExtD3DShaderIntrinsicsWaveOp_MaxF        0x0a
@@ -112,6 +113,40 @@ __decl float2 AmdExtD3DShaderIntrinsics_FloatOpWithRoundMode(
     uint roundMode, uint operation, float2 src0, float2 src1) DUMMY_FLOAT2_FUNC
 __decl float3 AmdExtD3DShaderIntrinsics_FloatOpWithRoundMode(
     uint roundMode, uint operation, float3 src0, float3 src1) DUMMY_FLOAT3_FUNC
+
+//=====================================================================================================================
+// Sub-group wave reductions
+
+[[vk::ext_capability(/* GroupNonUniform */ 61)]]
+[[vk::ext_capability(/* GroupNonUniformArithmetic */ 63)]]
+[[vk::ext_capability(/* GroupNonUniformClustered */ 67)]]
+
+[[vk::ext_instruction(350)]]
+float spirv_OpGroupNonUniformFAdd_clustered(uint scope, [[vk::ext_literal]] uint op, float value, uint clusterSize);
+
+float AmdExtD3DShaderIntrinsics_WaveClusterSum(float x, uint dxClusterSize)
+{
+    const uint clusterSize = (1 << (dxClusterSize - 1));
+    return spirv_OpGroupNonUniformFAdd_clustered(/* Subgroup */ 3, /* ClusteredReduce */ 3, x, clusterSize);
+}
+
+[[vk::ext_instruction(355)]]
+float spirv_OpGroupNonUniformFMin_clustered(uint scope, [[vk::ext_literal]] uint op, float value, uint clusterSize);
+
+float AmdExtD3DShaderIntrinsics_WaveClusterMin(float x, uint dxClusterSize)
+{
+    const uint clusterSize = (1 << (dxClusterSize - 1));
+    return spirv_OpGroupNonUniformFMin_clustered(/* Subgroup */ 3, /* ClusteredReduce */ 3, x, clusterSize);
+}
+
+[[vk::ext_instruction(358)]]
+float spirv_OpGroupNonUniformFMax_clustered(uint scope, [[vk::ext_literal]] uint op, float value, uint clusterSize);
+
+float AmdExtD3DShaderIntrinsics_WaveClusterMax(float x, uint dxClusterSize)
+{
+    const uint clusterSize = (1 << (dxClusterSize - 1));
+    return spirv_OpGroupNonUniformFMax_clustered(/* Subgroup */ 3, /* ClusteredReduce */ 3, x, clusterSize);
+}
 
 #endif
 
@@ -228,6 +263,7 @@ __decl uint AmdTraceRayLdsStackInit() DUMMY_UINT_FUNC
 __decl void     AmdTraceRaySampleGpuTimer(out_param(uint) timerHi, out_param(uint) timerLo) DUMMY_VOID_FUNC
 __decl uint64_t AmdTraceRaySampleGpuTimer() DUMMY_UINT_FUNC
 #pragma dxc diagnostic pop
+__decl uint AmdExtLaneIndex() DUMMY_UINT_FUNC
 __decl uint AmdTraceRayGetHwCuId() DUMMY_UINT_FUNC
 __decl uint AmdTraceRayGetHwWaveId() DUMMY_UINT_FUNC
 __decl uint AmdTraceRayGetHwSimdId() DUMMY_UINT_FUNC
@@ -242,6 +278,14 @@ __decl void AmdTraceRayInitStaticId() DUMMY_VOID_FUNC
 //=====================================================================================================================
 // Ref: GpuRt::Device::GetStaticPipelineFlags
 __decl uint AmdTraceRayGetStaticFlags() DUMMY_UINT_FUNC
+
+//=====================================================================================================================
+// Query flags statically known to be set, combining AmdTraceRayGetStaticFlags() (from pipeline flags)
+// and AmdTraceRayGetKnownSetRayFlags() (from known bits in TraceRay arguments).
+static uint AmdTraceRayGetAllKnownStaticallySetFlags()
+{
+    return AmdTraceRayGetStaticFlags() | AmdTraceRayGetKnownSetRayFlags();
+}
 
 //=====================================================================================================================
 // fetch data from LDS and return parent TraceRay rayId

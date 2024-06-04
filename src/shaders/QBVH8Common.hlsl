@@ -110,6 +110,29 @@ static void WriteInvalidChildInfo(
     const uint childInfoOffset = nodeOffset + GetChildInfoOffset(childIdx);
     DstBuffer.Store<uint3>(childInfoOffset, ChildInfo::Invalid);
 }
+
+//=====================================================================================================================
+static uint3 ComputePackedChildInfo(
+    in BoundingBox   childBounds,
+    in uint          instanceMask,
+    in uint          boxNodeFlags,
+    in uint          nodeType,
+    in uint          nodeRangeLength,
+    in float3        rcpExponents,
+    in float3        origin)
+{
+    const uint3 quantMax = ComputeQuantizedMax(childBounds.max, origin, rcpExponents, 12);
+    const uint3 quantMin = ComputeQuantizedMin(childBounds.min, origin, rcpExponents, 12);
+
+    const uint3 childInfo = ChildInfo::BuildPacked(quantMin,
+                                                   quantMax,
+                                                   boxNodeFlags,
+                                                   instanceMask,
+                                                   nodeType,
+                                                   nodeRangeLength);
+    return childInfo;
+}
+
 } // namespace QBVH8
 
 #endif

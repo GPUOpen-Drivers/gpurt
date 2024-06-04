@@ -31,9 +31,10 @@
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u6, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u7, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b255),"\
-                "UAV(u6, visibility=SHADER_VISIBILITY_ALL)"
+                "CBV(b255)"
 
 #include "../shared/rayTracingDefs.h"
 
@@ -45,31 +46,37 @@ struct RootConstants
 [[vk::push_constant]] ConstantBuffer<RootConstants> ShaderRootConstants    : register(b0);
 [[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b1);
 
-[[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer  DstBuffer          : register(u0);
-[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer  DstMetadata        : register(u1);
-[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer  ScratchBuffer      : register(u2);
-[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer  ScratchGlobal      : register(u3);
-[[vk::binding(4, 0)]]                  RWByteAddressBuffer  InstanceDescBuffer : register(u4);
-[[vk::binding(5, 0)]]                  RWByteAddressBuffer  EmitBuffer         : register(u5);
-
-// unused buffer
-[[vk::binding(6, 0)]] RWByteAddressBuffer                   SrcBuffer          : register(u6);
+[[vk::binding(0, 0)]] RWByteAddressBuffer                  SrcBuffer          : register(u0);
+[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstBuffer          : register(u1);
+[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer DstMetadata        : register(u2);
+[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer      : register(u3);
+[[vk::binding(4, 0)]] globallycoherent RWByteAddressBuffer ScratchGlobal      : register(u4);
+[[vk::binding(5, 0)]] RWByteAddressBuffer                  InstanceDescBuffer : register(u5);
+[[vk::binding(6, 0)]] RWByteAddressBuffer                  EmitBuffer         : register(u6);
+[[vk::binding(7, 0)]] RWByteAddressBuffer                  IndirectArgBuffer  : register(u7);
 
 #define TASK_COUNTER_BUFFER   ScratchGlobal
 #define TASK_COUNTER_OFFSET   (ShaderConstants.offsets.taskLoopCounters + TASK_LOOP_QBVH_COUNTER_OFFSET)
 #define NUM_TASKS_DONE_OFFSET (ShaderConstants.offsets.taskLoopCounters + TASK_LOOP_QBVH_TASKS_DONE_OFFSET)
+#include "TaskMacros.hlsl"
 
-#include "Common.hlsl"
-#include "IntersectCommon.hlsl"
-#include "BuildCommonScratch.hlsl"
-#include "CompactCommon.hlsl"
+template<typename T>
+T LoadInstanceDescBuffer(uint offset)
+{
+    return InstanceDescBuffer.Load<T>(offset);
+}
+#include "IndirectArgBufferUtils.hlsl"
 
-// BVH 8 requires up to 8 LDS elements per thread
+// BVH8 requires up to 8 LDS elements per thread
 #define MAX_ELEMENTS_PER_THREAD 8
 
 #define MAX_LDS_ELEMENTS_PER_THREADGROUP (MAX_ELEMENTS_PER_THREAD * BUILD_THREADGROUP_SIZE)
 groupshared uint SharedMem[MAX_LDS_ELEMENTS_PER_THREADGROUP];
+
+#include "BuildCommonScratch.hlsl"
 #endif
+
+#include "EncodeHwBvhCommon.hlsl"
 
 //=====================================================================================================================
 // Pack scratch node index for global stack
@@ -98,12 +105,29 @@ bool IsPackedNodeFp16(
 }
 
 //=====================================================================================================================
+void WriteBoxNode(
+    in uint             offset,
+    in Float32BoxNode   f32BoxNode)
+{
+    DstBuffer.Store<Float32BoxNode>(offset, f32BoxNode);
+}
+
+//=====================================================================================================================
+void WriteFp16BoxNode(
+    in uint             offset,
+    in Float16BoxNode   f16BoxNode)
+{
+    DstBuffer.Store<Float16BoxNode>(offset, f16BoxNode);
+}
+
+//=====================================================================================================================
 uint WriteInstanceNode(
+    in AccelStructOffsets offsets,
     in uint               numActivePrims,
     in ScratchNode        scratchNode,
     in uint               scratchNodeIndex,
     in uint               nodeOffset,
-    in AccelStructOffsets offsets)
+    in uint               metadataSizeInBytes)
 {
     const uint instanceIndex = scratchNode.left_or_primIndex_or_instIndex;
 
@@ -112,67 +136,34 @@ uint WriteInstanceNode(
                            (scratchNodeIndex - numActivePrims + 1) :
                            instanceIndex;
 
-    bool numLeafsDoneAlreadyIncremented = false;
-    if (numLeafsDoneAlreadyIncremented == false)
-    {
-        const uint numLeafsDoneOffset = ShaderConstants.offsets.qbvhGlobalStackPtrs + STACK_PTRS_NUM_LEAFS_DONE_OFFSET;
-        ScratchGlobal.InterlockedAdd(numLeafsDoneOffset, 1);
+    const uint numLeafsDoneOffset = ShaderConstants.offsets.qbvhGlobalStackPtrs + STACK_PTRS_NUM_LEAFS_DONE_OFFSET;
+    ScratchGlobal.InterlockedAdd(numLeafsDoneOffset, 1);
 
-        {
-            nodeOffset =
-                offsets.leafNodes + (destIndex * GetBvhNodeSizeInstance(Settings.enableFusedInstanceNode));
-        }
+    {
+        nodeOffset =
+            offsets.leafNodes + (destIndex * GetBvhNodeSizeInstance(Settings.enableFusedInstanceNode));
     }
 
     const uint nodePointer = PackNodePointer(NODE_TYPE_USER_NODE_INSTANCE, nodeOffset);
-    const uint metadataSizeInBytes = DstMetadata.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
+    const InstanceDesc instanceDesc = LoadInstanceDesc(instanceIndex, LoadNumPrimAndOffset().primitiveOffset);
 
-    InstanceDesc instanceDesc;
-    if (ShaderConstants.encodeArrayOfPointers != 0)
+    const uint blasRootNodePointer = scratchNode.splitBox_or_nodePointer;
+    const uint blasMetadataSize = scratchNode.numPrimitivesAndDoCollapse;
+    const uint geometryType = ExtractScratchNodeGeometryType(scratchNode.packedFlags);
+
     {
-        GpuVirtualAddress addr = InstanceDescBuffer.Load<GpuVirtualAddress>(instanceIndex * GPU_VIRTUAL_ADDRESS_SIZE);
-        instanceDesc = FetchInstanceDescAddr(addr);
+        WriteInstanceNode1_1(instanceDesc,
+                             geometryType,
+                             instanceIndex,
+                             nodePointer,
+                             blasRootNodePointer,
+                             blasMetadataSize,
+                             metadataSizeInBytes);
     }
-    else
-    {
-        instanceDesc = InstanceDescBuffer.Load<InstanceDesc>(instanceIndex * INSTANCE_DESC_SIZE);
-    }
-
-    // Passing allowUpdate = false here since inactive primitives have already been filtered out at this point.
-    const uint64_t blasHeaderAddr = GetAccelStructBaseAddr(instanceDesc, false);
-
-    WriteInstanceDescriptor(metadataSizeInBytes,
-                            blasHeaderAddr,
-                            instanceDesc.InstanceContributionToHitGroupIndex_and_Flags,
-                            instanceDesc.InstanceID_and_Mask,
-                            instanceDesc.Transform,
-                            instanceIndex,
-                            nodePointer,
-                            scratchNode.splitBox_or_nodePointer);
 
     DstBuffer.Store(offsets.primNodePtrs + (destIndex * sizeof(uint)), nodePointer);
 
     return nodePointer;
-}
-
-//=====================================================================================================================
-BoundingBox GetScratchNodeBoundingBoxTS(
-    in uint        scratchNodesScratchOffset,
-    in bool        isLeafNode,
-    in ScratchNode node)
-{
-    const bool enablePairCompression = (Settings.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION);
-
-    const uint baseScratchNodesOffset = Settings.enableEarlyPairCompression ?
-                                        ShaderConstants.offsets.bvhLeafNodeData :
-                                        scratchNodesScratchOffset;
-
-    return GetScratchNodeBoundingBox(node,
-                                     isLeafNode,
-                                     Settings.doTriangleSplitting,
-                                     ShaderConstants.offsets.triangleSplitBoxes,
-                                     enablePairCompression,
-                                     baseScratchNodesOffset);
 }
 
 //=====================================================================================================================
@@ -184,18 +175,11 @@ bool IsDestIndexInStack()
 }
 
 //=====================================================================================================================
-bool StackHasTwoEntries()
-{
-    bool stackHasTwoEntries = IsDestIndexInStack();
-    return stackHasTwoEntries;
-}
-
-//=====================================================================================================================
 // Returns source BVH node index given node.
 uint StackPopNodeIdx(
     uint stackIndex)
 {
-    if (StackHasTwoEntries())
+    if (IsDestIndexInStack())
     {
         stackIndex *= 2;
     }
@@ -220,22 +204,7 @@ uint Calc64BChunkOffset(uint chunkIdx64B)
 }
 
 //=====================================================================================================================
-static uint CreateBoxNodePointer(
-    in uint nodeOffsetInBytes,
-    in bool writeAsFp16BoxNode)
-{
-    uint nodeType = GetInternalNodeType();
-    if ((nodeType == NODE_TYPE_BOX_FLOAT32) && writeAsFp16BoxNode)
-    {
-        nodeType = NODE_TYPE_BOX_FLOAT16;
-    }
-
-    return PackNodePointer(nodeType, nodeOffsetInBytes);
-}
-
-//=====================================================================================================================
 static uint GetNum64BChunks(
-    in bool isTopLevel,
     in bool isLeafNode,
     in bool isFp16)
 {
@@ -256,16 +225,15 @@ static uint GetNum64BChunks(
 }
 
 //======================================================================================================================
-static void InitBuildQbvhImpl(
+static void InitBuildQBVHImpl(
     in uint globalId,
-    in uint numLeafNodes,
+    in uint maxInternalNodeCount,
     in uint numThreads)
 {
     // Note the first entry is initialized below. Skip initializing it to invalid.
-    const uint maxInternalNodeCount = GetNumInternalNodeCount(numLeafNodes);
     for (uint stackIndex = globalId + 1; stackIndex < maxInternalNodeCount; stackIndex += numThreads)
     {
-        if (StackHasTwoEntries())
+        if (IsDestIndexInStack())
         {
             const uint qbvhStackOffset = ShaderConstants.offsets.qbvhGlobalStack + (stackIndex * sizeof(uint2));
             ScratchGlobal.Store<uint2>(qbvhStackOffset, uint2(INVALID_IDX, INVALID_IDX));
@@ -284,7 +252,6 @@ static void InitBuildQbvhImpl(
         stackPtrs.stackPtrSrcNodeId = 1;
         // Node destination in linear memory. Counts in 64B chunks.
         stackPtrs.stackPtrNodeDest = 2;
-
         stackPtrs.numLeafsDone = 0;
 
         ScratchGlobal.Store<StackPtrs>(ShaderConstants.offsets.qbvhGlobalStackPtrs, stackPtrs);
@@ -292,7 +259,7 @@ static void InitBuildQbvhImpl(
         const uint32_t rootNodeIndex =
             FetchRootNodeIndex(Settings.enableFastLBVH, ShaderConstants.offsets.fastLBVHRootNodeIndex);
 
-        if (StackHasTwoEntries())
+        if (IsDestIndexInStack())
         {
             ScratchGlobal.Store<uint2>(ShaderConstants.offsets.qbvhGlobalStack, uint2(rootNodeIndex, 0));
         }
@@ -302,78 +269,6 @@ static void InitBuildQbvhImpl(
         }
     }
 }
-
-//=====================================================================================================================
-void PostHwBvhBuild(
-    uint          localId,
-    uint          numActivePrims)
-{
-    if (localId == 0)
-    {
-        if (Settings.topLevelBuild)
-        {
-            if (numActivePrims == 0)
-            {
-                // This is an empty TLAS, but we didn't know it yet when we were setting up the header writes in the
-                // command buffer. Overwrite the GPU VA to 0 to properly designate the TLAS as empty.
-                DstMetadata.Store<GpuVirtualAddress>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, 0);
-            }
-            WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET, numActivePrims);
-        }
-        else if (Settings.triangleCompressionMode != PAIR_TRIANGLE_COMPRESSION)
-        {
-            bool compressionEnabled = false;
-            if (compressionEnabled == false)
-            {
-                // When compression is disabled, the final leaf node count is the active prim count.
-                WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET, numActivePrims);
-            }
-        }
-
-        const AccelStructHeader header = DstBuffer.Load<AccelStructHeader>(0);
-
-        // Unused
-        uint metadataSizeInBytes = 0;
-        AccelStructOffsets offsets;
-
-        // Calculate compacted size
-        const uint accelStructType = Settings.topLevelBuild ? TOP_LEVEL : BOTTOM_LEVEL;
-        uint compactedSize = CalcCompactedSize(header, accelStructType, offsets, metadataSizeInBytes);
-
-        WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_COMPACTED_BYTE_SIZE_OFFSET, compactedSize);
-
-        if (Settings.emitCompactSize != 0)
-        {
-            EmitBuffer.Store2(0, uint2(compactedSize, 0));
-        }
-    }
-}
-
-#if NO_SHADER_ENTRYPOINT == 0
-//=====================================================================================================================
-// Main Function : InitBuildQBVH
-//=====================================================================================================================
-[RootSignature(RootSig)]
-[numthreads(BUILD_THREADGROUP_SIZE, 1, 1)]
-void InitBuildQBVH(
-    uint globalId : SV_DispatchThreadID)
-{
-    uint numLeafNodes;
-
-    // With pair compresssion enabled, the leaf node count in header represents actual valid
-    // primitives
-    if (EnableLatePairCompression())
-    {
-        numLeafNodes = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);;
-    }
-    else
-    {
-        numLeafNodes = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
-    }
-
-    InitBuildQbvhImpl(globalId, numLeafNodes, ShaderRootConstants.numThreads);
-}
-#endif
 
 //=====================================================================================================================
 void WriteTriangleNodePrimitive0(
@@ -455,7 +350,7 @@ uint WritePrimitiveNode(
         bool isPairCompressed = (Settings.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION);
         if (Settings.enableEarlyPairCompression)
         {
-            isPairCompressed &= IsScratchNodeEarlyTrianglePair(scratchNode);
+            isPairCompressed &= IsScratchNodeQuadPrimitive(scratchNode);
         }
         else
         {
@@ -483,12 +378,11 @@ uint WritePrimitiveNode(
             {
                 const float3 v3 = float3(asfloat(scratchNode.splitBox_or_nodePointer),
                                          asfloat(scratchNode.numPrimitivesAndDoCollapse),
-                                         asfloat(scratchNode.unused));
+                                         asfloat(scratchNode.sortedPrimIndex));
 
                 DstBuffer.Store<float3>(nodeOffset + TRIANGLE_NODE_V3_OFFSET, v3);
 
-                const uint tri0PrimitiveIndex =
-                    scratchNode.left_or_primIndex_or_instIndex - ExtractScratchNodePairPrimOffset(scratchNode);
+                const uint tri0PrimitiveIndex = GetScratchNodePrimitiveIndex(scratchNode, 0);
 
                 WriteTriangleNodePrimitive0(geometryPrimNodePtrsOffset,
                                             nodeOffset,
@@ -556,7 +450,6 @@ uint WritePrimitiveNode(
 // Returns destination offset in memory for a given node.
 // The value returned is in terms of 64B, so 1 for fp16 and 2 for fp32 box node
 uint GetDestIdx(
-    bool topLevelBuild,
     uint stackIndex)
 {
     uint destIndex;
@@ -566,7 +459,7 @@ uint GetDestIdx(
         // Collapse should not enter this code path because tasks store destination indexes directly
         destIndex = StackPopSecondEntry(stackIndex);
     }
-    else if (topLevelBuild || (Settings.fp16BoxNodesMode == NO_NODES_IN_BLAS_AS_FP16))
+    else if (Settings.topLevelBuild || (Settings.fp16BoxNodesMode == NO_NODES_IN_BLAS_AS_FP16))
     {
         destIndex = 2 * stackIndex;
 
@@ -583,7 +476,6 @@ uint GetDestIdx(
 //=====================================================================================================================
 // Allocates the appropriate number of nodes on the stack, and writes out stack entries
 uint AllocQBVHStackNumItems(
-    bool          topLevelBuild,
     uint          compChildInfo,       ///< flag if child is to be written out
     uint4         intChildNodeIdx,     ///< scratch node index (from parent) for each child node
     inout uint4   intChildDstOffset,   ///< destination address offset for each child node, uses fp16 / fp32 node size
@@ -610,7 +502,7 @@ uint AllocQBVHStackNumItems(
     // Uniform nodes - rely on a single stack item per thread
     if (IsDestIndexInStack() == false)
     {
-        origDest = GetDestIdx(topLevelBuild, origStackIdx);
+        origDest = GetDestIdx(origStackIdx);
 
         // Destination offset index for each child node
         intChildDstOffset += origDest;
@@ -659,7 +551,6 @@ uint AllocQBVHStackNumItems(
 static uint ProcessNode(
     in uint               scratchNodesScratchOffset, // Scratch nodes offset
     in uint               metadataSizeInBytes,       // Metadata size
-    in bool               topLevelBuild,    // Compile time flag indicating whether this is top or bottom level build
     in ScratchNode        scratchNode,      // Scratch node being processed
     in uint               scratchNodeIndex, // Index of the Scratch node in BVH2
     in uint               destIndex,        // Dest index of the node in terms of 64B chunks in DstBuffer
@@ -676,24 +567,22 @@ static uint ProcessNode(
     {
         bool writeAsFp16BoxNode = false;
         {
-            writeAsFp16BoxNode = ((topLevelBuild == false) && isFp16);
+            writeAsFp16BoxNode = ((Settings.topLevelBuild == false) && isFp16);
         }
         nodePointer = CreateBoxNodePointer(nodeOffset, writeAsFp16BoxNode);
     }
+    else if (Settings.topLevelBuild)
+    {
+        nodePointer = WriteInstanceNode(offsets,
+                                        numActivePrims,
+                                        scratchNode,
+                                        scratchNodeIndex,
+                                        nodeOffset,
+                                        metadataSizeInBytes);
+    }
     else
     {
-        if (topLevelBuild)
-        {
-            nodePointer = WriteInstanceNode(numActivePrims,
-                                            scratchNode,
-                                            scratchNodeIndex,
-                                            nodeOffset,
-                                            offsets);
-        }
-        else
-        {
-            nodePointer = WritePrimitiveNode(scratchNodesScratchOffset, scratchNode, nodeOffset, offsets);
-        }
+        nodePointer = WritePrimitiveNode(scratchNodesScratchOffset, scratchNode, nodeOffset, offsets);
     }
 
     WriteParentPointer(metadataSizeInBytes, nodePointer, parentNodePtr);
@@ -705,7 +594,6 @@ static uint ProcessNode(
 static void PullUpChildren(
     in    uint                    scratchNodesScratchOffset,
     in    uint                    metadataSizeInBytes,
-    in    bool                    topLevelBuild,
     in    uint                    qbvhNodePtr,
     in    AccelStructOffsets      offsets,
     in    uint4                   nodeIdx,
@@ -727,7 +615,6 @@ static void PullUpChildren(
 
             child[i] = ProcessNode(scratchNodesScratchOffset,
                                    metadataSizeInBytes,
-                                   topLevelBuild,
                                    n,
                                    scratchNodeIdx,
                                    dstIdx[i],
@@ -810,7 +697,6 @@ static bool OverrideFp32BoxNodeToFp16(
 //=====================================================================================================================
 // Apply heuristics to choose which 2 nodes to open up in BVH2.
 static void ApplyHeuristic(
-    in    bool                    topLevelBuild,
     in    uint                    localId,
     in    uint                    scratchNodesScratchOffset,
     in    uint                    numActivePrims,
@@ -885,18 +771,17 @@ static void ApplyHeuristic(
 
         nodeIdxFinal[i] = PackScratchNodeIndex(scratchNodeIdx, isFp16);
 
-        count64B += GetNum64BChunks(topLevelBuild, isLeafNode, isFp16);
+        count64B += GetNum64BChunks(isLeafNode, isFp16);
     }
 
 }
 
 //=====================================================================================================================
-void BuildQbvhImpl(
+void BuildQBVHImpl(
     uint globalId,
     uint localId,
     uint numLeafNodes,
-    uint numActivePrims,
-    bool topLevelBuild)  // Compile time flag indicating whether this is top or bottom level build
+    uint numActivePrims)  // Compile time flag indicating whether this is top or bottom level build
 {
     // Load acceleration structure header
     const AccelStructHeader  header  = DstBuffer.Load<AccelStructHeader>(0);
@@ -920,13 +805,17 @@ void BuildQbvhImpl(
         WriteAccelStructHeaderRootBoundingBox(bbox);
         WriteParentPointer(metadataSizeInBytes, rootNodePtr, INVALID_IDX);
 
+        if (Settings.topLevelBuild == false)
+        {
+            DstBuffer.Store(ACCEL_STRUCT_HEADER_PACKED_FLAGS_OFFSET, rootScratchNode.packedFlags);
+        }
+
         // Generate box node with a leaf reference in child index 0 for single primitive acceleration structure
         if (numLeafNodes == 1)
         {
             uint destIndex = 0;
             const uint childNodePtr = ProcessNode(scratchNodesScratchOffset,
                                                   metadataSizeInBytes,
-                                                  topLevelBuild,
                                                   rootScratchNode,
                                                   rootNodeIndex,
                                                   destIndex,
@@ -1009,7 +898,7 @@ void BuildQbvhImpl(
                                      isFp16;
             }
 
-            const uint bvhNodeDstIdx = GetDestIdx(topLevelBuild, stackIndex);
+            const uint bvhNodeDstIdx = GetDestIdx(stackIndex);
             const uint qbvhNodeAddr  = Calc64BChunkOffset(bvhNodeDstIdx);
             const uint qbvhNodePtr   = CreateBoxNodePointer(qbvhNodeAddr, writeAsFp16BoxNode);
 
@@ -1036,8 +925,7 @@ void BuildQbvhImpl(
             // Apply Surface Area Heuristic to select which 2 nodes to open up in BVH2.
             // Selected nodes can be the children or grandchildren of the currently processed node.
             // Selected nodes' children will be pulled up to be the new children in the QBVH.
-            ApplyHeuristic(topLevelBuild,
-                           localId,
+            ApplyHeuristic(localId,
                            scratchNodesScratchOffset,
                            numActivePrims,
                            node,
@@ -1046,8 +934,7 @@ void BuildQbvhImpl(
                            intChildDstIdx,
                            childDstCount64B);
 
-            const uint origStackIdx = AllocQBVHStackNumItems(topLevelBuild,
-                                                             compChildInfo,
+            const uint origStackIdx = AllocQBVHStackNumItems(compChildInfo,
                                                              intChildNodeIdx,
                                                              intChildDstIdx,
                                                              childDstCount64B);
@@ -1060,7 +947,6 @@ void BuildQbvhImpl(
             // Pull up the nodes chosen by SAH to be the new children in QBVH
             PullUpChildren(scratchNodesScratchOffset,
                            metadataSizeInBytes,
-                           topLevelBuild,
                            qbvhNodePtr,
                            offsets,
                            intChildNodeIdx,
@@ -1128,8 +1014,6 @@ void BuildQBVH(
     uint localId  = localIdIn;
     uint groupId  = groupIdIn;
 
-    const bool topLevelBuild  = Settings.topLevelBuild;
-    const uint type           = Settings.topLevelBuild ? TOP_LEVEL : BOTTOM_LEVEL;
     const uint numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
 
     uint numLeafNodes = numActivePrims;
@@ -1141,26 +1025,24 @@ void BuildQBVH(
         numLeafNodes = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_LEAF_NODES_OFFSET);
     }
 
+    const uint maxInternalNodeCount = GetMaxInternalNodeCount(numLeafNodes);
+
     uint numTasksWait = 0;
     uint waveId       = 0;
 
     INIT_TASK;
 
-    BEGIN_TASK(RoundUpQuotient(GetNumInternalNodeCount(numLeafNodes), BUILD_THREADGROUP_SIZE));
+    BEGIN_TASK(RoundUpQuotient(maxInternalNodeCount, BUILD_THREADGROUP_SIZE));
 
-    InitBuildQbvhImpl(globalId, numLeafNodes, ShaderRootConstants.numThreads);
+    InitBuildQBVHImpl(globalId, maxInternalNodeCount, ShaderRootConstants.numThreads);
 
-    END_TASK(RoundUpQuotient(GetNumInternalNodeCount(numLeafNodes), BUILD_THREADGROUP_SIZE));
+    END_TASK(RoundUpQuotient(maxInternalNodeCount, BUILD_THREADGROUP_SIZE));
 
-    BEGIN_TASK(RoundUpQuotient(GetNumInternalNodeCount(numLeafNodes), BUILD_THREADGROUP_SIZE));
+    BEGIN_TASK(RoundUpQuotient(maxInternalNodeCount, BUILD_THREADGROUP_SIZE));
 
-    {
-        {
-            BuildQbvhImpl(globalId, localId, numLeafNodes, numActivePrims, topLevelBuild);
-        }
-    }
+    BuildQBVHImpl(globalId, localId, numLeafNodes, numActivePrims);
 
-    END_TASK(RoundUpQuotient(GetNumInternalNodeCount(numLeafNodes), BUILD_THREADGROUP_SIZE));
+    END_TASK(RoundUpQuotient(maxInternalNodeCount, BUILD_THREADGROUP_SIZE));
 
     BEGIN_TASK(1);
 

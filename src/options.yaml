@@ -26,6 +26,9 @@
 ## Options definitions
 
 # ------------------------------------------------------------------------------------------------------------------
+# Enums
+
+# ------------------------------------------------------------------------------------------------------------------
 # This is the definition of the single options struct.
 # An option is represented by a sequence entry whose name is the name of the option, and it is itself
 # a sequence with entries:
@@ -36,3 +39,4 @@ Options:
     threadTraceEnabled:
         Type: uint32
         Default: 0
+

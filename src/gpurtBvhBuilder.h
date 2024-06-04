@@ -87,9 +87,7 @@ public:
     void InitializeBuildConfigs();
 
     void EncodePrimitives();
-
-    void CountTrianglePairs();
-    void CountTrianglePairsPrefixSum();
+    void EncodeQuadPrimitives();
 
     // data offset and size in ResultBuffer
     struct ResultBufferInfo
@@ -127,7 +125,6 @@ public:
 
     // Encodes instance nodes into a scratch buffer
     void EncodeInstances(
-        gpusize            instanceDescVa,
         uint32             numDesc,
         InputElementLayout descLayout);
 
@@ -232,10 +229,14 @@ private:
 
     void InitGeometryConstants();
 
-    void UpdateBuildConfig();
-
     GeometryType GetGeometryType(
         const AccelStructBuildInputs inputs);
+
+    // Returns true if this BVH update should be treated as a build instead.
+    bool ForceRebuild() const
+    {
+        return false;
+    }
 
     bool UpdateAllowed() const
     {
@@ -244,7 +245,8 @@ private:
 
     bool IsUpdate() const
     {
-        return Util::TestAnyFlagSet(m_buildArgs.inputs.flags, AccelStructBuildFlagPerformUpdate);
+        return Util::TestAnyFlagSet(m_buildArgs.inputs.flags, AccelStructBuildFlagPerformUpdate)
+            && (ForceRebuild() == false);
     }
 
     gpusize HeaderBufferBaseVa() const
@@ -299,6 +301,8 @@ private:
 
     void BuildParallel();
 
+    void BuildTrivialBvh();
+
     void Rebraid();
 
     void GenerateMortonCodes();
@@ -318,7 +322,7 @@ private:
 
     void UpdateParallel();
 
-    void BuildQBVH();
+    void EncodeHwBvh();
 
     void RefitBounds();
 
@@ -379,6 +383,7 @@ private:
     bool AllowRebraid() const;
     bool AllowLatePairCompression() const;
     bool NeedsPostBuildEmitPass() const;
+    bool HasBuildDumpEvents() const;
 
     // Helper functions
     void Dispatch(
@@ -398,8 +403,7 @@ private:
         gpusize virtualAddress,
         uint32  entryOffset);
 
-    uint32 WriteDestBuffers(uint32 entryOffset);
-    uint32 WriteEncodeBuffers(uint32 entryOffset);
+    uint32 WriteBufferBindings(uint32 entryOffset, uint32 geometryIndex = 0);
     uint32 WriteUpdateBuffers(uint32 entryOffset);
 
     uint32 WriteBuildShaderConstantBuffer(uint32 entryOffset);
@@ -479,6 +483,7 @@ private:
     void OutputPipelineName(InternalRayTracingCsType type);
 #endif
     void InitBuildSettings();
+    void InitCopySettings();
 
     const char* ConvertBuildModeToString();
     const char* ConvertRebraidTypeToString();

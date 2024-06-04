@@ -26,7 +26,8 @@
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "UAV(u2, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
+                "CBV(b255)"
 
 //=====================================================================================================================
 // 32 bit constants
@@ -35,7 +36,6 @@ struct InputArgs
     uint AddressLo;
     uint AddressHi;
     uint NumThreads;
-    uint rtIpLevel;
     uint isDriverDecode;
 };
 

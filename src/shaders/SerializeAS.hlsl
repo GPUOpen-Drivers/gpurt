@@ -28,7 +28,8 @@
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u5, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
+                "CBV(b255)"
 
 //=====================================================================================================================
 // 32 bit constants
@@ -140,7 +141,6 @@ void SerializeAS(in uint3 globalThreadId : SV_DispatchThreadID)
                 // are mixed in this array so we need to read the instance index from memory to account for
                 // all API instances. There is some duplication here since we may have multiple leaf nodes
                 // pointing to same instance but Serialize performance is not of great concern.
-
                 {
                     apiInstanceIndex = FetchInstanceIndex(0, header, currentInstNodePtr);
                 }

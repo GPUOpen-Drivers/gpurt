@@ -40,7 +40,6 @@ struct TDArgs
     uint TDBinsScratchOffset;
     uint CurrentStateScratchOffset;
     uint TdTaskQueueCounterScratchOffset;
-    uint EncodeArrayOfPointers;
 };
 
 #define FLT_MAX         3.402823466e+38F        /* max value */
@@ -57,10 +56,11 @@ struct TDArgs
                 "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
-                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b255),"\
                 "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u6, visibility=SHADER_VISIBILITY_ALL)"
+                "UAV(u6, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u7, visibility=SHADER_VISIBILITY_ALL),"\
+                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
+                "CBV(b255)"
 
 #include "../shared/rayTracingDefs.h"
 
@@ -71,19 +71,25 @@ struct RootConstants
 [[vk::push_constant]] ConstantBuffer<RootConstants> ShaderRootConstants    : register(b0);
 [[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b1);
 
-[[vk::binding(0, 0)]]                  RWByteAddressBuffer DstBuffer          : register(u0);
-[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer DstMetadata        : register(u1);
-[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer      : register(u2);
-[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer ScratchGlobal      : register(u3);
-[[vk::binding(4, 0)]]                  RWByteAddressBuffer InstanceDescBuffer : register(u4);
+[[vk::binding(0, 0)]] RWByteAddressBuffer                          SrcBuffer           : register(u0);
+[[vk::binding(1, 0)]] RWByteAddressBuffer                          DstBuffer           : register(u1);
+[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer         DstMetadata         : register(u2);
+[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer         ScratchBuffer       : register(u3);
+[[vk::binding(4, 0)]] globallycoherent RWByteAddressBuffer         ScratchGlobal       : register(u4);
+[[vk::binding(5, 0)]] RWByteAddressBuffer                          InstanceDescBuffer  : register(u5);
+[[vk::binding(6, 0)]] RWByteAddressBuffer                          EmitBuffer          : register(u6);
+[[vk::binding(7, 0)]] RWByteAddressBuffer                          IndirectArgBuffer   : register(u7);
 
-// unused buffer
-[[vk::binding(5, 0)]] RWByteAddressBuffer                  SrcBuffer          : register(u5);
-[[vk::binding(6, 0)]] RWByteAddressBuffer                  EmitBuffer         : register(u6);
-
+template<typename T>
+T LoadInstanceDescBuffer(uint offset)
+{
+    return InstanceDescBuffer.Load<T>(offset);
+}
+#include "IndirectArgBufferUtils.hlsl"
 #include "IntersectCommon.hlsl"
 #include "BuildCommon.hlsl"
 #include "BuildCommonScratch.hlsl"
+#include "EncodeTopLevelCommon.hlsl"
 
 groupshared uint SharedMem[1];
 
@@ -746,16 +752,7 @@ void WriteChildrenTreeRefList(
     const GpuVirtualAddress address = GetInstanceAddr(asuint(node.sah_or_v2_or_instBasePtr.x),
                                                       asuint(node.sah_or_v2_or_instBasePtr.y));
 
-    InstanceDesc desc;
-    if (args.EncodeArrayOfPointers != 0)
-    {
-        GpuVirtualAddress addr = InstanceDescBuffer.Load<GpuVirtualAddress>(ref.primitiveIndex * GPU_VIRTUAL_ADDRESS_SIZE);
-        desc = FetchInstanceDescAddr(addr);
-    }
-    else
-    {
-        desc = InstanceDescBuffer.Load<InstanceDesc>(ref.primitiveIndex * INSTANCE_DESC_SIZE);
-    }
+    const InstanceDesc desc = LoadInstanceDesc(ref.primitiveIndex, LoadNumPrimAndOffset().primitiveOffset);
 
     if (
         IsBoxNode16(ref.nodePointer))
@@ -1885,7 +1882,6 @@ void BuildBVHTD(
     args.TDBinsScratchOffset          = ShaderConstants.offsets.tdBins;
     args.CurrentStateScratchOffset    = ShaderConstants.offsets.tdState;
     args.TdTaskQueueCounterScratchOffset = ShaderConstants.offsets.tdTaskQueueCounter;
-    args.EncodeArrayOfPointers        = ShaderConstants.encodeArrayOfPointers;
 
     BuildBVHTDImpl(globalId, localId, groupId, args);
 }

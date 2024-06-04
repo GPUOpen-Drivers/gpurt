@@ -345,7 +345,7 @@ static IntersectionResult TraceRayImpl1_1(
                             const uint64_t instNodePtr64 =
                                 CalculateInstanceNodePtr64(GPURT_RTIP1_1, topLevelBvh, instNodePtr);
 #if DEVELOPER
-                            if (EnableTraversalCounter())
+                            if (EnableTraversalCounter() && (PackUint64(hitInfo.anyHitId) != 0))
                             {
                                 WriteRayHistoryTokenFunctionCall(rayId,
                                                                  hitInfo.anyHitId,
@@ -380,7 +380,7 @@ static IntersectionResult TraceRayImpl1_1(
                             AmdTraceRayGetHitAttributes(candidateT, hitKind, status);
 
 #if DEVELOPER
-                            if (EnableTraversalCounter())
+                            if (EnableTraversalCounter() && (PackUint64(hitInfo.anyHitId) != 0))
                             {
                                 WriteRayHistoryTokenAnyHitStatus(rayId, status);
                             }
@@ -690,17 +690,6 @@ static IntersectionResult IntersectRayImpl1_1(
     IntersectionResult result = (IntersectionResult)0;
     result.t         = ray.TMax - ray.TMin;
     result.nodeIndex = INVALID_IDX;
-
-#if DEVELOPER
-    result.numIterations = 0;
-
-    result.numRayBoxTest         = 0;
-    result.numRayTriangleTest    = 0;
-    result.maxStackDepth         = 0;
-    result.numAnyHitInvocation   = 0;
-    result.numCandidateHits      = 0;
-    result.instanceIntersections = 0;
-#endif
 
     if ((blasPointer != INVALID_NODE) && (tlasPointer != INVALID_NODE))
     {

@@ -226,7 +226,7 @@ void DebugMonitor::GpuDebugThread(
             break;
         }
 
-        Util::SleepMs(500);
+        Util::Sleep(std::chrono::milliseconds(500));
     }
 }
 } // namespace GpuRt

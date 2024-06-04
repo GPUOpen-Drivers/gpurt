@@ -70,10 +70,6 @@ static IntersectionResult TraceRayImpl2_0(
 
     uint lastInstanceNode = INVALID_IDX;
 
-    // OR compile time pipeline flags into the ray flags so they are handled by hardware culling
-    rayFlags |=
-        (AmdTraceRayGetStaticFlags() & (PIPELINE_FLAG_SKIP_PROCEDURAL_PRIMITIVES | PIPELINE_FLAG_SKIP_TRIANGLES));
-
     const bool rayForceOpaque        = (rayFlags & RAY_FLAG_FORCE_OPAQUE);
     const bool cullOpaque            = (rayFlags & RAY_FLAG_CULL_OPAQUE);
     const bool cullNonOpaque         = (rayFlags & RAY_FLAG_CULL_NON_OPAQUE);
@@ -277,14 +273,14 @@ static IntersectionResult TraceRayImpl2_0(
                     {
                         const uint instanceContribution = (instanceHitContributionAndFlags & 0x00FFFFFF);
                         HitGroupInfo hitInfo = GetHitGroupInfo(ExtractRayContributionToHitIndex(traceRayParameters),
-                                                                ExtractMultiplierForGeometryContributionToHitIndex(traceRayParameters),
-                                                                geometryIndex,
-                                                                instanceContribution);
+                                                               ExtractMultiplierForGeometryContributionToHitIndex(traceRayParameters),
+                                                               geometryIndex,
+                                                               instanceContribution);
 
                         const uint64_t instNodePtr64 =
                             CalculateInstanceNodePtr64(GPURT_RTIP2_0, topLevelBvh, instNodePtr);
 #if DEVELOPER
-                        if (EnableTraversalCounter())
+                        if (EnableTraversalCounter() && (PackUint64(hitInfo.anyHitId) != 0))
                         {
                             WriteRayHistoryTokenFunctionCall(rayId,
                                                              hitInfo.anyHitId,
@@ -319,7 +315,7 @@ static IntersectionResult TraceRayImpl2_0(
                         // updated if the hit was accepted and "status" reflects that decision
                         AmdTraceRayGetHitAttributes(candidateT, hitKind, status);
 #if DEVELOPER
-                        if (EnableTraversalCounter())
+                        if (EnableTraversalCounter() && (PackUint64(hitInfo.anyHitId) != 0))
                         {
                             WriteRayHistoryTokenAnyHitStatus(rayId, status);
                         }

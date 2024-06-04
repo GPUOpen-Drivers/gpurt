@@ -222,3 +222,43 @@ bool IsActive(TriangleData tri)
 {
     return ((isnan(tri.v0.x) == false) && (isnan(tri.v1.x) == false) && (isnan(tri.v2.x) == false));
 }
+
+//======================================================================================================================
+TriangleData FetchTrianglePrimitive(
+    in BuildShaderGeometryConstants geomConst,
+    in uint geomId,
+    in uint primId)
+{
+    // Fetch face indices from index buffer
+    const IndexBufferInfo indexBufferInfo =
+    {
+        geomConst.indexBufferGpuVaLo,
+        geomConst.indexBufferGpuVaHi,
+        geomConst.indexBufferByteOffset,
+        geomConst.indexBufferFormat,
+    };
+
+    // Fetch face indices from index buffer
+    uint3 faceIndices = FetchFaceIndices(primId, indexBufferInfo);
+
+    TriangleData tri = (TriangleData)0;
+
+    // Check if vertex indices are within bounds, otherwise make the triangle inactive
+    const uint maxIndex = max(faceIndices.x, max(faceIndices.y, faceIndices.z));
+    if (maxIndex < geomConst.vertexCount)
+    {
+        const uint64_t transformBufferGpuVa =
+            PackUint64(geomConst.transformBufferGpuVaLo, geomConst.transformBufferGpuVaHi);
+
+        // Fetch triangle vertex data from vertex buffer
+        tri = FetchTransformedTriangleData(GeometryBuffer[NonUniformResourceIndex(geomId)],
+                                           faceIndices,
+                                           geomConst.geometryStride,
+                                           0,  // TODO: Indirect builds
+                                           geomConst.vertexComponentCount,
+                                           transformBufferGpuVa,
+                                           0); // TODO: Indirect builds
+    }
+
+    return tri;
+}

@@ -52,9 +52,6 @@ static IntersectionResult TraceRayInternal(
 #ifdef __cplusplus
     _AmdSetRtip(rtIpLevel);
 #endif
-#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION  >= 41
-    rayFlags = (rayFlags & ~AmdTraceRayGetKnownUnsetRayFlags()) | AmdTraceRayGetKnownSetRayFlags();
-#endif
 
     switch (rtIpLevel)
     {
@@ -119,6 +116,10 @@ static bool TraceRayCommon(
     uint  rtIpLevel
 )
 {
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION  >= 41
+    rayFlags = (rayFlags & ~AmdTraceRayGetKnownUnsetRayFlags()) | AmdTraceRayGetKnownSetRayFlags();
+#endif
+
 #if DEVELOPER
     rayFlags |= DispatchRaysConstBuf.profileRayFlags;
     TraversalCounter counter;
@@ -134,6 +135,11 @@ static bool TraceRayCommon(
                               originX, originY, originZ,
                               tMin,
                               dirX, dirY, dirZ);
+
+    // OR compile time pipeline flags into the ray flags so they are handled by hardware culling
+    // Need to happend after AmdTraceRaySetTraceParams as the ray flags shader reading do not include pipeline flags.
+    rayFlags |=
+        (AmdTraceRayGetStaticFlags() & (PIPELINE_FLAG_SKIP_PROCEDURAL_PRIMITIVES | PIPELINE_FLAG_SKIP_TRIANGLES));
 
     RayDesc ray;
     ray.Origin    = float3(originX, originY, originZ);
@@ -326,6 +332,8 @@ static bool TraceRayCommon(
 #if DEVELOPER
     if (EnableTraversalCounter())
     {
+        // Restore parentId
+        AmdTraceRaySetParentId(parentId);
         WriteTraversalCounter(rayId, counter);
     }
 #endif

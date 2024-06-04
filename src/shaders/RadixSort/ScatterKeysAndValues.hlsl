@@ -31,6 +31,8 @@
                 "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
                 "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u6, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u7, visibility=SHADER_VISIBILITY_ALL),"\
                 "CBV(b255)"/*Build Settings binding*/
 
 //=====================================================================================================================
@@ -45,14 +47,14 @@ struct RootConstants
 [[vk::push_constant]] ConstantBuffer<RootConstants> ShaderRootConstants    : register(b0);
 [[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b1);
 
-[[vk::binding(0, 0)]] RWByteAddressBuffer DstBuffer     : register(u0);
-[[vk::binding(1, 0)]] RWByteAddressBuffer DstMetadata   : register(u1);
-[[vk::binding(2, 0)]] RWByteAddressBuffer ScratchBuffer : register(u2);
-[[vk::binding(3, 0)]] RWByteAddressBuffer ScratchGlobal : register(u3);
-
-// unused buffer
-[[vk::binding(4, 0)]] RWByteAddressBuffer SrcBuffer     : register(u4);
-[[vk::binding(5, 0)]] RWByteAddressBuffer EmitBuffer    : register(u5);
+[[vk::binding(0, 0)]] RWByteAddressBuffer         SrcBuffer           : register(u0);
+[[vk::binding(1, 0)]] RWByteAddressBuffer         DstBuffer           : register(u1);
+[[vk::binding(2, 0)]] RWByteAddressBuffer         DstMetadata         : register(u2);
+[[vk::binding(3, 0)]] RWByteAddressBuffer         ScratchBuffer       : register(u3);
+[[vk::binding(4, 0)]] RWByteAddressBuffer         ScratchGlobal       : register(u4);
+[[vk::binding(5, 0)]] RWByteAddressBuffer         InstanceDescBuffer  : register(u5);
+[[vk::binding(6, 0)]] RWByteAddressBuffer         EmitBuffer          : register(u6);
+[[vk::binding(7, 0)]] RWByteAddressBuffer         IndirectArgBuffer   : register(u7);
 
 #include "ScanCommon.hlsli"
 #include "../BuildCommonScratch.hlsl"

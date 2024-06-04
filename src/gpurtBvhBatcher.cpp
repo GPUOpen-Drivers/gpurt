@@ -39,6 +39,11 @@
 
 namespace GpuRt
 {
+// =====================================================================================================================
+static bool PhaseFlagSet(BuildPhaseFlags src, BuildPhaseFlags test)
+{
+    return Util::TestAnyFlagSet(uint32(src), uint32(test));
+}
 
 // =====================================================================================================================
 // Explicit ray tracing bvh batcher constructor
@@ -122,7 +127,9 @@ void BvhBatcher::BuildAccelerationStructureBatch(
             }
             else
             {
-                blasBuilders.EmplaceBack(std::move(builder));
+                {
+                    blasBuilders.EmplaceBack(std::move(builder));
+                }
             }
         }
     }
@@ -135,16 +142,22 @@ void BvhBatcher::BuildAccelerationStructureBatch(
         RGP_POP_MARKER();
     }
 
-    if ((blasBuilders.IsEmpty() == false) || (blasUpdaters.IsEmpty() == false))
+    if (
+        (blasBuilders.IsEmpty() == false) ||
+        (blasUpdaters.IsEmpty() == false))
     {
         RGP_PUSH_MARKER("BLAS: %u builds, %u updates", blasBuilders.size(), blasUpdaters.size());
-        BuildRaytracingAccelerationStructureBatch<false>(blasBuilders, blasUpdaters);
+        BuildRaytracingAccelerationStructureBatch<false>(
+            blasBuilders,
+            blasUpdaters);
         RGP_POP_MARKER();
     }
     if ((tlasBuilders.IsEmpty() == false) || (tlasUpdaters.IsEmpty() == false))
     {
         RGP_PUSH_MARKER("TLAS: %u builds, %u updates", tlasBuilders.size(), tlasUpdaters.size());
-        BuildRaytracingAccelerationStructureBatch<true>(tlasBuilders, tlasUpdaters);
+        BuildRaytracingAccelerationStructureBatch<true>(
+            tlasBuilders,
+            tlasUpdaters);
         RGP_POP_MARKER();
     }
 
@@ -155,10 +168,11 @@ void BvhBatcher::BuildAccelerationStructureBatch(
 // Executes each build phase for each builder within the batch
 template <bool IsTlas>
 void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
-    Util::Span<BvhBuilder> builders, // Batch of BVH builds
-    Util::Span<BvhBuilder> updaters) // Batch of BVH updates
+    Util::Span<BvhBuilder> builders,        // Batch of BVH builds
+    Util::Span<BvhBuilder> updaters)        // Batch of BVH updates
 {
-    if (builders.IsEmpty() && updaters.IsEmpty())
+    if (
+        builders.IsEmpty() && updaters.IsEmpty())
     {
         return;
     }
@@ -179,29 +193,29 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
     Barrier();
     RGP_POP_MARKER();
 
+    if (PhaseEnabled(BuildPhaseFlags::BuildDumpEvents))
+    {
+        // TODO: Disable per-bvh timestamp events for batched builds
+        BuildPhase(builders, &BvhBuilder::PreBuildDumpEvents);
+        BuildPhase(updaters, &BvhBuilder::PreBuildDumpEvents);
+    }
+
     if (builders.IsEmpty() == false)
     {
         RGP_PUSH_MARKER("Builds");
 
-        // TODO: Disable per-bvh timestamp events for batched builds
-        BuildPhase(builders, &BvhBuilder::PreBuildDumpEvents);
-
-        if (PhaseEnabled(BuildPhaseFlags::EarlyPairCompression))
+        if (PhaseEnabled(BuildPhaseFlags::EncodeQuadPrimitives))
         {
-            BuildPhase("CountTrianglePairs", builders, &BvhBuilder::CountTrianglePairs);
-            Barrier();
-            BuildPhase("CountTrianglePairsPrefixSum", builders, &BvhBuilder::CountTrianglePairsPrefixSum);
-            Barrier();
+            BuildPhase("EncodeQuadPrimitives", builders, &BvhBuilder::EncodeQuadPrimitives);
         }
-
-        if (PhaseEnabled(BuildPhaseFlags::EncodePrimitives))
+        else if (PhaseEnabled(BuildPhaseFlags::EncodePrimitives))
         {
-            BuildPhase("EncodePrimitives", builders, &BvhBuilder::EncodePrimitives);
+            BuildPhase(BuildPhaseFlags::EncodePrimitives, builders, &BvhBuilder::EncodePrimitives);
         }
 
         if (m_deviceSettings.enableParallelBuild)
         {
-            BuildPhase("BuildParallel", builders, &BvhBuilder::BuildParallel);
+            BuildPhase(BuildPhaseFlags::BuildParallel, builders, &BvhBuilder::BuildParallel);
         }
         else
         {
@@ -226,8 +240,6 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
             RGP_POP_MARKER();
         }
 
-        BuildPhase(builders, &BvhBuilder::PostBuildDumpEvents);
-
         RGP_POP_MARKER();
     }
 
@@ -237,7 +249,7 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
 
         if (PhaseEnabled(BuildPhaseFlags::EncodePrimitives))
         {
-            BuildPhase("EncodePrimitives", updaters, &BvhBuilder::EncodePrimitives);
+            BuildPhase(BuildPhaseFlags::EncodePrimitives, updaters, &BvhBuilder::EncodePrimitives);
         }
 
         BuildPhase("UpdateAccelerationStructure", updaters, &BvhBuilder::UpdateAccelerationStructure);
@@ -245,17 +257,26 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
         RGP_POP_MARKER();
     }
 
+    if (PhaseEnabled(BuildPhaseFlags::SeparateEmitPostBuildInfoPass))
     {
         RGP_PUSH_MARKER("EmitPostBuildInfo");
-
-        if (PhaseEnabled(BuildPhaseFlags::SeparateEmitPostBuildInfoPass))
-        {
-            Barrier();
-        }
+        Barrier();
         BuildPhase("Updates", updaters, &BvhBuilder::EmitPostBuildInfo);
         BuildPhase("Builds", builders, &BvhBuilder::EmitPostBuildInfo);
 
         RGP_POP_MARKER();
+    }
+    else
+    {
+        // Execute EmitPostBuildInfo without any RGP markers
+        BuildPhase(updaters, &BvhBuilder::EmitPostBuildInfo);
+        BuildPhase(builders, &BvhBuilder::EmitPostBuildInfo);
+    }
+
+    if (PhaseEnabled(BuildPhaseFlags::BuildDumpEvents))
+    {
+        BuildPhase(builders, &BvhBuilder::PostBuildDumpEvents);
+        BuildPhase(updaters, &BvhBuilder::PostBuildDumpEvents);
     }
 }
 
@@ -272,23 +293,23 @@ void BvhBatcher::BuildMultiDispatch(Util::Span<BvhBuilder> builders)
     if (PhaseEnabled(BuildPhaseFlags::Rebraid))
     {
         Barrier();
-        BuildPhase("Rebraid", builders, &BvhBuilder::Rebraid);
+        BuildPhase(BuildPhaseFlags::Rebraid, builders, &BvhBuilder::Rebraid);
     }
     if (PhaseEnabled(BuildPhaseFlags::BuildBVHTD))
     {
         Barrier();
-        BuildPhase("BuildBVHTD", builders, &BvhBuilder::BuildBVHTD);
+        BuildPhase(BuildPhaseFlags::BuildBVHTD, builders, &BvhBuilder::BuildBVHTD);
     }
     if (PhaseEnabled(BuildPhaseFlags::GenerateMortonCodes))
     {
         Barrier();
-        BuildPhase("GenerateMortonCodes", builders, &BvhBuilder::GenerateMortonCodes);
+        BuildPhase(BuildPhaseFlags::GenerateMortonCodes, builders, &BvhBuilder::GenerateMortonCodes);
     }
     if (PhaseEnabled(BuildPhaseFlags::MergeSort))
     {
         Barrier();
         const uint32 wavesPerSimd = builders.size() == 1 ? 16U : 2U;
-        BuildFunction("Merge Sort", builders, [wavesPerSimd](BvhBuilder& builder)
+        BuildFunction(BuildPhaseFlags::MergeSort, builders, [wavesPerSimd](BvhBuilder& builder)
         {
             builder.MergeSort(wavesPerSimd);
         });
@@ -303,18 +324,18 @@ void BvhBatcher::BuildMultiDispatch(Util::Span<BvhBuilder> builders)
     if (PhaseEnabled(BuildPhaseFlags::BuildBVH))
     {
         Barrier();
-        BuildPhase("BuildBVH", builders, &BvhBuilder::BuildBVH);
+        BuildPhase(BuildPhaseFlags::BuildBVH, builders, &BvhBuilder::BuildBVH);
     }
     if (PhaseEnabled(BuildPhaseFlags::BuildFastAgglomerativeLbvh))
     {
         Barrier();
-        BuildPhase("BuildFastAgglomerativeLbvh", builders, &BvhBuilder::BuildFastAgglomerativeLbvh);
+        BuildPhase(BuildPhaseFlags::BuildFastAgglomerativeLbvh, builders, &BvhBuilder::BuildFastAgglomerativeLbvh);
     }
     if (PhaseEnabled(BuildPhaseFlags::BuildBVHPLOC))
     {
         Barrier();
         const uint32 wavesPerSimd = builders.size() == 1 ? 8U : 1U;
-        BuildFunction("BuildBVHPLOC", builders, [wavesPerSimd](BvhBuilder& builder)
+        BuildFunction(BuildPhaseFlags::BuildBVHPLOC, builders, [wavesPerSimd](BvhBuilder& builder)
         {
             builder.BuildBVHPLOC(wavesPerSimd);
         });
@@ -322,17 +343,17 @@ void BvhBatcher::BuildMultiDispatch(Util::Span<BvhBuilder> builders)
     if (PhaseEnabled(BuildPhaseFlags::RefitBounds))
     {
         Barrier();
-        BuildPhase("RefitBounds", builders, &BvhBuilder::RefitBounds);
+        BuildPhase(BuildPhaseFlags::RefitBounds, builders, &BvhBuilder::RefitBounds);
     }
     if (PhaseEnabled(BuildPhaseFlags::PairCompression))
     {
         Barrier();
-        BuildPhase("PairCompression", builders, &BvhBuilder::PairCompression);
+        BuildPhase(BuildPhaseFlags::PairCompression, builders, &BvhBuilder::PairCompression);
     }
-    if (PhaseEnabled(BuildPhaseFlags::BuildQBVH))
+    if (PhaseEnabled(BuildPhaseFlags::EncodeHwBvh))
     {
         Barrier();
-        BuildPhase("BuildQBVH", builders, &BvhBuilder::BuildQBVH);
+        BuildPhase(BuildPhaseFlags::EncodeHwBvh, builders, &BvhBuilder::EncodeHwBvh);
     }
 }
 
@@ -421,7 +442,7 @@ void BvhBatcher::DispatchInitAccelerationStructure(
                 // primitive reference counter. Initialise counters to 0 when these features are enabled.
                 const bool dynamicallyIncrementsPrimRefCount = builder.m_buildConfig.enableEarlyPairCompression
                     || builder.m_buildConfig.triangleSplitting
-                    || (!builder.m_buildConfig.topLevelBuild && builder.m_buildSettings.isIndirectBuild);
+                    || builder.m_buildSettings.isIndirectBuild;
                 const InitAccelerationStructure::Constants shaderConstants =
                 {
                     .maxNumPrimitives                     = builder.m_buildConfig.maxNumPrimitives,
@@ -537,7 +558,7 @@ void BvhBatcher::UpdateEnabledPhaseFlags(
 // Checks if the provided phase is enabled for the current batch
 bool BvhBatcher::PhaseEnabled(BuildPhaseFlags phase)
 {
-    return Util::TestAnyFlagSet(uint32(m_enabledPhaseFlags), uint32(phase));
+    return PhaseFlagSet(m_enabledPhaseFlags, phase);
 }
 
 // =====================================================================================================================
@@ -563,7 +584,49 @@ void BvhBatcher::BuildFunction(
 }
 
 // =====================================================================================================================
-// Invokes the builder phase function for each builder
+// Applies the provided BatchBuilderFunc for each builder that enables the phase
+template <typename BatchBuilderFunc>
+void BvhBatcher::BuildFunction(
+    BuildPhaseFlags        phase,
+    Util::Span<BvhBuilder> builders,
+    BatchBuilderFunc       func)
+{
+    RGP_PUSH_MARKER(BuildPhaseName(phase));
+
+    for (auto& builder : builders)
+    {
+        if (PhaseFlagSet(builder.EnabledPhases(), phase))
+        {
+            func(builder);
+        }
+    }
+
+    RGP_POP_MARKER();
+}
+
+// =====================================================================================================================
+// Invokes the builder phase function for each builder that enables the phase
+template<typename BuilderPhase>
+void BvhBatcher::BuildPhase(
+    BuildPhaseFlags        phase,
+    Util::Span<BvhBuilder> builders,
+    BuilderPhase           pBuilderPhase)
+{
+    RGP_PUSH_MARKER(BuildPhaseName(phase));
+
+    for (auto& builder : builders)
+    {
+        if (PhaseFlagSet(builder.EnabledPhases(), phase))
+        {
+            (builder.*pBuilderPhase)();
+        }
+    }
+
+    RGP_POP_MARKER();
+}
+
+// =====================================================================================================================
+// Invokes the builder phase function for each builder in the batch
 template<typename BuilderPhase>
 void BvhBatcher::BuildPhase(
     const char*            rgpMarkerName,
@@ -590,7 +653,10 @@ void BvhBatcher::BuildPhase(
     Util::Span<BvhBuilder> builders,
     BuilderPhase           pBuilderPhase)
 {
-    BuildPhase(nullptr, builders, pBuilderPhase);
+    for (auto& builder : builders)
+    {
+        (builder.*pBuilderPhase)();
+    }
 }
 
 #if GPURT_DEVELOPER

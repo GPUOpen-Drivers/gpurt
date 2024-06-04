@@ -35,6 +35,7 @@ set(gpurtHlsl
     RadixSort/ScanExclusiveInt4DLBCommon.hlsl
     RadixSort/ScanExclusivePartInt4.hlsl
     RadixSort/ScatterKeysAndValues.hlsl
+    IndirectArgBufferUtils.hlsl
     AccelStructTracker.hlsl
     BuildBVH.hlsl
     BuildBVHPLOC.hlsl
@@ -45,7 +46,9 @@ set(gpurtHlsl
     BuildFastAgglomerativeLbvh.hlsl
     Debug.hlsl
     TaskCounter.hlsl
+    TaskMacros.hlsl
     TaskQueueCounter.hlsl
+    EncodeHwBvhCommon.hlsl
     BuildSettings.hlsli
     BuildParallel.hlsl
     BuildQBVH.hlsl
@@ -53,10 +56,10 @@ set(gpurtHlsl
     ClearBuffer.hlsl
     Common.hlsl
     CompactAS.hlsl
+    CompactAS1_1.hlsl
     CompactCommon.hlsl
     CopyAS.hlsl
     CopyBufferRaw.hlsl
-    CountTrianglePairsPrefixSum.hlsl
     DecodeAS.hlsl
     DecodeCommon.hlsl
     DeserializeAS.hlsl

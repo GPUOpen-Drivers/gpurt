@@ -44,7 +44,7 @@ enum class BuildPhaseFlags : uint32_t
 {
     Rebraid                       = 1 << 0,
     BuildBVHTD                    = 1 << 1,
-    BuildQBVH                     = 1 << 2,
+    EncodeHwBvh                   = 1 << 2,
     GenerateMortonCodes           = 1 << 3,
     MergeSort                     = 1 << 4,
     RadixSort                     = 1 << 5,
@@ -55,9 +55,50 @@ enum class BuildPhaseFlags : uint32_t
     SeparateEmitPostBuildInfoPass = 1 << 12,
     BuildParallel                 = 1 << 13,
     BuildFastAgglomerativeLbvh    = 1 << 15,
-    EarlyPairCompression          = 1 << 16,
+    EncodeQuadPrimitives          = 1 << 16,
     EncodePrimitives              = 1 << 18,
+    BuildDumpEvents               = 1 << 19,
 };
+
+static const char* BuildPhaseName(BuildPhaseFlags phase)
+{
+    switch (phase)
+    {
+    case GpuRt::BuildPhaseFlags::Rebraid:
+        return "Rebraid";
+    case GpuRt::BuildPhaseFlags::BuildBVHTD:
+        return "BuildBVHTD";
+    case GpuRt::BuildPhaseFlags::EncodeHwBvh:
+        return "EncodeHwBvh";
+    case GpuRt::BuildPhaseFlags::GenerateMortonCodes:
+        return "GenerateMortonCodes";
+    case GpuRt::BuildPhaseFlags::MergeSort:
+        return "MergeSort";
+    case GpuRt::BuildPhaseFlags::RadixSort:
+        return "RadixSort";
+    case GpuRt::BuildPhaseFlags::BuildBVH:
+        return "BuildBVH";
+    case GpuRt::BuildPhaseFlags::BuildBVHPLOC:
+        return "BuildBVHPLOC";
+    case GpuRt::BuildPhaseFlags::RefitBounds:
+        return "RefitBounds";
+    case GpuRt::BuildPhaseFlags::PairCompression:
+        return "PairCompression";
+    case GpuRt::BuildPhaseFlags::SeparateEmitPostBuildInfoPass:
+        return "SeparateEmitPostBuildInfoPass";
+    case GpuRt::BuildPhaseFlags::BuildParallel:
+        return "BuildParallel";
+    case GpuRt::BuildPhaseFlags::BuildFastAgglomerativeLbvh:
+        return "BuildFastAgglomerativeLbvh";
+    case GpuRt::BuildPhaseFlags::EncodeQuadPrimitives:
+        return "EncodeQuadPrimitives";
+    case GpuRt::BuildPhaseFlags::EncodePrimitives:
+        return "EncodePrimitives";
+    case GpuRt::BuildPhaseFlags::BuildDumpEvents:
+        return "BuildDumpEvents";
+    }
+    return "";
+}
 
 constexpr BuildPhaseFlags& operator|=(BuildPhaseFlags& a, BuildPhaseFlags b) noexcept
 {

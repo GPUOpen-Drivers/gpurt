@@ -73,7 +73,6 @@ const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsTyp
     PIPELINE_BUILD_INFO(RefitBounds),
     PIPELINE_BUILD_INFO(ClearBuffer),
     PIPELINE_BUILD_INFO(CopyBufferRaw),
-    PIPELINE_BUILD_INFO(InitBuildQBVH),
     PIPELINE_BUILD_INFO(BuildQBVH),
     PIPELINE_BUILD_INFO(BitHistogram),
     PIPELINE_BUILD_INFO(ScatterKeysAndValues),
@@ -99,8 +98,7 @@ const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsTyp
     PIPELINE_BUILD_INFO(InitAccelerationStructure),
     PIPELINE_BUILD_INFO(InitUpdateAccelerationStructure),
     PIPELINE_BUILD_INFO(BuildFastAgglomerativeLbvh),
-    PIPELINE_BUILD_INFO(CountTrianglePairs),
-    PIPELINE_BUILD_INFO(CountTrianglePairsPrefixSum),
+    PIPELINE_BUILD_INFO(EncodeQuadNodes),
 };
 
 #undef PIPELINE_BUILD_INFO

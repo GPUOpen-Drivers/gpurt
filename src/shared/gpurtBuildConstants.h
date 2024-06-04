@@ -113,14 +113,14 @@ struct BuildShaderConstants
     uint32 tsBudgetPerTriangle;
 
     uint32 maxNumPrimitives;
-    uint32 encodeArrayOfPointers;
     uint32 rebraidFactor;
     uint32 numMortonSizeBits;
-
     float reservedFloat;
+
     uint32 indirectArgBufferStride;
     uint32 numDescs;
     uint32 leafNodeExpansionFactor;
+    uint32 padding0;
 
     // Align the following struct to 4 dwords due to HLSL constant buffer packing rules
     AccelStructHeader header;

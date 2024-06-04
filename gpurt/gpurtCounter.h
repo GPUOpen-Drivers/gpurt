@@ -144,6 +144,16 @@ typedef uint32 CounterInfo;
 // Per-ray traversal counter data
 struct TraversalCounter
 {
+#ifdef __cplusplus
+    TraversalCounter(int val)
+    {
+        memset(this, val, sizeof(TraversalCounter));
+    }
+
+    TraversalCounter() : TraversalCounter(0)
+    {
+    }
+#endif
     uint32 data[TCID_COUNT];  // Counter data per-ray
 };
 
