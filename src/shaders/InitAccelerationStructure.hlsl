@@ -23,7 +23,8 @@
  *
  **********************************************************************************************************************/
 #ifdef IS_UPDATE
-#define RootSig "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1))"
+#define RootSig "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
+                "CBV(b255)"
 #else
 #define RootSig "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
                 "DescriptorTable(CBV(b0, numDescriptors = 4294967295, space = 1)),"\
@@ -34,7 +35,7 @@
 
 #include "Common.hlsl"
 
-[[vk::binding(0, 2)]] RWByteAddressBuffer       BatchScratchGlobals[]   : register(u0, space1);
+[[vk::binding(0, 3)]] RWByteAddressBuffer       BatchScratchGlobals[]   : register(u0, space1);
 #ifndef IS_UPDATE
 struct Constants
 {
@@ -57,9 +58,9 @@ struct Constants
     AccelStructMetadataHeader metadataHeader;
 };
 
-[[vk::binding(0, 3)]] ConstantBuffer<Constants> BatchBuilderConstants[] : register(b0, space1);
-[[vk::binding(0, 4)]] RWByteAddressBuffer       BatchHeaderBuffers[]    : register(u0, space2);
-[[vk::binding(0, 5)]] RWByteAddressBuffer       BatchScratchBuffers[]   : register(u0, space3);
+[[vk::binding(0, 4)]] ConstantBuffer<Constants> BatchBuilderConstants[] : register(b0, space1);
+[[vk::binding(0, 5)]] RWByteAddressBuffer       BatchHeaderBuffers[]    : register(u0, space2);
+[[vk::binding(0, 6)]] RWByteAddressBuffer       BatchScratchBuffers[]   : register(u0, space3);
 #endif
 
 static const uint INVALID_SCRATCH_OFFSET = 0xFFFFFFFF;

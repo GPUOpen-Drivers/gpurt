@@ -617,6 +617,9 @@ constexpr NodeMapping UpdateTrianglesMapping[]
     { NodeType::Uav, 2 },
     { NodeType::ConstantBufferTable, 1 },
     { NodeType::TypedUavTable, 1 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
 };
 
 constexpr NodeMapping UpdateAabbsMapping[]
@@ -628,6 +631,9 @@ constexpr NodeMapping UpdateAabbsMapping[]
     { NodeType::Uav, 2 },
     { NodeType::ConstantBufferTable, 1 },
     { NodeType::TypedUavTable, 1 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
 };
 
 constexpr NodeMapping ClearBufferMapping[] =

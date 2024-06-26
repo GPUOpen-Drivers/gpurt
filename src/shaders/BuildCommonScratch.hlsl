@@ -386,6 +386,12 @@ float FetchScratchNodeLargestLength(
 }
 
 //=====================================================================================================================
+float FetchScratchNodeLargestLength(ScratchNode node)
+{
+    return asfloat(node.splitBox_or_nodePointer);
+}
+
+//=====================================================================================================================
 UintBoundingBox4 FetchCentroidBox(
     uint  baseOffset,
     uint  nodeIndex,

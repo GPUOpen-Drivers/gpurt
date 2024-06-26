@@ -47,8 +47,8 @@ struct RootConstants
 
 [[vk::push_constant]] ConstantBuffer<RootConstants>                 ShaderRootConstants : register(b0);
 [[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants>          ShaderConstants     : register(b1);
-[[vk::binding(0, 2)]] ConstantBuffer<BuildShaderGeometryConstants>  GeometryConstants[] : register(b0, space1);
-[[vk::binding(0, 3)]] RWBuffer<float3>                              GeometryBuffer[]    : register(u0, space1);
+[[vk::binding(0, 3)]] ConstantBuffer<BuildShaderGeometryConstants>  GeometryConstants[] : register(b0, space1);
+[[vk::binding(0, 4)]] RWBuffer<float3>                              GeometryBuffer[]    : register(u0, space1);
 
 [[vk::binding(0, 0)]] RWByteAddressBuffer                           SrcBuffer           : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer          DstBuffer           : register(u1);
@@ -69,8 +69,8 @@ T LoadInstanceDescBuffer(uint offset)
 #include "BuildCommon.hlsl"
 #include "BuildCommonScratch.hlsl"
 #include "EncodeCommon.hlsl"
-#include "EncodePairedTriangle.hlsl"
 #include "TaskMacros.hlsl"
+#include "EncodePairedTriangleImpl.hlsl"
 
 //=====================================================================================================================
 [RootSignature(RootSig)]
@@ -83,9 +83,6 @@ void EncodeTriangleNodes(
     const GeometryArgs args = InitGeometryArgs(ShaderRootConstants.geometryIndex);
     const NumPrimAndInputOffset inputOffsets = LoadInputOffsetsAndNumPrim(args);
 
-    const bool enableEarlyPairCompression =
-        (Settings.enableEarlyPairCompression == true) && (IsUpdate() == false);
-
     if (globalThreadId.x == 0)
     {
         WriteGeometryInfo(
@@ -96,28 +93,14 @@ void EncodeTriangleNodes(
 
     if (primitiveIndex < inputOffsets.numPrimitives)
     {
-        if (enableEarlyPairCompression)
-        {
-            EncodePairedTriangleNode(GeometryBuffer[ShaderRootConstants.geometryIndex],
-                                     args,
-                                     primitiveIndex,
-                                     globalThreadId.x,
-                                     inputOffsets.primitiveOffset,
-                                     inputOffsets.vertexOffsetInComponents,
-                                     inputOffsets.indexOffsetInBytes,
-                                     inputOffsets.transformOffsetInBytes);
-        }
-        else
-        {
-            EncodeTriangleNode(GeometryBuffer[ShaderRootConstants.geometryIndex],
-                               args,
-                               primitiveIndex,
-                               inputOffsets.primitiveOffset,
-                               inputOffsets.vertexOffsetInComponents,
-                               inputOffsets.indexOffsetInBytes,
-                               inputOffsets.transformOffsetInBytes,
-                               true);
-        }
+        EncodeTriangleNode(GeometryBuffer[ShaderRootConstants.geometryIndex],
+                           args,
+                           primitiveIndex,
+                           inputOffsets.primitiveOffset,
+                           inputOffsets.vertexOffsetInComponents,
+                           inputOffsets.indexOffsetInBytes,
+                           inputOffsets.transformOffsetInBytes,
+                           true);
     }
 
     IncrementPrimitiveTaskCounters(args.encodeTaskCounterScratchOffset,
@@ -236,12 +219,14 @@ void EncodeQuadNodes(
 
     if (globalId < endId)
     {
-        const uint primNodePointerOffset =
-            geometryArgs.BasePrimNodePtrOffset + (flattenedPrimitiveIndex * sizeof(uint));
+        {
+            const uint primNodePointerOffset =
+                geometryArgs.BasePrimNodePtrOffset + (flattenedPrimitiveIndex * sizeof(uint));
 
-        // Store invalid prim node pointer for now during first time builds.
-        // If the triangle is active, EncodeHwBvh will write it in.
-        DstBuffer.Store(primNodePointerOffset, INVALID_IDX);
+            // Store invalid prim node pointer for now during first time builds.
+            // If the triangle is active, EncodeHwBvh will write it in.
+            DstBuffer.Store(primNodePointerOffset, INVALID_IDX);
+        }
 
         const IndexBufferInfo indexBufferInfo =
         {

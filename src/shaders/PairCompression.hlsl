@@ -50,8 +50,8 @@
 [[vk::binding(6, 0)]] RWByteAddressBuffer                          EmitBuffer          : register(u6);
 [[vk::binding(7, 0)]] RWByteAddressBuffer                          IndirectArgBuffer   : register(u7);
 
-[[vk::binding(0, 2)]] ConstantBuffer<BuildShaderGeometryConstants> GeometryConstants[] : register(b0, space1);
-[[vk::binding(0, 3)]] RWBuffer<float3>                             GeometryBuffer[]    : register(u0, space1);
+[[vk::binding(0, 3)]] ConstantBuffer<BuildShaderGeometryConstants> GeometryConstants[] : register(b0, space1);
+[[vk::binding(0, 4)]] RWBuffer<float3>                             GeometryBuffer[]    : register(u0, space1);
 
 #include "Common.hlsl"
 #include "BuildCommonScratch.hlsl"
@@ -281,10 +281,10 @@ uint EncodeTwoTrianglesPerNodeQBVHCompression(
 
         const IndexBufferInfo indexBufferInfo =
         {
-            GeometryConstants[geometryIndex].indexBufferGpuVaLo,
-            GeometryConstants[geometryIndex].indexBufferGpuVaHi,
-            GeometryConstants[geometryIndex].indexBufferByteOffset + indexOffsetInBytes,
-            GeometryConstants[geometryIndex].indexBufferFormat,
+            GeometryConstants[NonUniformResourceIndex(geometryIndex)].indexBufferGpuVaLo,
+            GeometryConstants[NonUniformResourceIndex(geometryIndex)].indexBufferGpuVaHi,
+            GeometryConstants[NonUniformResourceIndex(geometryIndex)].indexBufferByteOffset + indexOffsetInBytes,
+            GeometryConstants[NonUniformResourceIndex(geometryIndex)].indexBufferFormat,
         };
 
         const uint3 faceIndices = FetchFaceIndices(primitiveIndex, indexBufferInfo);

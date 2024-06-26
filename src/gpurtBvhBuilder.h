@@ -225,7 +225,9 @@ private:
     void InitBuildConfig(
         const AccelStructBuildInfo& buildArgs);
 
-    void InitBuildShaderConstants();
+    BuildShaderConstants GetBuildShaderConstants() const;
+    void AllocateBuildShaderConstants(
+        const BuildShaderConstants& buildShaderConstants);
 
     void InitGeometryConstants();
 
@@ -278,7 +280,7 @@ private:
 
     AccelStructMetadataHeader InitAccelStructMetadataHeader();
 
-    AccelStructHeader InitAccelStructHeader();
+    AccelStructHeader InitAccelStructHeader() const;
 
     BvhBuildMode OverrideBuildMode(
         const AccelStructBuildInfo& buildInfo);
@@ -502,7 +504,6 @@ private:
     RayTracingScratchDataOffsets      m_scratchOffsets;      // Scratch offsets for the build
     const IBackend&                   m_backend;             // Backend interface
     CompileTimeBuildSettings          m_buildSettings;
-    BuildShaderConstants              m_buildShaderConstants;
     gpusize                           m_shaderConstantsGpuVa{};
     gpusize                           m_geomConstSrdTable{};
     gpusize                           m_geomBufferSrdTable{};

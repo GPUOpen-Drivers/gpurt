@@ -507,9 +507,11 @@ void EncodeTriangleNode(
                                      boundingBox,
                                      tri);
 
-            // Store invalid prim node pointer for now during first time builds.
-            // If the triangle is active, EncodeHwBvh will write it in.
-            DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
+            {
+                // Store invalid prim node pointer for now during first time builds.
+                // If the triangle is active, EncodeHwBvh will write it in.
+                DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
+            }
         }
     }
     else
@@ -523,7 +525,9 @@ void EncodeTriangleNode(
                 0,
                 NaN);
 
-            DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
+            {
+                DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
+            }
         }
         else if (Settings.isUpdateInPlace == false)
         {
@@ -733,9 +737,11 @@ void EncodeAabbNode(
                                    instanceMask,
                                    boundingBox);
 
-        // Store invalid prim node pointer for now during first time builds.
-        // If the Procedural node is active, EncodeHwBvh will update it.
-        DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
+        {
+            // Store invalid prim node pointer for now during first time builds.
+            // If the Procedural node is active, EncodeHwBvh will update it.
+            DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
+        }
     }
 
     // ClearFlags for refit and update

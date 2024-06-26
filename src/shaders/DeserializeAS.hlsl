@@ -104,62 +104,68 @@ void DeserializeAS(
 
     if (type == TOP_LEVEL)
     {
-        // Update BLAS pointers in the instance nodes
-        const uint basePrimNodePtrsOffset = metadataSizeInBytes + header.offsets.primNodePtrs;
-
-        // Loop over active primitives since there may be more or less valid instances than the original API
-        // instance count when rebraid is enabled.
-        const uint rebraid = header.RebraidEnabled();
-
-        const uint numInstances = (rebraid != 0) ? header.numActivePrims : header.numDescs;
-
-        const uint stride = (ShaderConstants.numWaves * BUILD_THREADGROUP_SIZE);
-        for (uint i = globalId; i < numInstances; i += stride)
         {
-            const uint currentInstNodePtrOffset = basePrimNodePtrsOffset + (i * NODE_PTR_SIZE);
-            const uint currentInstNodePtr       = SrcBuffer.Load(serializedHeaderSize + currentInstNodePtrOffset);
+            // Update BLAS pointers in the instance nodes
+            const uint basePrimNodePtrsOffset = metadataSizeInBytes + header.offsets.primNodePtrs;
 
-            // Skip inactive instances which have their node pointers set to invalid. Note, these only appear with
-            // rebraid disabled
-            if (currentInstNodePtr != INVALID_IDX)
+            // Loop over active primitives since there may be more or less valid instances than the original API
+            // instance count when rebraid is enabled.
+            const uint rebraid = header.RebraidEnabled();
+
+            const uint numInstances = (rebraid != 0) ? header.numActivePrims : header.numDescs;
+
+            const uint stride = (ShaderConstants.numWaves * BUILD_THREADGROUP_SIZE);
+            for (uint i = globalId; i < numInstances; i += stride)
             {
-                // Fetch API instance index from instance node. With rebraid enabled the instance node pointers
-                // in memory are in sorted order with no deactivated instances in between. The re-braided instances
-                // are mixed in this array so we need to read the instance index from memory to account for
-                // all API instances. There is some duplication here since we may have multiple leaf nodes
-                // pointing to same instance but Serialize performance is not of great concern.
-                uint apiInstanceIndex = 0;
+                const uint currentInstNodePtrOffset = basePrimNodePtrsOffset + (i * NODE_PTR_SIZE);
+                const uint currentInstNodePtr       = SrcBuffer.Load(serializedHeaderSize + currentInstNodePtrOffset);
 
+                // Skip inactive instances which have their node pointers set to invalid. Note, these only appear with
+                // rebraid disabled
+                if (currentInstNodePtr != INVALID_IDX)
                 {
-                    apiInstanceIndex = FetchInstanceIndex(serializedHeaderSize, header, currentInstNodePtr);
-                }
+                    // Fetch API instance index from instance node. With rebraid enabled the instance node pointers
+                    // in memory are in sorted order with no deactivated instances in between. The re-braided instances
+                    // are mixed in this array so we need to read the instance index from memory to account for
+                    // all API instances. There is some duplication here since we may have multiple leaf nodes
+                    // pointing to same instance but Serialize performance is not of great concern.
+                    uint apiInstanceIndex = 0;
 
-                // During serialisation we store the BLAS base addresses in API instance order. See SerializeAS
-                // for details
-                uint64_t newGpuVa = SrcBuffer.Load<uint64_t>(SERIALIZED_AS_HEADER_SIZE + (apiInstanceIndex * GPUVA_SIZE));
+                    const uint currentInstNodeOffset = ExtractNodePointerOffset(currentInstNodePtr);
 
-                const uint currentInstNodeOffset = metadataSizeInBytes + ExtractNodePointerOffset(currentInstNodePtr);
-
-                uint64_t childBasePtr = 0;
-
-                {
-                    childBasePtr = SrcBuffer.Load<uint64_t>(
-                        serializedHeaderSize + currentInstNodeOffset + INSTANCE_DESC_VA_LO_OFFSET);
-
-                    // Handle null BLAS address
-                    if (newGpuVa != 0)
                     {
-                        const uint blasMetadataSize = SrcBuffer.Load(serializedHeaderSize + currentInstNodeOffset +
-                                                                     INSTANCE_NODE_EXTRA_OFFSET +
-                                                                     RTIP1_1_INSTANCE_SIDEBAND_CHILD_METADATA_SIZE_OFFSET);
-                        newGpuVa = newGpuVa + blasMetadataSize;
+                        apiInstanceIndex = FetchInstanceIndex(serializedHeaderSize, header, currentInstNodeOffset);
                     }
 
-                    // Preserve the instance flags in the high bits of the address.
-                    const uint64_t newChildBasePtr =
-                        (childBasePtr & ~(INSTANCE_BASE_POINTER_ADDRESS_USED_MASK)) | (newGpuVa >> 3);
+                    // During serialisation we store the BLAS base addresses in API instance order. See SerializeAS
+                    // for details
+                    uint64_t newGpuVa =
+                        SrcBuffer.Load<uint64_t>(SERIALIZED_AS_HEADER_SIZE + (apiInstanceIndex * GPUVA_SIZE));
 
-                    DstMetadata.Store<uint64_t>(currentInstNodeOffset + INSTANCE_DESC_VA_LO_OFFSET, newChildBasePtr);
+                    const uint offset = metadataSizeInBytes + currentInstNodeOffset;
+
+                    uint64_t childBasePtr = 0;
+
+                    {
+                        childBasePtr = SrcBuffer.Load<uint64_t>(
+                            serializedHeaderSize + offset + INSTANCE_DESC_VA_LO_OFFSET);
+
+                        // Handle null BLAS address
+                        if (newGpuVa != 0)
+                        {
+                            const uint blasMetadataSize =
+                                SrcBuffer.Load(serializedHeaderSize + offset +
+                                               INSTANCE_NODE_EXTRA_OFFSET +
+                                               RTIP1_1_INSTANCE_SIDEBAND_CHILD_METADATA_SIZE_OFFSET);
+                            newGpuVa = newGpuVa + blasMetadataSize;
+                        }
+
+                        // Preserve the instance flags in the high bits of the address.
+                        const uint64_t newChildBasePtr =
+                            (childBasePtr & ~(INSTANCE_BASE_POINTER_ADDRESS_USED_MASK)) | (newGpuVa >> 3);
+
+                        DstMetadata.Store<uint64_t>(offset + INSTANCE_DESC_VA_LO_OFFSET, newChildBasePtr);
+                    }
                 }
             }
         }

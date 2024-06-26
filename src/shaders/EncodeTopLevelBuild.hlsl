@@ -149,15 +149,19 @@ void EncodeInstancesBuild(
             }
         }
 
-        // Store invalid prim node pointer for now during first time builds.
-        // If the instance is active, EncodeHwBvh will write it in.
-        DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
+        {
+            // Store invalid prim node pointer for now during first time builds.
+            // If the instance is active, EncodeHwBvh will write it in.
+            DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
+        }
     }
     else
     {
         // Deactivate instance permanently by setting bbox_min_or_v0.x to NaN
         WriteScratchNodeDataAtOffset(destScratchNodeOffset, 0, asuint(NaN));
 
-        DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
+        {
+            DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
+        }
     }
 }

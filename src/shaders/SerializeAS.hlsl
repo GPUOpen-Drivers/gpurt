@@ -106,50 +106,54 @@ void SerializeAS(in uint3 globalThreadId : SV_DispatchThreadID)
 
     if (type == TOP_LEVEL)
     {
-        // Bottom tree GPUVAs after header (SERIALIZED_AS_HEADER_SIZE)
-        const uint basePrimNodePtrsOffset = metadataSizeInBytes + header.offsets.primNodePtrs;
+        {
+            // Bottom tree GPUVAs after header (SERIALIZED_AS_HEADER_SIZE)
+            const uint basePrimNodePtrsOffset = metadataSizeInBytes + header.offsets.primNodePtrs;
 
-        // Loop over active primitives since there may be more or less valid instances than the original API
-        // instance count when rebraid is enabled.
-        const uint rebraid =
-            (header.info >> ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_SHIFT) &
+            // Loop over active primitives since there may be more or less valid instances than the original API
+            // instance count when rebraid is enabled.
+            const uint rebraid =
+                (header.info >> ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_SHIFT) &
                 ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_MASK;
 
-        const uint numInstances = (rebraid != 0) ? header.numActivePrims : header.numDescs;
+            const uint numInstances = (rebraid != 0) ? header.numActivePrims : header.numDescs;
 
-        for (uint i = globalID; i < numInstances; i += BUILD_THREADGROUP_SIZE * ShaderConstants.numWaves)
-        {
-            const uint currentInstNodePtrOffset = basePrimNodePtrsOffset + (i * NODE_PTR_SIZE);
-            const uint currentInstNodePtr = SrcBuffer.Load(currentInstNodePtrOffset);
-
-            // Note, without rebraid the instance nodes are in API order with deactivated instances
-            // indicated by an invalid node pointer.
-            uint32_t apiInstanceIndex = i;
-
-            // Skip inactive instances which have their node pointers set to invalid. Note, these only appear with
-            // rebraid disabled
-            uint64_t gpuVa = 0;
-
-            if (currentInstNodePtr != INVALID_IDX)
+            for (uint i = globalID; i < numInstances; i += BUILD_THREADGROUP_SIZE * ShaderConstants.numWaves)
             {
-                InstanceDesc apiInstanceDesc = DecodeApiInstanceDesc(header, currentInstNodePtr);
+                const uint currentInstNodePtrOffset = basePrimNodePtrsOffset + (i * NODE_PTR_SIZE);
+                const uint currentInstNodePtr = SrcBuffer.Load(currentInstNodePtrOffset);
 
-                gpuVa = PackUint64(apiInstanceDesc.accelStructureAddressLo, apiInstanceDesc.accelStructureAddressHiAndFlags);
+                // Note, without rebraid the instance nodes are in API order with deactivated instances
+                // indicated by an invalid node pointer.
+                uint32_t apiInstanceIndex = i;
 
-                // Fetch API instance index from instance node. With rebraid enabled the instance node pointers
-                // in memory are in sorted order with no deactivated instances in between. The re-braided instances
-                // are mixed in this array so we need to read the instance index from memory to account for
-                // all API instances. There is some duplication here since we may have multiple leaf nodes
-                // pointing to same instance but Serialize performance is not of great concern.
+                // Skip inactive instances which have their node pointers set to invalid. Note, these only appear with
+                // rebraid disabled
+                uint64_t gpuVa = 0;
+
+                if (currentInstNodePtr != INVALID_IDX)
                 {
-                    apiInstanceIndex = FetchInstanceIndex(0, header, currentInstNodePtr);
-                }
-            }
+                    const uint currentInstNodeOffset = ExtractNodePointerOffset(currentInstNodePtr);
+                    InstanceDesc apiInstanceDesc = DecodeApiInstanceDesc(header, currentInstNodeOffset);
 
-            if (apiInstanceIndex < header.numDescs)
-            {
-                // Write original BLAS address to destination buffer
-                DstBuffer.Store<uint64_t>((apiInstanceIndex * sizeof(uint64_t)) + SERIALIZED_AS_HEADER_SIZE, gpuVa);
+                    gpuVa = PackUint64(apiInstanceDesc.accelStructureAddressLo,
+                                       apiInstanceDesc.accelStructureAddressHiAndFlags);
+
+                    // Fetch API instance index from instance node. With rebraid enabled the instance node pointers
+                    // in memory are in sorted order with no deactivated instances in between. The re-braided instances
+                    // are mixed in this array so we need to read the instance index from memory to account for
+                    // all API instances. There is some duplication here since we may have multiple leaf nodes
+                    // pointing to same instance but Serialize performance is not of great concern.
+                    {
+                        apiInstanceIndex = FetchInstanceIndex(0, header, currentInstNodeOffset);
+                    }
+                }
+
+                if (apiInstanceIndex < header.numDescs)
+                {
+                    // Write original BLAS address to destination buffer
+                    DstBuffer.Store<uint64_t>((apiInstanceIndex * sizeof(uint64_t)) + SERIALIZED_AS_HEADER_SIZE, gpuVa);
+                }
             }
         }
     }

@@ -136,12 +136,12 @@ static RayTracingIpLevel _AmdGetRtip()
 
     return rtIpLevel;
 }
+#endif
 
 static bool RtIpIsAtLeast(RayTracingIpLevel level)
 {
     return ((uint32_t)_AmdGetRtip()) >= ((uint32_t)level);
 }
-#endif
 
 //=====================================================================================================================
 static uint ConvertRtIpLevel(RayTracingIpLevel rtIpLevel)
@@ -579,13 +579,18 @@ struct _AmdTraversalState
     {
     }
 
-    bool IsGoingDown()
+    bool SkipTri0()
     {
         uint ret = 0;
         return ret;
     }
 
-    void PackIsGoingDown(bool val)
+    void PackSkipTri0(bool val)
+    {
+    }
+
+    // Combined setter for instContribution and skipTri0 that prevents a dependency on the old value.
+    void PackInstanceContributionAndSkipTri0(uint instContribution, bool skipTri0)
     {
     }
 
@@ -775,19 +780,9 @@ struct _AmdTraversalResultData
 // The macros and intrinsics are defined by llpc.
 DECLARE_ENQUEUE(, uint64_t returnAddr, _AmdSystemData data)
 
-#ifdef CONTINUATIONS_USE_DUMMY_RET_ADDR
 DECLARE_ENQUEUE(Traversal, uint64_t dummyReturnAddr, _AmdSystemData data)
 DECLARE_ENQUEUE(RayGen, uint64_t dummyReturnAddr, _AmdDispatchSystemData data)
 DECLARE_WAIT_ENQUEUE(Traversal, uint64_t dummyReturnAddr, _AmdSystemData data)
-
-#define DUMMY_RETURN_ADDR _AmdGetUninitializedI64(),
-#else
-DECLARE_ENQUEUE(Traversal, _AmdSystemData data)
-DECLARE_ENQUEUE(RayGen, _AmdDispatchSystemData data)
-DECLARE_WAIT_ENQUEUE(Traversal, _AmdSystemData data)
-
-#define DUMMY_RETURN_ADDR
-#endif
 
 DECLARE_ENQUEUE(AnyHit, uint64_t returnAddr, _AmdAnyHitSystemData data, float2 candidateBarycentrics)
 DECLARE_ENQUEUE(Intersection, uint64_t returnAddr, _AmdAnyHitSystemData data)
@@ -860,8 +855,8 @@ static uint64_t GetVpcFromShaderIdTable(
 }
 
 //=====================================================================================================================
-// Returns the 64-bit VPC for the given AHS by loading its shader address, and setting the AHS priority.
-static uint64_t GetAnyHitAddr(
+// Returns the 32-bit part of the hit group shader id containing the AHS shader id.
+static uint32_t GetAnyHit32BitShaderId(
     uint hitGroupRecordIndex)
 {
     const uint offset = DispatchRaysConstBuf.hitGroupTableStrideInBytes * hitGroupRecordIndex;
@@ -870,14 +865,23 @@ static uint64_t GetAnyHitAddr(
         PackUint64(DispatchRaysConstBuf.hitGroupTableBaseAddressLo, DispatchRaysConstBuf.hitGroupTableBaseAddressHi);
     if (tableVa == 0)
     {
-        return 0;
+       return 0;
     }
-    return GetVpcFromShaderIdAddr(tableVa + offset + 8, SCHEDULING_PRIORITY_AHS);
+    return ConstantLoadDwordAtAddr(tableVa + offset + 8);
 }
 
 //=====================================================================================================================
 // Returns the 64-bit VPC for the given AHS by loading its shader address, and setting the AHS priority.
 static uint64_t GetAnyHitAddr(
+    uint hitGroupRecordIndex)
+{
+    uint32_t shaderId = GetAnyHit32BitShaderId(hitGroupRecordIndex);
+    return GetVpcFromShaderId(shaderId, SCHEDULING_PRIORITY_AHS);
+}
+
+//=====================================================================================================================
+// Returns whether the corresponding AHS is non-null.
+static bool AnyHitIsNonNull(
     in uint traceParameters,
     in uint geometryContributionToHitGroupIndex,
     in uint instanceContributionToHitGroupIndex)
@@ -888,7 +892,7 @@ static uint64_t GetAnyHitAddr(
                                        geometryContributionToHitGroupIndex,
                                        instanceContributionToHitGroupIndex);
 
-    return GetAnyHitAddr(hitGroupRecordIndex);
+    return GetAnyHit32BitShaderId(hitGroupRecordIndex) != 0;
 }
 
 //=====================================================================================================================
@@ -1773,8 +1777,6 @@ export bool _cont_ReportHit(inout_param(_AmdAnyHitSystemData) data, float THit, 
     data.candidate.PackHitKind(HitKind);
 
     uint isOpaque = true;
-    uint geometryIndex = INVALID_IDX;
-    uint instanceContribution = 0;
     {
         PrimitiveData primitiveData;
         InstanceDesc desc;
@@ -1786,8 +1788,6 @@ export bool _cont_ReportHit(inout_param(_AmdAnyHitSystemData) data, float THit, 
             const GpuVirtualAddress tlasAddr = data.base.ray.AccelStruct() + ExtractNodePointerOffset(tlasNodePtr);
             desc = FetchInstanceDescAddr(tlasAddr);
             isOpaque = data.candidate.IsOpaque();
-            geometryIndex = data.candidate.GeometryIndex();
-            instanceContribution = desc.InstanceContributionToHitGroupIndex_and_Flags & 0x00ffffff;
         }
     }
 
@@ -1795,11 +1795,7 @@ export bool _cont_ReportHit(inout_param(_AmdAnyHitSystemData) data, float THit, 
     {
         uint hitGroupRecordIndex = 0;
         {
-            hitGroupRecordIndex = CalculateHitGroupRecordAddress(
-                ExtractRayContributionToHitIndex(data.base.ray.traceParameters),
-                ExtractMultiplierForGeometryContributionToHitIndex(data.base.ray.traceParameters),
-                geometryIndex,
-                instanceContribution);
+            hitGroupRecordIndex = data.base.dispatch.shaderRecIdx;
         }
         // Compute hit group address and fetch shader identifiers
         const uint64_t anyHitAddr = GetAnyHitAddr(hitGroupRecordIndex);
@@ -1953,7 +1949,7 @@ export void _cont_KernelEntry()
 
     _AmdContStackSetPtr(_cont_GetContinuationStackAddr());
 
-    _AmdEnqueueRayGen(GetRayGenVpc(), DUMMY_RETURN_ADDR systemData);
+    _AmdEnqueueRayGen(GetRayGenVpc(), _AmdGetUninitializedI64(), systemData);
 }
 
 //=====================================================================================================================
@@ -2048,6 +2044,9 @@ export void _cont_TraceRay(
     data.ray       = ray;
     data.traversal = traversal;
 
+    RayHistoryInitStaticId();
+    RayHistoryWriteBegin(data);
+
     const uint     callerShaderRecIdx    = dispatch.shaderRecIdx; // 0 if from RayGen.
     const uint     parentId              = RayHistoryGetParentId(dispatch);
     const uint64_t traversalAddrWithPrio = GetTraversalVpc();
@@ -2055,13 +2054,11 @@ export void _cont_TraceRay(
     // The type of the shader containing this TraceRay call, i.e. the shader we are inlined into.
     const DXILShaderKind enclosingShaderType = _AmdGetShaderKind();
     const uint           resumePrio          = GetPriorityForShaderType(enclosingShaderType);
-    const uint64_t       resumeAddr          = _AmdGetResumePointAddr();
-    const uint64_t       resumeAddrWithPrio  = GetVpcWithPriority(resumeAddr, resumePrio);
+
+    // NO control flow is allowed between _AmdGetResumePointAddr() and _AmdWaitAwaitTraversal().
+    const uint64_t resumeAddr         = _AmdGetResumePointAddr();
+    const uint64_t resumeAddrWithPrio = GetVpcWithPriority(resumeAddr, resumePrio);
     data.traversal.PackReturnAddress(resumeAddrWithPrio);
-
-    RayHistoryInitStaticId();
-    RayHistoryWriteBegin(data);
-
     dispatch = _AmdWaitAwaitTraversal(traversalAddrWithPrio, -1, data);
 
     // for the resume part.
@@ -2143,8 +2140,16 @@ static void EnqueueNextShader(bool hasWorkToDo, uint64_t nextShaderAddr, uint64_
 {
     if (!hasWorkToDo)
     {
-        // No work to do = dead lane, jump to traversal as a synchronization point with an empty system data
-        _AmdWaitEnqueueTraversal(GetTraversalVpc(), -1, DUMMY_RETURN_ADDR _AmdSystemData::MakeDeadLane());
+        if (_AmdContinuationStackIsGlobal())
+        {
+            // No work to do = dead lane, jump to traversal as a synchronization point with an empty system data
+            _AmdWaitEnqueueTraversal(GetTraversalVpc(), -1, _AmdGetUninitializedI64(), _AmdSystemData::MakeDeadLane());
+        }
+        else
+        {
+            // This case should only occur in sorting mode.
+            GPU_ASSERT(false);
+        }
     }
 
     const uint newState = data.traversal.committed.State();
@@ -2165,7 +2170,7 @@ static void EnqueueNextShader(bool hasWorkToDo, uint64_t nextShaderAddr, uint64_
     }
 
     // Return to RayGen. No need to set a priority, as it is already set in the stored return address.
-    _AmdEnqueueRayGen(returnAddr, DUMMY_RETURN_ADDR data.dispatch);
+    _AmdEnqueueRayGen(returnAddr, _AmdGetUninitializedI64(), data.dispatch);
 }
 
 //=====================================================================================================================
@@ -2268,8 +2273,8 @@ export void _cont_Traversal(
                 (/* exec      */ WaveActiveCountBits(true) << 13));
         }
 
-        uint64_t nextShaderAddr = ~uint64_t(0);
-        const bool nextShaderValid = GetNextHitMissPc(data, state, candidate, nextShaderAddr);
+        uint64_t nextShaderAddr = 0;
+        GetNextHitMissPc(data, state, candidate, nextShaderAddr);
 
         bool hasWorkToDo = true;
         // Avoid sorting on return addresses to RayGen (the case nextShaderValid == false), as it may create
@@ -2277,12 +2282,12 @@ export void _cont_Traversal(
         // points due to divergent control flow in the TraceRay call, but those resume points are all copies of the same
         // code. If we sort and re-read only from one bin, we might prevent future TraceRay calls from reconverging
         // on traversal.
-        if (_AmdContinuationStackIsGlobal() && nextShaderValid)
+        if (_AmdContinuationStackIsGlobal() && (nextShaderAddr != 0))
         {
         }
 
         const uint64_t returnAddr = data.traversal.ReturnAddress();
-        if (!nextShaderValid)
+        if (nextShaderAddr == 0)
         {
             nextShaderAddr = returnAddr;
         }
@@ -2349,7 +2354,7 @@ export void _cont_Traversal(
             // Note we don't need "Wait" here because priorities run AHS and IS first
             const uint64_t traversalAddr = _AmdGetCurrentFuncAddr();
             const uint64_t traversalAddrWithPrio = GetVpcWithPriority(traversalAddr, SCHEDULING_PRIORITY_TRAVERSAL);
-            _AmdEnqueueTraversal(traversalAddrWithPrio, DUMMY_RETURN_ADDR data);
+            _AmdEnqueueTraversal(traversalAddrWithPrio, _AmdGetUninitializedI64(), data);
         }
     }
     // This is unreachable

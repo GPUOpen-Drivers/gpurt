@@ -234,6 +234,9 @@ enum class NodeType : uint32
     ConstantBufferTable, // Single DWORD constant buffer table VA
     UavTable,            // Single DWORD UAV table VA (raw or structured)
     TypedUavTable,       // Single DWORD UAV table VA (typed)
+    Srv,                 // Raw or structured buffer SRV VA
+    SrvTable,            // Single DWORD SRV table VA (raw or structured)
+    TypedSrvTable,       // Single DWORD SRV table VA (typed)
     Count
 };
 
@@ -587,6 +590,16 @@ enum class InstanceFlag : uint32
     ForceNonOpaque                = 0x8
 };
 
+#if GPURT_DEVELOPER
+// Granularity of RGP markers for BVH Builds
+enum class RgpMarkerGranularityFlags : uint32
+{
+    Disabled = 0x0,
+    PerBatch = 0x1,
+    PerBuild = 0x2,
+};
+#endif
+
 // GPURT version of the API instance description in GPU memory.  It should match e.g. D3D12DDI_RAYTRACING_INSTANCE_DESC
 struct InstanceDesc
 {
@@ -763,6 +776,9 @@ struct DeviceSettings
 
     uint32                      gpuDebugFlags;
 
+#if GPURT_DEVELOPER
+    RgpMarkerGranularityFlags   rgpMarkerGranularityFlags;
+#endif
 };
 
 // Describes a postbuild info write request from some acceleration structures to some location.

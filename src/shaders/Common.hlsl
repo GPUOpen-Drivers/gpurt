@@ -811,11 +811,9 @@ static PrimitiveData FetchPrimitiveData(
 //=====================================================================================================================
 static uint32_t GetInstanceSidebandOffset(
     in AccelStructHeader header,
-    in uint32_t nodePtr)
+    in uint32_t          instanceNodeOffset)
 {
     uint32_t sidebandOffset = 0;
-
-    const uint32_t instanceNodeOffset = ExtractNodePointerOffset(nodePtr);
 
     {
         sidebandOffset = instanceNodeOffset + sizeof(InstanceDesc);

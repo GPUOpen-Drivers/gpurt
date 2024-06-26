@@ -443,7 +443,11 @@ BvhBuilder::BvhBuilder(
     m_buildSettingsHash(0)
 {
     InitializeBuildConfigs();
-    InitBuildShaderConstants();
+
+    {
+        const BuildShaderConstants shaderConstants = GetBuildShaderConstants();
+        AllocateBuildShaderConstants(shaderConstants);
+    }
 
     if (m_buildArgs.inputs.type == GpuRt::AccelStructType::BottomLevel)
     {
@@ -1323,12 +1327,17 @@ void BvhBuilder::InitBuildConfig(
     m_buildConfig.sceneCalcType = SceneBoundsCalculation::BasedOnGeometry;
 
     // Only enable earlyPairCompression if
-    // -) triangleCompressionMode is set to be "Pair", and
-    // -) deviceSettings chose to enable EarlyPairCompression
+    // 1. triangleCompressionMode is set to be "Pair", and
+    // 2. deviceSettings chose to enable EarlyPairCompression
+    // 3. This is not an update
     m_buildConfig.enableEarlyPairCompression = false;
-    if (m_buildConfig.triangleCompressionMode == TriangleCompressionMode::Pair)
+
+    if (IsUpdate() == false)
     {
-        m_buildConfig.enableEarlyPairCompression = m_deviceSettings.enableEarlyPairCompression;
+        if (m_buildConfig.triangleCompressionMode == TriangleCompressionMode::Pair)
+        {
+            m_buildConfig.enableEarlyPairCompression = m_deviceSettings.enableEarlyPairCompression;
+        }
     }
 
     if (m_buildConfig.enableEarlyPairCompression)
@@ -1354,41 +1363,39 @@ void BvhBuilder::InitBuildConfig(
 }
 
 // =====================================================================================================================
-void BvhBuilder::InitBuildShaderConstants()
+BuildShaderConstants BvhBuilder::GetBuildShaderConstants() const
 {
-    m_buildShaderConstants = {};
-    m_buildShaderConstants.leafNodeExpansionFactor = GetLeafNodeExpansion();
-    m_buildShaderConstants.numDescs                = m_buildArgs.inputs.inputElemCount;
-    m_buildShaderConstants.numPrimitives           = m_buildConfig.numPrimitives;
+    // Make sure the address for empty top levels is 0 so we avoid tracing them. Set a valid address for empty
+    // bottom levels so the top level build can still read the bottom level header.
+    const bool emptyTopLevel = (m_buildConfig.topLevelBuild) && (m_buildConfig.numPrimitives == 0);
+    const gpusize resultBufferAddress =
+        IsUpdate() ? HeaderBufferBaseVa() :
+        emptyTopLevel ? 0 : ResultBufferBaseVa();
 
-    if (IsUpdate())
-    {
-        m_buildShaderConstants.resultBufferAddrLo = Util::LowPart(HeaderBufferBaseVa());
-        m_buildShaderConstants.resultBufferAddrHi = Util::HighPart(HeaderBufferBaseVa());
-    }
-    else
-    {
-        // Make sure the address for empty top levels is 0 so we avoid tracing them. Set a valid address for empty
-        // bottom levels so the top level build can still read the bottom level header.
-        const bool emptyTopLevel = (m_buildConfig.topLevelBuild) && (m_buildConfig.numPrimitives == 0);
+    const BuildShaderConstants constants = {
+        .resultBufferAddrLo      = Util::LowPart(resultBufferAddress),
+        .resultBufferAddrHi      = Util::HighPart(resultBufferAddress),
+        .numPrimitives           = m_buildConfig.numPrimitives,
+        .tsBudgetPerTriangle     = IsUpdate() ? 0 : m_deviceSettings.tsBudgetPerTriangle,
 
-        const uint32 maxNumPrimitives = NumPrimitivesAfterSplit(m_buildConfig.numPrimitives,
-                                                                m_deviceSettings.triangleSplittingFactor);
+        .maxNumPrimitives        = IsUpdate() ? 0 : m_buildConfig.maxNumPrimitives,
+        .rebraidFactor           = IsUpdate() ? 0 : m_deviceSettings.rebraidFactor,
 
-        m_buildShaderConstants.resultBufferAddrLo  = emptyTopLevel ? 0 : Util::LowPart(ResultBufferBaseVa());
-        m_buildShaderConstants.resultBufferAddrHi  = emptyTopLevel ? 0 : Util::HighPart(ResultBufferBaseVa());
-        m_buildShaderConstants.tsBudgetPerTriangle = m_deviceSettings.tsBudgetPerTriangle;
-        m_buildShaderConstants.maxNumPrimitives    = maxNumPrimitives;
-        m_buildShaderConstants.rebraidFactor       = m_deviceSettings.rebraidFactor;
-        m_buildShaderConstants.maxNumPrimitives    = m_buildConfig.maxNumPrimitives;
-        m_buildShaderConstants.header              = InitAccelStructHeader();
+        .indirectArgBufferStride = m_buildArgs.indirect.indirectStride,
+        .numDescs                = m_buildArgs.inputs.inputElemCount,
+        .leafNodeExpansionFactor = GetLeafNodeExpansion(),
+        .numMortonSizeBits       = m_buildConfig.numMortonSizeBits,
 
-    }
+        .header                  = IsUpdate() ? AccelStructHeader{} : InitAccelStructHeader(),
+        .offsets                 = m_scratchOffsets,
+    };
+    return constants;
+}
 
-    m_buildShaderConstants.indirectArgBufferStride = m_buildArgs.indirect.indirectStride;
-
-    m_buildShaderConstants.offsets = m_scratchOffsets;
-
+// =====================================================================================================================
+void BvhBuilder::AllocateBuildShaderConstants(
+    const BuildShaderConstants& buildShaderConstants)
+{
     // Add 4 DWORD padding to avoid page faults when the compiler uses a multi-DWORD load straddling the end of the
     // constant buffer
     static constexpr uint32 BufferPadding = 4u;
@@ -1397,7 +1404,7 @@ void BvhBuilder::InitBuildShaderConstants()
     void* pData = m_pDevice->AllocateTemporaryData(m_cmdBuffer,
                                                    AllocationSizeBytes,
                                                    &m_shaderConstantsGpuVa);
-    std::memcpy(pData, &m_buildShaderConstants, sizeof(BuildShaderConstants));
+    std::memcpy(pData, &buildShaderConstants, sizeof(BuildShaderConstants));
 }
 
 // =====================================================================================================================
@@ -1467,7 +1474,7 @@ void BvhBuilder::InitGeometryConstants()
         {
             .gpuAddr = geometryConstGpuVa + (i * sizeof(BuildShaderGeometryConstants)),
             .range   = sizeof(BuildShaderGeometryConstants),
-            .stride  = 16,
+            .stride  = 1,
         };
 
         m_backend.CreateBufferViewSrds(1, constBufferViewInfo, pCbvTable, false);
@@ -1495,7 +1502,7 @@ AccelStructMetadataHeader BvhBuilder::InitAccelStructMetadataHeader()
 }
 
 // =====================================================================================================================
-AccelStructHeader BvhBuilder::InitAccelStructHeader()
+AccelStructHeader BvhBuilder::InitAccelStructHeader() const
 {
     const uint32 accelStructSize = m_resultBufferInfo.dataSize;
 
@@ -1901,13 +1908,21 @@ void BvhBuilder::PushRGPMarker(
     const char* pFormat,
     Args&&...   args)
 {
-    m_pDevice->PushRGPMarker(m_cmdBuffer, pFormat, std::forward<Args>(args)...);
+    if (Util::TestAnyFlagSet(uint32(m_deviceSettings.rgpMarkerGranularityFlags),
+                             uint32(RgpMarkerGranularityFlags::PerBuild)))
+    {
+        m_pDevice->PushRGPMarker(m_cmdBuffer, pFormat, std::forward<Args>(args)...);
+    }
 }
 
 // =====================================================================================================================
 void BvhBuilder::PopRGPMarker()
 {
-    m_pDevice->PopRGPMarker(m_cmdBuffer);
+    if (Util::TestAnyFlagSet(uint32(m_deviceSettings.rgpMarkerGranularityFlags),
+                             uint32(RgpMarkerGranularityFlags::PerBuild)))
+    {
+        m_pDevice->PopRGPMarker(m_cmdBuffer);
+    }
 }
 
 // =====================================================================================================================
@@ -2434,14 +2449,19 @@ void BvhBuilder::PostBuildDumpEvents()
     // Dump Acceleration Structure
     if (m_deviceSettings.enableBuildAccelStructDumping)
     {
-        const uint32 resultDataSize    = m_dumpInfo.sizeInBytes;
-        const uint32 scratchBufferSize = m_dumpInfo.scratchSizeInBytes;
+        AccelStructInfo dumpInfo = m_dumpInfo;
 
+        const uint32 resultDataSize = dumpInfo.sizeInBytes;
         uint64 allocationSize = resultDataSize;
 
         if (m_deviceSettings.enableBuildAccelStructScratchDumping)
         {
-            allocationSize += scratchBufferSize;
+            allocationSize += dumpInfo.scratchSizeInBytes;
+        }
+        else
+        {
+            // Don't allocate for scratch memory if we're not dumping it.
+            dumpInfo.scratchSizeInBytes = 0;
         }
 
         // This assert will fail on some really large cases like san_miguel when also dumping scratch.
@@ -2454,7 +2474,7 @@ void BvhBuilder::PostBuildDumpEvents()
         gpusize dumpGpuVirtAddr = 0;
         Pal::Result result =
             m_clientCb.pfnAccelStructBuildDumpEvent(
-                m_cmdBuffer, m_dumpInfo, m_buildArgs, &dumpGpuVirtAddr);
+                m_cmdBuffer, dumpInfo, m_buildArgs, &dumpGpuVirtAddr);
 
         if (result == Pal::Result::Success)
         {
@@ -2469,7 +2489,7 @@ void BvhBuilder::PostBuildDumpEvents()
                 m_pDevice->CopyBufferRaw(m_cmdBuffer,
                     dumpGpuVirtAddr + resultDataSize,
                     ScratchBufferBaseVa(),
-                    scratchBufferSize >> 2);
+                    dumpInfo.scratchSizeInBytes >> 2);
 
                 // Upload the scratch buffer offsets data to the reserved portion of the scratch buffer
                 m_pDevice->UploadCpuMemory(m_cmdBuffer,
@@ -2514,6 +2534,11 @@ void BvhBuilder::InitializeBuildConfigs()
 // Prepares the inputs for the primitive encode shaders
 void BvhBuilder::EncodeQuadPrimitives()
 {
+    // Early pair compression passes are only enabled on bottom level re-builds. For updates, we need
+    // to run the EncodePrimitives pass. This function must not be called for an Update, which should be using
+    // the regular EncodePrimitives() path.
+    PAL_ASSERT(IsUpdate() == false);
+
     PAL_ASSERT(m_buildArgs.inputs.type == AccelStructType::BottomLevel);
 
     // TODO: handle indirect build argument buffer
@@ -3110,7 +3135,8 @@ BuildPhaseFlags BvhBuilder::EnabledPhases() const
             flags |= BuildPhaseFlags::BuildDumpEvents;
         }
 
-        // Early pair compression passes are only enabled on bottom level builds
+        // Early pair compression passes are only enabled on bottom level re-builds. For updates, we need
+        // to run the EncodePrimitives pass which is handled in the IsUpdate() case above.
         if ((m_buildConfig.topLevelBuild == false) && m_buildConfig.enableEarlyPairCompression)
         {
             flags |= BuildPhaseFlags::EncodeQuadPrimitives;

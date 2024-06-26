@@ -66,7 +66,6 @@ set(gpurtHlsl
     EmitAS.hlsl
     EncodeCommon.hlsl
     EncodeNodes.hlsl
-    EncodePairedTriangle.hlsl
     EncodePairedTriangleImpl.hlsl
     EncodeTopLevel.hlsl
     EncodeTopLevelBuild.hlsl

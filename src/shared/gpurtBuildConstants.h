@@ -114,13 +114,18 @@ struct BuildShaderConstants
 
     uint32 maxNumPrimitives;
     uint32 rebraidFactor;
-    uint32 numMortonSizeBits;
-    float reservedFloat;
+    float  reservedFloat;
+    uint32 reservedUint;
 
     uint32 indirectArgBufferStride;
     uint32 numDescs;
     uint32 leafNodeExpansionFactor;
+    uint32 numMortonSizeBits;
+
+    uint32 reservedUint2;
     uint32 padding0;
+    uint32 padding1;
+    uint32 padding2;
 
     // Align the following struct to 4 dwords due to HLSL constant buffer packing rules
     AccelStructHeader header;

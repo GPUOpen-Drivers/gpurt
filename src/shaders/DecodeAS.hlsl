@@ -101,24 +101,27 @@ void DecodeAS(in uint3 globalThreadId : SV_DispatchThreadID)
 
     if (type == TOP_LEVEL)
     {
-        // @note Prim node pointers of rebraided instances are allocated in memory after the prim node pointers of the
-        //       API input instances, so we can just use numDescs since we do not want rebraided instances here.
-        const uint numInstanceDescs = header.numDescs;
-
-        for (uint i = globalID; i < numInstanceDescs; i += ShaderConstants.NumThreads)
         {
-            const uint dstInstanceDescOffset = headerSize + (i * INSTANCE_DESC_SIZE);
-            const uint nodePointer           = SrcBuffer.Load(basePrimNodePointersOffset + (i * NODE_PTR_SIZE));
+            // @note Prim node pointers of rebraided instances are allocated in memory after the prim node pointers of the
+            //       API input instances, so we can just use numDescs since we do not want rebraided instances here.
+            const uint numInstanceDescs = header.numDescs;
 
-            if (nodePointer != INVALID_IDX)
+            for (uint i = globalID; i < numInstanceDescs; i += ShaderConstants.NumThreads)
             {
-                InstanceDesc apiInstanceDesc = DecodeApiInstanceDesc(header, nodePointer);
-                DstBuffer.Store<InstanceDesc>(dstInstanceDescOffset, apiInstanceDesc);
-            }
-            else
-            {
-                InstanceDesc apiInstanceDesc = (InstanceDesc)0;
-                DstBuffer.Store<InstanceDesc>(dstInstanceDescOffset, apiInstanceDesc);
+                const uint dstInstanceDescOffset = headerSize + (i * INSTANCE_DESC_SIZE);
+                const uint nodePointer           = SrcBuffer.Load(basePrimNodePointersOffset + (i * NODE_PTR_SIZE));
+
+                if (nodePointer != INVALID_IDX)
+                {
+                    const uint nodeOffset = ExtractNodePointerOffset(nodePointer);
+                    InstanceDesc apiInstanceDesc = DecodeApiInstanceDesc(header, nodeOffset);
+                    DstBuffer.Store<InstanceDesc>(dstInstanceDescOffset, apiInstanceDesc);
+                }
+                else
+                {
+                    InstanceDesc apiInstanceDesc = (InstanceDesc)0;
+                    DstBuffer.Store<InstanceDesc>(dstInstanceDescOffset, apiInstanceDesc);
+                }
             }
         }
     }

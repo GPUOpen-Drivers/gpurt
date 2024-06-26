@@ -322,8 +322,10 @@ int PairTriangles(
     uint3 faceIndices,
     TriangleData tri)
 {
-    int pairInfo = 0;
+    // Initialise as unpaired triangle
+    int pairInfo = -1;
 
+    // Indexed triangles can always be paired as their connectivity cannot change on updates.
     if (isIndexed)
     {
         if (Settings.enablePairCostCheck)
@@ -336,7 +338,8 @@ int PairTriangles(
             pairInfo = PairTrianglesImpl(faceIndices, true);
         }
     }
-    else
+    // Only pair non-indexed triangles for non-updateable as the triangle positions can change on updates
+    else if (IsUpdateAllowed() == false)
     {
         float3x3 faceVertices;
         faceVertices[0] = tri.v0;
@@ -355,162 +358,4 @@ int PairTriangles(
     }
 
     return pairInfo;
-}
-
-//=====================================================================================================================
-uint ComputePrimRefCountBlockOffset(
-    in uint blockOffset, in uint globalId)
-{
-    const uint waveID = (globalId / WaveGetLaneCount());
-    return (blockOffset + waveID) * sizeof(uint);
-}
-
-//======================================================================================================================
-void EncodePairedTriangleNodeImpl(
-    RWBuffer<float3>           GeometryBuffer,
-    GeometryArgs               geometryArgs,
-    uint                       primitiveIndex,
-    uint                       globalId,
-    uint                       primitiveOffset,
-    uint                       vertexOffset,
-    uint                       indexOffsetInBytes,
-    uint                       transformOffestInElements)
-{
-    const uint metadataSize = geometryArgs.metadataSizeInBytes;
-
-    const uint basePrimNodePtr = geometryArgs.BasePrimNodePtrOffset;
-
-    const uint flattenedPrimitiveIndex = primitiveOffset + primitiveIndex;
-
-    const uint primNodePointerOffset =
-        metadataSize + basePrimNodePtr + (flattenedPrimitiveIndex * sizeof(uint));
-
-    const uint basePrimRefCountOffset =
-        metadataSize + geometryArgs.DestLeafByteOffset;
-
-    const uint primRefCountOffset =
-        basePrimRefCountOffset + ComputePrimRefCountBlockOffset(geometryArgs.blockOffset, globalId);
-
-    const uint dstScratchNodeOffset = DstMetadata.Load(primRefCountOffset);
-
-    const IndexBufferInfo indexBufferInfo =
-    {
-        geometryArgs.IndexBufferVaLo,
-        geometryArgs.IndexBufferVaHi,
-        geometryArgs.IndexBufferByteOffset + indexOffsetInBytes,
-        geometryArgs.IndexBufferFormat,
-    };
-
-    // Fetch face indices from index buffer
-    uint3 faceIndices = FetchFaceIndices(primitiveIndex, indexBufferInfo);
-
-    const bool isIndexed = (geometryArgs.IndexBufferFormat != IndexFormatInvalid);
-
-    // Initialise lane as inactive or paired triangle
-    int pairInfo = -2;
-
-    TriangleData tri;
-    tri.v0 = float3(0, 0, 0);
-    tri.v1 = float3(0, 0, 0);
-    tri.v2 = float3(0, 0, 0);
-
-    // Check if vertex indices are within bounds, otherwise make the triangle inactive
-    const uint maxIndex = max(faceIndices.x, max(faceIndices.y, faceIndices.z));
-    if (maxIndex < geometryArgs.vertexCount)
-    {
-        const uint64_t transformBufferGpuVa =
-            PackUint64(geometryArgs.TransformBufferGpuVaLo, geometryArgs.TransformBufferGpuVaHi);
-
-        // Fetch triangle vertex data from vertex buffer
-        tri = FetchTransformedTriangleData(GeometryBuffer,
-                                           faceIndices,
-                                           geometryArgs.GeometryStride,
-                                           vertexOffset,
-                                           geometryArgs.VertexComponentCount,
-                                           transformBufferGpuVa,
-                                           transformOffestInElements);
-
-        // Generate triangle bounds and update scene bounding box
-        const BoundingBox boundingBox = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
-
-        const bool isActive = IsActive(tri);
-
-        if (isActive)
-        {
-            if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometry)
-            {
-                UpdateSceneBounds(geometryArgs.SceneBoundsByteOffset, boundingBox);
-            }
-            else if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
-            {
-                // TODO: with tri splitting, need to not update "size" here
-                UpdateSceneBoundsWithSize(geometryArgs.SceneBoundsByteOffset, boundingBox);
-            }
-        }
-        else
-        {
-            // Override v0.x for inactive case
-            tri.v0.x = NaN;
-        }
-
-        pairInfo = PairTriangles(isIndexed, faceIndices, tri);
-    }
-
-    // Store invalid prim node pointer for now during first time builds.
-    // If the triangle is active, EncodeHwBvh will write it in.
-    DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
-
-    // Count quads produced by the current wave. Note, this includes unpaired triangles as well
-    // (marked with a value of -1).
-    const bool isActiveTriangle = (pairInfo >= -1);
-    const uint waveActivePrimCount = WaveActiveCountBits(isActiveTriangle);
-
-    // Allocate scratch nodes for active triangle primitives using the precomputed block offset for each
-    // triangle geometry
-    const uint laneActivePrimIdx = WavePrefixCountBits(isActiveTriangle);
-    const uint dstScratchNodeIdx = dstScratchNodeOffset + laneActivePrimIdx;
-
-    const bool hasValidQuad = (pairInfo >= 0);
-    const uint pairLaneId = hasValidQuad ? pairInfo >> 16 : 0;
-
-    TriangleData tri1;
-    tri1.v0 = WaveReadLaneAt(tri.v0, pairLaneId);
-    tri1.v1 = WaveReadLaneAt(tri.v1, pairLaneId);
-    tri1.v2 = WaveReadLaneAt(tri.v2, pairLaneId);
-
-    const uint primitiveIndex1 = WaveReadLaneAt(primitiveIndex, pairLaneId);
-
-    if (hasValidQuad)
-    {
-        const uint triT0Rotation = (pairInfo & 0xF);
-        const uint triT1Rotation = (pairInfo >> 4) & 0xF;
-
-        WriteScratchQuadNode(geometryArgs.LeafNodeDataByteOffset,
-                             dstScratchNodeIdx,
-                             geometryArgs.GeometryIndex,
-                             geometryArgs.GeometryFlags,
-                             tri1,
-                             primitiveIndex1,
-                             triT1Rotation,
-                             tri,
-                             primitiveIndex,
-                             triT0Rotation);
-    }
-    else if (pairInfo == -1)
-    {
-        // Write out unpaired triangle
-        WriteScratchTriangleNode(geometryArgs.LeafNodeDataByteOffset,
-                                 dstScratchNodeIdx,
-                                 geometryArgs.GeometryIndex,
-                                 geometryArgs.GeometryFlags,
-                                 tri,
-                                 primitiveIndex);
-    }
-    else
-    {
-        // This triangle is a pair in a quad handled by the lead lane. Nothing to do here.
-    }
-
-    // ClearFlags for refit and update
-    ClearFlagsForRefitAndUpdate(geometryArgs, flattenedPrimitiveIndex, false);
 }

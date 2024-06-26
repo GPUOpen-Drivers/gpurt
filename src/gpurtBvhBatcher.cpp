@@ -206,9 +206,10 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
 
         if (PhaseEnabled(BuildPhaseFlags::EncodeQuadPrimitives))
         {
-            BuildPhase("EncodeQuadPrimitives", builders, &BvhBuilder::EncodeQuadPrimitives);
+            BuildPhase(BuildPhaseFlags::EncodeQuadPrimitives, builders, &BvhBuilder::EncodeQuadPrimitives);
         }
-        else if (PhaseEnabled(BuildPhaseFlags::EncodePrimitives))
+
+        if (PhaseEnabled(BuildPhaseFlags::EncodePrimitives))
         {
             BuildPhase(BuildPhaseFlags::EncodePrimitives, builders, &BvhBuilder::EncodePrimitives);
         }
@@ -666,13 +667,21 @@ void BvhBatcher::PushRGPMarker(
     const char* pFormat,
     Args&&...   args)
 {
-    m_pDevice->PushRGPMarker(m_cmdBuffer, pFormat, std::forward<Args>(args)...);
+    if (Util::TestAnyFlagSet(uint32(m_deviceSettings.rgpMarkerGranularityFlags),
+                             uint32(RgpMarkerGranularityFlags::PerBatch)))
+    {
+        m_pDevice->PushRGPMarker(m_cmdBuffer, pFormat, std::forward<Args>(args)...);
+    }
 }
 
 // =====================================================================================================================
 void BvhBatcher::PopRGPMarker()
 {
-    m_pDevice->PopRGPMarker(m_cmdBuffer);
+    if (Util::TestAnyFlagSet(uint32(m_deviceSettings.rgpMarkerGranularityFlags),
+                             uint32(RgpMarkerGranularityFlags::PerBatch)))
+    {
+        m_pDevice->PopRGPMarker(m_cmdBuffer);
+    }
 }
 
 // =====================================================================================================================

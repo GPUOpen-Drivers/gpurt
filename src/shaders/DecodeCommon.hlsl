@@ -76,9 +76,9 @@ typedef struct D3D12DDI_RAYTRACING_GEOMETRY_TRIANGLES_DESC_0054
 static uint32_t FetchInstanceIndex(
     in uint32_t            bufferOffset,
     in AccelStructHeader   header,
-    in uint32_t            nodePtr)
+    in uint32_t            nodeOffset)
 {
-    const uint32_t sidebandOffset = GetInstanceSidebandOffset(header, nodePtr);
+    const uint32_t sidebandOffset = GetInstanceSidebandOffset(header, nodeOffset);
     return SrcBuffer.Load(
         bufferOffset + header.metadataSizeInBytes + sidebandOffset + RTIP1_1_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET);
 }
@@ -86,14 +86,14 @@ static uint32_t FetchInstanceIndex(
 //=====================================================================================================================
 static InstanceDesc DecodeApiInstanceDesc(
     in AccelStructHeader header,
-    in uint nodePtr)
+    in uint              nodeOffset)
 {
     InstanceDesc apiInstanceDesc = (InstanceDesc)0;
     uint64_t gpuVa = 0;
     uint32_t blasMetadataSize = 0;
 
     {
-        const uint offset = header.metadataSizeInBytes + ExtractNodePointerOffset(nodePtr);
+        const uint offset = header.metadataSizeInBytes + nodeOffset;
         apiInstanceDesc = SrcBuffer.Load<InstanceDesc>(offset);
 
         const InstanceSidebandData1_1 sideband =

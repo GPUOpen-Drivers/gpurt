@@ -530,14 +530,18 @@ ClientPipelineHandle Device::GetInternalPipeline(
             uint32 uavBindingCount  = 0;
             uint32 cbvCount         = 0;
             uint32 cbvBindingCount  = 0;
+            uint32 srvCount         = 0;
+            uint32 srvBindingCount  = 0;
 
             // Descriptor sets are assigned as follows:
             // 0  Root UAVs
             // 1  Root constants and CBVs
-            // 2+ Desciptor tables (UAV or CBV)
+            // 2  Root SRVs
+            // 3+ Descriptor tables
             constexpr uint32 DescriptorSetUAV    = 0;
             constexpr uint32 DescriptorSetCBV    = 1;
-            constexpr uint32 DescriptorSetTables = 2;
+            constexpr uint32 DescriptorSetSRV    = 2;
+            constexpr uint32 DescriptorSetTables = 3;
 
             uint32 tableSet = DescriptorSetTables;
 
@@ -590,6 +594,22 @@ ClientPipelineHandle Device::GetInternalPipeline(
                     nodes[nodeIndex].binding       = 0;
                     nodes[nodeIndex].descSet       = tableSet++;
                     uavCount++;
+                    break;
+                case NodeType::Srv:
+                    nodes[nodeIndex].logicalId     = srvCount + ReservedLogicalIdCount;
+                    nodes[nodeIndex].srdStartIndex = srvBindingCount;
+                    nodes[nodeIndex].binding       = srvBindingCount;
+                    nodes[nodeIndex].descSet       = DescriptorSetSRV;
+                    srvCount++;
+                    srvBindingCount++;
+                    break;
+                case NodeType::SrvTable:
+                case NodeType::TypedSrvTable:
+                    nodes[nodeIndex].logicalId     = srvCount + ReservedLogicalIdCount;
+                    nodes[nodeIndex].srdStartIndex = 0;
+                    nodes[nodeIndex].binding       = 0;
+                    nodes[nodeIndex].descSet       = tableSet++;
+                    srvCount++;
                     break;
                 default:
                     PAL_ASSERT_ALWAYS();
@@ -1235,11 +1255,23 @@ void Device::AddMetadataToList(
     RtPipelineType              pipelineType,
     RayHistoryTraceListInfo*    pTraceListInfo)
 {
+    uint32 dispatchDimX = dispatchInfo.dimX;
+    uint32 dispatchDimY = dispatchInfo.dimY;
+    uint32 dispatchDimZ = dispatchInfo.dimZ;
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 38
+    if (dispatchInfo.threadGroupSizeX != 0)
+    {
+        dispatchDimX *= dispatchInfo.threadGroupSizeX;
+        dispatchDimY *= dispatchInfo.threadGroupSizeY;
+        dispatchDimZ *= dispatchInfo.threadGroupSizeZ;
+    }
+#endif
+
     CounterInfo counterInfo =
     {
-        .dispatchRayDimensionX  = dispatchInfo.dimX,
-        .dispatchRayDimensionY  = dispatchInfo.dimY,
-        .dispatchRayDimensionZ  = dispatchInfo.dimZ,
+        .dispatchRayDimensionX  = dispatchDimX,
+        .dispatchRayDimensionY  = dispatchDimY,
+        .dispatchRayDimensionZ  = dispatchDimZ,
         .counterMode            = 1,
         .counterMask            = 0,
         .counterStride          = sizeof(uint32),

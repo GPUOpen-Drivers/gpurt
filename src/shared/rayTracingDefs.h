@@ -30,7 +30,9 @@
 #include "../../gpurt/gpurtAccelStruct.h"
 #include "../../gpurt/gpurtBuildSettings.h"
 #include "../../gpurt/gpurtDispatch.h"
+#ifndef GPURT_BVH_BUILD_SHADER
 #include "../../gpurt/gpurtTraceSettings.h"
+#endif
 #include "accelStruct.h"
 #include "gpurtBuildConstants.h"
 #ifdef __cplusplus

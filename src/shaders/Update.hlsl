@@ -54,8 +54,8 @@ struct RootConstants
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer         DstMetadata          : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer         ScratchBuffer        : register(u1);
 [[vk::binding(2, 0)]]                  RWByteAddressBuffer         SrcBuffer            : register(u2);
-[[vk::binding(0, 2)]] ConstantBuffer<BuildShaderGeometryConstants> GeometryConstants[]  : register(b0, space1);
-[[vk::binding(0, 3)]] RWBuffer<float3>                             GeometryBuffer[]     : register(u0, space1);
+[[vk::binding(0, 3)]] ConstantBuffer<BuildShaderGeometryConstants> GeometryConstants[]  : register(b0, space1);
+[[vk::binding(0, 4)]] RWBuffer<float3>                             GeometryBuffer[]     : register(u0, space1);
 // unused buffer
 [[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer         DstBuffer            : register(u3);
 [[vk::binding(4, 0)]] RWByteAddressBuffer                          EmitBuffer           : register(u4);

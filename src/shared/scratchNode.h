@@ -106,7 +106,14 @@ static uint CalculateScratchBvhNodesOffset(
     in uint bvhNodesOffset,
     in bool topDownBuild)
 {
-    const uint offset = topDownBuild ? 0 : (numLeafNodes - numActivePrims) * SCRATCH_NODE_SIZE;
+    uint offset = 0;
+    // In case of a BLAS with 1 primitive, the scratch offset for both, bvhNodeData and
+    // bvhLeafNodeData are the same. Hence, offset = 0 for such BLASs.
+    if (numLeafNodes > 1)
+    {
+        offset = topDownBuild ? 0 : (numLeafNodes - numActivePrims) * SCRATCH_NODE_SIZE;
+    }
+
     return bvhNodesOffset + offset;
 }
 

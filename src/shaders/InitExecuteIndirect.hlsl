@@ -328,7 +328,9 @@ void InitExecuteIndirect(
             // Output the indirect dispatch size for each pipeline we will dispatch
             if (Constants.pipelineCount > 1)
             {
-                const uint rayGenIdentifier = LoadDwordAtAddr(dispatchRaysDesc.rayGenShaderTable.address);
+                // Get the second dword of the rayGen shader identifier, the name hash. That is what we need
+                // to match against the RayGenIds table set up by the driver for ExecuteIndirect.
+                const uint rayGenIdentifier = LoadDwordAtAddr(dispatchRaysDesc.rayGenShaderTable.address + 4);
 
                 // Setup indirect dispatch arguments for all raygen shaders in the pipeline. Only the raygen with the
                 // matching ID will be launched.

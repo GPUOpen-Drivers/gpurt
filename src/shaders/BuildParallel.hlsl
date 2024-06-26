@@ -74,8 +74,8 @@ struct RootConstants
 [[vk::binding(6, 0)]] RWByteAddressBuffer                          EmitBuffer          : register(u6);
 [[vk::binding(7, 0)]] RWByteAddressBuffer                          IndirectArgBuffer   : register(u7);
 // Debug Buffer
-[[vk::binding(0, 2)]] ConstantBuffer<BuildShaderGeometryConstants> GeometryConstants[] : register(b0, space1);
-[[vk::binding(0, 3)]] RWBuffer<float3>                             GeometryBuffer[]    : register(u0, space1);
+[[vk::binding(0, 3)]] ConstantBuffer<BuildShaderGeometryConstants> GeometryConstants[] : register(b0, space1);
+[[vk::binding(0, 4)]] RWBuffer<float3>                             GeometryBuffer[]    : register(u0, space1);
 
 template<typename T>
 T LoadInstanceDescBuffer(uint offset)
@@ -511,32 +511,15 @@ void EncodePrimitives(
 
         for (uint primitiveIndex = globalId; primitiveIndex < inputOffsets.numPrimitives; primitiveIndex += GetNumThreads())
         {
-            // not an update, just check the "enableEarlyPairCompression" and decide which Encode path to use
-            if (Settings.enableEarlyPairCompression == true)
-            {
-                EncodePairedTriangleNodeImpl(
-                    GeometryBuffer[geometryIndex],
-                    geometryArgs,
-                    primitiveIndex,
-                    globalId,
-                    inputOffsets.primitiveOffset,
-                    inputOffsets.vertexOffsetInComponents,
-                    inputOffsets.indexOffsetInBytes,
-                    inputOffsets.transformOffsetInBytes);
-
-            }
-            else
-            {
-                EncodeTriangleNode(
-                    GeometryBuffer[geometryIndex],
-                    geometryArgs,
-                    primitiveIndex,
-                    inputOffsets.primitiveOffset,
-                    inputOffsets.vertexOffsetInComponents,
-                    inputOffsets.indexOffsetInBytes,
-                    inputOffsets.transformOffsetInBytes,
-                    false); // Don't write to the update stack
-            }
+            EncodeTriangleNode(
+                GeometryBuffer[geometryIndex],
+                geometryArgs,
+                primitiveIndex,
+                inputOffsets.primitiveOffset,
+                inputOffsets.vertexOffsetInComponents,
+                inputOffsets.indexOffsetInBytes,
+                inputOffsets.transformOffsetInBytes,
+                false); // Don't write to the update stack
         }
     }
 }

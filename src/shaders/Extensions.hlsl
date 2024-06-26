@@ -126,7 +126,7 @@ float spirv_OpGroupNonUniformFAdd_clustered(uint scope, [[vk::ext_literal]] uint
 
 float AmdExtD3DShaderIntrinsics_WaveClusterSum(float x, uint dxClusterSize)
 {
-    const uint clusterSize = (1 << (dxClusterSize - 1));
+    const uint clusterSize = (1u << (dxClusterSize - 1));
     return spirv_OpGroupNonUniformFAdd_clustered(/* Subgroup */ 3, /* ClusteredReduce */ 3, x, clusterSize);
 }
 
@@ -135,7 +135,7 @@ float spirv_OpGroupNonUniformFMin_clustered(uint scope, [[vk::ext_literal]] uint
 
 float AmdExtD3DShaderIntrinsics_WaveClusterMin(float x, uint dxClusterSize)
 {
-    const uint clusterSize = (1 << (dxClusterSize - 1));
+    const uint clusterSize = (1u << (dxClusterSize - 1));
     return spirv_OpGroupNonUniformFMin_clustered(/* Subgroup */ 3, /* ClusteredReduce */ 3, x, clusterSize);
 }
 
@@ -144,7 +144,7 @@ float spirv_OpGroupNonUniformFMax_clustered(uint scope, [[vk::ext_literal]] uint
 
 float AmdExtD3DShaderIntrinsics_WaveClusterMax(float x, uint dxClusterSize)
 {
-    const uint clusterSize = (1 << (dxClusterSize - 1));
+    const uint clusterSize = (1u << (dxClusterSize - 1));
     return spirv_OpGroupNonUniformFMax_clustered(/* Subgroup */ 3, /* ClusteredReduce */ 3, x, clusterSize);
 }
 

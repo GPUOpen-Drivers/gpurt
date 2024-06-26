@@ -319,16 +319,16 @@ static void TraversalInternal2_0(
                 candidate.currNodePtr = nodePtr;
 #endif
 
-                uint anyHitIdLow = 0;
+                bool hasAnyHit = false;
                 if ((rayForceOpaque == false) && (isOpaque == false))
                 {
-                    anyHitIdLow = SplitUint64(GetAnyHitAddr(data.ray.traceParameters,
-                                                            primitiveData.geometryIndex,
-                                                            instanceContributionToHitGroupIndex)).x;
+                    hasAnyHit = AnyHitIsNonNull(data.ray.traceParameters,
+                                                primitiveData.geometryIndex,
+                                                instanceContributionToHitGroupIndex);
                 }
 
                 // DXR spec: if there is no any hit shader, the geometry is considered opaque.
-                if (rayForceOpaque || isOpaque || (anyHitIdLow == 0))
+                if (rayForceOpaque || isOpaque || (!hasAnyHit))
                 {
                     RayHistoryWriteTriangleHitResult(data, true);
 
