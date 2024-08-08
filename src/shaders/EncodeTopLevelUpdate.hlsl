@@ -22,6 +22,9 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
+#include "UpdateCommon.hlsl"
+
+//=====================================================================================================================
 void WriteInstanceDescriptor(
     in InstanceDesc       instanceDesc,
     in uint               geometryType,
@@ -151,7 +154,7 @@ void EncodeInstancesUpdate(
             // stack in scratch memory
             if (pushNodeToUpdateStack)
             {
-                PushNodeToUpdateStack(ShaderConstants.offsets.updateStack, parentNodePointer);
+                PushNodeToUpdateStack(parentNodePointer);
             }
 
             WriteInstanceDescriptor(desc,

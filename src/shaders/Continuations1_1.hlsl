@@ -158,9 +158,7 @@ static _AmdTraversalState InitTraversalState1_1(
 
     uint schedulerState = TRAVERSAL_STATE_COMMITTED_NOTHING;
     traversal.committed.PackState(schedulerState);
-#if AMD_VULKAN || GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
     traversal.committed.currNodePtr = INVALID_NODE;
-#endif
 
     // Start traversing from root node
     traversal.nextNodePtr = isValid ? CreateRootNodePointer1_1() : INVALID_NODE;
@@ -354,12 +352,10 @@ static void TraversalInternal1_1(
                         candidateBarycentrics.y  = asfloat(intersectionResult.w) / asfloat(intersectionResult.y);
                         uint hitKind        = backFacingTriangle ? HIT_KIND_TRIANGLE_BACK_FACE : HIT_KIND_TRIANGLE_FRONT_FACE;
                         candidate.primitiveIndex = primitiveData.primitiveIndex;
-                        candidate.PackHitKind(hitKind);
+                        candidate.PackInstanceContribution(instanceContributionToHitGroupIndex, hitKind);
                         candidate.PackGeometryIndex(primitiveData.geometryIndex);
                         candidate.PackIsOpaque(isOpaque);
-#if AMD_VULKAN || GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
                         candidate.currNodePtr = nodePtr;
-#endif
 
                         bool hasAnyHit = false;
                         if ((rayForceOpaque == false) && (isOpaque == false))
@@ -420,9 +416,8 @@ static void TraversalInternal1_1(
                 candidate.primitiveIndex = primitiveData.primitiveIndex;
                 candidate.PackGeometryIndex(primitiveData.geometryIndex);
                 candidate.PackIsOpaque(isOpaque);
-#if AMD_VULKAN || GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
+                candidate.PackInstanceContribution(instanceContributionToHitGroupIndex);
                 candidate.currNodePtr = nodePtr;
-#endif
 
 #if GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
                 uint anyHitCallType = rayForceOpaque ? ANYHIT_CALLTYPE_SKIP : ANYHIT_CALLTYPE_DUPLICATE;

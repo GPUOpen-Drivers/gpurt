@@ -157,7 +157,7 @@ void UpdateQBVHImpl1_1(
     }
 
     // initialise node pointer from stack
-    uint offset = GetUpdateStackOffset(ShaderConstants.offsets.updateStack, globalID);
+    uint offset = GetUpdateStackOffset(globalID);
     uint nodePointer = ScratchBuffer.Load(offset);
 
     // The last child of the root node updates the root bounding box in the header
@@ -178,13 +178,13 @@ void UpdateQBVHImpl1_1(
         {
             // Pick the next node to process
             uint nextIndex;
-            ScratchBuffer.InterlockedAdd(UPDATE_SCRATCH_TASK_COUNT_OFFSET, 1, nextIndex);
+            ScratchBuffer.InterlockedAdd(UPDATE_SCRATCH_REFIT_TASK_COUNT_OFFSET, 1, nextIndex);
             // Skip the initial set of nodes processed when the shader launches
             nextIndex += numThreads;
 
             if (nextIndex < numWorkItems)
             {
-                offset = GetUpdateStackOffset(ShaderConstants.offsets.updateStack, nextIndex);
+                offset = GetUpdateStackOffset(nextIndex);
                 nodePointer = ScratchBuffer.Load(offset);
             }
             else

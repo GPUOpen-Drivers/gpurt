@@ -107,6 +107,7 @@ static const CompileTimeBuildSettings Settings = {
     rebraidQualityHeuristic,
     0,
     0,
+    0,
 };
 
 #endif

@@ -51,19 +51,19 @@ static_assert(GPURT_RTIP2_0 == uint32_t(Pal::RayTracingIpLevel::RtIp2_0), "GPURT
 #endif
 
 //=====================================================================================================================
-///@note Enum is a reserved keyword in glslang. To workaround this limitation, define static constants to replace the
-///      HLSL enums that follow for compatibility.
-//=====================================================================================================================
-namespace PrimitiveType
+enum PrimitiveType : uint
 {
-    static const uint Triangle      = 0;
-    static const uint AABB          = 1;
-    static const uint Instance      = 2;
-}
+    Triangle = 0,
+    AABB     = 1,
+    Instance = 2,
+};
+
+#if defined(__cplusplus)
+#define __decl extern
+#endif
 
 // These DUMMY_*_FUNC postfix stubs must be included at the end of every driver stub (AmdTraceRay*) declaration to
-// work around a Vulkan glslang issue where the compiler can't deal with calls to functions that don't have bodies.
-#if defined(AMD_VULKAN)
+// work around a DXC + Spirv issue where the compiler can't deal with calls to functions that don't have bodies.
 #define DUMMY_BOOL_FUNC   { return false; }
 #define DUMMY_VOID_FUNC   { }
 #define DUMMY_UINT_FUNC   { return 0; }
@@ -73,21 +73,6 @@ namespace PrimitiveType
 #define DUMMY_FLOAT_FUNC  { return 0; }
 #define DUMMY_FLOAT2_FUNC { return float2(0, 0); }
 #define DUMMY_FLOAT3_FUNC { return float3(0, 0, 0); }
-#else
-#define DUMMY_BOOL_FUNC   ;
-#define DUMMY_VOID_FUNC   ;
-#define DUMMY_UINT_FUNC   ;
-#define DUMMY_UINT2_FUNC  ;
-#define DUMMY_UINT3_FUNC  ;
-#define DUMMY_UINT4_FUNC  ;
-#define DUMMY_FLOAT_FUNC  ;
-#define DUMMY_FLOAT2_FUNC ;
-#define DUMMY_FLOAT3_FUNC ;
-#endif
-
-#if defined(__cplusplus)
-#define __decl extern
-#endif
 
 //=====================================================================================================================
 // Acceleration structure type
@@ -129,22 +114,6 @@ namespace PrimitiveType
 // 6: DisabledOnAcceptFirstHit (disable if bvhNode sort is on, and rayFlag is AcceptFirstHit)
 //
 // This need to match ILC_BOX_SORT_HEURISTIC_MODE
-#ifdef AMD_VULKAN_GLSLANG
-//=====================================================================================================================
-///@note Enum is a reserved keyword in glslang. To workaround this limitation, define static constants to replace the
-///      HLSL enums that follow for compatibility.
-//=====================================================================================================================
-namespace BoxSortHeuristic
-{
-    static const uint Closest = 0x0;
-    static const uint Largest                       = 0x1;
-    static const uint MidPoint                      = 0x2;
-    static const uint Disabled                      = 0x3;
-    static const uint LargestFirstOrClosest         = 0x4;
-    static const uint LargestFirstOrClosestMidPoint = 0x5;
-    static const uint DisabledOnAcceptFirstHit      = 0x6;
-}
-#else
 enum BoxSortHeuristic : uint
 {
     Closest                       = 0x0,
@@ -155,25 +124,12 @@ enum BoxSortHeuristic : uint
     LargestFirstOrClosestMidPoint = 0x5,
     DisabledOnAcceptFirstHit      = 0x6,
 };
-#endif
 
-#ifdef AMD_VULKAN_GLSLANG
-//=====================================================================================================================
-///@note Enum is a reserved keyword in glslang. To workaround this limitation, define static constants to replace the
-///      HLSL enums that follow for compatibility.
-//=====================================================================================================================
-namespace SceneBoundsCalculation
-{
-    static const uint SceneBoundsBasedOnGeometry = 0x0;
-    static const uint SceneBoundsBasedOnGeometryWithSize = 0x1;
-}
-#else
 enum SceneBoundsCalculation : uint
 {
     SceneBoundsBasedOnGeometry = 0x0,
     SceneBoundsBasedOnGeometryWithSize = 0x1
 };
-#endif
 
 //=====================================================================================================================
 // Options for where FP16 box nodes are created within BLAS for QBVH
@@ -207,25 +163,28 @@ const static uint TILE_SIZE  = TILE_WIDTH * TILE_WIDTH;
 #endif
 
 //=====================================================================================================================
-// Common structure definitions
-typedef uint64_t GpuVirtualAddress;
-
-#define GPU_VIRTUAL_ADDRESS_SIZE 8
-
-#ifdef __cplusplus
-static_assert(GPU_VIRTUAL_ADDRESS_SIZE == sizeof(GpuVirtualAddress), "GPU Virtual Address mismatch");
-#endif
-
-//=====================================================================================================================
 struct BoundingBox // matches D3D12_RAYTRACING_AABB
 {
     float3 min;
     float3 max;
 };
 
+#ifndef __cplusplus
+//=====================================================================================================================
+static BoundingBox CombineAABB(
+    BoundingBox b0,
+    BoundingBox b1)
+{
+    BoundingBox bbox;
+    bbox.min = min(b0.min, b1.min);
+    bbox.max = max(b0.max, b1.max);
+    return bbox;
+}
+#endif
+
 //======================================================================================================================
 // matches VkAccelerationStructureBuildRangeInfoKHR
-struct IndirectBuildOffset
+struct IndirectBuildRangeInfo
 {
     uint primitiveCount;
     uint primitiveOffset;
@@ -913,12 +872,11 @@ static uint2 SplitUint64(uint64_t x)
 // Used Address                 [44: 3]
 // Unused Address               [53:45]
 //
-// Note glslang doesn't like 64-bit integer literals
-#define INSTANCE_BASE_POINTER_ZERO_MASK           PackUint64(       0x7,        0x0) //                0x7ull
-#define INSTANCE_BASE_POINTER_ADDRESS_USED_MASK   PackUint64(0xFFFFFFF8,     0x1FFF) //     0x1FFFFFFFFFF8ull
-#define INSTANCE_BASE_POINTER_ADDRESS_UNUSED_MASK PackUint64(0x00000000,   0x3FE000) //   0x3FE00000000000ull
-#define INSTANCE_BASE_POINTER_ADDRESS_MASK        PackUint64(0xFFFFFFF8,   0x3FFFFF) //   0x3FFFFFFFFFFFF8ull
-#define INSTANCE_BASE_POINTER_FLAGS_MASK          PackUint64(0x00000000, 0xFFC00000) // 0xFFC0000000000000ull
+#define INSTANCE_BASE_POINTER_ZERO_MASK                          0x7ull
+#define INSTANCE_BASE_POINTER_ADDRESS_USED_MASK       0x1FFFFFFFFFF8ull
+#define INSTANCE_BASE_POINTER_ADDRESS_UNUSED_MASK   0x3FE00000000000ull
+#define INSTANCE_BASE_POINTER_ADDRESS_MASK          0x3FFFFFFFFFFFF8ull
+#define INSTANCE_BASE_POINTER_FLAGS_MASK          0xFFC0000000000000ull
 
 #define NODE_POINTER_FLAGS_SHIFT                 54
 #define NODE_POINTER_FORCE_OPAQUE_SHIFT          54
@@ -1071,18 +1029,16 @@ struct StateTaskQueueCounter
 // Counters used in encode phase
 
 //=====================================================================================================================
-struct EncodeTaskCountersBuildParallel
+// Task counters common between BVH builds and updates
+struct EncodeTaskCountersCommon
 {
     uint numPrimitives;
     uint primRefs;
 };
 
 //=====================================================================================================================
-struct EncodeTaskCounters
+struct EncodeTaskCountersBuild : EncodeTaskCountersCommon
 {
-    uint numPrimitives;
-    uint primRefs;
-
     // The following indirect arguments are only used in mult-dispatch path. Note, currently only HPLOC dispatch uses
     // these, but it will be extended to other passes when early pair compression is enabled.
     uint groupCountX;
@@ -1093,7 +1049,32 @@ struct EncodeTaskCounters
 #define ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET 0
 #define ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET      4
 #define ENCODE_TASK_COUNTER_INDIRECT_ARGS         8
-#define ENCODE_TASK_COUNTER_NUM_DWORDS            (sizeof(EncodeTaskCounters) / sizeof(uint))
+
+#ifdef __cplusplus
+static_assert(ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET == offsetof(EncodeTaskCountersBuild, numPrimitives));
+static_assert(ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET == offsetof(EncodeTaskCountersBuild, primRefs));
+#endif
+
+//=====================================================================================================================
+// Update scratch memory fields
+struct EncodeTaskCountersUpdate : EncodeTaskCountersCommon
+{
+    uint refitTaskCounter;
+    uint taskCount;
+    uint tasksDone;
+};
+
+#define UPDATE_SCRATCH_COUNTER_NUM_PRIMITIVES_OFFSET 0  // Written by Encode phase.
+#define UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET      4  // Written by Encode phase.
+#define UPDATE_SCRATCH_REFIT_TASK_COUNT_OFFSET       8  // Update phase refit task counter
+#define UPDATE_SCRATCH_TASK_COUNT_OFFSET            12  // Update task queue counters.
+#define UPDATE_SCRATCH_TASKS_DONE_OFFSET            16  // Update task queue counters.
+
+#ifdef __cplusplus
+// The following counter offsets shared between build and update encode must match.
+static_assert(UPDATE_SCRATCH_COUNTER_NUM_PRIMITIVES_OFFSET == ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET);
+static_assert(UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET == ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET);
+#endif
 
 //=====================================================================================================================
 struct TaskLoopCounters
@@ -1366,32 +1347,12 @@ struct IndexBufferInfo
 #define INDEX_BUFFER_INFO_FORMAT_OFFSET      12
 
 //=====================================================================================================================
-// Update scratch memory fields
-#define UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET 0
-#define UPDATE_SCRATCH_TASK_COUNT_OFFSET        4
-#define UPDATE_SCRATCH_ENCODE_TASK_COUNT_OFFSET 8
-#define UPDATE_SCRATCH_ENCODE_TASKS_DONE_OFFSET 12
-
-//=====================================================================================================================
-#ifdef AMD_VULKAN
-//=====================================================================================================================
-///@note Enum is a reserved keyword in glslang. To workaround this limitation, define static constants to replace the
-///      HLSL enums that follow for compatibility.
-//=====================================================================================================================
-namespace RebraidType
-{
-    static const uint Off = 0x0;
-    static const uint V1  = 0x1;
-    static const uint V2  = 0x2;
-}
-#else
 enum RebraidType : uint
 {
     Off = 0, // No Rebraid
     V1  = 1, // First version of Rebraid
     V2  = 2, // Second version of Rebraid
 };
-#endif
 
 #define BUILD_MODE_LINEAR   0
 // BUILD_MODE_AC was 1, but it has been removed.
@@ -1546,9 +1507,7 @@ struct RayQueryInternal
     uint             clocks;
     uint             numCandidateHits;
     uint             instanceIntersections;
-#ifdef AMD_VULKAN
     uint             rayQueryObjId;
-#endif
 };
 
 //=====================================================================================================================
@@ -1563,42 +1522,22 @@ struct HitGroupInfo
 //=====================================================================================================================
 struct TriangleData
 {
+#if __cplusplus
+    TriangleData(int val)
+    {
+        memset(this, val, sizeof(TriangleData));
+    }
+
+    TriangleData() : TriangleData(0)
+    {}
+#endif
+
     float3 v0; ///< Vertex 0
     float3 v1; ///< Vertex 1
     float3 v2; ///< Vertex 2
 };
 
 //=====================================================================================================================
-
-//=====================================================================================================================
-struct GeometryArgs
-{
-    uint metadataSizeInBytes;           // Size of the metadata header
-    uint NumPrimitives;                 // Number of primitives
-    uint LeafNodeDataByteOffset;        // Leaf node data byte offset
-    uint PrimitiveOffset;               // Primitive Offset
-    uint SceneBoundsByteOffset;         // Scene bounds byte offset
-    uint PropagationFlagsScratchOffset; // Flags byte offset
-    uint BaseUpdateStackScratchOffset;  // Update stack offset
-    uint IndexBufferByteOffset;         // Index buffer byte offset
-    uint IndexBufferFormat;             // Index buffer format
-    uint GeometryStride;                // Geometry buffer stride in terms of components for vertices. 0 if the
-                                        // stride is accounted for in the SRD. R32G32 elements for AABBs.
-    uint GeometryIndex;                 // Index of the geometry description that owns this node
-    uint BaseGeometryInfoOffset;        // Base offset for the geometry info
-    uint BasePrimNodePtrOffset;         // Base offset for the prim nodes
-    uint GeometryFlags;                 // Geometry flags (D3D12_RAYTRACING_GEOMETRY_FLAGS)
-    uint VertexComponentCount;          // Components in vertex buffer format
-    uint VertexComponentSize;           // Size of component (in bytes) in vertex buffer format.
-    uint vertexCount;                   // Vertex count
-    uint DestLeafByteOffset;            // Destination buffer leaf node data section offset
-    uint LeafNodeExpansionFactor;       // Leaf node expansion factor (> 1 for triangle splitting)
-    uint IndexBufferVaLo;
-    uint IndexBufferVaHi;
-    uint TransformBufferGpuVaLo;
-    uint TransformBufferGpuVaHi;
-    uint blockOffset;                    // Starting block index for current geometry
-    uint encodeTaskCounterScratchOffset;
-};
+struct LutData {};
 
 #endif

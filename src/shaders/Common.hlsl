@@ -44,17 +44,6 @@ typedef AccelStructDataOffsets AccelStructOffsets;
 #define inout_param(x) inout x
 #endif
 
-#ifdef AMD_VULKAN_GLSLANG
-// Vulkan workarounds for glslangValidator.
-#define export
-
-struct BuiltInTriangleIntersectionAttributes
-{
-    float2 barycentrics;
-};
-
-#endif
-
 //=====================================================================================================================
 // static definitions
 
@@ -82,10 +71,7 @@ struct BuiltInTriangleIntersectionAttributes
 #define DEAD_LANE         0xfffffff7
 
 #include "Extensions.hlsl"
-#include "../shared/math.h"
-
-// Workaround for lack of 64 bit literals and casts in glslang
-static const uint64_t OneU64 = 1;
+#include "../shadersClean/common/Math.hlsli"
 
 #ifdef __cplusplus
 static const float NaN = std::numeric_limits<float>::quiet_NaN();
@@ -99,7 +85,7 @@ static const BoundingBox InvalidBoundingBox =
     float3(-FLT_MAX, -FLT_MAX, -FLT_MAX)
 };
 
-#define FLAG_IS_SET(x, flagName)   (((x) & (OneU64 << (flagName##_SHIFT))) != 0)
+#define FLAG_IS_SET(x, flagName)   (((x) & (1ull << (flagName##_SHIFT))) != 0)
 #define FLAG_IS_CLEAR(x, flagName) (FLAG_IS_SET(x, flagName) == 0)
 
 //=====================================================================================================================

@@ -24,6 +24,7 @@
  #######################################################################################################################
 
 
+import cmd
 import sys
 import os
 import re
@@ -36,6 +37,9 @@ import enum
 import traceback
 import struct
 import shutil
+import glob
+import pathlib
+from typing import List
 
 DWORDS_PER_LINE = 8
 
@@ -64,7 +68,7 @@ DEFAULT_OUTPUT_DIR = "CompiledShaders"
 SPIRV_WHITELIST = "strip_whitelist.txt"
 SPV_REMAP_EXECUTABLE = "spirv-remap"
 DXC_EXECUTABLE = "dxc"
-GLSLANG_EXECUTABLE = "glslangValidator"
+maxLegacyRtIpLevel = 20
 
 class ShaderConfig:
     def __init__(self, path, entryPoint=None, outputName=None, defines=None, includePaths=None):
@@ -89,10 +93,14 @@ class ShaderConfig:
         return not self.isLibrary()
 
 traceShaderConfigs = [
-    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibrarySw"),
-    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibrarySwDev", defines="DEVELOPER=1"),
-    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibrary", defines="USE_HW_INTRINSIC=1"),
-    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibraryDev", defines="USE_HW_INTRINSIC=1,DEVELOPER=1"),
+    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibrarySw", defines="GPURT_RTIP_LEVEL=0"),
+    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibrarySwDev", defines="DEVELOPER=1,GPURT_RTIP_LEVEL=0"),
+    # Below 2 lines will be removed after GPURT_MINIMUM_INTERFACE_MAJOR_VERSION is bumped to 48
+    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibrary", defines="USE_HW_INTRINSIC=1,GPURT_RTIP_LEVEL=0"),
+    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibraryDev", defines="USE_HW_INTRINSIC=1,DEVELOPER=1,GPURT_RTIP_LEVEL=0"),
+
+    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibraryLegacy", defines=f"USE_HW_INTRINSIC=1,GPURT_RTIP_LEVEL={maxLegacyRtIpLevel}"),
+    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibraryDevLegacy", defines=f"USE_HW_INTRINSIC=1,DEVELOPER=1,GPURT_RTIP_LEVEL={maxLegacyRtIpLevel}"),
 ]
 
 bvhShaderConfigs = [
@@ -113,7 +121,7 @@ bvhShaderConfigs = [
     ShaderConfig(path="UpdateQBVH.hlsl", entryPoint="UpdateQBVH"),
     ShaderConfig(path="RefitBounds.hlsl", entryPoint="RefitBounds"),
     ShaderConfig(path="ClearBuffer.hlsl", entryPoint="ClearBuffer"),
-    ShaderConfig(path="CopyBufferRaw.hlsl", entryPoint="CopyBufferRaw"),
+    ShaderConfig(path="../shadersClean/build/CopyBufferRaw.hlsl", entryPoint="CopyBufferRaw"),
     ShaderConfig(path="BuildQBVH.hlsl", entryPoint="BuildQBVH"),
     ShaderConfig(path="RadixSort/BitHistogram.hlsl", entryPoint="BitHistogram"),
     ShaderConfig(path="RadixSort/ScatterKeysAndValues.hlsl", entryPoint="ScatterKeysAndValues"),
@@ -138,6 +146,192 @@ bvhShaderConfigs = [
     ShaderConfig(path="InitAccelerationStructure.hlsl", entryPoint="InitAccelerationStructure", defines="IS_UPDATE=1", outputName="InitUpdateAccelerationStructure"),
     ShaderConfig(path="BuildFastAgglomerativeLbvh.hlsl", entryPoint="BuildFastAgglomerativeLbvh"),
 ]
+
+def getBaseDxcCommandArgs(isBvh:bool, isLibrary:bool, isSpirv:bool):
+    dxcOptions = []
+    dxcOptions += ["-Vd"]
+    dxcOptions += ["-O3"]
+    if isSpirv:
+        dxcOptions += ["-spirv"]
+        dxcOptions += ["-fspv-target-env=universal1.5", "-fcgl"] if isLibrary else ["-fspv-target-env=vulkan1.1"]
+        dxcOptions += ["-DAMD_VULKAN", "-DAMD_VULKAN_DXC", "-DAMD_VULKAN_SPV"]
+        dxcOptions += ["-fvk-use-scalar-layout"]
+
+    dxcOptions += ["-Wall", "-Wextra"]
+
+    dxcOptions +=  ["-Wno-ignored-attributes",
+                    "-Wno-parentheses-equality",
+                    "-Wno-parameter-usage",
+                    "-Wno-unused-variable",
+                    "-Wno-unused-function",
+                    "-Wno-unused-parameter",
+                    "-Wno-unknown-pragmas",
+                    "-Wno-sometimes-uninitialized",
+                    "-Wno-uninitialized",
+                    "-Wno-conversion",
+                    "-Wno-parameter-usage",
+                    ]
+
+    dxcOptions += ["-enable-16bit-types"]
+    dxcOptions += ["-T", SHADER_PROFILE_LIB] if isLibrary else  ["-T", SHADER_PROFILE]
+    # Currently rayquery takes a 8% perf hit in *only* gankino when traversal is compiled with hlsl 2021
+    dxcOptions += ["-HV", "2021"] if isBvh else ["-HV", "2018"]
+
+    return dxcOptions
+
+validationSpecialCaseDefines = {x.path:x.defines for x in list(filter(lambda a : a.defines is not None, bvhShaderConfigs))}
+
+"""
+Combines args into an array of strings that can be used as compilation command by InvokeSubprocess.
+Output command lacks: filename, -M flag for listing includes and entrypoint-specific defines like USE_HW_INTRINSIC
+"""
+def getValidationCmdArgs(args) -> [str]:
+
+    compilerPath = FixInputPath(args.compilerPath) + '/'
+    compilerPath += DXC_EXECUTABLE
+    compilerPath = FixExePath(compilerPath)
+
+    validateCommand =  [compilerPath]
+
+    validateCommand += getBaseDxcCommandArgs(True, True, True)
+    validateCommand += ["-Wno-misplaced-attributes"] # -Wmisplaced-attributes is triggered by [RootSignature()]
+                                                     # used by entrypoint code and compiled as library
+    validateCommand += ['-Fo', 'temp.bin']
+
+    validateCommand += ['-DLIBRARY_COMPILATION']
+
+    #use defines from cmake
+    for d in args.defines.split(';'):
+        d = d.strip()
+        if d != '':
+            validateCommand += ['-D' + d]
+    if args.vulkan:
+        validateCommand += ['-DAMD_VULKAN']
+    #developer only ever adds, so we enable it globally for validation
+    validateCommand += ['-DDEVELOPER']
+    validateCommand += ['-DUSE_HW_INTRINSIC=1']
+
+    #use include pathes from cmake
+    for p in args.includePaths.split(';'):
+        p = p.strip()
+        if p != '':
+            validateCommand += ['-I', p]
+
+    return validateCommand
+
+"""
+Finds all hlsl-hlsli pairs of files under basePath (recursively).
+Outputs dict of filenames (without extension) to pair of bools meaning (has_hlsl_implementation, has_hlsli_header)
+"""
+def getHlslHlsliPairs(basePath: str) -> {str: (bool, bool)}:
+    # pairs -> {hlsl_hlsli_pair_path_without_extension: (has_hlsl, has_hlsli)}
+    pairs = {}
+    # insert hlsl part of pairs
+    for hlslfile in glob.glob(basePath+"/**/*.hlsl", recursive=True):
+        withoutExtension = pathlib.Path(hlslfile).with_suffix("")
+        pairs[withoutExtension] = (True, False)
+
+    #insert hlsli part of pairs
+    for hlslifile in glob.glob(basePath+"/**/*.hlsli", recursive=True):
+        withoutExtension = pathlib.Path(hlslifile).with_suffix("")
+        hasHlslFile = pairs.get(withoutExtension, (False, False))[0]
+        pairs[withoutExtension] = (hasHlslFile, True)
+
+    return pairs
+
+"""
+Some files/functions can be included conditionally behind ifdefs.
+This function combines defines, so that we can test compilation with different combinations of defines.
+"""
+def getDefineCombos(path: pathlib.Path) -> [[str]]:
+    # required to test all combos as we cannot know how these interact
+    # it's only partial compilation, so it should not take a lot of time
+    # tests 1 or 2 combos (only 1 if there are no file specific defines)
+    # - default defines
+    # - default defines + file specific defines
+
+    defineCombos = [[]]
+    filename = path.name
+    if filename in validationSpecialCaseDefines.keys():
+        temp = validationSpecialCaseDefines[filename].split(',')
+        temp = list(map(lambda a : "-D"+a, temp))
+        defineCombos += [temp]
+
+    return defineCombos
+
+"""
+shaderClean's hlsl-hlsli pair is considered clean when:
+1. it does not include anything else than .hlsli files;
+2. it does not include anything from outside of shaderClean directory.
+"""
+def validateIncludes(cmd: List[str], path: pathlib.Path, shadersCleanStr: str) -> bool:
+    listIncludesCmd = cmd + ["-M"]
+    threadOutput = []
+    retVal = InvokeSubprocess(listIncludesCmd, None, threadOutput, linuxLibraryPath=listIncludesCmd[0], expectNoOutput=False)
+    assert retVal == 0, "Could not list includes of {0} with cmd {1} because:\n {2}".format(path, listIncludesCmd, threadOutput)
+
+    includedPaths = set()
+    for line in threadOutput[0].split("\n")[1:]:
+        includedPaths |= {pathlib.Path(line.strip(" \n\r\t\\/"))}
+    includedPaths -= {path.with_suffix(".hlsl")}
+    includedPaths -= {path.with_suffix(".hlsli")}
+
+    # On windows, make sure that shadersCleanPath is also interpreted in the same way as hlsiStr via as_posix() otherwise
+    # use of a drive mapping may cause errors.
+    shadersCleanPath = pathlib.Path(shadersCleanStr)
+    shadersCleanStrPosix = str(shadersCleanPath.resolve().as_posix())
+
+    for hlsli in includedPaths:
+        hlsliStr = str(hlsli.resolve().as_posix())
+        if hlsli.suffix != ".hlsli":
+            print("GPURT clean shader validation failed:")
+            print("\tIncluding non-hlsli files is not allowed.")
+            print("\t{0} includes {1}".format(path, hlsliStr))
+            return False
+
+        if shadersCleanStrPosix not in hlsliStr:
+            print("GPURT clean shader validation failed:")
+            print("\tIncluding non-clean files is not allowed.")
+            print("\t{0} includes {1}".format(path, hlsliStr))
+            return False
+
+    return True
+
+"""
+hlsl-hlsli pairs must compile on its own. It tests whether pairs contain or include everything needed.
+If they do it allows including them anywhere in any order, except for some macros.
+"""
+def validateCompilation(cmd: List[str], path: pathlib.Path, shadersCleanStr: str) -> bool:
+    threadOutput = []
+    retVal = InvokeSubprocess(cmd, None, threadOutput, linuxLibraryPath=cmd[0], expectNoOutput=False)
+    if retVal != 0:
+        print("GPURT clean shader validation failed:")
+        print("\tCould not compile {0} as library with cmd {1} because:\n {2}".format(path, cmd, threadOutput))
+        return False
+
+    return True
+
+"""
+Validates the organization of shaders to enforce cpp/h a src/header sort of structure
+This helps keep the shader library untangled and easier to maintain.
+#define'ing LIBRARY_COMPILATION enables including files in any order and does not include implementation dependencies.
+"""
+def validateShadersClean(args) -> bool:
+    cmdBase = getValidationCmdArgs(args)
+    shadersCleanPath = pathlib.Path(FixInputPath(args.basepath)).parent.as_posix() + "/shadersClean"
+    shadersCleanStr = str(shadersCleanPath)
+
+    for path, (hasImpl, hasHeader) in getHlslHlsliPairs(shadersCleanPath).items():
+        assert (hasImpl or hasHeader), "There should not be files without impl nor header."
+        fullPath = path.with_suffix(".hlsl" if hasImpl else ".hlsli")
+        for defines in getDefineCombos(fullPath):
+            compileCmd = cmdBase + defines + [str(fullPath.as_posix())]
+            if not validateIncludes(compileCmd, fullPath, shadersCleanStr):
+                return False
+            if not validateCompilation(compileCmd, fullPath, shadersCleanStr):
+                return False
+
+    return True
 
 def isSpirvShader(shaderConfig, args):
     return args.vulkan and (shaderConfig.isLibrary() or (shaderConfig.isBVH() and args.spirv))
@@ -202,6 +396,9 @@ def InvokeSubprocess(commandArgs, workingDirectory, threadOutput, linuxLibraryPa
         threadOutput.append("Stdout:")
         threadOutput.append(compileOutput[0].decode(sys.stdout.encoding).strip())
         threadOutput.append("Stderr:")
+        threadOutput.append(compileOutput[1].decode(sys.stdout.encoding).strip())
+    else:
+        threadOutput.append(compileOutput[0].decode(sys.stdout.encoding).strip())
         threadOutput.append(compileOutput[1].decode(sys.stdout.encoding).strip())
 
     return compileResult
@@ -307,17 +504,16 @@ def ConvertDxilFile(inDxilFilename, inOutputName, threadOutput, addDxilPostfix):
         threadOutput.append(f"Error: {e}")
         return False
 
-def RunCompiler(outputDir, compilerPath, inShaderConfig, inShaderBasePath, inDXC, inVerbose, threadOutput, spirv, dxilPostfix):
+def RunCompiler(outputDir, compilerPath, inShaderConfig, inShaderBasePath, inVerbose, threadOutput, spirv, dxilPostfix):
     shaderPath = os.path.join(inShaderBasePath, inShaderConfig.path).replace('\\', '/')
     shaderFilename = os.path.basename(inShaderConfig.path)
 
     detailString = ":" + inShaderConfig.entryPoint if inShaderConfig.entryPoint is not None else "<Library>"
     ext = ".h"
-    if inDXC:
-        if spirv:
-            ext = "_spv" + ext
-        elif dxilPostfix:
-            ext = "_dxil" + ext
+    if spirv:
+        ext = "_spv" + ext
+    elif dxilPostfix:
+        ext = "_dxil" + ext
     genFileName = inShaderConfig.getName() + ext
     compilerName = os.path.split(compilerPath)[1]
     compilationString = "Compiling (%s spirv=%s) %s%s -> %s..." % (compilerName, spirv, shaderFilename, detailString, genFileName)
@@ -343,48 +539,14 @@ def RunCompiler(outputDir, compilerPath, inShaderConfig, inShaderBasePath, inDXC
     for p in inShaderConfig.includePaths.split(','):
         commandArgs += ['-I', p]
 
-    commandArgs += ['-enable-16bit-types']
-    if inShaderConfig.isBVH():
-        commandArgs += ['-HV', '2021']
-    else:
-        commandArgs += ['-HV', '2018']
+    commandArgs += getBaseDxcCommandArgs(inShaderConfig.isBVH(), inShaderConfig.isLibrary(), spirv)
+    commandArgs += shaderDefines
+    commandArgs += ['-Fo', binFile]
+    commandArgs += [hlslFile]
+    if entryPoint:
+        commandArgs += ['-E', entryPoint]
 
-    if inDXC:
-        isLibrary = inShaderConfig.isLibrary()
-        shaderProfileString = SHADER_PROFILE_LIB if isLibrary else SHADER_PROFILE
-        if spirv:
-            target_env = 'universal1.5' if isLibrary else 'vulkan1.1'
-            commandArgs += [f'-fspv-target-env={target_env}']
-            commandArgs += ['-spirv']
-            commandArgs += ['-Od']
-            commandArgs += ['-DAMD_VULKAN', '-DAMD_VULKAN_DXC', '-DAMD_VULKAN_SPV']
-            commandArgs += ['-fvk-use-scalar-layout']
-            if isLibrary:
-                commandArgs += ['-fcgl']
-        else:
-            commandArgs += ['-O3']
-        if entryPoint:
-            commandArgs += ['-E', entryPoint]
-        commandArgs += shaderDefines
-        commandArgs += ['-Vd']
-        commandArgs += ['-T', shaderProfileString]
-        commandArgs += ['-Wno-ignored-attributes']
-        commandArgs += ['-Wno-parentheses-equality']
-        commandArgs += ['-Fo', binFile]
-        commandArgs += [hlslFile]
-    else:
-        commandArgs += ['-V', hlslFile]
-        commandArgs += ['-o', binFile]
-        commandArgs += ['-D']
-        commandArgs += ['-S', 'comp']
-        commandArgs += ['--entry-point', 'TraceRaysRTPSO']
-        commandArgs += ['--keep-uncalled']
-        commandArgs += ['-Od']
-        commandArgs += ['-DDEFINE_RAYDESC=1', '-DAMD_VULKAN', '-DAMD_VULKAN_GLSLANG', '-DAMD_VULKAN_SPV']
-
-        commandArgs += shaderDefines
-
-    compileResult = InvokeSubprocess(commandArgs, outputDir, threadOutput, linuxLibraryPath=(compilerPath if inDXC else ''))
+    compileResult = InvokeSubprocess(commandArgs, outputDir, threadOutput, linuxLibraryPath=compilerPath)
 
     compilationString += "Success" if (compileResult == 0) else "Failure"
     threadOutput.append(compilationString)
@@ -441,7 +603,7 @@ def CompileShaderConfig(shaderConfig, args, shadersOutputDir,
             pass
         else:
             addDxilPostfix = True
-            if not RunCompiler(tempDirPath, compilerPath, shaderConfig, shadersBasePath, (not args.glslang or isBVH), args.verbose, threadOutput, args.spirv, addDxilPostfix):
+            if not RunCompiler(tempDirPath, compilerPath, shaderConfig, shadersBasePath, args.verbose, threadOutput, args.spirv, addDxilPostfix):
                 threadOutput.append("Failed to compile Vulkan shader config %s" % shaderConfig)
                 return (False, os.linesep.join(threadOutput))
 
@@ -502,10 +664,7 @@ def CompileShaders(args, internalShadersHeader, compileType) -> int:
     shadersOutputDir = FixInputPath(args.outputDir)
 
     compilerPath = FixInputPath(args.compilerPath) + '/'
-    if args.glslang:
-        compilerPath += GLSLANG_EXECUTABLE
-    else:
-        compilerPath += DXC_EXECUTABLE
+    compilerPath += DXC_EXECUTABLE
     compilerPath = FixExePath(compilerPath)
 
     dxcompilerLibPath = FixInputPath(args.dxcompilerLibPath)
@@ -580,7 +739,6 @@ def main() -> int:
     parser.add_argument('basepath', help='base path of the directory that contains the raytracing shaders')
     parser.add_argument('--outputDir', help='Output directory for compiled shaders', default=DEFAULT_OUTPUT_DIR)
     parser.add_argument('--vulkan', action='store_const', const=True, help='Output Vulkan shaders', default=False)
-    parser.add_argument('--glslang', action='store_const', const=True, help='Use glslangValidator (experimental) for Vulkan SPIRV generation instead of DXC', default=False)
     parser.add_argument('--disableDebugStripping', action='store_const', const=True, help='Disable Vulkan SPIRV debug symbol stripping', default=False)
     parser.add_argument('--interm-only', action='store_true', help="Generate intermediate SPIRV/DXIL instead of headers", default=False)
     parser.add_argument('--skip-bvh', action='store_true', help='Skip updating BVH shaders', default=False)
@@ -588,16 +746,30 @@ def main() -> int:
     parser.add_argument('--verbose', action='store_true', help='Output verbose inforation', default=False)
     parser.add_argument('--defines', help='Defines for the shader compiler, separated by ; or ,.', default="")
     parser.add_argument('--includePaths', help='Include paths for the shader compiler, separated by ; or ,.', default="")
-    parser.add_argument('--compilerPath', help='Path to standalone compiler (either dxc or glslangValidator).', default='./dxc.exe')
+    parser.add_argument('--compilerPath', help='Path to standalone compiler.', default='./dxc.exe')
     parser.add_argument('--dxcompilerLibPath', help='Path to dxcompiler.dll/libdxcompiler.so', default='./dxcompiler.dll')
     parser.add_argument('--spirvRemapPath', help='Path to spirv-remap executable', default='./spirv-remap.exe')
     parser.add_argument('--whiteListPath', help='Path to SPIRV whitelist file', default=SPIRV_WHITELIST)
     parser.add_argument('--jobs', help='Number of job threads to compile with', default=os.cpu_count())
     parser.add_argument('--spirv', action='store_true', help='Output SPIR-V for Vulkan for BVH shaders, need to be used with --vulkan', default=False)
     parser.add_argument('--strict', action='store_true', help='Require SSC invocations to finish cleanly without output or warnings.')
+    parser.add_argument('--validateShadersClean', action='store_const',const=True, help='Run #include validation on shaders for style enforcement.', default=False)
+
     originalPath = os.getcwd()
 
     args = parser.parse_args()
+
+    if args.validateShadersClean:
+        print("Validating shadersClean directory")
+        tBegin = time.perf_counter()
+        validIncludes = validateShadersClean(args)
+        tDuration = time.perf_counter() - tBegin
+        if validIncludes:
+            print("Validated shadersClean directory in ", round(tDuration, 4))
+        else:
+            print("Some files are not clean. See errors above.")
+        return 0 if validIncludes else -1
+
     outputDir = os.path.abspath(args.outputDir).replace('\\', '/')
 
     # Make sure the output directory exists

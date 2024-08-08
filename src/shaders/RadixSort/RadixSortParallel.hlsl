@@ -68,7 +68,7 @@ void BitHistogram(
     uint numPrimitives,
     uint useMortonCode30)
 {
-    for (; groupId < totalGroups; groupId += ShaderRootConstants.numThreadGroups)
+    for (; groupId < totalGroups; groupId += ShaderRootConstants.NumThreadGroups())
     {
         BitHistogramImpl(
             localId,
@@ -127,11 +127,11 @@ void ScanExclusiveAdd(
     }
     else if (radixSortScanLevel == 1)
     {
-        BEGIN_TASK(ShaderRootConstants.numThreadGroups);
+        BEGIN_TASK(ShaderRootConstants.NumThreadGroups());
 
         ScanExclusiveInt4Impl(globalId, localId, ShaderConstants.offsets.histogram, numElements);
 
-        END_TASK(ShaderRootConstants.numThreadGroups);
+        END_TASK(ShaderRootConstants.NumThreadGroups());
     }
     else if (radixSortScanLevel == 2)
     {
@@ -273,7 +273,7 @@ void ScatterKeysAndValues(
     uint numPrimitives,
     uint useMortonCode30)
 {
-    for (; groupId < totalNumGroups; groupId += ShaderRootConstants.numThreadGroups)
+    for (; groupId < totalNumGroups; groupId += ShaderRootConstants.NumThreadGroups())
     {
         ScatterKeysAndValuesImpl(
             groupId,
@@ -326,15 +326,15 @@ void RadixSort(
 
     for (uint passIdx = 0; passIdx < passes; passIdx++)
     {
-        BEGIN_TASK(ShaderRootConstants.numThreadGroups);
+        BEGIN_TASK(ShaderRootConstants.NumThreadGroups());
 
         BitHistogram(localId, groupId, totalNumGroups, bitShiftCount, currentFromKeys, numPrimitives, useMortonCode30);
 
-        END_TASK(ShaderRootConstants.numThreadGroups);
+        END_TASK(ShaderRootConstants.NumThreadGroups());
 
         ScanExclusiveAdd(numTasksWait, waveId, globalId, localId, groupId, numHistogramElements, passIdx, radixSortScanLevel);
 
-        BEGIN_TASK(ShaderRootConstants.numThreadGroups);
+        BEGIN_TASK(ShaderRootConstants.NumThreadGroups());
 
         ScatterKeysAndValues(
             groupId,
@@ -348,7 +348,7 @@ void RadixSort(
             numPrimitives,
             useMortonCode30);
 
-        END_TASK(ShaderRootConstants.numThreadGroups);
+        END_TASK(ShaderRootConstants.NumThreadGroups());
 
         // The first pass uses the input buffer. Swap between output and temp resources for later passes.
         if (bitShiftCount == 0)

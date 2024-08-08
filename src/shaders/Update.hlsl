@@ -22,22 +22,22 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
+// Note, CBV(b255) must be the last used binding in the root signature.
 #define RootSig "RootConstants(num32BitConstants=1, b0),"\
                 "CBV(b1),"\
                 "UAV(u0),"\
                 "UAV(u1),"\
                 "UAV(u2),"\
+                "UAV(u3),"\
                 "DescriptorTable(CBV(b0, numDescriptors = 4294967295, space = 1)),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
-                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b255),"\
-                "UAV(u3),"\
                 "UAV(u4),"\
-                "UAV(u5)"
+                "CBV(b255),"\
+                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
 
 #define TASK_COUNTER_BUFFER   ScratchBuffer
-#define TASK_COUNTER_OFFSET   UPDATE_SCRATCH_ENCODE_TASK_COUNT_OFFSET
-#define NUM_TASKS_DONE_OFFSET UPDATE_SCRATCH_ENCODE_TASKS_DONE_OFFSET
+#define TASK_COUNTER_OFFSET   UPDATE_SCRATCH_TASK_COUNT_OFFSET
+#define NUM_TASKS_DONE_OFFSET UPDATE_SCRATCH_TASKS_DONE_OFFSET
 #include "TaskMacros.hlsl"
 
 //======================================================================================================================
@@ -51,17 +51,24 @@ struct RootConstants
 
 [[vk::push_constant]] ConstantBuffer<RootConstants>                ShaderRootConstants  : register(b0);
 [[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants>         ShaderConstants      : register(b1);
+
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer         DstMetadata          : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer         ScratchBuffer        : register(u1);
 [[vk::binding(2, 0)]]                  RWByteAddressBuffer         SrcBuffer            : register(u2);
+[[vk::binding(3, 0)]] RWByteAddressBuffer                          IndirectArgBuffer    : register(u3);
+
 [[vk::binding(0, 3)]] ConstantBuffer<BuildShaderGeometryConstants> GeometryConstants[]  : register(b0, space1);
 [[vk::binding(0, 4)]] RWBuffer<float3>                             GeometryBuffer[]     : register(u0, space1);
-// unused buffer
-[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer         DstBuffer            : register(u3);
-[[vk::binding(4, 0)]] RWByteAddressBuffer                          EmitBuffer           : register(u4);
-[[vk::binding(5, 0)]] globallycoherent RWByteAddressBuffer         ScratchGlobal        : register(u5);
+
+[[vk::binding(4, 0)]] RWByteAddressBuffer                          NullBuffer           : register(u4);
+
+// Unmapped buffer
+#define DstBuffer NullBuffer
+#define EmitBuffer NullBuffer
+#define ScratchGlobal NullBuffer
 
 #include "EncodeCommon.hlsl"
+#include "UpdateCommon.hlsl"
 
 groupshared uint SharedMem[1];
 
@@ -70,8 +77,9 @@ groupshared uint SharedMem[1];
 // requirement for resources and variables. See BuildCommon.hlsl for details.
 #include "IntersectCommon.hlsl"
 #include "UpdateQBVHImpl.hlsl"
+#include "LaneGroup.hlsl"
+#include "IndirectArgBufferUtils.hlsl"
 
-#if !AMD_VULKAN
 //======================================================================================================================
 void EncodePrimitives(
     uint globalId,
@@ -79,7 +87,8 @@ void EncodePrimitives(
 {
     for (uint geomId = 0; geomId < ShaderConstants.numDescs; geomId++)
     {
-        const GeometryArgs geometryArgs = InitGeometryArgs(geomId);
+        const BuildShaderGeometryConstants geomConstants = GeometryConstants[geomId];
+        const NumPrimAndInputOffset inputOffsets = LoadInputOffsetsAndNumPrim(geomId, true);
 
         if (globalId == 0)
         {
@@ -87,36 +96,56 @@ void EncodePrimitives(
                 (geometryType == GEOMETRY_TYPE_TRIANGLES) ? DECODE_PRIMITIVE_STRIDE_TRIANGLE :
                                                             DECODE_PRIMITIVE_STRIDE_AABB;
 
-            WriteGeometryInfo(geometryArgs, geometryArgs.PrimitiveOffset, geometryArgs.NumPrimitives, primitiveStride);
+            WriteGeometryInfo(geomConstants, inputOffsets, geomId, primitiveStride);
         }
 
-        for (uint primId = globalId; primId < geometryArgs.NumPrimitives; primId += ShaderRootConstants.numThreads)
+        for (uint primId = globalId; primId < inputOffsets.numPrimitives; primId += ShaderRootConstants.numThreads)
         {
             if (geometryType == GEOMETRY_TYPE_TRIANGLES)
             {
-                EncodeTriangleNode(GeometryBuffer[geomId],
-                                   geometryArgs,
+                EncodeTriangleNode(geomConstants,
+                                   inputOffsets,
+                                   geomId,
                                    primId,
-                                   geometryArgs.PrimitiveOffset,
-                                   0,
-                                   0,
-                                   0,
-                                   true);
+                                   true); // Write to the update stack
             }
             else
             {
-                EncodeAabbNode(GeometryBuffer[geomId],
-                               geometryArgs,
+                EncodeAabbNode(geomConstants,
+                               inputOffsets,
+                               geomId,
                                primId,
-                               geometryArgs.PrimitiveOffset,
-                               0,
                                true);
             }
         }
     }
 }
 
-#endif
+//======================================================================================================================
+template<uint geometryType>
+void Update(
+    uint globalId,
+    uint localId)
+{
+    uint waveId = 0;
+    uint numTasksWait = 0;
+    INIT_TASK;
+
+    const uint numGroups = ShaderRootConstants.numThreads / BUILD_THREADGROUP_SIZE;
+
+    {
+        ClearUpdateFlags(globalId);
+        BEGIN_TASK(numGroups);
+        EncodePrimitives(globalId, GEOMETRY_TYPE_TRIANGLES);
+        END_TASK(numGroups);
+
+        const uint numWorkItems = ScratchBuffer.Load(UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET);
+        UpdateQBVHImpl(globalId,
+                    numWorkItems,
+                    ShaderRootConstants.numThreads);
+    }
+
+}
 
 //======================================================================================================================
 // Main Function : UpdateTriangles
@@ -127,27 +156,7 @@ void UpdateTriangles(
     uint globalId : SV_DispatchThreadID,
     uint localId  : SV_GroupThreadID)
 {
-    uint waveId = 0;
-    uint numTasksWait = 0;
-    INIT_TASK;
-
-    const uint numGroups = ShaderRootConstants.numThreads / BUILD_THREADGROUP_SIZE;
-
-#if !AMD_VULKAN
-    BEGIN_TASK(numGroups);
-
-    {
-        EncodePrimitives(globalId, GEOMETRY_TYPE_TRIANGLES);
-    }
-
-    END_TASK(numGroups);
-#endif
-
-    const uint numWorkItems = ScratchBuffer.Load(UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET);
-
-    UpdateQBVHImpl(globalId,
-                   numWorkItems,
-                   ShaderRootConstants.numThreads);
+    Update<GEOMETRY_TYPE_TRIANGLES>(globalId, localId);
 }
 
 //======================================================================================================================
@@ -159,25 +168,5 @@ void UpdateAabbs(
     uint globalId : SV_DispatchThreadID,
     uint localId  : SV_GroupThreadID)
 {
-    uint waveId = 0;
-    uint numTasksWait = 0;
-    INIT_TASK;
-
-    const uint numGroups = ShaderRootConstants.numThreads / BUILD_THREADGROUP_SIZE;
-
-#if !AMD_VULKAN
-    BEGIN_TASK(numGroups);
-
-    {
-        EncodePrimitives(globalId, GEOMETRY_TYPE_AABBS);
-    }
-
-    END_TASK(numGroups);
-#endif
-
-    const uint numWorkItems = ScratchBuffer.Load(UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET);
-
-    UpdateQBVHImpl(globalId,
-                   numWorkItems,
-                   ShaderRootConstants.numThreads);
+    Update<GEOMETRY_TYPE_AABBS>(globalId, localId);
 }

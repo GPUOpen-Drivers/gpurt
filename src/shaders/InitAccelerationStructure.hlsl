@@ -22,6 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
+// Note, CBV(b255) must be the last used binding in the root signature.
 #ifdef IS_UPDATE
 #define RootSig "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
                 "CBV(b255)"
@@ -90,8 +91,8 @@ void InitAccelerationStructure(
     const RWByteAddressBuffer ScratchGlobal = BatchScratchGlobals[groupId];
 
     // Reset update stack pointer and update task counters.
-    ScratchGlobal.Store<uint4>(0, uint4(0u, 0u, 0u, 0u));
-
+    const EncodeTaskCountersUpdate encodeTaskCountersUpdate = (EncodeTaskCountersUpdate)0;
+    ScratchGlobal.Store<EncodeTaskCountersUpdate>(0, encodeTaskCountersUpdate);
 #else
     const ConstantBuffer<Constants> BuilderConstants = BatchBuilderConstants[groupId];
     const RWByteAddressBuffer       HeaderBuffer     = BatchHeaderBuffers[groupId];

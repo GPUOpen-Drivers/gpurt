@@ -26,9 +26,10 @@
 #ifndef _EXTENSIONS_HLSL
 #define _EXTENSIONS_HLSL
 
-#if !defined(__cplusplus)
+#include "../shadersClean/common/Extensions.hlsli"
+#include "../shadersClean/common/Math.hlsli"
 
-#define __decl [noinline]
+#if !defined(__cplusplus)
 
 // Dummy implementation for Vulkan build only
 __decl uint AmdExtLaneCount() DUMMY_UINT_FUNC
@@ -156,13 +157,7 @@ float AmdExtD3DShaderIntrinsics_WaveClusterMax(float x, uint dxClusterSize)
 
 // Driver intrinsic that returns the dispatch rays index for the current thread
 __decl uint3 AmdTraceRayDispatchRaysIndex()
-#if defined(AMD_VULKAN) || defined(__cplusplus)
     DUMMY_UINT3_FUNC
-#else
-{
-    return DispatchRaysIndex();
-}
-#endif
 
 // Driver closest hit shader inlining patch function. Driver will possibly static none or all closest hit shaders.
 // Returns true if the call was inlined.
@@ -221,9 +216,7 @@ __decl void AmdTraceRayGetHitAttributes(
 // Driver notification of trace input parameters.
 __decl void AmdTraceRaySetTraceParams(
     in    uint  rayFlags,      ///< Ray flags
-#ifdef AMD_VULKAN
     in    uint  instanceInclusionMask,
-#endif
     in    float originX,       ///< Ray origin X
     in    float originY,       ///< Ray origin Y
     in    float originZ,       ///< Ray origin Z
@@ -240,11 +233,7 @@ __decl void AmdTraceRaySetTriangleIntersectionAttributes(
 
 // Driver notification of hit triangle node pointer
 
-#ifdef AMD_VULKAN
 __decl void AmdTraceRaySetHitTriangleNodePointer(
-#else
-static void AmdTraceRaySetHitTriangleNodePointer(
-#endif
     in GpuVirtualAddress bvhAddress, // The BVH address
     in uint              nodePointer // Node pointer of hit triangle
 )
@@ -350,18 +339,6 @@ __decl uint AmdTraceRayGetStackSize()   DUMMY_UINT_FUNC
 #define ANYHIT_CALLTYPE_NO_DUPLICATE    1
 #define ANYHIT_CALLTYPE_DUPLICATE       2
 
-//=====================================================================================================================
-static uint LowPart(GpuVirtualAddress addr)
-{
-    return uint(addr);
-}
-
-//=====================================================================================================================
-static uint HighPart(GpuVirtualAddress addr)
-{
-    return uint(addr >> 32);
-}
-
 #ifdef __cplusplus
 //=====================================================================================================================
 static uint LoadDwordAtAddr(GpuVirtualAddress addr)
@@ -452,17 +429,6 @@ static uint4 ConstantLoadDwordAtAddrx4(GpuVirtualAddress addr)
     return retVal;
 #endif
 }
-
-#if defined(AMD_VULKAN) || defined(__cplusplus)
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TiesToEven     0x0
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardPositive 0x1
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardNegative 0x2
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardZero     0x3
-
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Add      0x0
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Subtract 0x1
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Multiply 0x2
-#endif
 
 #ifdef __cplusplus
 #include <cfenv>

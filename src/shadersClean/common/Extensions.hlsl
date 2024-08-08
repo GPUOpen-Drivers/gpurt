@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -22,26 +22,4 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-// Main Function : CopyBufferRaw
-//=====================================================================================================================
-[[vk::binding(0, 0)]] RWStructuredBuffer<uint> Src : register(u0);
-[[vk::binding(1, 0)]] RWStructuredBuffer<uint> Dst : register(u1);
-
-struct Constants
-{
-	uint numDwords;
-};
-
-[[vk::push_constant]] ConstantBuffer<Constants> CB : register(b0);
-
-#define RootSig "RootConstants(num32BitConstants=1, b0), UAV(u0), UAV(u1)"
-
-[numthreads(64, 1, 1)]
-[RootSignature(RootSig)]
-void CopyBufferRaw(uint3 DispatchThreadID : SV_DispatchThreadID)
-{
-    if (DispatchThreadID.x < CB.numDwords)
-    {
-        Dst[DispatchThreadID.x] = Src[DispatchThreadID.x];
-    }
-}
+#include "Extensions.hlsli"

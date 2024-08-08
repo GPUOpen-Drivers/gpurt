@@ -83,6 +83,7 @@ void BvhBatcher::BuildAccelerationStructureBatch(
 
     for (const AccelStructBuildInfo& info : buildInfos)
     {
+        const AccelStructBuildInputs buildInputs = m_pDevice->OverrideBuildInputs(info.inputs);
         BvhBuilder builder(m_cmdBuffer,
                            m_backend,
                            m_pDevice,
@@ -93,8 +94,8 @@ void BvhBatcher::BuildAccelerationStructureBatch(
 
         UpdateEnabledPhaseFlags(builder.EnabledPhases());
 
-        const bool isUpdate = Util::TestAnyFlagSet(info.inputs.flags, AccelStructBuildFlagPerformUpdate);
-        const bool isTlas = info.inputs.type == AccelStructType::TopLevel;
+        const bool isUpdate = Util::TestAnyFlagSet(buildInputs.flags, AccelStructBuildFlagPerformUpdate);
+        const bool isTlas = buildInputs.type == AccelStructType::TopLevel;
         if (builder.m_buildConfig.numPrimitives == 0)
         {
             // Empty BVH builds need to initialize their headers and may emit post build information,
@@ -132,6 +133,11 @@ void BvhBatcher::BuildAccelerationStructureBatch(
                 }
             }
         }
+    }
+
+    if (m_deviceSettings.checkBufferOverlapsInBatch)
+    {
+        CheckOverlappingBuffers(buildInfos);
     }
 
     if (emptyBuilders.IsEmpty() == false)
@@ -190,7 +196,10 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
         DispatchInitAccelerationStructure<false>(builders);
         RGP_POP_MARKER();
     }
-    Barrier();
+    if ((updaters.IsEmpty() == false) || (builders.IsEmpty() == false))
+    {
+        Barrier();
+    }
     RGP_POP_MARKER();
 
     if (PhaseEnabled(BuildPhaseFlags::BuildDumpEvents))
@@ -221,23 +230,7 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
         else
         {
             RGP_PUSH_MARKER("BuildMultiDispatch");
-            if constexpr (IsTlas)
-            {
-                // Build one TLAS at a time.
-                // Workaround for crashes in cases where there are multiple TLAS and some are TopDown
-                // Games usually have one TLAS per batch, so this shouldn't cause a significant performance impact
-                const BuildPhaseFlags backup = m_enabledPhaseFlags;
-                for (size_t index = 0; index < builders.size(); ++index)
-                {
-                    m_enabledPhaseFlags = builders[index].EnabledPhases();
-                    BuildMultiDispatch(builders.Subspan(index, 1u));
-                }
-                m_enabledPhaseFlags = backup;
-            }
-            else
-            {
-                BuildMultiDispatch(builders);
-            }
+            BuildMultiDispatch(builders);
             RGP_POP_MARKER();
         }
 
@@ -563,6 +556,36 @@ bool BvhBatcher::PhaseEnabled(BuildPhaseFlags phase)
 }
 
 // =====================================================================================================================
+// Helper to invoke the BatchBuilderFunc to a builder
+template <typename BatchBuilderFunc>
+void BvhBatcher::InvokeBuildFunction(
+    BvhBuilder&      builder,
+    BatchBuilderFunc func)
+{
+    func(builder);
+
+    if (m_deviceSettings.enableInsertBarriersInBuildAS)
+    {
+        Barrier();
+    }
+}
+
+// =====================================================================================================================
+// Helper to invoke the BuildPhase of a builder
+template<typename BuilderPhase>
+void BvhBatcher::InvokeBuildPhase(
+    BvhBuilder&  builder,
+    BuilderPhase pBuilderPhase)
+{
+    (builder.*pBuilderPhase)();
+
+    if (m_deviceSettings.enableInsertBarriersInBuildAS)
+    {
+        Barrier();
+    }
+}
+
+// =====================================================================================================================
 // Applies the provided BatchBuilderFunc to all builders in builder span
 template <typename BatchBuilderFunc>
 void BvhBatcher::BuildFunction(
@@ -576,7 +599,7 @@ void BvhBatcher::BuildFunction(
     }
     for (auto& builder : builders)
     {
-        func(builder);
+        InvokeBuildFunction(builder, func);
     }
     if (rgpMarkerName != nullptr)
     {
@@ -598,7 +621,7 @@ void BvhBatcher::BuildFunction(
     {
         if (PhaseFlagSet(builder.EnabledPhases(), phase))
         {
-            func(builder);
+            InvokeBuildFunction(builder, func);
         }
     }
 
@@ -619,7 +642,7 @@ void BvhBatcher::BuildPhase(
     {
         if (PhaseFlagSet(builder.EnabledPhases(), phase))
         {
-            (builder.*pBuilderPhase)();
+            InvokeBuildPhase(builder, pBuilderPhase);
         }
     }
 
@@ -640,7 +663,7 @@ void BvhBatcher::BuildPhase(
     }
     for (auto& builder : builders)
     {
-        (builder.*pBuilderPhase)();
+        InvokeBuildPhase(builder, pBuilderPhase);
     }
     if (rgpMarkerName != nullptr)
     {
@@ -656,7 +679,7 @@ void BvhBatcher::BuildPhase(
 {
     for (auto& builder : builders)
     {
-        (builder.*pBuilderPhase)();
+        InvokeBuildPhase(builder, pBuilderPhase);
     }
 }
 
@@ -691,4 +714,74 @@ void BvhBatcher::OutputPipelineName(InternalRayTracingCsType type)
 }
 #endif
 
+// =====================================================================================================================
+void BvhBatcher::CheckOverlappingBuffers(
+    Util::Span<const AccelStructBuildInfo> buildInfos)
+{
+    struct BufferRange
+    {
+        gpusize addrStart;
+        gpusize addrEnd;
+    };
+    struct AsBufferRanges
+    {
+        BufferRange scratch;
+        BufferRange result;
+    };
+    const auto CalculateAsBufferRanges = [&](const AccelStructBuildInfo& buildInfo)
+    {
+        AsBufferRanges          ranges       = {};
+        AccelStructPrebuildInfo prebuildInfo = {};
+        m_pDevice->GetAccelStructPrebuildInfo(buildInfo.inputs, &prebuildInfo);
+
+        const bool isUpdate            = Util::TestAnyFlagSet(buildInfo.inputs.flags, AccelStructBuildFlagPerformUpdate);
+        const size_t scratchBuffersize = isUpdate ? prebuildInfo.updateScratchDataSizeInBytes :
+                                                    prebuildInfo.scratchDataSizeInBytes;
+
+        ranges.scratch.addrStart = buildInfo.scratchAddr.gpu;
+        ranges.scratch.addrEnd   = ranges.scratch.addrStart + scratchBuffersize;
+
+        ranges.result.addrStart = buildInfo.dstAccelStructGpuAddr;
+        ranges.result.addrEnd   = ranges.result.addrStart + prebuildInfo.resultDataMaxSizeInBytes;
+        return ranges;
+    };
+
+    const auto IsRangeOverlapping = [&](const BufferRange& lhs, const BufferRange& rhs)
+    {
+        return ((lhs.addrStart < rhs.addrEnd) && (rhs.addrStart < lhs.addrEnd));
+    };
+
+    for (size_t currentIndex = 0; currentIndex < buildInfos.size(); ++currentIndex)
+    {
+        const AsBufferRanges currentRanges = CalculateAsBufferRanges(buildInfos[currentIndex]);
+        for (size_t otherIndex = currentIndex + 1; otherIndex < buildInfos.size(); ++otherIndex)
+        {
+            const AsBufferRanges otherRanges = CalculateAsBufferRanges(buildInfos[otherIndex]);
+
+            PAL_ASSERT_MSG(IsRangeOverlapping(currentRanges.scratch, otherRanges.scratch) == false,
+                           "Found Scratch Buffers Overlapping in batch. "
+                           "Build %d 0x%llx-0x%llx, Build %d 0x%llx-0x%llx",
+                           currentIndex, currentRanges.scratch.addrStart, currentRanges.scratch.addrEnd,
+                           otherIndex, otherRanges.scratch.addrStart, otherRanges.scratch.addrEnd);
+
+            PAL_ASSERT_MSG(IsRangeOverlapping(currentRanges.result, otherRanges.result) == false,
+                           "Found Result Buffers Overlapping in batch. "
+                           "Build %d 0x%llx-0x%llx, Build %d 0x%llx-0x%llx",
+                           currentIndex, currentRanges.result.addrStart, currentRanges.result.addrEnd,
+                           otherIndex, otherRanges.result.addrStart, otherRanges.result.addrEnd);
+
+            PAL_ASSERT_MSG(IsRangeOverlapping(currentRanges.scratch, otherRanges.result) == false,
+                           "Found Scratch-Result Buffers Overlapping in batch. "
+                           "Build %d 0x%llx-0x%llx, Build %d 0x%llx-0x%llx",
+                           currentIndex, currentRanges.scratch.addrStart, currentRanges.scratch.addrEnd,
+                           otherIndex, otherRanges.result.addrStart, otherRanges.result.addrEnd);
+
+            PAL_ASSERT_MSG(IsRangeOverlapping(currentRanges.result, otherRanges.scratch) == false,
+                           "Found Result-Scratch Buffers Overlapping in batch. "
+                           "Build %d 0x%llx-0x%llx, Build %d 0x%llx-0x%llx",
+                           currentIndex, currentRanges.result.addrStart, currentRanges.result.addrEnd,
+                           otherIndex, otherRanges.scratch.addrStart, otherRanges.scratch.addrEnd);
+        }
+    }
+}
 }

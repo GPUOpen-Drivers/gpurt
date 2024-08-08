@@ -22,30 +22,9 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#define RootSig "CBV(b0),"\
-                "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u6, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u7, visibility=SHADER_VISIBILITY_ALL),"\
-                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b255)"
-
 #include "..\shared\rayTracingDefs.h"
 
-[[vk::binding(0, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants    : register(b0);
-
-[[vk::binding(0, 0)]] RWByteAddressBuffer                  SrcBuffer           : register(u0);
-[[vk::binding(1, 0)]] RWByteAddressBuffer                  DstBuffer           : register(u1);
-[[vk::binding(2, 0)]] RWByteAddressBuffer                  DstMetadata         : register(u2);
-[[vk::binding(3, 0)]] RWByteAddressBuffer                  ScratchBuffer       : register(u3);
-[[vk::binding(4, 0)]] RWByteAddressBuffer                  ScratchGlobal       : register(u4);
-[[vk::binding(5, 0)]] RWByteAddressBuffer                  InstanceDescBuffer  : register(u5);
-[[vk::binding(6, 0)]] RWByteAddressBuffer                  EmitBuffer          : register(u6);
-[[vk::binding(7, 0)]] RWByteAddressBuffer                  IndirectArgBuffer   : register(u7);
+#include "BuildRootSignature.hlsl"
 
 template<typename T>
 T LoadInstanceDescBuffer(uint offset)
@@ -173,20 +152,9 @@ void EncodeInstances(
                                  allowUpdate,
                                  blasMetadataSize);
         }
-
-        // ClearFlags for refit and update
-        const uint stride = ShaderConstants.leafNodeExpansionFactor * sizeof(uint);
-        const uint flagOffset = ShaderConstants.offsets.propagationFlags + (index * stride);
-        const uint initValue = Settings.enableFastLBVH ? 0xffffffffu : 0;
-
-        for (uint i = 0; i < ShaderConstants.leafNodeExpansionFactor; ++i)
-        {
-            ScratchBuffer.Store(flagOffset + (i * sizeof(uint)), initValue);
-        }
     }
 
-    IncrementPrimitiveTaskCounters(ShaderConstants.offsets.encodeTaskCounter,
-                                   index,
+    IncrementPrimitiveTaskCounters(index,
                                    numPrimAndOffset.numPrimitives,
                                    MaxNumPrimitives);
 }

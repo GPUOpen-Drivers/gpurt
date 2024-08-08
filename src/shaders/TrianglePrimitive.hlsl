@@ -23,6 +23,7 @@
  *
  **********************************************************************************************************************/
 #include "BuildSettings.hlsli"
+#include "IndirectArgBufferUtils.hlsl"
 
 //=====================================================================================================================
 // Get face indices from 16-bit index buffer
@@ -223,42 +224,51 @@ bool IsActive(TriangleData tri)
     return ((isnan(tri.v0.x) == false) && (isnan(tri.v1.x) == false) && (isnan(tri.v2.x) == false));
 }
 
-//======================================================================================================================
-TriangleData FetchTrianglePrimitive(
-    in BuildShaderGeometryConstants geomConst,
-    in uint geomId,
-    in uint primId)
+//=====================================================================================================================
+// Helper function to fetch triangle data. Returns false if the vertex indices are out of bounds.
+bool FetchTrianglePrimitive(
+    in BuildShaderGeometryConstants geomConstants,
+    in NumPrimAndInputOffset        inputOffsets,
+    in RWBuffer<float3>             geometryBuffer,
+    in uint                         geomId,
+    in uint                         primId,
+    inout_param(TriangleData)       tri,
+    inout_param(uint3)              faceIndices)
 {
-    // Fetch face indices from index buffer
     const IndexBufferInfo indexBufferInfo =
     {
-        geomConst.indexBufferGpuVaLo,
-        geomConst.indexBufferGpuVaHi,
-        geomConst.indexBufferByteOffset,
-        geomConst.indexBufferFormat,
+        geomConstants.indexBufferGpuVaLo,
+        geomConstants.indexBufferGpuVaHi,
+        geomConstants.indexBufferByteOffset + inputOffsets.indexOffsetInBytes,
+        geomConstants.indexBufferFormat,
     };
 
-    // Fetch face indices from index buffer
-    uint3 faceIndices = FetchFaceIndices(primId, indexBufferInfo);
+    // Fetch face indices from index buffer.
+    faceIndices = FetchFaceIndices(primId, indexBufferInfo);
 
-    TriangleData tri = (TriangleData)0;
-
-    // Check if vertex indices are within bounds, otherwise make the triangle inactive
+    // Check if vertex indices are within bounds.
     const uint maxIndex = max(faceIndices.x, max(faceIndices.y, faceIndices.z));
-    if (maxIndex < geomConst.vertexCount)
+    if (maxIndex < geomConstants.vertexCount)
     {
-        const uint64_t transformBufferGpuVa =
-            PackUint64(geomConst.transformBufferGpuVaLo, geomConst.transformBufferGpuVaHi);
-
         // Fetch triangle vertex data from vertex buffer
-        tri = FetchTransformedTriangleData(GeometryBuffer[NonUniformResourceIndex(geomId)],
-                                           faceIndices,
-                                           geomConst.geometryStride,
-                                           0,  // TODO: Indirect builds
-                                           geomConst.vertexComponentCount,
-                                           transformBufferGpuVa,
-                                           0); // TODO: Indirect builds
-    }
+        const uint64_t transformBufferGpuVa =
+            PackUint64(geomConstants.transformBufferGpuVaLo, geomConstants.transformBufferGpuVaHi);
 
-    return tri;
+        tri = FetchTransformedTriangleData(
+            geometryBuffer,
+            faceIndices,
+            geomConstants.geometryStride,
+            inputOffsets.vertexOffsetInComponents,
+            geomConstants.vertexComponentCount,
+            transformBufferGpuVa,
+            inputOffsets.transformOffsetInBytes);
+
+        return true;
+    }
+    else
+    {
+        GPU_DPF("Out of bounds triangle vertex index. Indices: %u, %u, %u, VertexCount: %u, PrimId: %u, GeomId: %u\n",
+                faceIndices.x, faceIndices.y, faceIndices.z, geomConstants.vertexCount, primId, geomId);
+        return false;
+    }
 }

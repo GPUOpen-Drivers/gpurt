@@ -29,36 +29,13 @@
 // Can control number of iterations vis build settings (args.numIterations)
 
 #if NO_SHADER_ENTRYPOINT == 0
-#define RootSig "RootConstants(num32BitConstants=1, b0),"\
-                "CBV(b1),"\
-                "UAV(u0),"\
-                "UAV(u1),"\
-                "UAV(u2),"\
-                "UAV(u3),"\
-                "UAV(u4),"\
-                "UAV(u5),"\
-                "UAV(u6),"\
-                "UAV(u7),"\
-                "CBV(b255)"
-
+//=====================================================================================================================
 #include "../shared/rayTracingDefs.h"
 
-struct RootConstants
-{
-    uint numThreadGroups;
-};
-
-[[vk::push_constant]] ConstantBuffer<RootConstants> ShaderRootConstants    : register(b0);
-[[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b1);
-
-[[vk::binding(0, 0)]] RWByteAddressBuffer                          SrcBuffer           : register(u0);
-[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer         DstBuffer           : register(u1);
-[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer         DstMetadata         : register(u2);
-[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer         ScratchBuffer       : register(u3);
-[[vk::binding(4, 0)]] globallycoherent RWByteAddressBuffer         ScratchGlobal       : register(u4);
-[[vk::binding(5, 0)]] RWByteAddressBuffer                          InstanceDescBuffer  : register(u5);
-[[vk::binding(6, 0)]] RWByteAddressBuffer                          EmitBuffer          : register(u6);
-[[vk::binding(7, 0)]] RWByteAddressBuffer                          IndirectArgBuffer   : register(u7);
+#define GC_DSTBUFFER
+#define GC_DSTMETADATA
+#define GC_SCRATCHBUFFER
+#include "BuildRootSignature.hlsl"
 
 template<typename T>
 T LoadInstanceDescBuffer(uint offset)
@@ -705,7 +682,7 @@ void Rebraid(
     RebraidArgs args;
 
     args.numPrimitives                      = ShaderConstants.numPrimitives;
-    args.numThreadGroups                    = ShaderRootConstants.numThreadGroups;
+    args.numThreadGroups                    = ShaderRootConstants.NumThreadGroups();
     args.maxNumPrims                        = ShaderConstants.rebraidFactor * ShaderConstants.numPrimitives;
     args.bvhLeafNodeDataScratchOffset       = ShaderConstants.offsets.bvhLeafNodeData;
     args.sceneBoundsOffset                  = ShaderConstants.offsets.sceneBounds;

@@ -49,36 +49,12 @@ struct TDArgs
 #if NO_SHADER_ENTRYPOINT == 0
 #define USE_LDS     1
 
-#define RootSig "RootConstants(num32BitConstants=1, b0, visibility=SHADER_VISIBILITY_ALL), "\
-                "CBV(b1),"\
-                "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u6, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u7, visibility=SHADER_VISIBILITY_ALL),"\
-                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b255)"
-
+//=====================================================================================================================
 #include "../shared/rayTracingDefs.h"
 
-struct RootConstants
-{
-    uint numThreads;
-};
-[[vk::push_constant]] ConstantBuffer<RootConstants> ShaderRootConstants    : register(b0);
-[[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b1);
-
-[[vk::binding(0, 0)]] RWByteAddressBuffer                          SrcBuffer           : register(u0);
-[[vk::binding(1, 0)]] RWByteAddressBuffer                          DstBuffer           : register(u1);
-[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer         DstMetadata         : register(u2);
-[[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer         ScratchBuffer       : register(u3);
-[[vk::binding(4, 0)]] globallycoherent RWByteAddressBuffer         ScratchGlobal       : register(u4);
-[[vk::binding(5, 0)]] RWByteAddressBuffer                          InstanceDescBuffer  : register(u5);
-[[vk::binding(6, 0)]] RWByteAddressBuffer                          EmitBuffer          : register(u6);
-[[vk::binding(7, 0)]] RWByteAddressBuffer                          IndirectArgBuffer   : register(u7);
+#define GC_DSTMETADATA
+#define GC_SCRATCHBUFFER
+#include "BuildRootSignature.hlsl"
 
 template<typename T>
 T LoadInstanceDescBuffer(uint offset)
@@ -1871,7 +1847,7 @@ void BuildBVHTD(
     TDArgs args;
 
     args.NumPrimitives                = numPrimitives;
-    args.NumThreads                   = ShaderRootConstants.numThreads;
+    args.NumThreads                   = ShaderRootConstants.NumThreads();
     args.MaxRefCountSize              = numPrimitives * ShaderConstants.rebraidFactor;
     args.LengthPercentage             = 0.1;
     args.BvhNodeDataScratchOffset     = ShaderConstants.offsets.bvhNodeData;

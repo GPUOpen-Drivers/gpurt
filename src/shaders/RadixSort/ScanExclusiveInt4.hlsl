@@ -23,33 +23,10 @@
  *
  **********************************************************************************************************************/
 #if NO_SHADER_ENTRYPOINT == 0
-#define RootSig "RootConstants(num32BitConstants=2, b0, visibility=SHADER_VISIBILITY_ALL), "\
-                "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u6, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u7, visibility=SHADER_VISIBILITY_ALL)"
-
 //=====================================================================================================================
-struct InputArgs
-{
-    uint NumElements;
-    uint InOutArrayScratchOffset;
-};
+#include "../../shared/rayTracingDefs.h"
 
-[[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
-
-[[vk::binding(0, 0)]] RWByteAddressBuffer         SrcBuffer           : register(u0);
-[[vk::binding(1, 0)]] RWByteAddressBuffer         DstBuffer           : register(u1);
-[[vk::binding(2, 0)]] RWByteAddressBuffer         DstMetadata         : register(u2);
-[[vk::binding(3, 0)]] RWByteAddressBuffer         ScratchBuffer       : register(u3);
-[[vk::binding(4, 0)]] RWByteAddressBuffer         ScratchGlobal       : register(u4);
-[[vk::binding(5, 0)]] RWByteAddressBuffer         InstanceDescBuffer  : register(u5);
-[[vk::binding(6, 0)]] RWByteAddressBuffer         EmitBuffer          : register(u6);
-[[vk::binding(7, 0)]] RWByteAddressBuffer         IndirectArgBuffer   : register(u7);
+#include "../BuildRootSignature.hlsl"
 
 #include "ScanCommon.hlsli"
 
@@ -140,7 +117,7 @@ void ScanExclusiveInt4(
     ScanExclusiveInt4Impl(
         globalId,
         localId,
-        ShaderConstants.InOutArrayScratchOffset,
-        ShaderConstants.NumElements);
+        ShaderRootConstants.InOutArrayScratchOffset(),
+        ShaderRootConstants.NumElements());
 }
 #endif

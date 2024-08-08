@@ -466,6 +466,13 @@ void WriteCentroidBox(
 }
 
 //=====================================================================================================================
+float FetchScratchNodeSADifference(
+    ScratchNode node)
+{
+    return node.sah_or_v2_or_instBasePtr.z;
+}
+
+//=====================================================================================================================
 void UpdateSceneSize(uint byteOffset, float size)
 {
     // Calculate the combined AABB for the entire wave.
@@ -547,9 +554,9 @@ void UpdateSceneBoundsUsingCentroid(uint byteOffset, float3 centroidPoint)
 //=====================================================================================================================
 void UpdateSceneBoundsWithSize(uint byteOffset, BoundingBox boundingBox)
 {
-    UpdateSceneBounds( byteOffset, boundingBox);
+    UpdateSceneBounds(byteOffset, boundingBox);
 
-    UpdateSceneSize( byteOffset + 24, ComputeBoxSurfaceArea(boundingBox));
+    UpdateSceneSize(byteOffset + 24, ComputeBoxSurfaceArea(boundingBox));
 }
 
 //=====================================================================================================================

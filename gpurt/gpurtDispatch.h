@@ -41,12 +41,18 @@ typedef uint64_t uint64;
 #define constexpr static const
 #endif
 
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 47
+constexpr uint32 MaxBufferSrdSize = 8;
+#else
+constexpr uint32 MaxBufferSrdSize = 4;
+#endif
+
 // Dispatch rays arguments top-level descriptor table (GPU structure)
 struct DispatchRaysTopLevelData
 {
-    uint64 dispatchRaysConstGpuVa;   // DispatchRays info constant buffer GPU VA
-    uint32 internalUavBufferSrd[4];  // Internal UAV shader resource descriptor
-    uint32 accelStructTrackerSrd[4]; // Structured buffer SRD pointing to the accel struct tracker
+    uint64 dispatchRaysConstGpuVa;                  // DispatchRays info constant buffer GPU VA
+    uint32 internalUavBufferSrd[MaxBufferSrdSize];  // Internal UAV shader resource descriptor
+    uint32 accelStructTrackerSrd[MaxBufferSrdSize]; // Structured buffer SRD pointing to the accel struct tracker
 };
 
 // Dispatch rays constant buffer data (GPU structure). Note, using unaligned uint64_t in HLSL constant buffers requires
@@ -108,7 +114,6 @@ constexpr uint32 DispatchRaysConstantsDw = sizeof(DispatchRaysConstants) / sizeo
 #endif
 
 constexpr uint32 MaxSupportedIndirectCounters = 8;
-constexpr uint32 MaxBufferSrdSize = 4;
 
 // Resource bindings required for InitExecuteIndirect
 struct InitExecuteIndirectUserData
@@ -153,9 +158,9 @@ struct InitExecuteIndirectConstants
     uint32 counterMode;             // Counter mode
     uint32 counterRayIdRangeBegin;  // Counter ray ID range begin
     uint32 counterRayIdRangeEnd;    // Counter ray ID range end
+    uint32 cpsBackendStackSize;     // Scratch memory used by a compiler backend, start at offset 0
     uint32 padding0;                // Padding for 16-byte alignment
     uint32 padding1;                // Padding for 16-byte alignment
-    uint32 padding2;                // Padding for 16-byte alignment
 
 #if __cplusplus
      // Internal counter buffer SRDs
@@ -164,16 +169,19 @@ struct InitExecuteIndirectConstants
     // Internal acceleration structure tracker buffer SRD.
     uint32 accelStructTrackerSrd[MaxBufferSrdSize];
 #else
-    uint4 internalUavSrd[MaxSupportedIndirectCounters];
-    uint4 accelStructTrackerSrd;
+    uint4 internalUavSrd[MaxSupportedIndirectCounters][MaxBufferSrdSize / 4];
+    uint4 accelStructTrackerSrd[MaxBufferSrdSize / 4];
 #endif
-
 };
 
 constexpr uint32 InitExecuteIndirectConstantsDw = sizeof(InitExecuteIndirectConstants) / sizeof(uint32);
 
 #if __cplusplus
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 47
+static_assert((MaxBufferSrdSize == 8), "Buffer SRD size changed, affected shaders and constants need update");
+#else
 static_assert((MaxBufferSrdSize == 4), "Buffer SRD size changed, affected shaders and constants need update");
+#endif
 static_assert((sizeof(InitExecuteIndirectConstants) % sizeof(uint32)) == 0,
               "InitExecuteIndirectConstants is not dword-aligned");
 }

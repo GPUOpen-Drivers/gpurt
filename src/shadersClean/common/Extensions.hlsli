@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -22,47 +22,35 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#if NO_SHADER_ENTRYPOINT == 0
+#ifndef EXTENSIONS_HLSLI
+#define EXTENSIONS_HLSLI
 
-//=====================================================================================================================
-#include "../../shared/rayTracingDefs.h"
+#if !defined(__cplusplus)
 
-#include "../BuildRootSignature.hlsl"
+#define __decl [noinline]
 
-#include "ScanCommon.hlsli"
 #endif
 
-//=====================================================================================================================
-// Distribute partial sums from top level scan into bottom level
-void DistributePartSumInt4Impl(
-    uint globalId,
-    uint groupId,
-    uint inOutDataOffset,
-    uint partialSumsOffset,
-    uint numElements)
-{
-    int4 v1 = safe_load_int4(inOutDataOffset, globalId, numElements);
-    int sum = ScratchBuffer.Load(partialSumsOffset + ((groupId >> 1) * sizeof(int)));
-    v1.xyzw += sum;
+#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TiesToEven     0x0
+#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardPositive 0x1
+#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardNegative 0x2
+#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardZero     0x3
 
-    safe_store_int4(v1, inOutDataOffset, globalId, numElements);
-}
+#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Add      0x0
+#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Subtract 0x1
+#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Multiply 0x2
 
-#if NO_SHADER_ENTRYPOINT == 0
 //=====================================================================================================================
-// Main Function : Distribute partial sum for RadixSort
+static float FloatOpWithRoundMode(uint roundMode, uint operation, float src0, float src1);
+
 //=====================================================================================================================
-[RootSignature(RootSig)]
-[numthreads(GROUP_SIZE, 1, 1)]
-void DistributePartSumInt4(
-    in uint globalId : SV_DispatchThreadID,
-    in uint groupId  : SV_GroupID)
-{
-    DistributePartSumInt4Impl(
-        globalId,
-        groupId,
-        ShaderRootConstants.InOutArrayScratchOffset(),
-        ShaderRootConstants.PartSumsScratchOffset(),
-        ShaderRootConstants.NumElements());
-}
+static float2 FloatOpWithRoundMode(uint roundMode, uint operation, float2 src0, float2 src1);
+
+//=====================================================================================================================
+static float3 FloatOpWithRoundMode(uint roundMode, uint operation, float3 src0, float3 src1);
+
+#ifndef LIBRARY_COMPILATION
+#include "Extensions.hlsl"
+#endif
+
 #endif

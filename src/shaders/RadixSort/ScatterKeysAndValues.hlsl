@@ -23,38 +23,10 @@
  *
  **********************************************************************************************************************/
 #if NO_SHADER_ENTRYPOINT == 0
-#define RootSig "RootConstants(num32BitConstants=2, b0, visibility=SHADER_VISIBILITY_ALL), "\
-                "CBV(b1),"\
-                "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u5, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u6, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u7, visibility=SHADER_VISIBILITY_ALL),"\
-                "CBV(b255)"/*Build Settings binding*/
-
 //=====================================================================================================================
-// 32 bit constants
-struct RootConstants
-{
-    uint BitShiftSize; // Number of bits to shift
-    uint NumGroups;    // Number of work groups dispatched
-};
 #include "../../shared/rayTracingDefs.h"
 
-[[vk::push_constant]] ConstantBuffer<RootConstants> ShaderRootConstants    : register(b0);
-[[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants : register(b1);
-
-[[vk::binding(0, 0)]] RWByteAddressBuffer         SrcBuffer           : register(u0);
-[[vk::binding(1, 0)]] RWByteAddressBuffer         DstBuffer           : register(u1);
-[[vk::binding(2, 0)]] RWByteAddressBuffer         DstMetadata         : register(u2);
-[[vk::binding(3, 0)]] RWByteAddressBuffer         ScratchBuffer       : register(u3);
-[[vk::binding(4, 0)]] RWByteAddressBuffer         ScratchGlobal       : register(u4);
-[[vk::binding(5, 0)]] RWByteAddressBuffer         InstanceDescBuffer  : register(u5);
-[[vk::binding(6, 0)]] RWByteAddressBuffer         EmitBuffer          : register(u6);
-[[vk::binding(7, 0)]] RWByteAddressBuffer         IndirectArgBuffer   : register(u7);
+#include "../BuildRootSignature.hlsl"
 
 #include "ScanCommon.hlsli"
 #include "../BuildCommonScratch.hlsl"
@@ -559,13 +531,13 @@ void ScatterKeysAndValues(
     uint currentToKeys   = scratchKeysOffset;
     uint currentToVals   = scratchValuesOffset;
 
-    if (ShaderRootConstants.BitShiftSize > 0)
+    if (ShaderRootConstants.BitShiftSize() > 0)
     {
         currentFromKeys = outputKeysOffset;
         currentFromVals = outputValuesOffset;
     }
     const uint BitsPerPass = 4;
-    const uint pass = ShaderRootConstants.BitShiftSize / BitsPerPass;
+    const uint pass = ShaderRootConstants.BitShiftSize() / BitsPerPass;
     if (pass % 2 == 1)
     {
         SwapUint(currentFromKeys, currentToKeys);
@@ -575,9 +547,9 @@ void ScatterKeysAndValues(
     ScatterKeysAndValuesImpl(
         groupId,
         localId,
-        ShaderRootConstants.BitShiftSize,
+        ShaderRootConstants.BitShiftSize(),
         numPrimitives,
-        ShaderRootConstants.NumGroups,
+        ShaderRootConstants.NumThreadGroups(),
         currentFromKeys,
         currentFromVals,
         ShaderConstants.offsets.histogram,

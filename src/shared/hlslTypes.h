@@ -96,5 +96,33 @@ struct float4
     float w;
 };
 
+struct uint16_t2
+{
+    uint16_t2() = default;
+    uint16_t2(uint16_t val0, uint16_t val1) : x(val0), y(val1) {}
+
+    uint16_t x;
+    uint16_t y;
+};
+struct uint16_t3
+{
+    uint16_t3() = default;
+    uint16_t3(uint16_t val0, uint16_t val1, uint16_t val2) : x(val0), y(val1), z(val2) {}
+
+    uint16_t x;
+    uint16_t y;
+    uint16_t z;
+};
+struct uint16_t4
+{
+    uint16_t4() = default;
+    uint16_t4(uint16_t val0, uint16_t val1, uint16_t val2, uint16_t val3) : x(val0), y(val1), z(val2), w(val3) {}
+
+    uint16_t x;
+    uint16_t y;
+    uint16_t z;
+    uint16_t w;
+};
+
 #endif
 #endif

@@ -72,6 +72,16 @@ private:
     bool PhaseEnabled(BuildPhaseFlags phase);
 
     template <typename BatchBuilderFunc>
+    void InvokeBuildFunction(
+        BvhBuilder&      builder,
+        BatchBuilderFunc func);
+
+    template <typename BuilderPhase>
+    void InvokeBuildPhase(
+        BvhBuilder&  builder,
+        BuilderPhase pBuilderPhase);
+
+    template <typename BatchBuilderFunc>
     void BuildFunction(
         const char*            rgpMarkerName,
         Util::Span<BvhBuilder> builders,
@@ -109,6 +119,7 @@ private:
 
     void OutputPipelineName(InternalRayTracingCsType type);
 #endif
+    void CheckOverlappingBuffers(Util::Span<const AccelStructBuildInfo> buildInfos);
 
     Internal::Device*           const m_pDevice;             // GPURT device
     ClientCmdBufferHandle             m_cmdBuffer;           // The associated PAL cmdbuffer

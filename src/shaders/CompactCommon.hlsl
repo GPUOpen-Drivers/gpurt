@@ -48,8 +48,10 @@ uint CalcCompactedSize(
 
     if (topLevelBuild == false)
     {
-        internalNodeSize = srcHeader.numInternalNodesFp32 * internalNodeSize +
-                           srcHeader.numInternalNodesFp16 * sizeof(Float16BoxNode);
+        internalNodeSize = srcHeader.numInternalNodesFp32 * internalNodeSize;
+        {
+            internalNodeSize += srcHeader.numInternalNodesFp16 * sizeof(Float16BoxNode);
+        }
         runningOffset += internalNodeSize;
 
         offsets.leafNodes = runningOffset;

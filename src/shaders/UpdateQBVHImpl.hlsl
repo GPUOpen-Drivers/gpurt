@@ -22,6 +22,19 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
+void ClearUpdateFlags(
+    uint globalId)
+{
+    // TODO: We are overallocating memory and clearing more slots than required. Fix this when you fix the memory
+    // allocation
+    const uint maxNumInternalNodeSlots = ShaderConstants.maxNumPrimitives;
+    for (uint i = globalId; i < maxNumInternalNodeSlots; i += ShaderRootConstants.numThreads)
+    {
+        ScratchBuffer.Store(ShaderConstants.offsets.propagationFlags + (i * sizeof(uint)), 0);
+    }
+}
+
+//=====================================================================================================================
 // Signal parent node
 uint SignalParentNode(
     uint baseFlagsOffset,

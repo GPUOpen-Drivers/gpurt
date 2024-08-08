@@ -34,8 +34,6 @@
 #include "../shared/rayTracingDefs.h"
 #include "BuildSettings.hlsli"
 
-static bool IsUpdate();
-
 //======================================================================================================================
 struct NumPrimAndOffset
 {
@@ -62,11 +60,11 @@ NumPrimAndOffset LoadNumPrimAndOffset()
 
     if (Settings.isIndirectBuild)
     {
-        const IndirectBuildOffset buildOffsetInfo =
-            IndirectArgBuffer.Load<IndirectBuildOffset>(0);
+        const IndirectBuildRangeInfo buildRangeInfo =
+            IndirectArgBuffer.Load<IndirectBuildRangeInfo>(0);
 
-        result.numPrimitives = buildOffsetInfo.primitiveCount;
-        result.primitiveOffset = buildOffsetInfo.primitiveOffset;
+        result.numPrimitives = buildRangeInfo.primitiveCount;
+        result.primitiveOffset = buildRangeInfo.primitiveOffset;
     }
     else
     {
@@ -80,69 +78,56 @@ NumPrimAndOffset LoadNumPrimAndOffset()
 //=====================================================================================================================
 // Used by indirect build
 uint ComputePrimitiveOffset(
-    GeometryArgs geometryArgs)
+    in uint geometryIndex)
 {
     uint primitiveOffset = 0;
 
-    const uint metadataSize = IsUpdate() ?
-                              SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET) : geometryArgs.metadataSizeInBytes;
-
-    // In Parallel Builds, Header is initialized after Encode, therefore, we can only use this var for updates
-    const AccelStructDataOffsets offsets =
-        SrcBuffer.Load<AccelStructDataOffsets> (metadataSize + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET);
-
-    const uint baseGeometryInfoOffset = IsUpdate() ? offsets.geometryInfo : geometryArgs.BaseGeometryInfoOffset;
-
-    for (uint geomIdx = 0; geomIdx < geometryArgs.GeometryIndex; ++geomIdx)
+    for (uint geomIdx = 0; geomIdx < geometryIndex; ++geomIdx)
     {
-        const uint geometryInfoOffset =
-            metadataSize + baseGeometryInfoOffset +
-            (geomIdx * GEOMETRY_INFO_SIZE);
+        const IndirectBuildRangeInfo buildRangeInfo =
+            IndirectArgBuffer.Load<IndirectBuildRangeInfo>(ShaderConstants.indirectArgBufferStride * geomIdx);
 
-        GeometryInfo info;
-        info = DstMetadata.Load<GeometryInfo>(geometryInfoOffset);
-        uint primitiveCount = ExtractGeometryInfoNumPrimitives(info.geometryFlagsAndNumPrimitives);
-
-        primitiveOffset += primitiveCount;
+        primitiveOffset += buildRangeInfo.primitiveCount;
     }
 
     return primitiveOffset;
 }
 
 //======================================================================================================================
-// Fetch data from IndirectArgBuffer when needed by BLAS indirect build, use sane defaults for direct path otherwise.
-NumPrimAndInputOffset LoadInputOffsetsAndNumPrim(GeometryArgs args)
+// Compute data from IndirectArgBuffer when needed by BLAS indirect build, use sane defaults for direct path otherwise.
+NumPrimAndInputOffset GetInputOffsetsAndNumPrim(
+    in BuildShaderGeometryConstants geomConstants,
+    in uint                         geometryIndex,
+    in IndirectBuildRangeInfo       buildRangeInfo) // Sourced from Indirect Buffers
 {
     NumPrimAndInputOffset result = (NumPrimAndInputOffset) 0;
 
     if (Settings.isIndirectBuild)
     {
-        // Sourced from Indirect Buffers
-        const IndirectBuildOffset buildOffsetInfo =
-            IndirectArgBuffer.Load<IndirectBuildOffset>(ShaderConstants.indirectArgBufferStride * args.GeometryIndex);
-        const uint firstVertexInComponents = buildOffsetInfo.firstVertex * args.VertexComponentCount;
+        const uint firstVertexInComponents = buildRangeInfo.firstVertex * geomConstants.vertexComponentCount;
 
-        result.numPrimitives = buildOffsetInfo.primitiveCount;
-        result.primitiveOffset = ComputePrimitiveOffset(args);
+        result.numPrimitives = buildRangeInfo.primitiveCount;
+        result.primitiveOffset = ComputePrimitiveOffset(geometryIndex);
         if (Settings.geometryType == PrimitiveType::Triangle)
         {
-            if (args.IndexBufferFormat != IndexFormatInvalid)
+            if (geomConstants.indexBufferFormat != IndexFormatInvalid)
             {
                 result.vertexOffsetInComponents = firstVertexInComponents;
-                result.indexOffsetInBytes = buildOffsetInfo.primitiveOffset;
+                result.indexOffsetInBytes = buildRangeInfo.primitiveOffset;
             }
             else
             {
-                const uint primitiveOffsetInComponents = buildOffsetInfo.primitiveOffset / args.VertexComponentSize;
+                const uint primitiveOffsetInComponents =
+                    buildRangeInfo.primitiveOffset / geomConstants.vertexComponentSize;
 
                 result.vertexOffsetInComponents = primitiveOffsetInComponents + firstVertexInComponents;
                 result.indexOffsetInBytes = 0;
             }
-            result.transformOffsetInBytes = buildOffsetInfo.transformOffset;
+            result.transformOffsetInBytes = buildRangeInfo.transformOffset;
         }
         else if (Settings.geometryType == PrimitiveType::AABB)
         {
-            result.vertexOffsetInComponents = buildOffsetInfo.primitiveOffset / sizeof(float);
+            result.vertexOffsetInComponents = buildRangeInfo.primitiveOffset / sizeof(float);
 
             result.indexOffsetInBytes = 0;
             result.transformOffsetInBytes = 0;
@@ -150,14 +135,44 @@ NumPrimAndInputOffset LoadInputOffsetsAndNumPrim(GeometryArgs args)
     }
     else
     {
-        result.numPrimitives = args.NumPrimitives;
-        result.primitiveOffset = args.PrimitiveOffset;
+        result.numPrimitives = geomConstants.numPrimitives;
+        result.primitiveOffset = geomConstants.primitiveOffset;
         result.vertexOffsetInComponents = 0;
         result.indexOffsetInBytes = 0;
         result.transformOffsetInBytes = 0;
     }
 
     return result;
+}
+
+//======================================================================================================================
+// Use to fetch data from IndirectArgBuffer.
+NumPrimAndInputOffset LoadInputOffsetsAndNumPrim(
+    in uint geometryIndex,
+    in bool isUniform)       // Whether geometryIndex is uniform across all threads.
+{
+    IndirectBuildRangeInfo buildRangeInfo;
+    if (Settings.isIndirectBuild)
+    {
+        buildRangeInfo =
+            IndirectArgBuffer.Load<IndirectBuildRangeInfo>(ShaderConstants.indirectArgBufferStride * geometryIndex);
+    }
+    else
+    {
+        buildRangeInfo = (IndirectBuildRangeInfo)0;
+    }
+
+    BuildShaderGeometryConstants geomConstants = (BuildShaderGeometryConstants)0;
+    if (isUniform)
+    {
+        geomConstants = GeometryConstants[geometryIndex];
+    }
+    else
+    {
+        geomConstants = GeometryConstants[NonUniformResourceIndex(geometryIndex)];
+    }
+
+    return GetInputOffsetsAndNumPrim(geomConstants, geometryIndex, buildRangeInfo);
 }
 
 #endif

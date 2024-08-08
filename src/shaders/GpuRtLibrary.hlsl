@@ -288,7 +288,7 @@ export void TraceRayInline2_0(
 }
 
 //=====================================================================================================================
-// GPURT intrinsic for fetching instance ID from instance node
+// GPURT intrinsic for fetching instance ID from instance node for ray tracing IP 1.1/2.0
 export uint GetInstanceID(
     in uint64_t instanceNodePtr) // 64-bit instance node address
 {
@@ -297,7 +297,7 @@ export uint GetInstanceID(
 }
 
 //=====================================================================================================================
-// GPURT intrinsic for fetching instance index from instance node
+// GPURT intrinsic for fetching instance index from instance node for ray tracing IP 1.1/2.0
 export uint GetInstanceIndex(
     in uint64_t instanceNodePtr) // 64-bit instance node address
 {
@@ -422,6 +422,61 @@ export TriangleData FetchTrianglePositionFromRayQuery(
 }
 
 //=====================================================================================================================
+// Internal General function for fetching instance ID from instance node for different ray tracing IP
+static uint GetGeneralInstanceID(
+    in uint64_t instNodeAddr) // 64-bit instance node address
+{
+    uint id = 0;
+    switch (_AmdGetRtip())
+    {
+    default:
+    {
+        // For RtIp2.0 and Rtip1.1
+        id = GetInstanceID(instNodeAddr);
+        break;
+    }
+    }
+    return id;
+}
+
+//=====================================================================================================================
+// Internal General function for fetching instance Index from instance node for different ray tracing IP
+static uint GetGeneralInstanceIndex(
+    in uint64_t instNodeAddr) // 64-bit instance node address
+{
+    uint index = 0;
+    RayTracingIpLevel rtip = _AmdGetRtip();
+    switch (rtip)
+    {
+    default:
+    {
+        // For RtIp2.0 and Rtip1.1
+        index = GetInstanceIndex(instNodeAddr);
+        break;
+    }
+    }
+    return index;
+}
+
+//=====================================================================================================================
+// Internal GPURT function for fetching 64-bit instance node pointer used in RayQuery for different ray tracing IP
+static uint64_t GetRayQueryInstanceNodePtr(
+    in uint64_t tlasBaseAddr,     // 64-bit TLAS base address
+    in uint32_t instanceNodePtr)  // Instance node pointer
+{
+    uint64_t instNodePtr = 0;
+    RayTracingIpLevel rtip = _AmdGetRtip();
+    switch (rtip)
+    {
+    default:
+    {
+        instNodePtr = GetRayQuery64BitInstanceNodePtr(tlasBaseAddr, instanceNodePtr);
+        break;
+    }
+    }
+    return instNodePtr;
+}
+//=====================================================================================================================
 // Allocate ray query object. This is a notification for client drivers for querying ray query object size.
 export RayQueryInternal _RayQuery_Allocate()
 {
@@ -433,9 +488,6 @@ export RayQueryInternal _RayQuery_Allocate()
 export void _RayQuery_Abort(
     inout_param(RayQueryInternal) rayQuery)
 {
-    rayQuery.stackNumEntries = 0;
-    rayQuery.stackPtr        = AmdTraceRayGetStackBase();
-
     uint rtIp = (uint)_AmdGetRtip();
     if (rtIp >= (uint)RayTracingIpLevel::RtIp2_0)
     {
@@ -443,7 +495,9 @@ export void _RayQuery_Abort(
     }
     else
     {
-        rayQuery.currNodePtr = INVALID_NODE;
+        rayQuery.stackPtr        = AmdTraceRayGetStackBase();
+        rayQuery.stackNumEntries = 0;
+        rayQuery.currNodePtr     = INVALID_NODE;
     }
 }
 
@@ -492,9 +546,15 @@ export uint _RayQuery_CommittedStatus(
 //=====================================================================================================================
 // Return candidate type
 export uint _RayQuery_CandidateType(
-    in RayQueryInternal rayQuery)
+    inout_param(RayQueryInternal) rayQuery,
+    in uint                       constRayFlags)
 {
-    return rayQuery.candidateType;
+    if ((constRayFlags & RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES) != 0)
+    {
+        rayQuery.candidateType = CANDIDATE_NON_OPAQUE_TRIANGLE;
+    }
+
+    return min(rayQuery.candidateType, uint(CANDIDATE_PROCEDURAL_PRIMITIVE));
 }
 
 //=====================================================================================================================
@@ -502,8 +562,8 @@ export uint _RayQuery_CandidateType(
 export float3x4 _RayQuery_CandidateObjectToWorld3x4(
     in RayQueryInternal rayQuery)
 {
-    const uint64_t instNodeAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi) +
-        ExtractNodePointerOffset(rayQuery.candidate.instNodePtr);
+    const uint64_t topLevelAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi);
+    const uint64_t instNodeAddr = GetRayQueryInstanceNodePtr(topLevelAddr, rayQuery.candidate.instNodePtr);
     return GetObjectToWorld3x4(instNodeAddr);
 }
 
@@ -512,8 +572,8 @@ export float3x4 _RayQuery_CandidateObjectToWorld3x4(
 export float3x4 _RayQuery_CandidateWorldToObject3x4(
     in RayQueryInternal rayQuery)
 {
-    const uint64_t instNodeAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi) +
-        ExtractNodePointerOffset(rayQuery.candidate.instNodePtr);
+    const uint64_t topLevelAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi);
+    const uint64_t instNodeAddr = GetRayQueryInstanceNodePtr(topLevelAddr, rayQuery.candidate.instNodePtr);
     return GetWorldToObject3x4(instNodeAddr);
 }
 
@@ -522,8 +582,8 @@ export float3x4 _RayQuery_CandidateWorldToObject3x4(
 export float3x4 _RayQuery_CommittedObjectToWorld3x4(
     in RayQueryInternal rayQuery)
 {
-    const uint64_t instNodeAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi) +
-        ExtractNodePointerOffset(rayQuery.committed.instNodePtr);
+    const uint64_t topLevelAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi);
+    const uint64_t instNodeAddr = GetRayQueryInstanceNodePtr(topLevelAddr, rayQuery.committed.instNodePtr);
     return GetObjectToWorld3x4(instNodeAddr);
 }
 
@@ -532,8 +592,8 @@ export float3x4 _RayQuery_CommittedObjectToWorld3x4(
 export float3x4 _RayQuery_CommittedWorldToObject3x4(
     in RayQueryInternal rayQuery)
 {
-    const uint64_t instNodeAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi) +
-        ExtractNodePointerOffset(rayQuery.committed.instNodePtr);
+    const uint64_t topLevelAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi);
+    const uint64_t instNodeAddr = GetRayQueryInstanceNodePtr(topLevelAddr, rayQuery.committed.instNodePtr);
     return GetWorldToObject3x4(instNodeAddr);
 }
 
@@ -563,20 +623,18 @@ export bool _RayQuery_CommittedTriangleFrontFace(
 
 //=====================================================================================================================
 // Return candidate triangle node barycentrics
-export float _RayQuery_CandidateTriangleBarycentrics(
-    in RayQueryInternal rayQuery,
-    int                 index)
+export float2 _RayQuery_CandidateTriangleBarycentrics(
+    in RayQueryInternal rayQuery)
 {
-    return rayQuery.candidate.barycentrics[index];
+    return rayQuery.candidate.barycentrics;
 }
 
 //=====================================================================================================================
 // Return committed triangle node barycentrics
-export float _RayQuery_CommittedTriangleBarycentrics(
-    in RayQueryInternal rayQuery,
-    int                 index)
+export float2 _RayQuery_CommittedTriangleBarycentrics(
+    in RayQueryInternal rayQuery)
 {
-    return rayQuery.committed.barycentrics[index];
+    return rayQuery.committed.barycentrics;
 }
 
 //=====================================================================================================================
@@ -614,16 +672,18 @@ export float _RayQuery_RayTMin(
 //=====================================================================================================================
 // Return candidate triangle hit T
 export float _RayQuery_CandidateTriangleRayT(
-    in RayQueryInternal rayQuery)
+    inout_param(RayQueryInternal) rayQuery)
 {
+    rayQuery.candidate.rayTCurrent += rayQuery.rayTMin;
     return rayQuery.candidate.rayTCurrent;
 }
 
 //=====================================================================================================================
 // Return committed hit T
 export float _RayQuery_CommittedRayT(
-    in RayQueryInternal rayQuery)
+    inout_param(RayQueryInternal) rayQuery)
 {
+    rayQuery.committed.rayTCurrent += rayQuery.rayTMin;
     return rayQuery.committed.rayTCurrent;
 }
 
@@ -632,9 +692,9 @@ export float _RayQuery_CommittedRayT(
 export uint _RayQuery_CandidateInstanceIndex(
     in RayQueryInternal rayQuery)
 {
-    const uint64_t instNodeAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi) +
-        ExtractNodePointerOffset(rayQuery.candidate.instNodePtr);
-    return GetInstanceIndex(instNodeAddr);
+    const uint64_t topLevelAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi);
+    const uint64_t instNodeAddr = GetRayQueryInstanceNodePtr(topLevelAddr, rayQuery.candidate.instNodePtr);
+    return GetGeneralInstanceIndex(instNodeAddr);
 }
 
 //=====================================================================================================================
@@ -642,9 +702,9 @@ export uint _RayQuery_CandidateInstanceIndex(
 export uint _RayQuery_CommittedInstanceIndex(
     in RayQueryInternal rayQuery)
 {
-    const uint64_t instNodeAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi) +
-        ExtractNodePointerOffset(rayQuery.committed.instNodePtr);
-    return GetInstanceIndex(instNodeAddr);
+    const uint64_t topLevelAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi);
+    const uint64_t instNodeAddr = GetRayQueryInstanceNodePtr(topLevelAddr, rayQuery.committed.instNodePtr);
+    return GetGeneralInstanceIndex(instNodeAddr);
 }
 
 //=====================================================================================================================
@@ -652,9 +712,9 @@ export uint _RayQuery_CommittedInstanceIndex(
 export uint _RayQuery_CandidateInstanceID(
     in RayQueryInternal rayQuery)
 {
-    const uint64_t instNodeAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi) +
-        ExtractNodePointerOffset(rayQuery.candidate.instNodePtr);
-    return GetInstanceID(instNodeAddr);
+    const uint64_t topLevelAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi);
+    const uint64_t instNodeAddr = GetRayQueryInstanceNodePtr(topLevelAddr, rayQuery.candidate.instNodePtr);
+    return GetGeneralInstanceID(instNodeAddr);
 }
 
 //=====================================================================================================================
@@ -662,9 +722,9 @@ export uint _RayQuery_CandidateInstanceID(
 export uint _RayQuery_CommittedInstanceID(
     in RayQueryInternal rayQuery)
 {
-    const uint64_t instNodeAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi) +
-        ExtractNodePointerOffset(rayQuery.committed.instNodePtr);
-    return GetInstanceID(instNodeAddr);
+    const uint64_t topLevelAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi);
+    const uint64_t instNodeAddr = GetRayQueryInstanceNodePtr(topLevelAddr, rayQuery.committed.instNodePtr);
+    return GetGeneralInstanceID(instNodeAddr);
 }
 
 //=====================================================================================================================
@@ -701,38 +761,34 @@ export uint _RayQuery_CommittedPrimitiveIndex(
 
 //=====================================================================================================================
 // Return candidate object space ray origin
-export float _RayQuery_CandidateObjectRayOrigin(
-    in RayQueryInternal rayQuery,
-    int                 index)
+export float3 _RayQuery_CandidateObjectRayOrigin(
+    in RayQueryInternal rayQuery)
 {
-    return rayQuery.candidate.origin[index];
+    return rayQuery.candidate.origin;
 }
 
 //=====================================================================================================================
 // Return candidate object space ray direction
-export float _RayQuery_CandidateObjectRayDirection(
-    in RayQueryInternal rayQuery,
-    int                 index)
+export float3 _RayQuery_CandidateObjectRayDirection(
+    in RayQueryInternal rayQuery)
 {
-    return rayQuery.candidate.direction[index];
+    return rayQuery.candidate.direction;
 }
 
 //=====================================================================================================================
 // Return committed object space ray origin
-export float _RayQuery_CommittedObjectRayOrigin(
-    in RayQueryInternal rayQuery,
-    int                 index)
+export float3 _RayQuery_CommittedObjectRayOrigin(
+    in RayQueryInternal rayQuery)
 {
-    return rayQuery.committed.origin[index];
+    return rayQuery.committed.origin;
 }
 
 //=====================================================================================================================
 // Return committed object space ray direction
-export float _RayQuery_CommittedObjectRayDirection(
-    in RayQueryInternal rayQuery,
-    int                 index)
+export float3 _RayQuery_CommittedObjectRayDirection(
+    in RayQueryInternal rayQuery)
 {
-    return rayQuery.committed.direction[index];
+    return rayQuery.committed.direction;
 }
 
 //=====================================================================================================================
@@ -811,16 +867,15 @@ export float4x3 _RayQuery_WorldToObject4x3(
     in RayQueryInternal rayQuery,
     bool                committed)
 {
+    uint64_t topLevelAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi);
     uint64_t instNodeAddr;
     if (committed)
     {
-        instNodeAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi) +
-            ExtractNodePointerOffset(rayQuery.committed.instNodePtr);
+        instNodeAddr = GetRayQueryInstanceNodePtr(topLevelAddr, rayQuery.committed.instNodePtr);
     }
     else
     {
-        instNodeAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi) +
-            ExtractNodePointerOffset(rayQuery.candidate.instNodePtr);
+        instNodeAddr = GetRayQueryInstanceNodePtr(topLevelAddr, rayQuery.candidate.instNodePtr);
     }
 
     return GetWorldToObject4x3(instNodeAddr);
@@ -830,16 +885,15 @@ export float4x3 _RayQuery_ObjectToWorld4x3(
     in RayQueryInternal rayQuery,
     bool                committed)
 {
+    uint64_t topLevelAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi);
     uint64_t instNodeAddr;
     if (committed)
     {
-        instNodeAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi) +
-            ExtractNodePointerOffset(rayQuery.committed.instNodePtr);
+        instNodeAddr = GetRayQueryInstanceNodePtr(topLevelAddr, rayQuery.committed.instNodePtr);
     }
     else
     {
-        instNodeAddr = PackUint64(rayQuery.topLevelBvhLo, rayQuery.topLevelBvhHi) +
-            ExtractNodePointerOffset(rayQuery.candidate.instNodePtr);
+        instNodeAddr = GetRayQueryInstanceNodePtr(topLevelAddr, rayQuery.candidate.instNodePtr);
     }
 
     return  GetObjectToWorld4x3(instNodeAddr);
@@ -948,7 +1002,6 @@ export uint _RayQuery_InstanceIndex(in RayQueryInternal rayQuery, bool committed
     }
 }
 
-#ifdef AMD_VULKAN
 export void _RayQuery_SetObjId(in RayQueryInternal rayQuery, int objId)
 {
     rayQuery.rayQueryObjId = objId;
@@ -958,6 +1011,5 @@ export uint _RayQuery_GetObjId(in RayQueryInternal rayQuery)
 {
     return rayQuery.rayQueryObjId;
 }
-#endif
 
 #endif

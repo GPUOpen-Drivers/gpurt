@@ -65,7 +65,13 @@ struct LaneGroup
         return IsLaneIndex(0);
     }
 
-    // Counts the number of group lanes where the expression evaluates to true
+    // Returns true if this is the first active lane in the group
+    bool IsFirstActiveLane()
+    {
+        return (laneIndex == GetFirstActiveLaneIndex(true));
+    }
+
+    // Returns mask of the group lanes where the expression evaluates to true
     uint Ballot(bool expression)
     {
         uint32_t mask = uint32_t(WaveActiveBallot64(expression) >> GetFirstLaneIndex());
@@ -73,8 +79,14 @@ struct LaneGroup
         return mask & groupMask;
     }
 
+    // Counts the number of group lanes where the expression evaluates to true
+    uint BallotCount(bool expression)
+    {
+        return countbits(Ballot(expression));
+    }
+
     // Returns the index of the first active lane within this group that matches the source expression
-    uint GetFirstActiveLaneIndex(bool expression)
+    int GetFirstActiveLaneIndex(bool expression)
     {
         // Equivalent to uint4 mask = WaveMultiPrefixCountBits(value); but this generates better code
         // than the HLSL intrinsic.
@@ -88,19 +100,30 @@ struct LaneGroup
         return WaveReadLaneAt(val, GetFirstLaneIndex());
     }
 
-    float Sum(float val)
+    template<typename T>
+    T Sum(T val)
     {
         const uint clusterSize = log2(groupSize) + 1;
 
         return AmdExtD3DShaderIntrinsics_WaveClusterSum(val, clusterSize);
     }
 
-    float Max(float val)
+    template<typename T>
+    T Max(T val)
     {
         const uint clusterSize = log2(groupSize) + 1;
 
         return AmdExtD3DShaderIntrinsics_WaveClusterMax(val, clusterSize);
     }
+
+    template<typename T>
+    T Min(T val)
+    {
+        const uint clusterSize = log2(groupSize) + 1;
+
+        return AmdExtD3DShaderIntrinsics_WaveClusterMin(val, clusterSize);
+    }
+
     template<typename T>
     T Broadcast(T val, uint targetLane)
     {
@@ -110,20 +133,6 @@ struct LaneGroup
 
         // Use WaveReadLaneAt to read the value from the target lane to all lanes
         return WaveReadLaneAt(val, adjustedTargetLane);
-    }
-
-    uint BallotIndex(bool condition)
-    {
-        // Ballot collects the bits from all lanes where the condition is true.
-        uint mask = Ballot(condition);
-
-        // Compute the prefix sum to find the index within the group.
-        // For each lane, this gives the number of true conditions before it.
-        uint prefixSum = WavePrefixCountBits(condition);
-
-        // If the condition is true for the current lane, its index is the prefix sum;
-        // otherwise, it's an invalid index.
-        return condition ? prefixSum : INVALID_IDX;
     }
 
     uint ExclusivePrefixSum(bool condition)

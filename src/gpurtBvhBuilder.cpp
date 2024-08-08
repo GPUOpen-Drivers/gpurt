@@ -169,7 +169,7 @@ static uint32 ReserveBytes(
 
 // =====================================================================================================================
 // Returns the number of primitives in a triangle or procedural AABB geometry
-static uint32 GetGeometryPrimCount(
+uint32 BvhBuilder::GetGeometryPrimCount(
     const Geometry& geometry)
 {
     uint32 primCount = 0;
@@ -299,16 +299,14 @@ uint32 BvhBuilder::GetNumHistogramElements(
 
 // =====================================================================================================================
 // Helper function to determine leaf nodes size
-uint32 BvhBuilder::GetLeafNodeSize(
-    const DeviceSettings& settings,
-    const BuildConfig&    config)
+uint32 BvhBuilder::GetLeafNodeSize() const
 {
     uint32 size = 0;
 
     {
-        if (config.topLevelBuild)
+        if (m_buildConfig.topLevelBuild)
         {
-            size = settings.enableFusedInstanceNode ? RayTracingFusedInstanceNodeSize : RayTracingInstanceNodeSize;
+            size = m_deviceSettings.enableFusedInstanceNode ? RayTracingFusedInstanceNodeSize : RayTracingInstanceNodeSize;
         }
         else
         {
@@ -322,20 +320,39 @@ uint32 BvhBuilder::GetLeafNodeSize(
 }
 
 // =====================================================================================================================
-uint32 BvhBuilder::GetNumInternalNodeCount() const
+uint32 BvhBuilder::GetMinPrimsPerInternalNode() const
 {
-    uint32 maxNumChildren = 4u;
     uint32 minPrimsPerLastInternalNode = 2u;
 
-    {
-    }
+    return minPrimsPerLastInternalNode;
+}
 
-    return CalcAccelStructInternalNodeCount(m_buildConfig.maxNumPrimitives, maxNumChildren, minPrimsPerLastInternalNode);
+// =====================================================================================================================
+uint32 BvhBuilder::GetMaxLastLevelInternalNodeCount() const
+{
+    const uint32 minPrimsPerInternalNode = GetMinPrimsPerInternalNode();
+    return Util::RoundUpQuotient(m_buildConfig.maxNumPrimitives, minPrimsPerInternalNode);
+}
+
+// =====================================================================================================================
+uint32 BvhBuilder::GetMaxInternalNodeChildCount() const
+{
+    uint32 maxNumChildren = 4u;
+
+    return maxNumChildren;
+}
+
+// =====================================================================================================================
+uint32 BvhBuilder::GetNumInternalNodeCount() const
+{
+    return CalcAccelStructInternalNodeCount(m_buildConfig.maxNumPrimitives,
+                                            GetMaxInternalNodeChildCount(),
+                                            GetMinPrimsPerInternalNode());
 }
 
 // =====================================================================================================================
 // Calculate the size required for internal nodes
-uint32 BvhBuilder::CalculateInternalNodesSize()
+uint32 BvhBuilder::CalculateInternalNodesSize() const
 {
     uint32 numInternalNodes = GetNumInternalNodeCount();
     uint32 numBox16Nodes = 0;
@@ -377,17 +394,23 @@ uint32 BvhBuilder::CalculateInternalNodesSize()
 }
 
 // =====================================================================================================================
-// Static helper function that calculates the size of the buffer for leaf nodes
-uint32 BvhBuilder::CalculateLeafNodesSize()
+uint32 BvhBuilder::GetMaxNumLeafNodes() const
 {
-    {
-        return m_buildConfig.maxNumPrimitives * GetLeafNodeSize(m_deviceSettings, m_buildConfig);
-    }
+    uint32 maxNumLeafNodes = m_buildConfig.maxNumPrimitives;
+
+    return maxNumLeafNodes;
+}
+
+// =====================================================================================================================
+// Calculates the size of leaf node data section in result buffer
+uint32 BvhBuilder::CalculateLeafNodesSize() const
+{
+    return GetMaxNumLeafNodes() * GetLeafNodeSize();
 }
 
 // =====================================================================================================================
 // Static helper function that calculates the size of the buffer for acceleration structure nodes
-uint32 BvhBuilder::CalculateNodesSize()
+uint32 BvhBuilder::CalculateNodesSize() const
 {
     return CalculateInternalNodesSize() + CalculateLeafNodesSize();
 }
@@ -442,6 +465,8 @@ BvhBuilder::BvhBuilder(
     m_emitCompactDstGpuVa(0ull),
     m_buildSettingsHash(0)
 {
+    // Determine if the flags have to be overriden based on the build inputs.
+    m_buildArgs.inputs = m_pDevice->OverrideBuildInputs(m_buildArgs.inputs);
     InitializeBuildConfigs();
 
     {
@@ -568,6 +593,8 @@ BvhBuilder::ResultBufferInfo BvhBuilder::CalculateResultBufferInfo(
     AccelStructDataOffsets* pOffsets,
     uint32* pMetadataSizeInBytes)
 {
+    ResultBufferInfo info = {};
+
     uint32 runningOffset = 0;
 
     //-----------------------------------------------------------------------------------------------------------//
@@ -612,6 +639,7 @@ BvhBuilder::ResultBufferInfo BvhBuilder::CalculateResultBufferInfo(
         }
 
         offsets.primNodePtrs = ReserveBytes(m_buildConfig.maxNumPrimitives * sizeof(uint32), &runningOffset);
+
     }
 
     uint32 totalSizeInBytes = runningOffset;
@@ -636,7 +664,6 @@ BvhBuilder::ResultBufferInfo BvhBuilder::CalculateResultBufferInfo(
         *pMetadataSizeInBytes = metadataSizeInBytes;
     }
 
-    ResultBufferInfo info;
     info.baseOffset = metadataSizeInBytes + sizeof(AccelStructHeader);
     info.nodeSize = internalNodeSize + leafNodeSize;
     info.dataSize = totalSizeInBytes;
@@ -646,6 +673,14 @@ BvhBuilder::ResultBufferInfo BvhBuilder::CalculateResultBufferInfo(
 // =====================================================================================================================
 // Calculates the scratch buffer offsets and returns the total scratch memory size
 BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfo(
+    RayTracingScratchDataOffsets* pOffsets)
+{
+    return CalculateScratchBufferInfoDefault(pOffsets);
+}
+
+// =====================================================================================================================
+// Calculates the scratch buffer offsets and returns the total scratch memory size
+BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
     RayTracingScratchDataOffsets* pOffsets)
 {
     //--------------------------------------------
@@ -752,7 +787,7 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfo(
 
     // ============ TaskLoopCounters ============
     {
-        encodeTaskCounter = ReserveBytes(sizeof(EncodeTaskCounters), &runningOffset);
+        encodeTaskCounter = ReserveBytes(sizeof(EncodeTaskCountersBuild), &runningOffset);
         taskLoopCounters = ReserveBytes(sizeof(TaskLoopCounters), &runningOffset);
     }
 
@@ -1119,33 +1154,24 @@ uint32 BvhBuilder::CalculateUpdateScratchBufferInfo(
     //  Update Scratch Data layout
     //
     //-------------- Type: All ----------------------------------------------------------------------------------//
-    // UpdateStackPointer      uint32
-    // UpdateTaskCount         uint32
-    // UpdateEncodeTaskCount   uint32
-    // UpdateEncodeTasksDone   uint32
+    // EncodeTaskCountersUpdate
     // PropagationFlags        (uint32 PropagationFlags[NumPrimitives])
     // UpdateStackElements     uint32[NumPrimitives]
     //-----------------------------------------------------------------------------------------------------------//
     RayTracingScratchDataOffsets offsets = {};
 
-    // Update stack pointer
-    ReserveBytes(sizeof(uint32), &runningOffset);
-
-    // Done count
-    ReserveBytes(sizeof(uint32), &runningOffset);
-
     // Encode task loop counter
-    offsets.encodeTaskCounter = ReserveBytes(sizeof(uint32), &runningOffset);
+    offsets.encodeTaskCounter = ReserveBytes(Util::Pow2Align(sizeof(EncodeTaskCountersUpdate), 128u), &runningOffset);
 
-    // Encode tasks done count
-    ReserveBytes(sizeof(uint32), &runningOffset);
+    {
+        // Allocate space for the node flags
+        offsets.propagationFlags = ReserveBytes(m_buildConfig.maxNumPrimitives * sizeof(uint32), &runningOffset);
 
-    // Allocate space for the node flags
-    offsets.propagationFlags = ReserveBytes(m_buildConfig.maxNumPrimitives * sizeof(uint32), &runningOffset);
+        // Allocate space for update stack. Note, for a worst case tree, each leaf node enqueues a single parent
+        // node pointer for updating
+        offsets.updateStack = ReserveBytes(m_buildConfig.maxNumPrimitives * sizeof(uint32), &runningOffset);
 
-    // Allocate space for update stack. Note, for a worst case tree, each leaf node enqueues a single parent
-    // node pointer for updating
-    offsets.updateStack = ReserveBytes(m_buildConfig.maxNumPrimitives * sizeof(uint32), &runningOffset);
+    }
 
     if (pOffsets != nullptr)
     {
@@ -1267,6 +1293,11 @@ void BvhBuilder::InitBuildConfig(
         m_buildConfig.rebraidType = RebraidType::Off;
     }
 
+    // Enable BLAS build code paths required for rebraid support
+    m_buildConfig.enableInstanceRebraid =
+        (m_deviceSettings.rebraidType != RebraidType::Off) &&
+        (m_buildConfig.topLevelBuild == false);
+
     m_buildConfig.triangleSplitting = (m_deviceSettings.enableParallelBuild) &&
         m_deviceSettings.enableTriangleSplitting && (buildArgs.inputs.type == AccelStructType::BottomLevel) &&
         (Util::TestAnyFlagSet(buildArgs.inputs.flags, AccelStructBuildFlagAllowUpdate) == false) &&
@@ -1378,12 +1409,11 @@ BuildShaderConstants BvhBuilder::GetBuildShaderConstants() const
         .numPrimitives           = m_buildConfig.numPrimitives,
         .tsBudgetPerTriangle     = IsUpdate() ? 0 : m_deviceSettings.tsBudgetPerTriangle,
 
-        .maxNumPrimitives        = IsUpdate() ? 0 : m_buildConfig.maxNumPrimitives,
+        .maxNumPrimitives        = m_buildConfig.maxNumPrimitives,
         .rebraidFactor           = IsUpdate() ? 0 : m_deviceSettings.rebraidFactor,
 
         .indirectArgBufferStride = m_buildArgs.indirect.indirectStride,
         .numDescs                = m_buildArgs.inputs.inputElemCount,
-        .leafNodeExpansionFactor = GetLeafNodeExpansion(),
         .numMortonSizeBits       = m_buildConfig.numMortonSizeBits,
 
         .header                  = IsUpdate() ? AccelStructHeader{} : InitAccelStructHeader(),
@@ -1413,7 +1443,6 @@ void BvhBuilder::InitGeometryConstants()
     const uint32 geometryCount = m_buildArgs.inputs.inputElemCount;
 
     uint32 primitiveOffset = 0;
-    uint32 blockOffset = 0;
 
     const gpusize sizeInBytes = geometryCount * sizeof(BuildShaderGeometryConstants);
 
@@ -1456,7 +1485,6 @@ void BvhBuilder::InitGeometryConstants()
         {
             .numPrimitives                   = primitiveCount,
             .primitiveOffset                 = primitiveOffset,
-            .blockOffset                     = blockOffset,
             .geometryStride                  = stride,
             .indexBufferGpuVaLo              = Util::LowPart(indexBufferInfo.gpuVa),
             .indexBufferGpuVaHi              = Util::HighPart(indexBufferInfo.gpuVa),
@@ -1480,7 +1508,6 @@ void BvhBuilder::InitGeometryConstants()
         m_backend.CreateBufferViewSrds(1, constBufferViewInfo, pCbvTable, false);
         pCbvTable = Util::VoidPtrInc(pCbvTable, srdSizeBytes);
 
-        blockOffset += TrianglePairBlockCount(primitiveCount);
         primitiveOffset += primitiveCount;
     }
 }
@@ -1610,14 +1637,6 @@ BufferViewInfo BvhBuilder::SetupVertexBuffer(
 }
 
 // =====================================================================================================================
-// Return integer expansion factor which determines the number of flag slots each thread clears during Encode.
-uint32 BvhBuilder::GetLeafNodeExpansion() const
-{
-    return (m_buildConfig.numPrimitives == 0) ?
-        0 : Util::RoundUpQuotient(m_buildConfig.maxNumPrimitives, m_buildConfig.numPrimitives);
-}
-
-// =====================================================================================================================
 // Setup a typed buffer view for the provided procedural geometry.
 BufferViewInfo BvhBuilder::SetupAabbBuffer(
     const GeometryAabbs& desc,
@@ -1659,13 +1678,7 @@ void BvhBuilder::EncodeInstances(
 {
     BindPipeline(InternalRayTracingCsType::EncodeInstances);
 
-    uint32 entryOffset = 0;
-
-    // Set shader constants
-    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
-
-    // Set result and scratch buffers
-    entryOffset = WriteBufferBindings(entryOffset);
+    WriteBuildBufferBindings();
 
     RGP_PUSH_MARKER("Encode Instances (NumDescs=%u)", numDesc);
     Dispatch(DispatchSize(numDesc));
@@ -1840,7 +1853,7 @@ void BvhBuilder::InitAccelerationStructure()
     // initialises the counters via a CS with zero impact.
     if (m_deviceSettings.enableParallelBuild)
     {
-        const EncodeTaskCountersBuildParallel encodeTaskCounters = {
+        const EncodeTaskCountersCommon encodeTaskCounters = {
             .numPrimitives = 0,
             // BLAS increment primRefs during encode step to enable indirect builds of less primitives than maxPrimitiveCount
             .primRefs = primRefInitCount,
@@ -1851,14 +1864,14 @@ void BvhBuilder::InitAccelerationStructure()
     }
     else
     {
-        const EncodeTaskCounters encodeTaskCounters = {
-            .numPrimitives = 0,
-            // BLAS increment primRefs during encode step to enable indirect builds of less primitives than maxPrimitiveCount
-            .primRefs = primRefInitCount,
-            .groupCountX = 0,
-            .groupCountY = 1,
-            .groupCountZ = 1,
-        };
+        EncodeTaskCountersBuild encodeTaskCounters = {};
+
+        encodeTaskCounters.numPrimitives = 0;
+        // BLAS increment primRefs during encode step to enable indirect builds of less primitives than maxPrimitiveCount
+        encodeTaskCounters.primRefs      = primRefInitCount;
+        encodeTaskCounters.groupCountX   = 0;
+        encodeTaskCounters.groupCountY   = 1;
+        encodeTaskCounters.groupCountZ   = 1;
 
         const gpusize encodeTaskCountersOffset = ScratchBufferBaseVa() + m_scratchOffsets.encodeTaskCounter;
         WriteImmediateData(encodeTaskCountersOffset, encodeTaskCounters);
@@ -2120,14 +2133,7 @@ void BvhBuilder::InitBuildSettings()
     m_buildSettings.enableFusedInstanceNode      = m_deviceSettings.enableFusedInstanceNode;
     m_buildSettings.enableMergeSort              = m_buildConfig.enableMergeSort;
 
-    // m_buildConfig.rebraidType is only enabled on TLAS builds, as result we need a separate compile time
-    // setting to enable rebraid support in BLAS build shaders.
-    if ((m_deviceSettings.rebraidType != RebraidType::Off) && (m_buildSettings.topLevelBuild == 0))
-    {
-        // Enable instance rebraid support in build shaders. Note, currently this only enables additional
-        // code paths in BLAS build shaders.
-        m_buildSettings.enableInstanceRebraid = 1;
-    }
+    m_buildSettings.enableInstanceRebraid        = m_buildConfig.enableInstanceRebraid;
 
     m_buildSettings.tsPriority                   = m_deviceSettings.tsPriority;
     // Force priority to 1 if the client set it to 0
@@ -2170,11 +2176,6 @@ void BvhBuilder::InitBuildSettings()
 
     m_buildSettings.updateFlags =
         m_buildArgs.inputs.flags & (AccelStructBuildFlagPerformUpdate | AccelStructBuildFlagAllowUpdate);
-
-    if (ForceRebuild())
-    {
-        m_buildSettings.updateFlags &= ~AccelStructBuildFlagPerformUpdate;
-    }
 
     m_buildSettings.isUpdateInPlace = IsUpdateInPlace();
     m_buildSettings.encodeArrayOfPointers =
@@ -2223,22 +2224,19 @@ void BvhBuilder::GetAccelerationStructurePrebuildInfo(
     uint32 scratchDataSize = CalculateScratchBufferSize(resultBufferInfo, scratchBufferInfo);
 
     uint32 updateDataSize = 0;
-    if (Util::TestAnyFlagSet(buildInfo.flags, AccelStructBuildFlagAllowUpdate))
+    if (UpdateAllowed())
     {
-        updateDataSize = CalculateUpdateScratchBufferInfo(nullptr);
+        updateDataSize = Util::Max(1u, CalculateUpdateScratchBufferInfo(nullptr));
     }
     // Scratch size for builds may be smaller than updates, some apps will still try to use the scratch size from
     // the build when performing the update causing page faults.
     scratchDataSize = Util::Max(scratchDataSize, updateDataSize);
 
+    // Some applications crash when the driver reports 0 scratch size. Use 1 instead.
+    scratchDataSize = Util::Max(1u, scratchDataSize);
+
     prebuildInfo.scratchDataSizeInBytes       = scratchDataSize;
     prebuildInfo.updateScratchDataSizeInBytes = updateDataSize;
-
-    // @note We set the ScratchData and UpdateScratchData size to 1 instead of 0, because some apps crash otherwise.
-    prebuildInfo.scratchDataSizeInBytes =
-        Util::Max(static_cast<uint64>(1u), prebuildInfo.scratchDataSizeInBytes);
-    prebuildInfo.updateScratchDataSizeInBytes =
-        Util::Max(static_cast<uint64>(1u), prebuildInfo.updateScratchDataSizeInBytes);
 
     prebuildInfo.resultDataMaxSizeInBytes = resultDataSize;
     prebuildInfo.maxPrimitiveCount        = m_buildConfig.maxNumPrimitives;
@@ -2308,14 +2306,16 @@ void BvhBuilder::BuildRaytracingAccelerationStructure()
 
     if (IsUpdate())
     {
-        // Reset update stack pointer and update task counters.
-        ZeroDataImmediate(ScratchBufferBaseVa(), 4);
+        // Reset update encode task counters
+        const EncodeTaskCountersUpdate encodeTaskCountersUpdate = {};
+        WriteImmediateData(ScratchBufferBaseVa(), encodeTaskCountersUpdate);
+        Barrier(BarrierFlagSyncPostCpWrite);
     }
     else
     {
         InitAccelerationStructure();
+        Barrier(BarrierFlagSyncPostCpWrite);
     }
-    Barrier(BarrierFlagSyncPostCpWrite);
 
     if (HasBuildDumpEvents())
     {
@@ -2541,28 +2541,14 @@ void BvhBuilder::EncodeQuadPrimitives()
 
     PAL_ASSERT(m_buildArgs.inputs.type == AccelStructType::BottomLevel);
 
-    // TODO: handle indirect build argument buffer
     BindPipeline(InternalRayTracingCsType::EncodeQuadNodes);
 
-    const EncodePrimitive::Constants constants =
+    BuildShaderRootConstants0 shaderConstants =
     {
         .geometryIndex = m_buildConfig.trianglePairBlockCount
     };
 
-    uint32 entryOffset = 0;
-
-    entryOffset = WriteUserDataEntries(&constants, EncodePrimitive::NumEntries, entryOffset);
-
-    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
-
-    const uint32 cbvSrdTableGpuVaLo = Util::LowPart(m_geomConstSrdTable);
-    entryOffset = WriteUserDataEntries(&cbvSrdTableGpuVaLo, 1, entryOffset);
-
-    const uint32 vbvSrdTableGpuVaLo = Util::LowPart(m_geomBufferSrdTable);
-    entryOffset = WriteUserDataEntries(&vbvSrdTableGpuVaLo, 1, entryOffset);
-
-    // Set result and scratch buffers
-    entryOffset = WriteBufferBindings(entryOffset);
+    WriteBuildBufferBindings(shaderConstants, BuildBufferBindingFlags::GeometryBuffer);
 
     RGP_PUSH_MARKER("Encode Quad Nodes (NumPrimitives=%u)(NumBlocks=%u)",
                      m_buildConfig.maxNumPrimitives,
@@ -2588,18 +2574,8 @@ void BvhBuilder::EncodePrimitives()
         BindPipeline(pipelineType);
 
         constexpr uint32 EncodeRootConstEntryOffset = 0;
-        uint32 entryOffset = EncodePrimitive::NumEntries;
 
-        entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
-
-        const uint32 cbvSrdTableGpuVaLo = Util::LowPart(m_geomConstSrdTable);
-        entryOffset = WriteUserDataEntries(&cbvSrdTableGpuVaLo, 1, entryOffset);
-
-        const uint32 vbvSrdTableGpuVaLo = Util::LowPart(m_geomBufferSrdTable);
-        entryOffset = WriteUserDataEntries(&vbvSrdTableGpuVaLo, 1, entryOffset);
-
-        // Set result and scratch buffers
-        entryOffset = WriteBufferBindings(entryOffset);
+        WriteBuildBufferBindings({}, BuildBufferBindingFlags::GeometryBuffer);
 
         // Prepare merged source AABB buffer data from geometry
         for (uint32 geometryIndex = 0; geometryIndex < m_buildArgs.inputs.inputElemCount; ++geometryIndex)
@@ -2612,12 +2588,10 @@ void BvhBuilder::EncodePrimitives()
             // Mixing geometry types within a bottom-level acceleration structure is not allowed.
             PAL_ASSERT(geometry.type == m_buildConfig.geometryType);
 
-            const EncodePrimitive::Constants constants =
-            {
-                .geometryIndex = geometryIndex,
-            };
+            const BuildShaderRootConstants0 constants = {
+                .geometryIndex = geometryIndex};
 
-            WriteUserDataEntries(&constants, EncodePrimitive::NumEntries, EncodeRootConstEntryOffset);
+            WriteUserDataEntries(&constants, BuildBVH::NumEntries, EncodeRootConstEntryOffset);
 
             if (geometry.type == GeometryType::Triangles)
             {
@@ -3269,12 +3243,7 @@ void BvhBuilder::MergeSort(
 
     BindPipeline(InternalRayTracingCsType::MergeSort);
 
-    // Set shader constants
-    uint32 entryOffset = 0;
-    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
-
-    // Set result and scratch buffers
-    entryOffset = WriteBufferBindings(entryOffset);
+    WriteBuildBufferBindings();
 
     RGP_PUSH_MARKER("Merge Sort (maxNumPrimitives %u)", m_buildConfig.maxNumPrimitives);
 
@@ -3329,24 +3298,17 @@ void BvhBuilder::Rebraid()
 {
     PAL_ASSERT(AllowRebraid());
 
+    BindPipeline(InternalRayTracingCsType::Rebraid);
+
     // TODO: Determine numThreadGroups without relying on BuildParallel's logic
     const uint32 numThreadGroups = GetParallelBuildNumThreadGroups();
 
-    const Rebraid::Constants shaderConstants =
+    BuildShaderRootConstants0 shaderConstants =
     {
-        .numThreadGroups = numThreadGroups,
+        .numThreadGroups = numThreadGroups
     };
 
-    BindPipeline(InternalRayTracingCsType::Rebraid);
-
-    uint32 entryOffset = 0;
-
-    // Set shader constants
-    entryOffset = WriteUserDataEntries(&shaderConstants, Rebraid::NumEntries, entryOffset);
-    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
-
-    // Set result and scratch buffers
-    entryOffset = WriteBufferBindings(entryOffset);
+    WriteBuildBufferBindings(shaderConstants);
 
     RGP_PUSH_MARKER("Rebraid (numPrims %u)", m_buildConfig.numPrimitives);
     Dispatch(numThreadGroups);
@@ -3360,13 +3322,7 @@ void BvhBuilder::GenerateMortonCodes()
 {
     BindPipeline(InternalRayTracingCsType::GenerateMortonCodes);
 
-    uint32 entryOffset = 0;
-
-    // Set shader constants
-    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
-
-    // Set result and scratch buffers
-    entryOffset = WriteBufferBindings(entryOffset);
+    WriteBuildBufferBindings();
 
     RGP_PUSH_MARKER("Generate Morton Codes (maxNumPrimitives %u)", m_buildConfig.maxNumPrimitives);
     Dispatch(DispatchSize(m_buildConfig.maxNumPrimitives));
@@ -3379,15 +3335,9 @@ void BvhBuilder::GenerateMortonCodes()
 void BvhBuilder::DispatchBuildBVHPipeline(
     InternalRayTracingCsType pipeline)
 {
-    uint32 entryOffset = 0;
-
-    // Set shader constants
-    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
-
-    // Set result and scratch buffers
-    entryOffset = WriteBufferBindings(entryOffset);
-
     BindPipeline(pipeline);
+
+    WriteBuildBufferBindings();
 
     RGP_PUSH_MARKER("Build BVH (maxNumPrimitives %u)", m_buildConfig.maxNumPrimitives);
     Dispatch(DispatchSize(m_buildConfig.maxNumPrimitives));
@@ -3408,23 +3358,6 @@ void BvhBuilder::BuildBVHTD()
 {
     PAL_ASSERT(m_buildConfig.topDownBuild);
 
-    const uint32 threadGroupSize = DefaultThreadGroupSize;
-    const uint32 numThreadGroups = GetNumPersistentThreadGroups(m_buildConfig.maxNumPrimitives, threadGroupSize);
-
-    const BuildBVHTD::Constants shaderConstants =
-    {
-        .numThreads = numThreadGroups * threadGroupSize,
-    };
-
-    uint32 entryOffset = 0;
-
-    // Set shader constants
-    entryOffset = WriteUserDataEntries(&shaderConstants, BuildBVHTD::NumEntries, entryOffset);
-    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
-
-    // Set result and scratch buffers
-    entryOffset = WriteBufferBindings(entryOffset);
-
     if (m_buildConfig.rebraidType == RebraidType::V1)
     {
         BindPipeline(InternalRayTracingCsType::BuildBVHTDTR);
@@ -3433,6 +3366,16 @@ void BvhBuilder::BuildBVHTD()
     {
         BindPipeline(InternalRayTracingCsType::BuildBVHTD);
     }
+
+    const uint32 threadGroupSize = DefaultThreadGroupSize;
+    const uint32 numThreadGroups = GetNumPersistentThreadGroups(m_buildConfig.maxNumPrimitives, threadGroupSize);
+
+    BuildShaderRootConstants0 shaderConstants =
+    {
+        .numThreads = numThreadGroups * threadGroupSize
+    };
+
+    WriteBuildBufferBindings(shaderConstants);
 
     RGP_PUSH_MARKER("Build BVHTD");
     Dispatch(numThreadGroups);
@@ -3445,24 +3388,17 @@ void BvhBuilder::BuildBVHTD()
 void BvhBuilder::BuildBVHPLOC(
     uint32 wavesPerSimd)
 {
+    BindPipeline(InternalRayTracingCsType::BuildBVHPLOC);
+
     const uint32 tgSize = 256u;
     const uint32 numThreadGroups = GetNumPersistentThreadGroups(m_buildConfig.maxNumPrimitives, tgSize, wavesPerSimd);
 
-    uint32 entryOffset = 0;
-
-    const BuildBVHPLOC::Constants shaderConstants =
+    BuildShaderRootConstants0 shaderConstants =
     {
-        .numThreads = numThreadGroups * tgSize,
+       .numThreads = numThreadGroups * tgSize
     };
 
-    // Set shader constants
-    entryOffset = WriteUserDataEntries(&shaderConstants, BuildBVHPLOC::NumEntries, entryOffset);
-    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
-
-    // Set result and scratch buffers
-    entryOffset = WriteBufferBindings(entryOffset);
-
-    BindPipeline(InternalRayTracingCsType::BuildBVHPLOC);
+    WriteBuildBufferBindings(shaderConstants);
 
     RGP_PUSH_MARKER("Build PLOC BVH (maxNumPrimitives %u)", m_buildConfig.maxNumPrimitives);
     Dispatch(numThreadGroups);
@@ -3474,15 +3410,9 @@ void BvhBuilder::BuildBVHPLOC(
 // Executes the build Fast Agglomerative LBVH shader
 void BvhBuilder::BuildFastAgglomerativeLbvh()
 {
-    uint32 entryOffset = 0;
-
-    // Set shader constants
-    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
-
-    // Set result and scratch buffers
-    entryOffset = WriteBufferBindings(entryOffset);
-
     BindPipeline(InternalRayTracingCsType::BuildFastAgglomerativeLbvh);
+
+    WriteBuildBufferBindings();
 
     RGP_PUSH_MARKER("Build Fast Agglomerative LBVH (maxNumPrimitives %u)", m_buildConfig.maxNumPrimitives);
     Dispatch(DispatchSize(m_buildConfig.maxNumPrimitives));
@@ -3560,11 +3490,13 @@ void BvhBuilder::EncodeUpdate()
     BindPipeline((m_buildConfig.geometryType == GeometryType::Triangles) ?
         InternalRayTracingCsType::UpdateTriangles : InternalRayTracingCsType::UpdateAabbs);
 
-    const uint32 numWorkItems = Util::Max(1u, m_buildConfig.numPrimitives);
-
     const uint32 threadGroupSize  = DefaultThreadGroupSize;
     const uint32 wavesPerSimd     = 8;
-    const uint32 numThreadGroups  = GetNumPersistentThreadGroups(numWorkItems, threadGroupSize, wavesPerSimd);
+    uint32 numThreadGroups        = 0;
+    {
+        const uint32 numWorkItems = Util::Max(1u, m_buildConfig.numPrimitives);
+        numThreadGroups    = GetNumPersistentThreadGroups(numWorkItems, threadGroupSize, wavesPerSimd);
+    }
     const uint32 numThreads       = numThreadGroups * threadGroupSize;
 
     uint32 entryOffset = 0;
@@ -3588,7 +3520,10 @@ void BvhBuilder::EncodeUpdate()
     const uint32 vbvSrdTableGpuVaLo = Util::LowPart(m_geomBufferSrdTable);
     entryOffset = WriteUserDataEntries(&vbvSrdTableGpuVaLo, 1, entryOffset);
 
-    RGP_PUSH_MARKER("Update");
+    // NullBuffer binding
+    entryOffset = WriteBufferVa(0, entryOffset);
+
+    RGP_PUSH_MARKER("Update (NumPrimitives=%u)", m_buildConfig.maxNumPrimitives);
     Dispatch(numThreadGroups);
 
     RGP_POP_MARKER();
@@ -3633,28 +3568,21 @@ uint32 BvhBuilder::GetParallelBuildNumThreadGroups()
 // Executes the EncodeHwBvh shader
 void BvhBuilder::EncodeHwBvh()
 {
-    const uint32 nodeCount       = GetNumInternalNodeCount();
-    const uint32 numThreadGroups =
-        m_buildSettings.topLevelBuild ? Util::RoundUpQuotient(nodeCount, DefaultThreadGroupSize) :
-                                        GetNumPersistentThreadGroups(nodeCount);
-
-    const EncodeHwBvh::Constants shaderConstants =
-    {
-        numThreadGroups * DefaultThreadGroupSize,
-    };
-
-    uint32 entryOffset = 0;
-
-    // Set shader constants
-    entryOffset = WriteUserDataEntries(&shaderConstants, EncodeHwBvh::NumEntries, entryOffset);
-    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
-
-    // Set result and scratch buffers
-    entryOffset = WriteBufferBindings(entryOffset);
-
     {
         BindPipeline(InternalRayTracingCsType::BuildQBVH);
     }
+
+    const uint32 nodeCount       = GetNumInternalNodeCount();
+    const uint32 numThreadGroups =
+        m_buildSettings.topLevelBuild ? Util::RoundUpQuotient(nodeCount, DefaultThreadGroupSize) :
+        GetNumPersistentThreadGroups(nodeCount);
+
+    BuildShaderRootConstants0 shaderConstants =
+    {
+       .numThreads = numThreadGroups * DefaultThreadGroupSize
+    };
+
+    WriteBuildBufferBindings(shaderConstants);
 
     RGP_PUSH_MARKER("Encode HW BVH (nodeCount %u)", nodeCount);
     Dispatch(numThreadGroups);
@@ -3667,13 +3595,7 @@ void BvhBuilder::RefitBounds()
 {
     BindPipeline(InternalRayTracingCsType::RefitBounds);
 
-    uint32 entryOffset = 0;
-
-    // Set shader constants
-    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
-
-    // Set result and scratch buffers
-    entryOffset = WriteBufferBindings(entryOffset);
+    WriteBuildBufferBindings();
 
     RGP_PUSH_MARKER("Refit Bounds");
     Dispatch(DispatchSize(m_buildConfig.maxNumPrimitives));
@@ -3689,19 +3611,7 @@ void BvhBuilder::PairCompression()
 
     BindPipeline(InternalRayTracingCsType::PairCompression);
 
-    uint32 entryOffset = 0;
-
-    // Set shader constants
-    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
-
-    // Set result and scratch buffers
-    entryOffset = WriteBufferBindings(entryOffset);
-
-    const uint32 cbvSrdTableGpuVaLo = Util::LowPart(m_geomConstSrdTable);
-    entryOffset = WriteUserDataEntries(&cbvSrdTableGpuVaLo, 1, entryOffset);
-
-    const uint32 vbvSrdTableGpuVaLo = Util::LowPart(m_geomBufferSrdTable);
-    entryOffset = WriteUserDataEntries(&vbvSrdTableGpuVaLo, 1, entryOffset);
+    WriteBuildBufferBindings({}, BuildBufferBindingFlags::GeometryBuffer);
 
     RGP_PUSH_MARKER("Pair Compression");
     Dispatch(DispatchSize(m_buildConfig.maxNumPrimitives));
@@ -3777,20 +3687,13 @@ void BvhBuilder::BitHistogram(
 
     const uint32 numGroups = Util::RoundUpQuotient(numElems, m_radixSortConfig.groupBlockSize);
 
-    uint32 entryOffset = 0;
-
-    const BitHistogram::Constants shaderConstants =
+    BuildShaderRootConstants0 shaderConstants =
     {
-        .bitShiftSize = bitShiftSize,
-        .numGroups    =  numGroups,
+        .numThreadGroups = numGroups,
+        .bitShiftSize = bitShiftSize
     };
 
-    // Set shader constants
-    entryOffset = WriteUserDataEntries(&shaderConstants, BitHistogram::NumEntries, entryOffset);
-    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
-
-    // Set result and scratch buffers
-    entryOffset = WriteBufferBindings(entryOffset);
+    WriteBuildBufferBindings(shaderConstants);
 
     RGP_PUSH_MARKER("Bit Histogram");
     Dispatch(numGroups);
@@ -3808,20 +3711,13 @@ void BvhBuilder::ScatterKeysAndValues(
 
     const uint32 numGroups = Util::RoundUpQuotient(numElems, m_radixSortConfig.groupBlockSize);
 
-    uint32 entryOffset = 0;
-
-    const RadixSort::Constants shaderConstants =
+    BuildShaderRootConstants0 shaderConstants =
     {
-        .bitShiftSize = bitShiftSize,
-        .numGroups    =  numGroups,
+        .numThreadGroups = numGroups,
+        .bitShiftSize = bitShiftSize
     };
 
-    // Set shader constants
-    entryOffset = WriteUserDataEntries(&shaderConstants, RadixSort::NumEntries, entryOffset);
-    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
-
-    // Set result and scratch buffers
-    entryOffset = WriteBufferBindings(entryOffset);
+    WriteBuildBufferBindings(shaderConstants);
 
     RGP_PUSH_MARKER("Scatter Keys And Values");
     Dispatch(numGroups);
@@ -3873,39 +3769,19 @@ void BvhBuilder::BuildParallel()
     if (m_buildConfig.radixSortScanLevel > 0)
     {
         PAL_ASSERT(m_buildConfig.numPrimitives < (m_radixSortConfig.numScanElemsPerWorkGroup *
-                                                  m_radixSortConfig.numScanElemsPerWorkGroup *
-                                                  m_radixSortConfig.numScanElemsPerWorkGroup));
+            m_radixSortConfig.numScanElemsPerWorkGroup *
+            m_radixSortConfig.numScanElemsPerWorkGroup));
     }
-    const uint32 numThreadGroups = GetParallelBuildNumThreadGroups();
-
-    const BuildParallel::Constants shaderConstants =
-    {
-        .numThreadGroups = numThreadGroups,
-    };
 
     BindPipeline(buildParallelShaderType);
 
-    uint32 entryOffset = 0;
-    entryOffset = WriteUserDataEntries(&shaderConstants, BuildParallel::NumEntries, entryOffset);
+    const uint32 numThreadGroups = GetParallelBuildNumThreadGroups();
 
-    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
-
+    BuildShaderRootConstants0 shaderConstants =
     {
-        entryOffset = WriteBufferVa(0, entryOffset);
-    }
-
-    // Set result and scratch buffers
-    entryOffset = WriteBufferBindings(entryOffset);
-
-#if GPURT_ENABLE_GPU_DEBUG
-    entryOffset = WriteBufferVa(m_pDevice->GetGpuDebugBufferVa(), entryOffset);
-#endif
-
-    const uint32 cbvSrdTableGpuVaLo = Util::LowPart(m_geomConstSrdTable);
-    entryOffset = WriteUserDataEntries(&cbvSrdTableGpuVaLo, 1, entryOffset);
-
-    const uint32 vbvSrdTableGpuVaLo = Util::LowPart(m_geomBufferSrdTable);
-    entryOffset = WriteUserDataEntries(&vbvSrdTableGpuVaLo, 1, entryOffset);
+       .numThreadGroups = numThreadGroups
+    };
+    WriteBuildBufferBindings(shaderConstants, BuildBufferBindingFlags::GeometryBuffer);
 
     RGP_PUSH_MARKER("BVH build");
     Dispatch(numThreadGroups);
@@ -3949,19 +3825,13 @@ void BvhBuilder::ScanExclusiveAddOneLevel(
 {
     BindPipeline(InternalRayTracingCsType::ScanExclusiveInt4);
 
-    uint32 entryOffset = 0;
-
-    const ScanExclusiveAddWG::Constants shaderConstants =
+    BuildShaderRootConstants1 shaderConstants =
     {
-        .numElements             = numElems,
-        .inOutArrayScratchOffset = inOutArrayOffset,
+        .numElements = numElems,
+        .inOutArrayScratchOffset = inOutArrayOffset
     };
 
-    // Set constants
-    entryOffset = WriteUserDataEntries(&shaderConstants, ScanExclusiveAddWG::NumEntries, entryOffset);
-
-    // Set result and scratch buffers
-    entryOffset = WriteBufferBindings(entryOffset);
+    WriteBuildBufferBindings(shaderConstants);
 
     RGP_PUSH_MARKER("Scan Exclusive");
     Dispatch(numWorkGroups);
@@ -3979,20 +3849,14 @@ void BvhBuilder::ScanExclusiveAddPartial(
 {
     BindPipeline(InternalRayTracingCsType::ScanExclusivePartInt4);
 
-    uint32 entryOffset = 0;
-
-    // Set up shader constants
-    const ScanExclusivePartSum::Constants scanConstants =
+    BuildShaderRootConstants1 shaderConstants =
     {
-        .numElements             = numElems,
+        .numElements = numElems,
         .inOutArrayScratchOffset = inOutArrayOffset,
-        .partSumsScratchOffset   = partSumsOffset
+        .partSumsScratchOffset = partSumsOffset
     };
 
-    entryOffset = WriteUserDataEntries(&scanConstants, ScanExclusivePartSum::NumEntries, entryOffset);
-
-    // Set result and scratch buffers
-    entryOffset = WriteBufferBindings(entryOffset);
+    WriteBuildBufferBindings(shaderConstants);
 
     RGP_PUSH_MARKER("Scan Exclusive (Partial)");
 
@@ -4013,20 +3877,14 @@ void BvhBuilder::ScanExclusiveDistributeSums(
     // distribute sums
     BindPipeline(InternalRayTracingCsType::DistributePartSumInt4);
 
-    uint32 entryOffset = 0;
-
-    // Set up shader constants
-    const DistributePartSum::Constants distributeConstants =
+    BuildShaderRootConstants1 shaderConstants =
     {
-        .numElements              = numElems,
-        .outputArrayScratchOffset = inOutArrayOffset,
-        .partSumsScratchOffset    = partSumsOffset
+        .numElements = numElems,
+        .inOutArrayScratchOffset = inOutArrayOffset,
+        .partSumsScratchOffset = partSumsOffset
     };
 
-    entryOffset = WriteUserDataEntries(&distributeConstants, DistributePartSum::NumEntries, entryOffset);
-
-    // Set result and scratch buffers
-    entryOffset = WriteBufferBindings(entryOffset);
+    WriteBuildBufferBindings(shaderConstants);
 
     RGP_PUSH_MARKER("Scan Exclusive Distribute Partial Sum");
     Dispatch(numWorkGroups);
@@ -4139,19 +3997,12 @@ void BvhBuilder::ScanExclusiveAddDLB(
     const uint32 threadGroupSize = blockSize;
     const uint32 numInitGroups   = Util::RoundUpQuotient(numBlocks, threadGroupSize);
 
-    uint32 entryOffset = 0;
-
-    const ScanExclusiveAddDLB::Constants shaderConstants =
+    BuildShaderRootConstants1 shaderConstants =
     {
-        .numElements = numElems,
+        .numElements = numElems
     };
 
-    // Set number of elements
-    entryOffset = WriteUserDataEntries(&shaderConstants, ScanExclusiveAddDLB::NumEntries, entryOffset);
-    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
-
-    // Set result and scratch buffers
-    entryOffset = WriteBufferBindings(entryOffset);
+    WriteBuildBufferBindings(shaderConstants);
 
     RGP_PUSH_MARKER("Init Scan Exclusive Int 4 DLB");
 
@@ -4188,19 +4039,12 @@ void BvhBuilder::ScanExclusiveAddDLBInit()
     const uint32 threadGroupSize = blockSize;
     const uint32 numInitGroups = Util::RoundUpQuotient(numBlocks, threadGroupSize);
 
-    uint32 entryOffset = 0;
-
-    const ScanExclusiveAddDLB::Constants shaderConstants =
+    BuildShaderRootConstants1 shaderConstants =
     {
-        .numElements = numElems,
+        .numElements = numElems
     };
 
-    // Set number of elements
-    entryOffset = WriteUserDataEntries(&shaderConstants, ScanExclusiveAddDLB::NumEntries, entryOffset);
-    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
-
-    // Set result and scratch buffers
-    entryOffset = WriteBufferBindings(entryOffset);
+    WriteBuildBufferBindings(shaderConstants);
 
     RGP_PUSH_MARKER("Init Scan Exclusive Int 4 DLB");
 
@@ -4214,9 +4058,10 @@ void BvhBuilder::ScanExclusiveAddDLBInit()
 // =====================================================================================================================
 // Executes the DLB exclusive scan pass
 void BvhBuilder::ScanExclusiveAddDLBScan(
-    uint32 passIdx
-)
+    uint32 passIdx)
 {
+    BindPipeline(InternalRayTracingCsType::ScanExclusiveInt4DLB);
+
     const uint32 numElems = m_buildConfig.numHistogramElements;
 
     const uint32 blockSize = m_radixSortConfig.workGroupSize;
@@ -4225,22 +4070,13 @@ void BvhBuilder::ScanExclusiveAddDLBScan(
     const uint32 elementsPerBlock = blockSize * keysPerThread;
     const uint32 numBlocks = Util::RoundUpQuotient(numElems, elementsPerBlock);
 
-    uint32 entryOffset = 0;
-
-    const ScanExclusiveAddDLB::Constants shaderConstants =
+    BuildShaderRootConstants1 shaderConstants =
     {
         .numElements = numElems,
-        .passIndex   = passIdx,
+        .passIndex = passIdx
     };
 
-    // Set number of elements
-    entryOffset = WriteUserDataEntries(&shaderConstants, ScanExclusiveAddDLB::NumEntries, entryOffset);
-    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
-
-    // Set result and scratch buffers
-    entryOffset = WriteBufferBindings(entryOffset);
-
-    BindPipeline(InternalRayTracingCsType::ScanExclusiveInt4DLB);
+    WriteBuildBufferBindings(shaderConstants);
 
     RGP_PUSH_MARKER("Scan Exclusive Int 4 DLB");
     Dispatch(numBlocks);
@@ -4285,21 +4121,37 @@ uint32 BvhBuilder::NumPrimitivesAfterSplit(
 }
 
 // =====================================================================================================================
-uint32 BvhBuilder::WriteBufferBindings(
-    uint32 entryOffset,
-    uint32 geometryIndex)
+uint32 BvhBuilder::WriteBuildBufferBindings(
+    const BuildShaderRootConstants& entries,
+    uint32 buildBufferBindingFlags)
 {
+    uint32 entryOffset = 0;
+
+    // RootConstants
+    entryOffset = WriteUserDataEntries(&entries, BuildBVH::NumEntries, entryOffset);
+
+    // ShaderConstants
+    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
+
+    {
+        entryOffset = WriteBufferVa(0, entryOffset);
+    }
+
     // u0: SrcBuffer
     entryOffset = WriteBufferVa(SourceHeaderBufferBaseVa(), entryOffset);
+
     // u1: DstBuffer
     // Set DstBuffer to null for Updates since the metadata size recalculated may not match with what it was during the
     // Build and create a bad binding.
     gpusize dstBufferGpuVa = IsUpdate() ? 0 : ResultBufferBaseVa();
     entryOffset = WriteBufferVa(dstBufferGpuVa, entryOffset);
+
     // u2: DstMetadata
     entryOffset = WriteBufferVa(HeaderBufferBaseVa(), entryOffset);
+
     // u3: ScratchBuffer
     entryOffset = WriteBufferVa(RemappedScratchBufferBaseVa(), entryOffset);
+
     // u4: ScratchGlobal
     entryOffset = WriteBufferVa(ScratchBufferBaseVa(), entryOffset);
 
@@ -4326,11 +4178,25 @@ uint32 BvhBuilder::WriteBufferBindings(
     // u7: IndirectArgBuffer
     if (m_buildSettings.isIndirectBuild)
     {
-        entryOffset = WriteBufferVa(m_buildArgs.indirect.indirectGpuAddr + (geometryIndex * m_buildArgs.indirect.indirectStride), entryOffset);
+        entryOffset = WriteBufferVa(m_buildArgs.indirect.indirectGpuAddr, entryOffset);
     }
     else
     {
         entryOffset = WriteBufferVa(0, entryOffset);
+    }
+
+    // u8: DebugBuffer
+#if GPURT_ENABLE_GPU_DEBUG
+    entryOffset = WriteBufferVa(m_pDevice->GetGpuDebugBufferVa(), entryOffset);
+#endif
+
+    if (buildBufferBindingFlags & BuildBufferBindingFlags::GeometryBuffer)
+    {
+        const uint32 cbvSrdTableGpuVaLo = Util::LowPart(m_geomConstSrdTable);
+        entryOffset = WriteUserDataEntries(&cbvSrdTableGpuVaLo, 1, entryOffset);
+
+        const uint32 vbvSrdTableGpuVaLo = Util::LowPart(m_geomBufferSrdTable);
+        entryOffset = WriteUserDataEntries(&vbvSrdTableGpuVaLo, 1, entryOffset);
     }
 
     return entryOffset;
@@ -4340,14 +4206,21 @@ uint32 BvhBuilder::WriteBufferBindings(
 uint32 BvhBuilder::WriteUpdateBuffers(
     uint32 entryOffset) // Offset of the first entry
 {
-    // Set output buffer
+    // u0: DstMetadata
     entryOffset = WriteBufferVa(HeaderBufferBaseVa(), entryOffset);
-
-    // Set scratch buffer
+    // u1: ScratchBuffer
     entryOffset = WriteBufferVa(ScratchBufferBaseVa(), entryOffset);
-
-    // Set source buffers
+    // u2: SrcBuffer
     entryOffset = WriteBufferVa(SourceHeaderBufferBaseVa(), entryOffset);
+    // u3: IndirectArgBuffer
+    if (m_buildSettings.isIndirectBuild)
+    {
+        entryOffset = WriteBufferVa(m_buildArgs.indirect.indirectGpuAddr, entryOffset);
+    }
+    else
+    {
+        entryOffset = WriteBufferVa(0, entryOffset);
+    }
 
     return entryOffset;
 }

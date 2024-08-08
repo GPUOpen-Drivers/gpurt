@@ -48,13 +48,11 @@
 #define GPURT_ACCEL_STRUCT_MINOR_VERSION 3
 #define GPURT_ACCEL_STRUCT_VERSION       ((GPURT_ACCEL_STRUCT_MAJOR_VERSION << 16) | GPURT_ACCEL_STRUCT_MINOR_VERSION)
 
+#include "../src/shared/assert.h"
+
 #ifdef __cplusplus
 namespace GpuRt
 {
-
-#define GPURT_STATIC_ASSERT(condition, message) static_assert(condition, message)
-#else
-#define GPURT_STATIC_ASSERT(condition, message)
 #endif
 
 typedef uint32_t uint32;
@@ -76,10 +74,12 @@ struct AccelStructDataOffsets
 #define ACCEL_STRUCT_OFFSETS_PRIM_NODE_PTRS_OFFSET       12
 #define ACCEL_STRUCT_OFFSETS_SIZE                        16
 
+#ifdef __cplusplus
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_OFFSETS_INTERNAL_NODES_OFFSET == offsetof(AccelStructDataOffsets, internalNodes), "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_OFFSETS_LEAF_NODES_OFFSET == offsetof(AccelStructDataOffsets, leafNodes), "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_OFFSETS_GEOMETRY_INFO_OFFSET == offsetof(AccelStructDataOffsets, geometryInfo), "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_OFFSETS_PRIM_NODE_PTRS_OFFSET == offsetof(AccelStructDataOffsets, primNodePtrs), "");
+#endif
 GPURT_STATIC_ASSERT(sizeof(AccelStructDataOffsets) == 16,
     "AccelStructDataOffsets size cannot change because it is embedded in AccelStructHeader.");
 
@@ -105,10 +105,12 @@ struct AccelStructMetadataHeader
 #define ACCEL_STRUCT_METADATA_HEADER_SIZE               84
 
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_HEADER_SIZE == sizeof(AccelStructMetadataHeader), "Acceleration structure header mismatch");
+#ifdef __cplusplus
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_VA_LO_OFFSET == offsetof(AccelStructMetadataHeader, addressLo), "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_VA_HI_OFFSET == offsetof(AccelStructMetadataHeader, addressHi), "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_SIZE_OFFSET == offsetof(AccelStructMetadataHeader, sizeInBytes), "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET == offsetof(AccelStructMetadataHeader, taskCounter), "");
+#endif
 
 #ifdef __cplusplus
 // =====================================================================================================================
@@ -287,13 +289,14 @@ struct AccelStructHeader
 
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_SIZE == sizeof(AccelStructHeader),
     "Acceleration structure header mismatch");
+#ifdef __cplusplus
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_INFO_OFFSET                    == offsetof(AccelStructHeader, info),                 "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_METADATA_SIZE_OFFSET           == offsetof(AccelStructHeader, metadataSizeInBytes),  "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_BYTE_SIZE_OFFSET               == offsetof(AccelStructHeader, sizeInBytes),          "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_NUM_PRIMS_OFFSET               == offsetof(AccelStructHeader, numPrimitives),        "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET        == offsetof(AccelStructHeader, numActivePrims),       "");
 
-GPURT_STATIC_ASSERT(ACCEL_STRUCT_RESERVERED0_OFFSET                   == offsetof(AccelStructHeader, reserved0),             "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_RESERVERED0_OFFSET                     == offsetof(AccelStructHeader, reserved0),             "");
 
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_NUM_DESCS_OFFSET               == offsetof(AccelStructHeader, numDescs),             "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET           == offsetof(AccelStructHeader, geometryType),         "");
@@ -309,6 +312,7 @@ GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_FP32_ROOT_BOX_OFFSET           == offset
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_INFO_2_OFFSET                  == offsetof(AccelStructHeader, info2),                "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_PACKED_FLAGS_OFFSET            == offsetof(AccelStructHeader, packedFlags),          "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_COMPACTED_BYTE_SIZE_OFFSET     == offsetof(AccelStructHeader, compactedSizeInBytes), "");
+#endif
 
 #ifdef __cplusplus
 // =====================================================================================================================

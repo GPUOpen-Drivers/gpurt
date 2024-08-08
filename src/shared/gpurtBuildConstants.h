@@ -99,9 +99,9 @@ struct RayTracingScratchDataOffsets
     uint32 reserved9;
     uint32 reserved10;
     uint32 reserved11;
+    uint32 reserved12;
     uint32 taskLoopCounters;
     uint32 debugCounters;
-    uint32 reserved12;
     uint32 reserved13;
 };
 
@@ -119,13 +119,13 @@ struct BuildShaderConstants
 
     uint32 indirectArgBufferStride;
     uint32 numDescs;
-    uint32 leafNodeExpansionFactor;
     uint32 numMortonSizeBits;
 
     uint32 reservedUint2;
     uint32 padding0;
     uint32 padding1;
     uint32 padding2;
+    uint32 padding3;
 
     // Align the following struct to 4 dwords due to HLSL constant buffer packing rules
     AccelStructHeader header;
@@ -138,7 +138,7 @@ struct BuildShaderGeometryConstants
 {
     uint32 numPrimitives;                 // Number of primitives
     uint32 primitiveOffset;               // Per-geometry primitive offset
-    uint32 blockOffset;                   // Starting block index for current geometry
+    uint32 reserved;                      // Reserved
     uint32 geometryStride;                // Geometry buffer stride in terms of components for vertices. 0 if the
                                           // stride is accounted for in the SRD. R32G32 elements for AABBs.
     uint32 indexBufferGpuVaLo;
@@ -157,6 +157,84 @@ struct BuildShaderGeometryConstants
     uint32 padding1;
 };
 
+struct BuildShaderRootConstants0
+{
+    uint32 numThreadGroups;
+    uint32 numThreads;
+    uint32 geometryIndex;
+    uint32 bitShiftSize;
+};
+
+struct BuildShaderRootConstants1
+{
+    uint32 numElements;
+    uint32 passIndex;
+    uint32 inOutArrayScratchOffset;
+    uint32 partSumsScratchOffset;
+};
+
+struct BuildShaderRootConstants
+{
+#ifdef __cplusplus
+    BuildShaderRootConstants() = default;
+
+    BuildShaderRootConstants(BuildShaderRootConstants0 constants)
+    {
+        memcpy(this, &constants, sizeof(BuildShaderRootConstants));
+    }
+
+    BuildShaderRootConstants(BuildShaderRootConstants1 constants)
+    {
+        memcpy(this, &constants, sizeof(BuildShaderRootConstants));
+    }
+#endif
+
+    uint32 data0;
+    uint32 data1;
+    uint32 data2;
+    uint32 data3;
+
+    uint32 NumThreadGroups()
+    {
+        return data0;
+    }
+
+    uint32 NumThreads()
+    {
+        return data1;
+    }
+
+    uint32 GeometryIndex()
+    {
+        return data2;
+    }
+
+    uint32 BitShiftSize()
+    {
+        return data3;
+    }
+
+    uint32 NumElements()
+    {
+        return data0;
+    }
+
+    uint32 PassIndex()
+    {
+        return data1;
+    }
+
+    uint32 InOutArrayScratchOffset()
+    {
+        return data2;
+    }
+
+    uint32 PartSumsScratchOffset()
+    {
+        return data3;
+    }
+};
+
 #ifdef __cplusplus
 static_assert(sizeof(AccelStructHeader) % 16 == 0, "AccelStructHeader must be 16-byte aligned");
 static_assert(sizeof(RayTracingScratchDataOffsets) % 16 == 0, "RayTracingScratchDataOffsets must be 16-byte aligned");
@@ -165,6 +243,10 @@ static_assert(sizeof(BuildShaderGeometryConstants) % 16 == 0, "BuildShaderGeomet
 
 static_assert(offsetof(BuildShaderConstants, header) % 16 == 0, "AccelStructHeader must be 16-byte aligned");
 static_assert(offsetof(BuildShaderConstants, offsets) % 16 == 0, "RayTracingScratchDataOffsets must be 16-byte aligned");
+
+static_assert(sizeof(BuildShaderRootConstants0) == sizeof(BuildShaderRootConstants), "BuildShaderRootConstants structs must have the same size");
+static_assert(sizeof(BuildShaderRootConstants1) == sizeof(BuildShaderRootConstants), "BuildShaderRootConstants structs must have the same size");
+
 } // namespace GpuRt
 #endif
 

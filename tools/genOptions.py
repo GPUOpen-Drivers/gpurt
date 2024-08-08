@@ -59,20 +59,12 @@ namespace GpuRt
 
 typedef uint32_t uint32;
 
-#ifdef AMD_VULKAN
 #define DUMMY_OPTION_FUNC(value) { return value; }
-#else // AMD_VULKAN
-#define DUMMY_OPTION_FUNC(value) ;
-#endif
 
 #ifdef __cplusplus
 #define GPURT_OPTION_DECL extern
 #else // __cplusplus
-#ifdef AMD_VULKAN
 #define GPURT_OPTION_DECL [noinline]
-#else // AMD_VULKAN
-#define GPURT_OPTION_DECL
-#endif
 #endif
 
 """

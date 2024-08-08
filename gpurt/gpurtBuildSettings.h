@@ -98,6 +98,7 @@ struct CompileTimeBuildSettings
     uint32 rebraidQualityHeuristic;
     uint32 unused11;
     uint32 unused12;
+    uint32 unused13;
 };
 
 #define BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_ID                        0

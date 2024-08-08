@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -22,21 +22,23 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-//
-#ifndef _MATH_H
-#define _MATH_H
+#ifndef MATH_HLSLI
+#define MATH_HLSLI
+
+#include "ShaderDefs.hlsli"
+
+#include "Extensions.hlsli"
 
 //=====================================================================================================================
-static BoundingBox CombineAABB(
-    BoundingBox b0,
-    BoundingBox b1)
+static uint LowPart(GpuVirtualAddress addr)
 {
-    BoundingBox bbox;
+    return uint(addr);
+}
 
-    bbox.min = min(b0.min, b1.min);
-    bbox.max = max(b0.max, b1.max);
-
-    return bbox;
+//=====================================================================================================================
+static uint HighPart(GpuVirtualAddress addr)
+{
+    return uint(addr >> 32);
 }
 
 //=====================================================================================================================
@@ -72,12 +74,6 @@ inline uint16_t bits16(uint16_t bitcount)
 inline uint64_t bits64(uint64_t bitcount)
 {
     return (bitcount == 64) ? 0xFFFFFFFFFFFFFFFFull : ((1ull << bitcount) - 1ull);
-}
-
-//=====================================================================================================================
-inline uint countbits64(uint64_t val)
-{
-    return countbits(LowPart(val)) + countbits(HighPart(val));
 }
 
 //=====================================================================================================================
@@ -158,6 +154,12 @@ static uint32_t Pow2Align(
 }
 
 //=====================================================================================================================
+inline uint countbits64(uint64_t val)
+{
+    return countbits(LowPart(val)) + countbits(HighPart(val));
+}
+
+//=====================================================================================================================
 //https://github.com/Microsoft/DirectX-Graphics-Samples/blob/master/Libraries/D3D12RaytracingFallback/src/RayTracingHelper.hlsli
 // The MIT License (MIT)
 //
@@ -233,5 +235,9 @@ static float3x4 Inverse3x4(in float3x4 transform)
 
     return invertedTransform;
 }
+
+#ifndef LIBRARY_COMPILATION
+#include "Math.hlsl"
+#endif
 
 #endif

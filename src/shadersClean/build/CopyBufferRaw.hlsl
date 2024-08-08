@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -22,47 +22,28 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#if NO_SHADER_ENTRYPOINT == 0
 
 //=====================================================================================================================
-#include "../../shared/rayTracingDefs.h"
-
-#include "../BuildRootSignature.hlsl"
-
-#include "ScanCommon.hlsli"
-#endif
-
+// Main Function : CopyBufferRaw
 //=====================================================================================================================
-// Distribute partial sums from top level scan into bottom level
-void DistributePartSumInt4Impl(
-    uint globalId,
-    uint groupId,
-    uint inOutDataOffset,
-    uint partialSumsOffset,
-    uint numElements)
+[[vk::binding(0, 0)]] RWStructuredBuffer<uint> Src : register(u0);
+[[vk::binding(1, 0)]] RWStructuredBuffer<uint> Dst : register(u1);
+
+struct Constants
 {
-    int4 v1 = safe_load_int4(inOutDataOffset, globalId, numElements);
-    int sum = ScratchBuffer.Load(partialSumsOffset + ((groupId >> 1) * sizeof(int)));
-    v1.xyzw += sum;
+	uint numDwords;
+};
 
-    safe_store_int4(v1, inOutDataOffset, globalId, numElements);
-}
+[[vk::push_constant]] ConstantBuffer<Constants> CB : register(b0);
 
-#if NO_SHADER_ENTRYPOINT == 0
-//=====================================================================================================================
-// Main Function : Distribute partial sum for RadixSort
-//=====================================================================================================================
+#define RootSig "RootConstants(num32BitConstants=1, b0), UAV(u0), UAV(u1)"
+
+[numthreads(64, 1, 1)]
 [RootSignature(RootSig)]
-[numthreads(GROUP_SIZE, 1, 1)]
-void DistributePartSumInt4(
-    in uint globalId : SV_DispatchThreadID,
-    in uint groupId  : SV_GroupID)
+void CopyBufferRaw(uint3 DispatchThreadID : SV_DispatchThreadID)
 {
-    DistributePartSumInt4Impl(
-        globalId,
-        groupId,
-        ShaderRootConstants.InOutArrayScratchOffset(),
-        ShaderRootConstants.PartSumsScratchOffset(),
-        ShaderRootConstants.NumElements());
+    if (DispatchThreadID.x < CB.numDwords)
+    {
+        Dst[DispatchThreadID.x] = Src[DispatchThreadID.x];
+    }
 }
-#endif

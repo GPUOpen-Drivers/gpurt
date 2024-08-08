@@ -24,41 +24,11 @@
  **********************************************************************************************************************/
 #pragma once
 #include "gpurt/gpurt.h"
+#include "src/shared/gpurtBuildConstants.h"
 
 namespace GpuRt
 {
-
-namespace BuildBVHPLOC
-{
-    struct Constants
-    {
-        uint32 numThreads;
-    };
-
-    constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
-}
-
 namespace Update
-{
-    struct Constants
-    {
-        uint32 numThreads;
-    };
-
-    constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
-}
-
-namespace EncodeHwBvh
-{
-    struct Constants
-    {
-        uint32 numThreads;                       // Number of persistent threads
-    };
-
-    constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
-}
-
-namespace BuildBVHTD
 {
     struct Constants
     {
@@ -84,94 +54,6 @@ namespace CopyBufferRaw
     struct Constants
     {
         uint32 numDwords; // Number of dwords to copy
-    };
-
-    constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
-}
-
-namespace BuildParallel
-{
-    struct Constants
-    {
-        uint32 numThreadGroups;
-    };
-
-    constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
-};
-
-namespace Rebraid
-{
-    struct Constants
-    {
-        uint32 numThreadGroups;
-    };
-
-    constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
-}
-
-namespace RadixSort
-{
-    struct Constants
-    {
-        uint32 bitShiftSize; // Number of bits to shift
-        uint32 numGroups;    // Number of groups
-    };
-
-    constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
-}
-
-namespace BitHistogram
-{
-    struct Constants
-    {
-        uint32 bitShiftSize; // Number of bits to shift
-        uint32 numGroups;    // Number of groups
-    };
-
-    constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
-}
-
-namespace ScanExclusiveAddWG
-{
-    struct Constants
-    {
-        uint32 numElements;  // Number of elements
-        uint32 inOutArrayScratchOffset;
-    };
-
-    constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
-}
-
-namespace ScanExclusivePartSum
-{
-    struct Constants
-    {
-        uint32 numElements;  // Number of elements
-        uint32 inOutArrayScratchOffset;
-        uint32 partSumsScratchOffset;
-    };
-
-    constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
-}
-
-namespace DistributePartSum
-{
-    struct Constants
-    {
-        uint32 numElements;  // Number of elements
-        uint32 outputArrayScratchOffset;
-        uint32 partSumsScratchOffset;
-    };
-
-    constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
-}
-
-namespace ScanExclusiveAddDLB
-{
-    struct Constants
-    {
-        uint32 numElements;
-        uint32 passIndex;
     };
 
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
@@ -247,48 +129,30 @@ namespace DecodeAS
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
 }
 
-namespace EncodePrimitive
+namespace BuildBVH
 {
-    struct Constants
-    {
-        uint32 geometryIndex;
-    };
-
-    constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
-}
-
-/* Encode Shaders NodeMappings */
-
-constexpr NodeMapping EncodeTriangleNodesMapping[] =
-{
-    { NodeType::Constant, EncodePrimitive::NumEntries },
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::ConstantBufferTable, 1 },
-    { NodeType::TypedUavTable, 1 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
+    constexpr uint32 NumEntries = (sizeof(BuildShaderRootConstants) / sizeof(uint32));
 };
 
-#define EncodeAABBNodesMapping EncodeTriangleNodesMapping
-#define EncodeQuadNodesMapping EncodeTriangleNodesMapping
-
-constexpr NodeMapping EncodeInstancesMapping[] =
+/* Common Build Shaders Mapping */
+constexpr NodeMapping BuildBVHMapping[] =
 {
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
+    { NodeType::Constant, BuildBVH::NumEntries },   // BuildShaderRootConstants
+    { NodeType::ConstantBuffer, 2 },                // BuildShaderConstants
+    { NodeType::ConstantBuffer, 2 },                // LutBuffer
+    { NodeType::Uav, 2 },                           // SrcBuffer
+    { NodeType::Uav, 2 },                           // DstBuffer
+    { NodeType::Uav, 2 },                           // DstMetadata
+    { NodeType::Uav, 2 },                           // ScratchBuffer
+    { NodeType::Uav, 2 },                           // ScratchGlobal
+    { NodeType::Uav, 2 },                           // InstanceDescBuffer
+    { NodeType::Uav, 2 },                           // EmitBuffer
+    { NodeType::Uav, 2 },                           // IndirectArgBuffer
+#if GPURT_ENABLE_GPU_DEBUG
+    { NodeType::Uav, 2 },                           // DebugBuffer
+#endif
+    { NodeType::ConstantBufferTable, 1 },           // GeometryConstants
+    { NodeType::TypedUavTable, 1 },                 // GeometryBuffer
 };
 
 /* Build Shaders NodeMappings */
@@ -319,275 +183,6 @@ namespace InitAccelerationStructure
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
 }
 
-constexpr NodeMapping BuildParallelMapping[] =
-{
-    { NodeType::Constant, BuildParallel::NumEntries },
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-#if GPURT_ENABLE_GPU_DEBUG
-    { NodeType::Uav, 2 },
-#endif
-    { NodeType::ConstantBufferTable, 1 },
-    { NodeType::TypedUavTable, 1 },
-};
-
-constexpr NodeMapping RebraidMapping[] =
-{
-    { NodeType::Constant, Rebraid::NumEntries },
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-};
-
-constexpr NodeMapping GenerateMortonCodesMapping[] =
-{
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
-};
-
-constexpr NodeMapping BuildBVHMapping[] =
-{
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
-};
-
-constexpr NodeMapping BuildFastAgglomerativeLbvhMapping[] =
-{
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
-};
-
-constexpr NodeMapping BuildBVHTDMapping[] =
-{
-    { NodeType::Constant, BuildBVHTD::NumEntries },
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
-};
-
-#define BuildBVHTD32Mapping BuildBVHTDMapping
-
-constexpr NodeMapping BuildBVHTDTRMapping[] =
-{
-    { NodeType::Constant, BuildBVHTD::NumEntries },
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
-};
-
-#define BuildBVHTDTR32Mapping BuildBVHTDTRMapping
-
-constexpr NodeMapping BuildBVHPLOCMapping[] =
-{
-    { NodeType::Constant, BuildBVHPLOC::NumEntries },
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
-};
-
-constexpr NodeMapping RefitBoundsMapping[] =
-{
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
-};
-
-constexpr NodeMapping PairCompressionMapping[] =
-{
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::ConstantBufferTable, 1 },
-    { NodeType::TypedUavTable, 1 },
-};
-
-constexpr NodeMapping BuildQBVHMapping[] =
-{
-    { NodeType::Constant, EncodeHwBvh::NumEntries },
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
-};
-
-constexpr NodeMapping MergeSortMapping[] =
-{
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
-};
-
-constexpr NodeMapping BitHistogramMapping[] =
-{
-    { NodeType::Constant, BitHistogram::NumEntries },
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
-};
-
-constexpr NodeMapping ScatterKeysAndValuesMapping[] =
-{
-    { NodeType::Constant, RadixSort::NumEntries },
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
-};
-
-constexpr NodeMapping ScanExclusiveInt4Mapping[] =
-{
-    { NodeType::Constant, ScanExclusiveAddWG::NumEntries },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
-};
-
-constexpr NodeMapping ScanExclusivePartInt4Mapping[] =
-{
-    { NodeType::Constant, ScanExclusivePartSum::NumEntries },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
-};
-
-constexpr NodeMapping ScanExclusiveInt4DLBMapping[] =
-{
-    { NodeType::Constant, ScanExclusiveAddDLB::NumEntries },
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
-};
-
-constexpr NodeMapping InitScanExclusiveInt4DLBMapping[] =
-{
-    { NodeType::Constant, ScanExclusiveAddDLB::NumEntries },
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
-};
-
-constexpr NodeMapping DistributePartSumInt4Mapping[] =
-{
-    { NodeType::Constant, DistributePartSum::NumEntries  },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 }
-};
-
 /* Update Shaders NodeMappings */
 
 constexpr NodeMapping UpdateQBVHMapping[] =
@@ -608,33 +203,21 @@ constexpr NodeMapping UpdateParallelMapping[] =
     { NodeType::Uav, 2 }
 };
 
-constexpr NodeMapping UpdateTrianglesMapping[]
+constexpr NodeMapping UpdateMapping[]
 {
     { NodeType::Constant, Update::NumEntries },
     { NodeType::ConstantBuffer, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
     { NodeType::ConstantBufferTable, 1 },
     { NodeType::TypedUavTable, 1 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 }, // NullBuffer mapping.
 };
 
-constexpr NodeMapping UpdateAabbsMapping[]
-{
-    { NodeType::Constant, Update::NumEntries },
-    { NodeType::ConstantBuffer, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::ConstantBufferTable, 1 },
-    { NodeType::TypedUavTable, 1 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-    { NodeType::Uav, 2 },
-};
+#define UpdateTrianglesMapping UpdateMapping
+#define UpdateAabbsMapping UpdateMapping
 
 constexpr NodeMapping ClearBufferMapping[] =
 {

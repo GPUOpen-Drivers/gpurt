@@ -37,6 +37,7 @@ set(gpurtHlsl
     RadixSort/ScatterKeysAndValues.hlsl
     IndirectArgBufferUtils.hlsl
     AccelStructTracker.hlsl
+    BuildRootSignature.hlsl
     BuildBVH.hlsl
     BuildBVHPLOC.hlsl
     BuildBVHTDTR.hlsl
@@ -59,7 +60,7 @@ set(gpurtHlsl
     CompactAS1_1.hlsl
     CompactCommon.hlsl
     CopyAS.hlsl
-    CopyBufferRaw.hlsl
+    ../shadersClean/build/CopyBufferRaw.hlsl
     DecodeAS.hlsl
     DecodeCommon.hlsl
     DeserializeAS.hlsl
@@ -94,6 +95,7 @@ set(gpurtHlsl
     TraceRayCommon.hlsl
     TriangleSplitting.hlsl
     TrianglePrimitive.hlsl
+    UpdateCommon.hlsl
     Update.hlsl
     UpdateParallel.hlsl
     UpdateQBVH.hlsl
@@ -112,12 +114,16 @@ set(otherDeps
     ../../gpurt/gpurtDispatch.h
     ../../gpurt/gpurtTraceSettings.h
     ../shared/accelStruct.h
+    ../shared/assert.h
     ../shared/debugBuffer.h
     ../shared/gpurtBuildConstants.h
     ../shared/hlslTypes.h
-    ../shared/math.h
     ../shared/rayTracingDefs.h
     ../shared/scratchNode.h
+    ../shadersClean/common/Math.hlsli
+    ../shadersClean/common/Math.hlsl
+    ../shadersClean/common/Extensions.hlsli
+    ../shadersClean/common/ShaderDefs.hlsli
 )
 
 set(GPURT_SHADER_SOURCE_FILES "${gpurtHlsl}" "${otherDeps}" PARENT_SCOPE)

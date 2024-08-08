@@ -24,13 +24,11 @@
  **********************************************************************************************************************/
 #include "Common.hlsl"
 
+// Note, CBV(b255) must be the last used binding in the root signature.
 #define RootSig "RootConstants(num32BitConstants=3, b0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u0, visibility=SHADER_VISIBILITY_ALL), "\
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL), "\
-                "UAV(u2, visibility=SHADER_VISIBILITY_ALL), "\
-                "UAV(u3, visibility=SHADER_VISIBILITY_ALL), "\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL), "\
-                "CBV(b255)"
+                "CBV(b255),"\
 
 //=====================================================================================================================
 // 32 bit constants

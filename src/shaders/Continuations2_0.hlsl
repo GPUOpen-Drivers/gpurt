@@ -43,9 +43,7 @@ static _AmdTraversalState InitTraversalState2_0(
 
     uint schedulerState = TRAVERSAL_STATE_COMMITTED_NOTHING;
     traversal.committed.PackState(schedulerState);
-#if AMD_VULKAN || GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
     traversal.committed.currNodePtr = INVALID_NODE;
-#endif
 
     // Start traversing from root node
     traversal.nextNodePtr = isValid ? CreateRootNodePointer1_1() : TERMINAL_NODE;
@@ -114,6 +112,7 @@ static void TraversalInternal2_0(
 
     _AmdPrimitiveSystemState committed = data.traversal.committed;
     candidate = (_AmdPrimitiveSystemState)0;
+    bool haveCandidate = false;
     float2 committedBarycentrics = data.traversal.committedBarycentrics;
     candidateBarycentrics = float2(0.0f, 0.0f);
 
@@ -139,7 +138,6 @@ static void TraversalInternal2_0(
 
     if (data.traversal.instNodePtr != 0)
     {
-        candidate.instNodePtr = data.traversal.instNodePtr;
         // Restore after AnyHit or Intersection was called
         const GpuVirtualAddress nodeAddr64  = data.ray.AccelStruct() + ExtractNodePointerOffset(data.traversal.instNodePtr);
         InstanceDesc desc                   = FetchInstanceDescAddr(nodeAddr64);
@@ -218,16 +216,12 @@ static void TraversalInternal2_0(
             RayHistoryIncNumRayBoxTest(data);
         }
 
-        // Trigger node search for next iteration
-        nextNodePtr = INVALID_NODE;
-
         if (IsUserNodeInstance(nodePtr))
         {
             RayHistoryIncInstanceIntersections(data);
 
             InstanceDesc desc = FetchInstanceDescAddr(nodeAddr64);
 
-            candidate.instNodePtr      = nodePtr;
             data.traversal.instNodePtr = nodePtr;
             // Fetch instance node pointer (for rebraid) here to allow for the global loads to be
             // coalesced into a single loadx2
@@ -304,21 +298,6 @@ static void TraversalInternal2_0(
                                         ((((pointerFlags >> POINTER_FLAGS_HIDWORD_SHIFT) & RAY_FLAG_FORCE_OPAQUE) == 0) &&
                                          ((geometryFlags & D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE) == 0)));
 
-                candidate.PackState(TRAVERSAL_STATE_COMMITTED_TRIANGLE_HIT);
-
-                candidate.rayTCurrent    = candidateT;
-                candidateBarycentrics.x  = asfloat(intersectionResult.z) / asfloat(intersectionResult.y);
-                candidateBarycentrics.y  = asfloat(intersectionResult.w) / asfloat(intersectionResult.y);
-                // A negative t_denom denotes back face hit (0xFF), front face otherwise (0xFE).
-                uint hitKind        = (intersectionResult.y >> 31) | HIT_KIND_TRIANGLE_FRONT_FACE;
-                candidate.primitiveIndex = primitiveData.primitiveIndex;
-                candidate.PackHitKind(hitKind);
-                candidate.PackGeometryIndex(primitiveData.geometryIndex);
-                candidate.PackIsOpaque(isOpaque);
-#if AMD_VULKAN || GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
-                candidate.currNodePtr = nodePtr;
-#endif
-
                 bool hasAnyHit = false;
                 if ((rayForceOpaque == false) && (isOpaque == false))
                 {
@@ -327,30 +306,67 @@ static void TraversalInternal2_0(
                                                 instanceContributionToHitGroupIndex);
                 }
 
+                uint hitKind        = (intersectionResult.y >> 31) | HIT_KIND_TRIANGLE_FRONT_FACE;
+                float2 barycentrics = { asfloat(intersectionResult.z) / asfloat(intersectionResult.y),
+                                        asfloat(intersectionResult.w) / asfloat(intersectionResult.y) };
+
                 // DXR spec: if there is no any hit shader, the geometry is considered opaque.
                 if (rayForceOpaque || isOpaque || (!hasAnyHit))
                 {
+                    // Commit opaque triangle hit
                     RayHistoryWriteTriangleHitResult(data, true);
 
-                    // Let the app know an opaque triangle hit was detected. The primitive index and geometry
-                    // index are loaded after the traversal loop.
-                    committed = candidate;
-                    committedBarycentrics = candidateBarycentrics;
-
-                    // Commit an opaque triangle hit
+                    committed.instNodePtr    = data.traversal.instNodePtr;
+                    committed.rayTCurrent    = candidateT;
+                    committedBarycentrics    = barycentrics;
+                    committed.primitiveIndex = primitiveData.primitiveIndex;
+                    committed.PackInstanceContribution(instanceContributionToHitGroupIndex, hitKind);
+                    committed.PackGeometryIndex(primitiveData.geometryIndex,
+                        TRAVERSAL_STATE_COMMITTED_TRIANGLE_HIT, false);
+                    committed.currNodePtr    = nodePtr;
                     state = TRAVERSAL_STATE_COMMITTED_TRIANGLE_HIT;
-                    committed.PackState(TRAVERSAL_STATE_COMMITTED_TRIANGLE_HIT);
 
                     // Exit traversal early if ray flags indicate end search after first hit
                     if (rayFlags & RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH)
                     {
                         break;
                     }
+
+                    if (haveCandidate && candidate.rayTCurrent > candidateT)
+                    {
+                        // There is a pending candidate, but the new committed hit is closer, so we can discard it.
+                        candidate = (_AmdPrimitiveSystemState)0;
+                        haveCandidate = false;
+                        candidateBarycentrics = float2(0.0f, 0.0f);
+                    }
                 }
                 else
                 {
-                    // Let the app know a non opaque triangle hit was detected
-                    state = TRAVERSAL_STATE_CANDIDATE_NON_OPAQUE_TRIANGLE;
+                    // Need to run AHS on triangle hit
+                    if (haveCandidate)
+                    {
+                       // There already is a pending candidate. Need to break out of Traversal to process the pending hit,
+                       // so we can process this hit here on Traversal resume.
+                       break;
+                    }
+
+                    candidate.instNodePtr    = data.traversal.instNodePtr;
+                    candidate.rayTCurrent    = candidateT;
+                    candidateBarycentrics    = barycentrics;
+                    candidate.primitiveIndex = primitiveData.primitiveIndex;
+                    candidate.PackInstanceContribution(instanceContributionToHitGroupIndex, hitKind);
+                    candidate.PackGeometryIndex(primitiveData.geometryIndex,
+                    // This #ifdef is required until the legacy GPURT_RTIP_LEVEL == 0 lib has been removed:
+                        TRAVERSAL_STATE_COMMITTED_TRIANGLE_HIT, isOpaque);
+                    candidate.currNodePtr    = nodePtr;
+                    if (Options::getCpsCandidatePrimitiveMode() == CpsCandidatePrimitiveMode::DeferFirst)
+                    {
+                       haveCandidate = true;
+                    }
+                    else
+                    {
+                        state = TRAVERSAL_STATE_CANDIDATE_NON_OPAQUE_TRIANGLE;
+                    }
                 }
             }
 
@@ -384,13 +400,21 @@ static void TraversalInternal2_0(
 
             if (isCulled == false)
             {
+
+                if (haveCandidate)
+                {
+                   // There already is a pending candidate. Need to break out of Traversal to process the pending hit,
+                   // so we can process this hit here on Traversal resume.
+                   break;
+                }
+
                 candidate.PackState(TRAVERSAL_STATE_COMMITTED_PROCEDURAL_PRIMITIVE_HIT);
                 candidate.primitiveIndex = primitiveData.primitiveIndex;
                 candidate.PackGeometryIndex(primitiveData.geometryIndex);
                 candidate.PackIsOpaque(isOpaque);
-#if AMD_VULKAN || GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
+                candidate.PackInstanceContribution(instanceContributionToHitGroupIndex);
                 candidate.currNodePtr = nodePtr;
-#endif
+                candidate.instNodePtr = data.traversal.instNodePtr;
 
 #if GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
                 // Determine anyHit shader call type
@@ -440,15 +464,15 @@ static void TraversalInternal2_0(
 
                 const uint lastRootNode = IsBvhRebraid() ? lastInstanceRootNodePtr : blasRootNodePtr;
 
-                // Switch candidate.currNodePtr to the instance node in the TLAS if the last tested node was a BLAS root node.
+                // Switch the node pointer to the instance node in the TLAS if the last tested node was a BLAS root node.
                 if ((nodePtr == lastRootNode) && (bvhAddress != topBvhAddress))
                 {
-                    nodePtr = candidate.instNodePtr;
+                    nodePtr = data.traversal.instNodePtr;
                 }
 
-                // candidate.currNodePtr will still point to the TLAS instance node if an instance is culled. We also need to
+                // data.traversal.instNodePtr will still point to the TLAS instance node if an instance is culled. We also need to
                 // switch back to the TLAS in this case.
-                if (nodePtr == candidate.instNodePtr)
+                if (nodePtr == data.traversal.instNodePtr)
                 {
                     bvhAddress = topBvhAddress;
                     resetRay = true;
@@ -485,37 +509,46 @@ static void TraversalInternal2_0(
             }
         }
 
-        bool laneNeedsIsOrAhs = (state < TRAVERSAL_STATE_COMMITTED_NOTHING);
-#if GPURT_CONT_TRAVERSAL_EARLY_IS_AHS
-        // Stopping the Traversal loop for the whole wave on the first AHS/IS might be too aggressive.
-        // We implement this basic version here as basis for further experiments.
-        // Delaying it a bit could have potential benefits:
-        //   * avoid overhead of wave-intrinsic in every iteration (depending on the implementation of delaying)
-        //   * letting more lanes join the IS/AHS work
-        if (WaveActiveAnyTrue(laneNeedsIsOrAhs))
+        bool laneHasCandidate = (state < TRAVERSAL_STATE_COMMITTED_NOTHING);
+        if (Options::getCpsCandidatePrimitiveMode() == CpsCandidatePrimitiveMode::SuspendWave)
         {
-            if (laneNeedsIsOrAhs)
+
+            // Stopping the Traversal loop for the whole wave on the first AHS/IS might be too aggressive.
+            // We implement this basic version here as basis for further experiments.
+            // Delaying it a bit could have potential benefits:
+            //   * avoid overhead of wave-intrinsic in every iteration (depending on the implementation of delaying)
+            //   * letting more lanes join the IS/AHS work
+            if (WaveActiveAnyTrue(laneHasCandidate))
+            {
+                if (laneHasCandidate)
+                {
+                    // Break out of traversal to run AHS/IS
+                }
+                else if (IsValidNode(nextNodePtr))
+                {
+                    // Break out of traversal so other lanes can run AHS/IS and re-join traversal
+                    state = TRAVERSAL_STATE_SUSPEND_TRAVERSAL;
+                }
+                else
+                {
+                    // The lane is done with Traversal, and wants to run CHS or Miss
+                }
+                break;
+            }
+        }
+        else
+        {
+            if (laneHasCandidate)
             {
                 // Break out of traversal to run AHS/IS
+                break;
             }
-            else if (IsValidNode(nextNodePtr))
-            {
-                // Break out of traversal so other lanes can run AHS/IS and re-join traversal
-                state = TRAVERSAL_STATE_SUSPEND_TRAVERSAL;
-            }
-            else
-            {
-                // The lane is done with Traversal, and wants to run CHS or Miss
-            }
-            break;
         }
-#else // GPURT_CONT_TRAVERSAL_EARLY_IS_AHS
-        if (laneNeedsIsOrAhs)
-        {
-            // Break out of traversal to run AHS/IS
-            break;
-        }
-#endif
+    }
+
+    if (haveCandidate)
+    {
+        state = TRAVERSAL_STATE_CANDIDATE_NON_OPAQUE_TRIANGLE;
     }
 
     // Pack traversal results back into traversal state structure

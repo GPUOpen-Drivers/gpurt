@@ -129,9 +129,7 @@ static bool TraceRayCommon(
 
     // Capture parameters so they can be used to implement HLSL intrinsic functions.
     AmdTraceRaySetTraceParams(rayFlags,
-#ifdef AMD_VULKAN
                               instanceInclusionMask,
-#endif
                               originX, originY, originZ,
                               tMin,
                               dirX, dirY, dirZ);
@@ -227,7 +225,10 @@ static bool TraceRayCommon(
 
         if (result.nodeIndex != INVALID_NODE)
         {
-            uint instNodeIndex = FetchInstanceIdx(rtIpLevel, accelStruct, result.instNodePtr);
+            uint instNodeIndex;
+            {
+                instNodeIndex = FetchInstanceIdx(rtIpLevel, accelStruct, result.instNodePtr);
+            }
 
             WriteRayHistoryTokenEnd(rayId,
                                     uint2(result.primitiveIndex, result.geometryIndex),

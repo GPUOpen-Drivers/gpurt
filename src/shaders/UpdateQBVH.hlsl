@@ -22,15 +22,20 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
+// Note, CBV(b255) must be the last used binding in the root signature.
 #define RootSig "RootConstants(num32BitConstants=1, b0),"\
                 "CBV(b1),"\
-                "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u2, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u0, space=2147420894, visibility=SHADER_VISIBILITY_ALL),"\
+                "UAV(u0),"\
+                "UAV(u1),"\
+                "UAV(u2),"\
                 "CBV(b255),"\
-                "UAV(u3, visibility=SHADER_VISIBILITY_ALL),"\
-                "UAV(u4, visibility=SHADER_VISIBILITY_ALL)"
+                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
+
+#define TASK_COUNTER_BUFFER   ScratchBuffer
+#define TASK_COUNTER_OFFSET   UPDATE_SCRATCH_TASK_COUNT_OFFSET
+#define NUM_TASKS_DONE_OFFSET UPDATE_SCRATCH_TASKS_DONE_OFFSET
+groupshared uint SharedMem[1];
+#include "TaskMacros.hlsl"
 
 //======================================================================================================================
 // 32 bit constants
@@ -53,7 +58,7 @@ struct RootConstants
 [[vk::binding(4, 0)]] RWByteAddressBuffer                  EmitBuffer      : register(u4);
 
 #include "IntersectCommon.hlsl"
-#include "BuildCommon.hlsl"
+#include "UpdateCommon.hlsl"
 #include "UpdateQBVHImpl.hlsl"
 
 //=====================================================================================================================
@@ -62,8 +67,21 @@ struct RootConstants
 [RootSignature(RootSig)]
 [numthreads(BUILD_THREADGROUP_SIZE, 1, 1)]
 void UpdateQBVH(
-    in uint3 globalThreadId : SV_DispatchThreadID)
+    in uint globalThreadId : SV_DispatchThreadID,
+    in uint localId : SV_GroupThreadID)
 {
+    uint waveId = 0;
+    uint numTasksWait = 0;
+    INIT_TASK;
+
+    const uint numGroups = ShaderRootConstants.numThreads / BUILD_THREADGROUP_SIZE;
+
+    BEGIN_TASK(numGroups);
+
+    ClearUpdateFlags(globalId);
+
+    END_TASK(numGroups);
+
     // Fetch number of nodes to process
     uint numWorkItems = ScratchBuffer.Load(UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET);
 

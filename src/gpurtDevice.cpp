@@ -56,8 +56,13 @@ namespace GpuRt
 {
 
 #include "pipelines/g_internal_shaders.h"
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 48
+#include "pipelines/g_GpuRtLibraryLegacy_spv.h"
+#include "pipelines/g_GpuRtLibraryDevLegacy_spv.h"
+#else
 #include "pipelines/g_GpuRtLibrary_spv.h"
 #include "pipelines/g_GpuRtLibraryDev_spv.h"
+#endif
 #include "pipelines/g_GpuRtLibrarySw_spv.h"
 #include "pipelines/g_GpuRtLibrarySwDev_spv.h"
 
@@ -225,7 +230,10 @@ size_t GPURT_API_ENTRY GetDeviceSize()
 
 // =====================================================================================================================
 PipelineShaderCode GPURT_API_ENTRY GetShaderLibraryCode(
-    ShaderLibraryFeatureFlags flags)
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 48
+    const Pal::RayTracingIpLevel rayTracingIpLevel,
+#endif
+    ShaderLibraryFeatureFlags    flags)
 {
     GPURT_EXPORT_UNMANGLED_SYMBOL_MSVC
 
@@ -253,6 +261,16 @@ PipelineShaderCode GPURT_API_ENTRY GetShaderLibraryCode(
     }
     else
     {
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 48
+        if (enableDevFeatures)
+        {
+            CHOOSE_SHADER(CsGpuRtLibraryDevLegacy);
+        }
+        else
+        {
+            CHOOSE_SHADER(CsGpuRtLibraryLegacy);
+        }
+#else
         if (enableDevFeatures)
         {
             CHOOSE_SHADER(CsGpuRtLibraryDev);
@@ -261,6 +279,7 @@ PipelineShaderCode GPURT_API_ENTRY GetShaderLibraryCode(
         {
             CHOOSE_SHADER(CsGpuRtLibrary);
         }
+#endif
     }
 #undef CHOOSE_SHADER
 
@@ -1299,6 +1318,8 @@ void Device::AddMetadataToList(
     traversalFlags.usesNodePtrFlags = dispatchInfo.usesNodePtrFlags;
 
     pTraceListInfo->traversalFlags = traversalFlags;
+
+    pTraceListInfo->userMarkerContext = dispatchInfo.userMarkerContext;
 }
 
 // =====================================================================================================================
@@ -1436,6 +1457,7 @@ void Device::TraceIndirectRtDispatch(
             traceListInfo.counterInfo.isIndirect             = true;
             traceListInfo.traversalFlags.boxSortMode         = dispatchInfo.boxSortMode;
             traceListInfo.traversalFlags.usesNodePtrFlags    = dispatchInfo.usesNodePtrFlags;
+            traceListInfo.userMarkerContext                  = dispatchInfo.userMarkerContext;
 
             if (pCounterMetadataVa != nullptr)
             {
@@ -1596,6 +1618,12 @@ void Device::WriteRayHistoryMetaDataChunks(
             .sizeInByte = sizeof(RayHistoryTraversalFlags),
         },
         .traversalFlags = traceListInfo.traversalFlags,
+        .userMarkerInfo =
+        {
+            .kind = RayHistoryMetadataKind::UserMarkerInfo,
+            .sizeInByte = sizeof(uint64),
+        },
+        .userMarkerContext = traceListInfo.userMarkerContext
     };
 
     GpuUtil::TraceChunkInfo info =
@@ -2081,6 +2109,42 @@ void Device::RaytracingBarrier(
     uint32                flags)
 {
     m_pBackend->InsertBarrier(cmdBuffer, flags);
+}
+
+// =====================================================================================================================
+bool Device::ShouldUseGangedAceForBuild(
+    const AccelStructBuildInputs& inputs
+    ) const
+{
+    const AccelStructBuildInputs buildInputs = OverrideBuildInputs(inputs);
+    bool shouldUseGangedAce = Util::TestAnyFlagSet(buildInputs.flags, AccelStructBuildFlagPerformUpdate);
+
+    return shouldUseGangedAce;
+}
+
+// =====================================================================================================================
+const AccelStructBuildInputs Device::OverrideBuildInputs(
+    const AccelStructBuildInputs& inputs
+    ) const
+{
+    AccelStructBuildInputs buildInputs = inputs;
+
+    const bool rebuildTopLevel =
+        (
+        Util::TestAnyFlagSet(Settings().forceRebuildForUpdates, ForceRebuildForUpdatesMode::TopLevel)) &&
+        (buildInputs.type == GpuRt::AccelStructType::TopLevel);
+    const bool rebuildBottomLevel =
+        Util::TestAnyFlagSet(Settings().forceRebuildForUpdates, ForceRebuildForUpdatesMode::BottomLevel) &&
+        (buildInputs.type == GpuRt::AccelStructType::BottomLevel);
+
+    bool rebuildAS = rebuildBottomLevel || rebuildTopLevel;
+
+    if (rebuildAS)
+    {
+        buildInputs.flags &= ~(GpuRt::AccelStructBuildFlagAllowUpdate | GpuRt::AccelStructBuildFlagPerformUpdate);
+    }
+
+    return buildInputs;
 }
 
 #if GPURT_DEVELOPER

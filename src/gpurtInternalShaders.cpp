@@ -40,47 +40,50 @@ namespace GpuRt
 
 // Helper macro used to set up the pipeline build info array
 #if GPURT_GENERATED_AMDIL_AVAILABLE
-#define PIPELINE_BUILD_INFO(x) { 0, \
-                                 x ## Mapping, ArraySize(x ## Mapping), \
+#define PIPELINE_BUILD_MAP_INFO(m, x) { 0, \
+                                 m ## Mapping, ArraySize(m ## Mapping), \
                                  PipelineShaderCode{ Cs ## x, sizeof(Cs ## x), nullptr, 0, Cs ## x ## _spv, sizeof(Cs ## x ## _spv) }, \
                                  InternalRayTracingCsType::x, \
                                  COMPILER_OPTION_INIT, \
                                  #x }
 #else // GPURT_GENERATED_AMDIL_AVAILABLE
-#define PIPELINE_BUILD_INFO(x) { 0, \
-                                 x ## Mapping, ArraySize(x ## Mapping), \
+#define PIPELINE_BUILD_MAP_INFO(m, x) { 0, \
+                                 m ## Mapping, ArraySize(m ## Mapping), \
                                  PipelineShaderCode{ nullptr, 0, nullptr, 0, Cs ## x ## _spv, sizeof(Cs ## x ## _spv) }, \
                                  InternalRayTracingCsType::x, \
                                  COMPILER_OPTION_INIT, \
                                  #x }
 #endif
 
+#define PIPELINE_BUILD_INFO(x) PIPELINE_BUILD_MAP_INFO(x, x)
+#define PIPELINE_BUILD_BVH_INFO(x) PIPELINE_BUILD_MAP_INFO(BuildBVH, x)
+
 // Array of structs which contain the information required to build their associated raytracing pipeline
 const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsType::Count)] =
 {
-    PIPELINE_BUILD_INFO(BuildParallel),
-    PIPELINE_BUILD_INFO(EncodeTriangleNodes),
-    PIPELINE_BUILD_INFO(EncodeAABBNodes),
-    PIPELINE_BUILD_INFO(EncodeInstances),
-    PIPELINE_BUILD_INFO(Rebraid),
-    PIPELINE_BUILD_INFO(GenerateMortonCodes),
-    PIPELINE_BUILD_INFO(BuildBVH),
-    PIPELINE_BUILD_INFO(BuildBVHTD),
-    PIPELINE_BUILD_INFO(BuildBVHTDTR),
-    PIPELINE_BUILD_INFO(BuildBVHPLOC),
+    PIPELINE_BUILD_BVH_INFO(BuildParallel),
+    PIPELINE_BUILD_BVH_INFO(EncodeTriangleNodes),
+    PIPELINE_BUILD_BVH_INFO(EncodeAABBNodes),
+    PIPELINE_BUILD_BVH_INFO(EncodeInstances),
+    PIPELINE_BUILD_BVH_INFO(Rebraid),
+    PIPELINE_BUILD_BVH_INFO(GenerateMortonCodes),
+    PIPELINE_BUILD_BVH_INFO(BuildBVH),
+    PIPELINE_BUILD_BVH_INFO(BuildBVHTD),
+    PIPELINE_BUILD_BVH_INFO(BuildBVHTDTR),
+    PIPELINE_BUILD_BVH_INFO(BuildBVHPLOC),
     PIPELINE_BUILD_INFO(UpdateQBVH),
     PIPELINE_BUILD_INFO(UpdateParallel),
-    PIPELINE_BUILD_INFO(RefitBounds),
+    PIPELINE_BUILD_BVH_INFO(RefitBounds),
     PIPELINE_BUILD_INFO(ClearBuffer),
     PIPELINE_BUILD_INFO(CopyBufferRaw),
-    PIPELINE_BUILD_INFO(BuildQBVH),
-    PIPELINE_BUILD_INFO(BitHistogram),
-    PIPELINE_BUILD_INFO(ScatterKeysAndValues),
-    PIPELINE_BUILD_INFO(ScanExclusiveInt4),
-    PIPELINE_BUILD_INFO(ScanExclusivePartInt4),
-    PIPELINE_BUILD_INFO(ScanExclusiveInt4DLB),
-    PIPELINE_BUILD_INFO(InitScanExclusiveInt4DLB),
-    PIPELINE_BUILD_INFO(DistributePartSumInt4),
+    PIPELINE_BUILD_BVH_INFO(BuildQBVH),
+    PIPELINE_BUILD_BVH_INFO(BitHistogram),
+    PIPELINE_BUILD_BVH_INFO(ScatterKeysAndValues),
+    PIPELINE_BUILD_BVH_INFO(ScanExclusiveInt4),
+    PIPELINE_BUILD_BVH_INFO(ScanExclusivePartInt4),
+    PIPELINE_BUILD_BVH_INFO(ScanExclusiveInt4DLB),
+    PIPELINE_BUILD_BVH_INFO(InitScanExclusiveInt4DLB),
+    PIPELINE_BUILD_BVH_INFO(DistributePartSumInt4),
     PIPELINE_BUILD_INFO(EmitCurrentSize),
     PIPELINE_BUILD_INFO(EmitCompactSize),
     PIPELINE_BUILD_INFO(EmitSerializeDesc),
@@ -91,14 +94,14 @@ const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsTyp
     PIPELINE_BUILD_INFO(SerializeAS),
     PIPELINE_BUILD_INFO(DeserializeAS),
     PIPELINE_BUILD_INFO(InitExecuteIndirect),
-    PIPELINE_BUILD_INFO(PairCompression),
-    PIPELINE_BUILD_INFO(MergeSort),
+    PIPELINE_BUILD_BVH_INFO(PairCompression),
+    PIPELINE_BUILD_BVH_INFO(MergeSort),
     PIPELINE_BUILD_INFO(UpdateTriangles),
     PIPELINE_BUILD_INFO(UpdateAabbs),
     PIPELINE_BUILD_INFO(InitAccelerationStructure),
     PIPELINE_BUILD_INFO(InitUpdateAccelerationStructure),
-    PIPELINE_BUILD_INFO(BuildFastAgglomerativeLbvh),
-    PIPELINE_BUILD_INFO(EncodeQuadNodes),
+    PIPELINE_BUILD_BVH_INFO(BuildFastAgglomerativeLbvh),
+    PIPELINE_BUILD_BVH_INFO(EncodeQuadNodes),
 };
 
 #undef PIPELINE_BUILD_INFO

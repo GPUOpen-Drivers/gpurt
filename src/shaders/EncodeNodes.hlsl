@@ -22,42 +22,12 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#define RootSig "RootConstants(num32BitConstants=1, b0),"\
-                "CBV(b1),"\
-                "DescriptorTable(CBV(b0, numDescriptors = 4294967295, space = 1)),"\
-                "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
-                "UAV(u0),"\
-                "UAV(u1),"\
-                "UAV(u2),"\
-                "UAV(u3),"\
-                "UAV(u4),"\
-                "UAV(u5),"\
-                "UAV(u6),"\
-                "UAV(u7),"\
-                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
-                "CBV(b255)"
-
 #include "..\shared\rayTracingDefs.h"
 
-//======================================================================================================================
-struct RootConstants
-{
-    uint geometryIndex;
-};
-
-[[vk::push_constant]] ConstantBuffer<RootConstants>                 ShaderRootConstants : register(b0);
-[[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants>          ShaderConstants     : register(b1);
-[[vk::binding(0, 3)]] ConstantBuffer<BuildShaderGeometryConstants>  GeometryConstants[] : register(b0, space1);
-[[vk::binding(0, 4)]] RWBuffer<float3>                              GeometryBuffer[]    : register(u0, space1);
-
-[[vk::binding(0, 0)]] RWByteAddressBuffer                           SrcBuffer           : register(u0);
-[[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer          DstBuffer           : register(u1);
-[[vk::binding(2, 0)]] globallycoherent RWByteAddressBuffer          DstMetadata         : register(u2);
-[[vk::binding(3, 0)]] RWByteAddressBuffer                           ScratchBuffer       : register(u3);
-[[vk::binding(4, 0)]] globallycoherent RWByteAddressBuffer          ScratchGlobal       : register(u4);
-[[vk::binding(5, 0)]] RWByteAddressBuffer                           InstanceDescBuffer  : register(u5);
-[[vk::binding(6, 0)]] RWByteAddressBuffer                           EmitBuffer          : register(u6);
-[[vk::binding(7, 0)]] RWByteAddressBuffer                           IndirectArgBuffer   : register(u7);
+#define GC_DSTBUFFER
+#define GC_DSTMETADATA
+#define GC_SCRATCHBUFFER
+#include "BuildRootSignature.hlsl"
 
 template<typename T>
 T LoadInstanceDescBuffer(uint offset)
@@ -80,33 +50,29 @@ void EncodeTriangleNodes(
     in uint3 globalThreadId : SV_DispatchThreadID,
     in uint localId : SV_GroupThreadID)
 {
-    const GeometryArgs args = InitGeometryArgs(ShaderRootConstants.geometryIndex);
-    const NumPrimAndInputOffset inputOffsets = LoadInputOffsetsAndNumPrim(args);
+    const uint geometryIndex = ShaderRootConstants.GeometryIndex();
+    const BuildShaderGeometryConstants geomConstants = GeometryConstants[geometryIndex];
+    const NumPrimAndInputOffset inputOffsets = LoadInputOffsetsAndNumPrim(geometryIndex, true);
 
     if (globalThreadId.x == 0)
     {
-        WriteGeometryInfo(
-            args, inputOffsets.primitiveOffset, inputOffsets.numPrimitives, DECODE_PRIMITIVE_STRIDE_TRIANGLE);
+        WriteGeometryInfo(geomConstants, inputOffsets, geometryIndex, DECODE_PRIMITIVE_STRIDE_TRIANGLE);
     }
 
     uint primitiveIndex = globalThreadId.x;
 
     if (primitiveIndex < inputOffsets.numPrimitives)
     {
-        EncodeTriangleNode(GeometryBuffer[ShaderRootConstants.geometryIndex],
-                           args,
+        EncodeTriangleNode(geomConstants,
+                           inputOffsets,
+                           geometryIndex,
                            primitiveIndex,
-                           inputOffsets.primitiveOffset,
-                           inputOffsets.vertexOffsetInComponents,
-                           inputOffsets.indexOffsetInBytes,
-                           inputOffsets.transformOffsetInBytes,
                            true);
     }
 
-    IncrementPrimitiveTaskCounters(args.encodeTaskCounterScratchOffset,
-                                   primitiveIndex,
+    IncrementPrimitiveTaskCounters(primitiveIndex,
                                    inputOffsets.numPrimitives,
-                                   args.NumPrimitives);
+                                   geomConstants.numPrimitives);
 }
 
 //=====================================================================================================================
@@ -116,29 +82,28 @@ void EncodeTriangleNodes(
 void EncodeAABBNodes(
     in uint3 globalThreadId : SV_DispatchThreadID)
 {
-    const GeometryArgs args = InitGeometryArgs(ShaderRootConstants.geometryIndex);
-    const NumPrimAndInputOffset inputOffsets = LoadInputOffsetsAndNumPrim(args);
+    const uint geometryIndex = ShaderRootConstants.GeometryIndex();
+    const BuildShaderGeometryConstants geomConstants = GeometryConstants[geometryIndex];
+    const NumPrimAndInputOffset inputOffsets = LoadInputOffsetsAndNumPrim(geometryIndex, true);
 
     if (globalThreadId.x == 0)
     {
-        WriteGeometryInfo(args, inputOffsets.primitiveOffset, inputOffsets.numPrimitives, DECODE_PRIMITIVE_STRIDE_AABB);
+        WriteGeometryInfo(geomConstants, inputOffsets, geometryIndex, DECODE_PRIMITIVE_STRIDE_AABB);
     }
 
     uint primitiveIndex = globalThreadId.x;
     if (primitiveIndex < inputOffsets.numPrimitives)
     {
-        EncodeAabbNode(GeometryBuffer[ShaderRootConstants.geometryIndex],
-                       args,
+        EncodeAabbNode(geomConstants,
+                       inputOffsets,
+                       geometryIndex,
                        primitiveIndex,
-                       inputOffsets.primitiveOffset,
-                       inputOffsets.vertexOffsetInComponents,
                        true);
     }
 
-    IncrementPrimitiveTaskCounters(args.encodeTaskCounterScratchOffset,
-                                   primitiveIndex,
+    IncrementPrimitiveTaskCounters(primitiveIndex,
                                    inputOffsets.numPrimitives,
-                                   args.NumPrimitives);
+                                   geomConstants.numPrimitives);
 }
 
 static const uint LOCAL_COUNTS_READY = ((uint)1 << 30);
@@ -178,86 +143,67 @@ void EncodeQuadNodes(
     in uint globalId : SV_DispatchThreadID,
     in uint localId : SV_GroupThreadID)
 {
-    InitBlockPrefixSum(localId, ShaderRootConstants.geometryIndex);
+    // Note, ShaderRootConstants.GeometryIndex() is reused for number of blocks needed across all geometries.
+    InitBlockPrefixSum(localId, ShaderRootConstants.GeometryIndex());
 
     // Figure out which geometry desc contains this blocks primitives.
-    uint geomId = 0;
-
     const uint blockId = (globalId / WaveGetLaneCount());
-
+    NumPrimAndInputOffset inputOffsets = (NumPrimAndInputOffset)0;
+    uint blockOffset = 0;
+    uint geomId = 0;
     for (; geomId < ShaderConstants.numDescs; ++geomId)
     {
-        const uint numBlocks =
-            Pow2Align(GeometryConstants[geomId].numPrimitives, BUILD_THREADGROUP_SIZE) / BUILD_THREADGROUP_SIZE;
+        inputOffsets = LoadInputOffsetsAndNumPrim(geomId, true);
 
-        const uint blockOffset = GeometryConstants[geomId].blockOffset;
+        const uint numBlocks =
+            Pow2Align(inputOffsets.numPrimitives, BUILD_THREADGROUP_SIZE) / BUILD_THREADGROUP_SIZE;
+
         if (blockId < (blockOffset + numBlocks))
         {
             break;
         }
+        else
+        {
+            blockOffset += numBlocks;
+        }
     }
 
-    const GeometryArgs geometryArgs = InitGeometryArgs(geomId);
-    const NumPrimAndInputOffset inputOffsets = LoadInputOffsetsAndNumPrim(geometryArgs);
+    const BuildShaderGeometryConstants geomConstants = GeometryConstants[geomId];
 
-    const uint startId = geometryArgs.blockOffset * WaveGetLaneCount();
-    const uint endId = startId + geometryArgs.NumPrimitives;
+    const uint startId = blockOffset * WaveGetLaneCount();
+    const uint endId = startId + inputOffsets.numPrimitives;
 
     // Initialise lane as inactive triangle
     int pairInfo = -2;
 
     TriangleData tri = (TriangleData)0;
+    uint3 indices = uint3(0, 0, 0);
 
     const uint primId = globalId - startId;
-    const uint flattenedPrimitiveIndex = geometryArgs.PrimitiveOffset + primId;
+    const uint flattenedPrimitiveIndex = inputOffsets.primitiveOffset + primId;
 
     if (primId == 0)
     {
-        WriteGeometryInfo(
-            geometryArgs, inputOffsets.primitiveOffset, inputOffsets.numPrimitives, DECODE_PRIMITIVE_STRIDE_TRIANGLE);
+        WriteGeometryInfo(geomConstants, inputOffsets, geomId, DECODE_PRIMITIVE_STRIDE_TRIANGLE);
     }
 
     if (globalId < endId)
     {
         {
             const uint primNodePointerOffset =
-                geometryArgs.BasePrimNodePtrOffset + (flattenedPrimitiveIndex * sizeof(uint));
+                ShaderConstants.header.offsets.primNodePtrs + (flattenedPrimitiveIndex * sizeof(uint));
 
             // Store invalid prim node pointer for now during first time builds.
             // If the triangle is active, EncodeHwBvh will write it in.
             DstBuffer.Store(primNodePointerOffset, INVALID_IDX);
         }
 
-        const IndexBufferInfo indexBufferInfo =
+        const bool validIndices =
+            FetchTrianglePrimitive(geomConstants, inputOffsets, GeometryBuffer[geomId], geomId, primId, tri, indices);
+        if (validIndices)
         {
-            geometryArgs.IndexBufferVaLo,
-            geometryArgs.IndexBufferVaHi,
-            geometryArgs.IndexBufferByteOffset + inputOffsets.indexOffsetInBytes,
-            geometryArgs.IndexBufferFormat,
-        };
-
-        // Fetch face indices from index buffer
-        uint3 faceIndices = FetchFaceIndices(primId, indexBufferInfo);
-
-        const bool isIndexed = (geometryArgs.IndexBufferFormat != IndexFormatInvalid);
-
-        // Check if vertex indices are within bounds, otherwise make the triangle inactive
-        const uint maxIndex = max(faceIndices.x, max(faceIndices.y, faceIndices.z));
-        if (maxIndex < geometryArgs.vertexCount)
-        {
-            const uint64_t transformBufferGpuVa =
-                PackUint64(geometryArgs.TransformBufferGpuVaLo, geometryArgs.TransformBufferGpuVaHi);
-
-            // Fetch triangle vertex data from vertex buffer
-            tri = FetchTransformedTriangleData(GeometryBuffer[geomId],
-                                               faceIndices,
-                                               geometryArgs.GeometryStride,
-                                               inputOffsets.vertexOffsetInComponents,
-                                               geometryArgs.VertexComponentCount,
-                                               transformBufferGpuVa,
-                                               inputOffsets.transformOffsetInBytes);
-
-            pairInfo = PairTriangles(isIndexed, faceIndices, tri);
+            const bool isIndexed = (geomConstants.indexBufferFormat != IndexFormatInvalid);
+            pairInfo = PairTriangles(isIndexed, indices, tri);
         }
 
         // Generate triangle bounds and update scene bounding box
@@ -268,12 +214,12 @@ void EncodeQuadNodes(
         {
             if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometry)
             {
-                UpdateSceneBounds(geometryArgs.SceneBoundsByteOffset, boundingBox);
+                UpdateSceneBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
             }
             else if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
             {
                 // TODO: with tri splitting, need to not update "size" here
-                UpdateSceneBoundsWithSize(geometryArgs.SceneBoundsByteOffset, boundingBox);
+                UpdateSceneBoundsWithSize(ShaderConstants.offsets.sceneBounds, boundingBox);
             }
         }
         else
@@ -352,10 +298,9 @@ void EncodeQuadNodes(
             const uint triT0Rotation = (pairInfo & 0xF);
             const uint triT1Rotation = (pairInfo >> 4) & 0xF;
 
-            WriteScratchQuadNode(geometryArgs.LeafNodeDataByteOffset,
-                                 dstScratchNodeIdx,
-                                 geometryArgs.GeometryIndex,
-                                 geometryArgs.GeometryFlags,
+            WriteScratchQuadNode(dstScratchNodeIdx,
+                                 geomId,
+                                 geomConstants.geometryFlags,
                                  tri1,
                                  primId1,
                                  triT1Rotation,
@@ -366,10 +311,9 @@ void EncodeQuadNodes(
         else if (pairInfo == -1)
         {
             // Write out unpaired triangle
-            WriteScratchTriangleNode(geometryArgs.LeafNodeDataByteOffset,
-                                     dstScratchNodeIdx,
-                                     geometryArgs.GeometryIndex,
-                                     geometryArgs.GeometryFlags,
+            WriteScratchTriangleNode(dstScratchNodeIdx,
+                                     geomId,
+                                     geomConstants.geometryFlags,
                                      tri,
                                      primId);
         }
@@ -378,11 +322,8 @@ void EncodeQuadNodes(
             // This triangle is a pair in a quad handled by the lead lane. Nothing to do here.
         }
 
-        // ClearFlags for refit and update
-        ClearFlagsForRefitAndUpdate(geometryArgs, flattenedPrimitiveIndex, false);
-
         // Update primitive reference count
-        if (blockId == (ShaderRootConstants.geometryIndex - 1))
+        if (blockId == (ShaderRootConstants.GeometryIndex() - 1))
         {
             const uint globalCount = (blockPrimCount + exclusivePrefixCount);
 

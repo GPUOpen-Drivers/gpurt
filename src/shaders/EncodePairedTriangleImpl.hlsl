@@ -23,14 +23,13 @@
  *
  **********************************************************************************************************************/
 void WriteScratchTriangleNode(
-    uint         leafNodeDataOffset,
     uint         dstScratchNodeIdx,
     uint         geometryIndex,
     uint         geometryFlags,
     TriangleData tri,
     uint         primitiveIndex)
 {
-    uint offset = CalcScratchNodeOffset(leafNodeDataOffset, dstScratchNodeIdx);
+    uint offset = CalcScratchNodeOffset(ShaderConstants.offsets.bvhLeafNodeData, dstScratchNodeIdx);
 
     uint4 data;
 
@@ -60,7 +59,6 @@ void WriteScratchTriangleNode(
 
 //=====================================================================================================================
 void WriteScratchQuadNode(
-    uint         leafNodeDataOffset,
     uint         dstScratchNodeIdx,
     uint         geometryIndex,
     uint         geometryFlags,
@@ -81,7 +79,7 @@ void WriteScratchQuadNode(
     // triT1 - NODE_TYPE_TRIANGLE_1 (1st to intersect)
     triangleId = WriteTriangleIdField(triangleId, NODE_TYPE_TRIANGLE_1, triT1Rotation, geometryFlags);
 
-    uint offset = CalcScratchNodeOffset(leafNodeDataOffset, dstScratchNodeIdx);
+    uint offset = CalcScratchNodeOffset(ShaderConstants.offsets.bvhLeafNodeData, dstScratchNodeIdx);
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_PRIMITIVE_ID_OFFSET, tri1PrimIdx);
 
     // Pack triangle 0 primitive offset from triangle 1. Note, the pairing process always searches within a contiguous
@@ -325,17 +323,19 @@ int PairTriangles(
     // Initialise as unpaired triangle
     int pairInfo = -1;
 
+    const bool isActiveTriangle = IsActive(tri);
+
     // Indexed triangles can always be paired as their connectivity cannot change on updates.
     if (isIndexed)
     {
         if (Settings.enablePairCostCheck)
         {
             const BoundingBox bbox = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
-            pairInfo = PairTrianglesOptimal(faceIndices, bbox, true);
+            pairInfo = PairTrianglesOptimal(faceIndices, bbox, isActiveTriangle);
         }
         else
         {
-            pairInfo = PairTrianglesImpl(faceIndices, true);
+            pairInfo = PairTrianglesImpl(faceIndices, isActiveTriangle);
         }
     }
     // Only pair non-indexed triangles for non-updateable as the triangle positions can change on updates
@@ -349,11 +349,11 @@ int PairTriangles(
         if (Settings.enablePairCostCheck)
         {
             const BoundingBox bbox = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
-            pairInfo = PairTrianglesOptimal(faceVertices, bbox, true);
+            pairInfo = PairTrianglesOptimal(faceVertices, bbox, isActiveTriangle);
         }
         else
         {
-            pairInfo = PairTrianglesImpl(faceVertices, IsActive(tri));
+            pairInfo = PairTrianglesImpl(faceVertices, isActiveTriangle);
         }
     }
 

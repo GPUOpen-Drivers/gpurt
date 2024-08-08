@@ -85,13 +85,20 @@ size_t GPURT_API_ENTRY GetDeviceSize()
 
 // =====================================================================================================================
 PipelineShaderCode GPURT_API_ENTRY GetShaderLibraryCode(
-    ShaderLibraryFeatureFlags flags)
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 48
+    const Pal::RayTracingIpLevel rayTracingIpLevel,
+#endif
+    ShaderLibraryFeatureFlags    flags)
 {
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 40
     GPURT_EXPORT_UNMANGLED_SYMBOL_MSVC
 #endif
 
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 48
+    return Internal::GetShaderLibraryCode(rayTracingIpLevel, flags);
+#else
     return Internal::GetShaderLibraryCode(flags);
+#endif
 }
 
 // =====================================================================================================================

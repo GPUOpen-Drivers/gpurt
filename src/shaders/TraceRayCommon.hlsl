@@ -31,18 +31,10 @@
 #include "../../gpurt/gpurtDispatch.h"
 
 // Driver reserved space ID and resource bindings
-#ifdef AMD_VULKAN
 
 #define SPACEID space93
 
 #define DispatchRaysConstantsId        b17
-#else
-
-#define SPACEID space2147420893
-
-#define DispatchRaysConstantsId        b1
-
-#endif
 
 #ifndef __cplusplus
 //=====================================================================================================================
@@ -116,11 +108,7 @@ static HitGroupInfo FetchHitGroupInfo(
     if (tableVa != 0)
     {
         const uint4 d0 = LoadDwordAtAddrx4(tableVa + offset);
-#ifdef AMD_VULKAN
         const uint2 d1 = LoadDwordAtAddrx4(tableVa + offset + 0x10).xy;
-#else
-        const uint2 d1 = LoadDwordAtAddrx2(tableVa + offset + 0x10);
-#endif
         hitInfo.closestHitId   = d0.xy;
         hitInfo.anyHitId       = d0.zw;
         hitInfo.intersectionId = d1.xy;

@@ -160,6 +160,8 @@ struct RayHistoryMetadata
     CounterInfo              counter;
     RayHistoryMetadataInfo   traversalFlagsInfo;
     RayHistoryTraversalFlags traversalFlags;
+    RayHistoryMetadataInfo   userMarkerInfo;
+    uint64                   userMarkerContext;
 };
 #pragma pack(pop)
 
@@ -186,6 +188,8 @@ struct RayHistoryTraceListInfo
     RayHistoryTraversalFlags    traversalFlags;
 
     IndirectCounterMetadata*    pIndirectCounterMetadata;
+
+    uint64                      userMarkerContext;
 };
 
 typedef Util::Vector<RayHistoryTraceListInfo, 8, Internal::Device> RayHistoryBufferList;
@@ -258,7 +262,10 @@ size_t GPURT_API_ENTRY GetDeviceSize();
 // @return Shader code for the shader library
 //
 PipelineShaderCode GPURT_API_ENTRY GetShaderLibraryCode(
-    ShaderLibraryFeatureFlags flags);
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 48
+    const Pal::RayTracingIpLevel rayTracingIpLevel,
+#endif
+    ShaderLibraryFeatureFlags    flags);
 
 // =====================================================================================================================
 // Returns GPURT shader library function table for input ray tracing IP level.
@@ -682,6 +689,8 @@ public:
     virtual const ClientCallbacks& GetClientCallbacks() const override { return m_clientCb; }
     virtual const DeviceInitInfo& GetInitInfo() const override { return m_info; }
 
+    virtual bool ShouldUseGangedAceForBuild(const AccelStructBuildInputs& inputs) const override;
+
     // Returns size in DWORDs of a buffer view SRD
     uint32 GetBufferSrdSizeDw() const { return m_bufferSrdSizeDw; };
 
@@ -706,6 +715,10 @@ public:
         ClientCmdBufferHandle cmdBuffer,
         InternalRayTracingCsType type) const;
 #endif
+
+    // Overrides the BuildFlags and return new build inputs when device settings requires it
+    const AccelStructBuildInputs OverrideBuildInputs(
+        const AccelStructBuildInputs& inputs) const;
 
 private:
 

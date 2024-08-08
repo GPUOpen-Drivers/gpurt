@@ -132,6 +132,16 @@ if(GPURT_CLIENT_API STREQUAL "VULKAN")
             ${gpurtSpirvRemap}
 
         COMMAND Python3::Interpreter "${gpurtCompileScript}"
+            --outputDir "${gpurtOutputDir}"
+            --validateShadersClean
+            ${COMPILER_ARGUMENT}
+            --defines "\"${gpurtDefines}\""
+            --includePaths "\"${gpurtIncludeDirectories}\""
+            "${gpurtDxilBvhShader}"
+            "${gpurtShadersSourceDir}"
+            "${gpurtSscStrict}"
+
+        COMMAND Python3::Interpreter "${gpurtCompileScript}"
             --vulkan
             "${SPIRV_FLAG}"
             --outputDir "${gpurtOutputDir}"

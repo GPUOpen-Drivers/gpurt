@@ -373,6 +373,15 @@ enum class AccelStructBuilderType : uint32
 static_assert(uint32(AccelStructBuilderType::Gpu) == 0, "Enums encoded in the acceleration structure must not change.");
 static_assert(uint32(AccelStructBuilderType::Cpu) == 1, "Enums encoded in the acceleration structure must not change.");
 
+// Modes for when to perform a rebuild instead of an update
+enum ForceRebuildForUpdatesMode : uint32
+{
+    None        = 0x0,  // Disable build flag overrides
+    TopLevel    = 0x1,  // Override flags for top level acceleration structures only
+    BottomLevel = 0x2,  // Override flags for bottom level acceleration structures only
+    All         = 0x3,  // Override flags for all acceleration structure updates
+};
+
 // Modes for which interior box nodes in BLAS are written as fp16
 enum class Fp16BoxNodesInBlasMode : uint32
 {
@@ -732,6 +741,8 @@ struct DeviceSettings
     Fp16BoxNodesInBlasMode      fp16BoxNodesInBlasMode;               // Mode for which interior nodes in BLAS are FP16
     float                       fp16BoxModeMixedSaThresh;             // For fp16 mode "mixed", surface area threshold
 
+    ForceRebuildForUpdatesMode  forceRebuildForUpdates;               // When to perform a rebuild instead of an update
+
     Pal::RayTracingIpLevel      emulatedRtIpLevel;                    // Client request RTIP level, used to override IP level related GPURT settings.
 
     struct
@@ -767,6 +778,7 @@ struct DeviceSettings
         uint32 enableFastLBVH : 1;                          // Enable the Fast LBVH path
 
         uint32 enableRemapScratchBuffer : 1;                // Enable remapping bvh2 data from ScratchBuffer to ResultBuffer
+        uint32 checkBufferOverlapsInBatch : 1;
     };
 
     uint64                      accelerationStructureUUID;  // Acceleration Structure UUID
@@ -1019,6 +1031,8 @@ struct RtDispatchInfo
     ShaderTable missShaderTable;
     ShaderTable hitGroupTable;
     ShaderTable callableShaderTable;
+
+    uint64 userMarkerContext;
 };
 
 #if GPURT_DEVELOPER
@@ -1389,7 +1403,10 @@ size_t GPURT_API_ENTRY GetDeviceSize();
 // @return Shader code for the shader library
 //
 PipelineShaderCode GPURT_API_ENTRY GetShaderLibraryCode(
-    ShaderLibraryFeatureFlags flags);
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 48
+    const Pal::RayTracingIpLevel rayTracingIpLevel,
+#endif
+    ShaderLibraryFeatureFlags    flags);
 
 // =====================================================================================================================
 // Returns GPURT shader library function table for input ray tracing IP level.
@@ -1600,6 +1617,9 @@ public:
 
     virtual const ClientCallbacks& GetClientCallbacks() const = 0;
     virtual const DeviceInitInfo& GetInitInfo() const = 0;
+
+    // Check if a build is a good candidate for ACE offload (typically barrier-free cases)
+    virtual bool ShouldUseGangedAceForBuild(const AccelStructBuildInputs& inputs) const = 0;
 
 protected:
 

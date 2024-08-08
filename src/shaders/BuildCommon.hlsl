@@ -33,7 +33,7 @@
 
 #include "IntersectCommon.hlsl"
 #include "MortonCodes.hlsl"
-#include "../shared/math.h"
+#include "../shadersClean/common/Math.hlsli"
 
 //=====================================================================================================================
 #define LEAFIDX(i) ((numActivePrims-1) + (i))
@@ -226,7 +226,9 @@ BoundingBox GenerateBoxNode32BoundingBox(
 }
 
 //=====================================================================================================================
-BoundingBox TransformBoundingBox(BoundingBox box, float4 inputTransform[3])
+BoundingBox TransformBoundingBox(
+    in BoundingBox box,
+    in float4      inputTransform[3])
 {
     // convert to center/extents box representation
     float3 center  = (box.max + box.min) * 0.5;
@@ -262,8 +264,18 @@ BoundingBox TransformBoundingBox(BoundingBox box, float4 inputTransform[3])
 }
 
 //=====================================================================================================================
+// Overload of TransformBoundingBox ^ with a float3x4 as the type of the inputTransform, instead of float4[3]
+BoundingBox TransformBoundingBox(
+    in BoundingBox box,
+    in float3x4    inputTransform)
+{
+    float4 arrayTransform[3] = {inputTransform[0], inputTransform[1], inputTransform[2]};
+    return TransformBoundingBox(box, arrayTransform);
+}
+
+//=====================================================================================================================
 BoundingBox GenerateInstanceBoundingBox(
-    float4         instanceTransform[3],
+    in float4      instanceTransform[3],
     in BoundingBox blasRootBounds)
 {
     BoundingBox instanceBbox = TransformBoundingBox(blasRootBounds, instanceTransform);
@@ -387,92 +399,6 @@ uint64_t spirv_OpGroupNonUniformBitwiseOr(uint scope, [[vk::ext_literal]] uint o
 uint3 spirv_OpGroupNonUniformBitwiseOr(uint scope, [[vk::ext_literal]] uint op, uint3 value);
 
 #define WAVE_POSTFIX_OR(val) spirv_OpGroupNonUniformBitwiseOr(/* Subgroup */ 3, /* InclusiveScan */ 1, (val))
-
-//=====================================================================================================================
-uint GetUpdateStackOffset(
-    uint baseUpdateStackScratchOffset,
-    uint stackIdx)
-{
-    return baseUpdateStackScratchOffset + (stackIdx * sizeof(uint));
-}
-
-//=====================================================================================================================
-void PushNodeToUpdateStack(
-    uint                baseUpdateStackScratchOffset,
-    uint                parentNodePointer)
-{
-    uint stackPtr;
-    ScratchBuffer.InterlockedAdd(UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET, 1, stackPtr);
-
-    uint offset = GetUpdateStackOffset(baseUpdateStackScratchOffset, stackPtr);
-    ScratchBuffer.Store(offset, parentNodePointer);
-}
-
-//=====================================================================================================================
-// Note, SrcBuffer and DstMetadata point to the beginning of the acceleration structure buffer
-void CopyChildPointersAndFlags(
-    uint                nodePointer,
-    uint                metadataSize)
-{
-    const uint nodeOffset = metadataSize + ExtractNodePointerOffset(nodePointer);
-
-    {
-        const uint4 childPointers = SrcBuffer.Load<uint4>(nodeOffset);
-        DstMetadata.Store<uint4>(nodeOffset, childPointers);
-
-        if (IsBoxNode32(nodePointer))
-        {
-            const uint sourceFlags = SrcBuffer.Load(nodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET);
-            DstMetadata.Store(nodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, sourceFlags);
-        }
-
-    }
-}
-
-//=====================================================================================================================
-uint4 LoadBoxNodeChildPointers(
-    in uint              nodeOffset)
-{
-    return SrcBuffer.Load<uint4>(nodeOffset);
-}
-
-//=====================================================================================================================
-uint ComputeChildIndexAndValidBoxCount(
-    in uint              metadataSize,
-    in uint              parentNodePointer,
-    in uint              childNodePointer,
-    out_param(uint)      boxNodeCount)
-{
-
-    const uint parentNodeOffset = metadataSize + ExtractNodePointerOffset(parentNodePointer);
-    const uint4 childPointers = LoadBoxNodeChildPointers(parentNodeOffset);
-
-    // Find child index in parent (assumes child pointer 0 is always valid)
-    uint childIdx = 0;
-    if (childNodePointer == childPointers.y)
-    {
-        childIdx = 1;
-    }
-
-    if (childNodePointer == childPointers.z)
-    {
-        childIdx = 2;
-    }
-
-    if (childNodePointer == childPointers.w)
-    {
-        childIdx = 3;
-    }
-
-    // Note, IsBoxNode() will return false for invalid nodes.
-    boxNodeCount = 0;
-    boxNodeCount += IsBoxNode(childPointers.x) ? 1 : 0;
-    boxNodeCount += IsBoxNode(childPointers.y) ? 1 : 0;
-    boxNodeCount += IsBoxNode(childPointers.z) ? 1 : 0;
-    boxNodeCount += IsBoxNode(childPointers.w) ? 1 : 0;
-
-    return childIdx;
-}
 
 //=====================================================================================================================
 uint ReadParentPointer(
@@ -802,6 +728,11 @@ bool EnableLatePairCompression()
 //=====================================================================================================================
 bool UsePrimIndicesArray()
 {
+    if (Settings.enableEarlyPairCompression)
+    {
+        return false;
+    }
+
     return false;
 }
 
@@ -865,7 +796,7 @@ InstanceDesc LoadInstanceDesc(
     if (Settings.encodeArrayOfPointers != 0)
     {
         const GpuVirtualAddress addr = LoadInstanceDescBuffer<GpuVirtualAddress>(
-            instanceId * GPU_VIRTUAL_ADDRESS_SIZE);
+            instanceId * sizeof(GpuVirtualAddress));
 
         return FetchInstanceDescAddr(addr + offsetInBytes);
     }

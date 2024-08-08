@@ -531,6 +531,7 @@ enum class RayHistoryMetadataKind : uint32
     CounterInfo        = 1,
     Unused             = 2,
     TraversalFlags     = 3,
+    UserMarkerInfo     = 4
 };
 
 // ====================================================================================================================

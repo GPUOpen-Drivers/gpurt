@@ -62,15 +62,6 @@ public:
     // Destructor for the ray tracing bvh builder class
     ~BvhBuilder();
 
-    // Helper function to determine internal nodes size
-    uint32 CalculateInternalNodesSize();
-
-    // Helper function to determine leaf nodes size
-    uint32 CalculateLeafNodesSize();
-
-    // Helper function to determine nodes size
-    uint32 CalculateNodesSize();
-
     // Helper function to determine geometry info size
     static uint32 CalculateGeometryInfoSize(
         uint32 numGeometryDescs);
@@ -118,6 +109,9 @@ public:
         uint32* pMetadataSizeInBytes);
 
     ScratchBufferInfo CalculateScratchBufferInfo(
+        RayTracingScratchDataOffsets* pOffsets);
+
+    ScratchBufferInfo CalculateScratchBufferInfoDefault(
         RayTracingScratchDataOffsets* pOffsets);
 
     uint32 CalculateUpdateScratchBufferInfo(
@@ -172,6 +166,9 @@ public:
 
     BuildPhaseFlags EnabledPhases() const;
 
+    static uint32 GetGeometryPrimCount(
+        const Geometry& geometry);
+
 private:
 
     // Configs that change within build calls, private to the bvh builder.
@@ -207,6 +204,7 @@ private:
         bool                            enableEarlyPairCompression;
         bool                            enableFastLBVH;
         bool                            enableMergeSort;
+        bool                            enableInstanceRebraid;
     };
 
     BvhBuilder(
@@ -215,8 +213,10 @@ private:
         ClientCallbacks              clientCb,
         const DeviceSettings&        deviceSettings);
 
-    uint32 GetLeafNodeSize(
-        const DeviceSettings& settings, const BuildConfig& config);
+    uint32 CalculateInternalNodesSize()const;
+    uint32 CalculateLeafNodesSize() const;
+    uint32 CalculateNodesSize() const;
+    uint32 GetLeafNodeSize() const;
 
     static uint32 GetNumHistogramElements(
         const RadixSortConfig& config,
@@ -234,12 +234,6 @@ private:
     GeometryType GetGeometryType(
         const AccelStructBuildInputs inputs);
 
-    // Returns true if this BVH update should be treated as a build instead.
-    bool ForceRebuild() const
-    {
-        return false;
-    }
-
     bool UpdateAllowed() const
     {
         return Util::TestAnyFlagSet(m_buildArgs.inputs.flags, AccelStructBuildFlagAllowUpdate);
@@ -247,8 +241,7 @@ private:
 
     bool IsUpdate() const
     {
-        return Util::TestAnyFlagSet(m_buildArgs.inputs.flags, AccelStructBuildFlagPerformUpdate)
-            && (ForceRebuild() == false);
+        return Util::TestAnyFlagSet(m_buildArgs.inputs.flags, AccelStructBuildFlagPerformUpdate);
     }
 
     gpusize HeaderBufferBaseVa() const
@@ -405,7 +398,16 @@ private:
         gpusize virtualAddress,
         uint32  entryOffset);
 
-    uint32 WriteBufferBindings(uint32 entryOffset, uint32 geometryIndex = 0);
+    // options for WriteBuildBufferBindings
+    enum BuildBufferBindingFlags : uint32
+    {
+        GeometryBuffer = 0x2,
+    };
+
+    uint32 WriteBuildBufferBindings(
+        const BuildShaderRootConstants& entries = {},
+        uint32 buildBufferBindingFlags = 0);
+
     uint32 WriteUpdateBuffers(uint32 entryOffset);
 
     uint32 WriteBuildShaderConstantBuffer(uint32 entryOffset);
@@ -470,9 +472,11 @@ private:
         const GeometryAabbs& desc,
         uint32* pStride) const;
 
-    uint32 GetLeafNodeExpansion() const;
-
     uint32 GetNumInternalNodeCount() const;
+    uint32 GetMaxNumLeafNodes() const;
+    uint32 GetMinPrimsPerInternalNode() const;
+    uint32 GetMaxInternalNodeChildCount() const;
+    uint32 GetMaxLastLevelInternalNodeCount() const;
 
 #if GPURT_DEVELOPER
     // Driver generated RGP markers are only added in internal builds because they expose details about the

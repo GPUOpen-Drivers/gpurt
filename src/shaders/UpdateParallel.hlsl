@@ -22,15 +22,20 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
+// Note, CBV(b255) must be the last used binding in the root signature.
 #define RootSig "RootConstants(num32BitConstants=1, b0),"\
                 "CBV(b1),"\
                 "UAV(u0),"\
                 "UAV(u1),"\
                 "UAV(u2),"\
-                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
                 "CBV(b255),"\
-                "UAV(u3),"\
-                "UAV(u4)"
+                "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
+
+#define TASK_COUNTER_BUFFER   ScratchBuffer
+#define TASK_COUNTER_OFFSET   UPDATE_SCRATCH_TASK_COUNT_OFFSET
+#define NUM_TASKS_DONE_OFFSET UPDATE_SCRATCH_TASKS_DONE_OFFSET
+groupshared uint SharedMem[1];
+#include "TaskMacros.hlsl"
 
 //======================================================================================================================
 // 32 bit constants
@@ -56,7 +61,7 @@ struct RootConstants
 // Note, these headers must be included after all resource bindings have been defined. Also, there is a strict naming
 // requirement for resources and variables. See BuildCommon.hlsl for details.
 #include "IntersectCommon.hlsl"
-#include "BuildCommon.hlsl"
+#include "UpdateCommon.hlsl"
 #include "UpdateQBVHImpl.hlsl"
 
 //=====================================================================================================================
@@ -66,7 +71,7 @@ void WaitForEncodeTasksToFinish(uint numTasksWait)
     do
     {
         DeviceMemoryBarrier();
-    } while (ScratchBuffer.Load(UPDATE_SCRATCH_ENCODE_TASK_COUNT_OFFSET) < numTasksWait);
+    } while (ScratchBuffer.Load(UPDATE_SCRATCH_COUNTER_NUM_PRIMITIVES_OFFSET) < numTasksWait);
 }
 
 //=====================================================================================================================
@@ -75,8 +80,21 @@ void WaitForEncodeTasksToFinish(uint numTasksWait)
 [RootSignature(RootSig)]
 [numthreads(BUILD_THREADGROUP_SIZE, 1, 1)]
 void UpdateParallel(
-    in uint globalThreadId : SV_DispatchThreadID)
+    in uint globalThreadId : SV_DispatchThreadID,
+    in uint localId : SV_GroupThreadID)
 {
+    uint waveId = 0;
+    uint numTasksWait = 0;
+    INIT_TASK;
+
+    const uint numGroups = ShaderRootConstants.numThreads / BUILD_THREADGROUP_SIZE;
+
+    BEGIN_TASK(numGroups);
+
+    ClearUpdateFlags(globalId);
+
+    END_TASK(numGroups);
+
     // Waiting for EncodeNodes/EncodeTopLevel to finish encoding the leaves/primitives
     WaitForEncodeTasksToFinish(ShaderConstants.numPrimitives);
 

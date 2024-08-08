@@ -56,7 +56,6 @@ void WriteTaskCounterData(uint offset, uint dataOffset, uint data)
 // Direct builds have access to primitive count during dispatch cmd recording and set
 // ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET to correct value beforehand.
 void IncrementPrimitiveTaskCounters(
-    in uint encodeTaskCounterScratchOffset,
     in uint primitiveIndex,
     in uint numPrimitives,
     in uint maxNumPrimitives)
@@ -73,11 +72,11 @@ void IncrementPrimitiveTaskCounters(
         // direct builds set ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET to correct value during cmd recording
         if (Settings.isIndirectBuild && !Settings.enableEarlyPairCompression && !Settings.doTriangleSplitting)
         {
-            IncrementTaskCounter(encodeTaskCounterScratchOffset + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET,
+            IncrementTaskCounter(ShaderConstants.offsets.encodeTaskCounter + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET,
                                  encodedPrimCount);
         }
 
-        IncrementTaskCounter(encodeTaskCounterScratchOffset + ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET,
+        IncrementTaskCounter(ShaderConstants.offsets.encodeTaskCounter + ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET,
                              dispatchedPrimCount);
     }
 }
