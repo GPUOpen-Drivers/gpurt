@@ -132,26 +132,6 @@ static bool RtIpIsAtLeast(RayTracingIpLevel level)
 }
 
 //=====================================================================================================================
-static uint ConvertRtIpLevel(RayTracingIpLevel rtIpLevel)
-{
-    uint level = 0;
-
-    switch (rtIpLevel)
-    {
-    case RayTracingIpLevel::RtIp1_1:
-        level = GPURT_RTIP1_1;
-        break;
-    case RayTracingIpLevel::RtIp2_0:
-        level = GPURT_RTIP2_0;
-        break;
-    default:
-        break;
-    }
-
-    return level;
-}
-
-//=====================================================================================================================
 static uint GetPriorityForShaderType(
     DXILShaderKind shaderKind)
 {
@@ -170,19 +150,62 @@ static uint GetPriorityForShaderType(
 // Forward declaration for _AmdDispatchSystemData.PackDispatchId() and _AmdDispatchSystemData.DispatchId()
 static uint3 GetDispatchRaysDimensions();
 
+//=====================================================================================================================
+
 static uint64_t GetVpcWithPriority(uint64_t vpc, uint priority)
 {
-    return vpc;
+    if (_AmdIsLlpc())
+    {
+        return vpc;
+    }
+
+    const uint64_t prio64 = priority;
+    const uint firstMetadataBit = 32;
+    const uint firstPriorityBitInMetadata = 16;
+    GPU_ASSERT((vpc & 0xFFFF000000000000) == 0);
+    return vpc | (prio64 << (firstMetadataBit + firstPriorityBitInMetadata));
 }
 
-static uint64_t Unpack32BitVpcTo64BitVpc(uint32_t vpc32, bool /*unpackPriority*/)
+//=====================================================================================================================
+// 32-bit function pointer packing/unpacking
+//
+static uint64_t Unpack32BitVpcTo64BitVpc(uint32_t vpc32, bool unpackPriority)
 {
-    return vpc32;
+    if (_AmdIsLlpc())
+    {
+        return vpc32;
+    }
+
+    uint64_t vpc = (vpc32 & 0xFFFFFFC0);
+
+    if (unpackPriority)
+    {
+       // The priority is stored in bits 0..2.
+       uint32_t priority = (vpc32 & 0x7);
+       vpc = GetVpcWithPriority(vpc, priority);
+    }
+
+    return vpc;
 }
 
 static uint32_t Pack64BitVpcTo32Bits(uint64_t vpc)
 {
-    return (vpc & 0xFFFFFFFF);
+    if (_AmdIsLlpc())
+    {
+        return (vpc & 0xFFFFFFFF);
+    }
+
+    // Incoming metadata is in the high dword
+    uint32_t inMetadata = (uint32_t)(vpc >> 32);
+    uint32_t prio = (inMetadata >> 16);
+    // We only have three bits for the priority:
+    GPU_ASSERT(prio <= 7);
+
+    // Outgoing metadata is in the low 6 bits
+    uint32_t outMetadata = prio;
+
+    GPU_ASSERT((vpc & 0x2F) == 0);
+    return SplitUint64(vpc).x | outMetadata;
 }
 
 //=====================================================================================================================
@@ -2030,7 +2053,6 @@ static void EnqueueNextShader(bool hasWorkToDo, uint64_t nextShaderAddr, uint64_
         }
         else
         {
-            // This case should only occur in sorting mode.
             GPU_ASSERT(false);
         }
     }
@@ -2038,7 +2060,6 @@ static void EnqueueNextShader(bool hasWorkToDo, uint64_t nextShaderAddr, uint64_
     const uint newState = data.traversal.committed.State();
     RayHistoryWriteEnd(data, newState);
 
-    // Finished sorting, previously dead lanes may now have CHS|MS to execute and vice-versa
     if (nextShaderAddr != returnAddr)
     {
         const DXILShaderKind shaderKind = (DXILShaderKind)(data.IsMiss(newState) ?
@@ -2116,7 +2137,6 @@ export void _cont_Traversal(
         RayHistoryWriteAnyHitOrProceduralStatus(data);
     }
 
-    // Handle reordering of rays/threads before processing since dead lanes may become alive after sorting.
     // Execute traversal for active lanes.
     uint state                          = TRAVERSAL_STATE_COMMITTED_NOTHING;
     _AmdPrimitiveSystemState candidate  = (_AmdPrimitiveSystemState)0;
@@ -2150,14 +2170,6 @@ export void _cont_Traversal(
     _AmdTraversalResultData result = (_AmdTraversalResultData)0;
 
     bool IsChsOrMiss = data.IsChsOrMiss(state);
-    // For sorting-enabled global mem mode, we only enqueue CHS/Miss once all
-    // lanes have arrived in this state.
-    // In non-sorting mode, we immediately enqueue CHS/Miss. This is mostly
-    // to replicate the old ProcessContinuation() behavior for now.
-    // We might want to consider also waiting for all lanes here in the non-global
-    // mem mode for consistency, and potentially also to have a common place
-    // in between Traversal and CHS/Miss where extra work can be done just once
-    // for all lanes, e.g. preparing system data for CHS/Miss.
     if ((_AmdContinuationStackIsGlobal() && WaveActiveAllTrue(IsChsOrMiss)) ||
         (!_AmdContinuationStackIsGlobal() && IsChsOrMiss))
     {
@@ -2167,11 +2179,6 @@ export void _cont_Traversal(
         GetNextHitMissPc(data, state, candidate, nextShaderAddr);
 
         bool hasWorkToDo = true;
-        // Avoid sorting on return addresses to RayGen (the case nextShaderValid == false), as it may create
-        // unexpected behavior and might increase execution divergence. For example, we might have multiple resume
-        // points due to divergent control flow in the TraceRay call, but those resume points are all copies of the same
-        // code. If we sort and re-read only from one bin, we might prevent future TraceRay calls from reconverging
-        // on traversal.
         if (_AmdContinuationStackIsGlobal() && (nextShaderAddr != 0))
         {
         }
@@ -2231,9 +2238,6 @@ export void _cont_Traversal(
         }
         else
         {
-            // The last remaining case is that we need to re-enqueue Traversal, because we are waiting for
-            // other lanes to finish BVH traversal before sorting, or to resume suspended lanes that wait for
-            // other lanes to run IS/AHS in early-is-ahs mode.
             //
             // Everything else needs to go back through scheduling/traversal, regardless of state
             // Note we don't need "Wait" here because priorities run AHS and IS first

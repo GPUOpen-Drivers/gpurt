@@ -26,16 +26,32 @@
 #include "BuildSettings.hlsli"
 #endif
 
+//======================================================================================================================
+// Set a scratch buffer counter to 0 if it has a valid offset
+void InitScratchCounter(uint offset)
+{
+    if (offset != INVALID_IDX)
+    {
+        ScratchGlobal.Store(offset, 0);
+    }
+}
+
+//======================================================================================================================
+// Increase a scratch buffer counter and return its original value
+uint IncrementScratchCounter(uint offset, uint value)
+{
+    uint originalVal = 0;
+    ScratchGlobal.InterlockedAdd(offset, value, originalVal);
+    return originalVal;
+}
+
 //=====================================================================================================================
 // Increment task counter to mark a task / primitive as done
 uint IncrementTaskCounter(uint offset, uint value)
 {
     DeviceMemoryBarrier();
 
-    uint originalVal = 0;
-    ScratchGlobal.InterlockedAdd(offset, value, originalVal);
-
-    return originalVal;
+    return IncrementScratchCounter(offset, value);
 }
 
 //=====================================================================================================================

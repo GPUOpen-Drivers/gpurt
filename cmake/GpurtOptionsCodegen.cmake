@@ -53,4 +53,5 @@ add_custom_target(generate_gpurtOptions_h
 )
 
 target_include_directories(gpurt PUBLIC ${OUTDIR})
+target_sources(gpurt INTERFACE ${GPURTOPTIONS_OUTPUT})
 

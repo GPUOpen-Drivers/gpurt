@@ -113,10 +113,11 @@ uint3 FetchFaceIndices(
 // Vertex buffers only require an address and stride alignment of the format component size not the entire element size.
 // If the input data is not naturally aligned, we cannot use a single typed fetch for the 2-3 components. In this case,
 // we need to fetch each component separately.
+template<typename Float3Buffer>
 float3 FetchVertexPerComponent(
-    RWBuffer<float3> buffer,
-    uint             firstComponentIndex,
-    uint             numComponents)
+    Float3Buffer buffer,
+    uint         firstComponentIndex,
+    uint         numComponents)
 {
     float3 vertex;
     vertex.x = buffer[firstComponentIndex+0].x;
@@ -134,8 +135,9 @@ float3 FetchVertexPerComponent(
 }
 
 //=====================================================================================================================
+template<typename Float3Buffer>
 TriangleData FetchTriangleData(
-    RWBuffer<float3> buffer,
+    Float3Buffer     buffer,
     uint             vertexOffsetInComponents,
     uint3            index,
     uint             strideInComponents,
@@ -181,8 +183,9 @@ uint CalcTriangleBoxNodeFlags(
 }
 
 //======================================================================================================================
+template<typename Float3Buffer>
 TriangleData FetchTransformedTriangleData(
-    in RWBuffer<float3>           geometryBuffer,
+    in Float3Buffer               geometryBuffer,
     in uint3                      faceIndices,
     in uint                       geometryStride,
     in uint                       vertexOffsetInComponents,
@@ -226,10 +229,11 @@ bool IsActive(TriangleData tri)
 
 //=====================================================================================================================
 // Helper function to fetch triangle data. Returns false if the vertex indices are out of bounds.
+template<typename Float3Buffer>
 bool FetchTrianglePrimitive(
     in BuildShaderGeometryConstants geomConstants,
     in NumPrimAndInputOffset        inputOffsets,
-    in RWBuffer<float3>             geometryBuffer,
+    in Float3Buffer                 geometryBuffer,
     in uint                         geomId,
     in uint                         primId,
     inout_param(TriangleData)       tri,

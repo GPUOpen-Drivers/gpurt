@@ -141,12 +141,18 @@ void PostHwBvhBuild(
                                                offsets,
                                                metadataSizeInBytes);
 
+        // Rebuilding an updateable acceleration structure need to use the original size and not compacted one.
+        if (Settings.rebuildAccelStruct)
+        {
+            compactedSize = ShaderConstants.header.compactedSizeInBytes;
+        }
         WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_COMPACTED_BYTE_SIZE_OFFSET, compactedSize);
 
         if (Settings.emitCompactSize != 0)
         {
             EmitBuffer.Store2(0, uint2(compactedSize, 0));
         }
+
     }
 }
 

@@ -270,12 +270,10 @@ static uint64_t PackInstanceBasePointer(GpuVirtualAddress instanceVa, uint insta
     instanceBasePointer |= (instanceFlags & D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_NON_OPAQUE)
                            ? (1ull << NODE_POINTER_FORCE_NON_OPAQUE_SHIFT) : 0;
 
-    {
-        // Set 'Skip Procedural' for triangles and 'Skip Triangles' for procedural geometry
-        instanceBasePointer |= (geometryType == GEOMETRY_TYPE_TRIANGLES)
-                            ? (1ull << NODE_POINTER_SKIP_PROCEDURAL_SHIFT)
-                            : (1ull << NODE_POINTER_SKIP_TRIANGLES_SHIFT);
-    }
+    // Set 'Skip Procedural' for triangles and 'Skip Triangles' for procedural geometry
+    instanceBasePointer |= (geometryType == GEOMETRY_TYPE_TRIANGLES)
+                        ? (1ull << NODE_POINTER_SKIP_PROCEDURAL_SHIFT)
+                        : (1ull << NODE_POINTER_SKIP_TRIANGLES_SHIFT);
 
     instanceBasePointer |= (geometryType == GEOMETRY_TYPE_AABBS)
                        ? (1ull << NODE_POINTER_DISABLE_TRIANGLE_CULL_SHIFT) : 0;

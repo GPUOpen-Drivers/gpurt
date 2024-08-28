@@ -29,7 +29,6 @@
 // Following order matters as AccelStructTracker relies on defines from TraceRayCommon.hlsl
 #include "TraceRayCommon.hlsl"
 #include "AccelStructTracker.hlsl"
-#include "llpc/GpurtIntrinsics.h"
 
 #if GPURT_BUILD_CONTINUATION && LLPC_CLIENT_INTERFACE_MAJOR_VERSION
 // Include the continuations library
@@ -1000,6 +999,65 @@ export uint _RayQuery_InstanceIndex(in RayQueryInternal rayQuery, bool committed
     {
         return _RayQuery_CandidateInstanceIndex(rayQuery);
     }
+}
+
+//=====================================================================================================================
+// Fetch triangle position
+export TriangleData _RayQuery_FetchTrianglePosition(
+    inout_param(RayQueryInternal) rayQuery,  // BVH address
+    in bool                       committed) // Node pointer
+{
+    TriangleData tdata;
+    RayTracingIpLevel rtip = _AmdGetRtip();
+    switch (rtip)
+    {
+    default:
+    {
+        tdata = FetchTrianglePositionFromRayQuery(rayQuery, committed);
+        break;
+    }
+    }
+    return tdata;
+}
+
+//=====================================================================================================================
+// RayQuery::Proceed() entry point
+export bool _RayQuery_Proceed(
+    inout_param(RayQueryInternal) rayQuery,
+    in    uint                    constRayFlags,
+    in    uint3                   dispatchThreadId)
+{
+    uint rtIpLevel = ConvertRtIpLevel(_AmdGetRtip());
+    return RayQueryProceedCommon(
+        rayQuery,
+        constRayFlags,
+        dispatchThreadId,
+        rtIpLevel
+    );
+}
+
+//=====================================================================================================================
+// TraceRayInline() entry point
+export void _RayQuery_TraceRayInline(
+    inout_param(RayQueryInternal) rayQuery,
+    in    uint                    accelStructLo,
+    in    uint                    accelStructHi,
+    in    uint                    constRayFlags,
+    in    uint                    rayFlags,
+    in    uint                    instanceMask,
+    in    RayDesc                 rayDesc,
+    in    uint3                   dispatchThreadId)
+{
+    uint rtIpLevel = ConvertRtIpLevel(_AmdGetRtip());
+    TraceRayInlineCommon(rayQuery,
+                         accelStructLo,
+                         accelStructHi,
+                         constRayFlags,
+                         rayFlags,
+                         instanceMask,
+                         rayDesc,
+                         dispatchThreadId,
+                         rtIpLevel);
 }
 
 export void _RayQuery_SetObjId(in RayQueryInternal rayQuery, int objId)

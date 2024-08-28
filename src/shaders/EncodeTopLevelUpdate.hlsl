@@ -28,9 +28,9 @@
 void WriteInstanceDescriptor(
     in InstanceDesc       instanceDesc,
     in uint               geometryType,
-    in uint               boxNodeFlags,
     in uint               instanceIndex,
     in uint               instNodePtr,
+    in AccelStructOffsets offsets,
     in uint               blasRootNodePointer,
     in uint               blasMetadataSize,
     in uint               tlasMetadataSize)
@@ -51,6 +51,7 @@ void EncodeInstancesUpdate(
     uint               index,
     InstanceDesc       desc,
     uint               tlasMetadataSize,
+    AccelStructOffsets offsets,
     uint               primNodePointerOffset,
     uint64_t           baseAddrAccelStructHeader,
     uint               numActivePrims,
@@ -159,9 +160,9 @@ void EncodeInstancesUpdate(
 
             WriteInstanceDescriptor(desc,
                                     geometryType,
-                                    boxNodeFlags,
                                     index,
                                     nodePointer,
+                                    offsets,
                                     CreateRootNodePointer(),
                                     blasMetadataSize,
                                     tlasMetadataSize);

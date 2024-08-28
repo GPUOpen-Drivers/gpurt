@@ -107,7 +107,7 @@ void GenerateMortonCodesImpl(
     // Clear refit propagation flags for each leaf node in BVH2.
     const uint initValue = (Settings.enableFastLBVH ? 0xffffffffu : 0);
     const uint flagOffset = ShaderConstants.offsets.propagationFlags + (primitiveIndex * sizeof(uint));
-    ScratchGlobal.Store(flagOffset, initValue);
+    ScratchBuffer.Store(flagOffset, initValue);
 }
 
 #if NO_SHADER_ENTRYPOINT == 0

@@ -35,7 +35,7 @@ uint CalcCompactedSize(
     // Acceleration structure data starts with the header (not including the metadata)
     uint runningOffset = sizeof(AccelStructHeader);
 
-    AccelStructOffsets offsets;
+    AccelStructOffsets offsets = (AccelStructOffsets)0;
     offsets.internalNodes = runningOffset;
 
     uint internalNodeSize = 0;
@@ -63,8 +63,12 @@ uint CalcCompactedSize(
         offsets.geometryInfo = runningOffset;
         runningOffset += srcHeader.numDescs * sizeof(GeometryInfo);
 
-        offsets.primNodePtrs = runningOffset;
-        runningOffset += srcHeader.numPrimitives * sizeof(uint);
+        {
+            offsets.primNodePtrs = runningOffset;
+            runningOffset += srcHeader.numPrimitives * sizeof(uint);
+
+        }
+
     }
     else
     {
@@ -82,8 +86,11 @@ uint CalcCompactedSize(
             offsets.geometryInfo = 0;
         }
 
-        offsets.primNodePtrs = runningOffset;
-        runningOffset += srcHeader.numPrimitives * sizeof(uint);
+        {
+            offsets.primNodePtrs = runningOffset;
+            runningOffset += srcHeader.numPrimitives * sizeof(uint);
+
+        }
     }
 
     {

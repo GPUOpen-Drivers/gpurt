@@ -30,6 +30,8 @@
 #endif
 #include "../../gpurt/gpurtDispatch.h"
 
+#include "llpc/GpurtIntrinsics.h"
+
 // Driver reserved space ID and resource bindings
 
 #define SPACEID space93
@@ -88,6 +90,26 @@ static uint CalculateHitGroupRecordAddress(
                                                                // bottom level acceleration structure (0,1,2,3..)
             InstanceContributionToHitGroupIndex                // from instance
            );
+}
+
+//=====================================================================================================================
+static uint ConvertRtIpLevel(RayTracingIpLevel rtIpLevel)
+{
+    uint level = 0;
+
+    switch (rtIpLevel)
+    {
+    case RayTracingIpLevel::RtIp1_1:
+        level = GPURT_RTIP1_1;
+        break;
+    case RayTracingIpLevel::RtIp2_0:
+        level = GPURT_RTIP2_0;
+        break;
+    default:
+        break;
+    }
+
+    return level;
 }
 
 //=====================================================================================================================

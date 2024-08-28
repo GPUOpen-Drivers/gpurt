@@ -136,6 +136,7 @@ void EncodeInstances(
             EncodeInstancesUpdate(index,
                                   desc,
                                   tlasMetadataSize,
+                                  offsets,
                                   primNodePointerOffset,
                                   baseAddrAccelStructHeader,
                                   numActivePrims,

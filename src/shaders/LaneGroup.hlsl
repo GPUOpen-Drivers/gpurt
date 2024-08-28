@@ -125,6 +125,22 @@ struct LaneGroup
     }
 
     template<typename T>
+    T BitOr(T val)
+    {
+        const uint clusterSize = log2(groupSize) + 1;
+
+        return AmdExtD3DShaderIntrinsics_WaveClusterBitOr(val, clusterSize);
+    }
+
+    template<typename T>
+    T BitAnd(T val)
+    {
+        const uint clusterSize = log2(groupSize) + 1;
+
+        return AmdExtD3DShaderIntrinsics_WaveClusterBitAnd(val, clusterSize);
+    }
+
+    template<typename T>
     T Broadcast(T val, uint targetLane)
     {
         // Ensure the target lane is within the bounds of the group

@@ -2128,16 +2128,7 @@ const AccelStructBuildInputs Device::OverrideBuildInputs(
     ) const
 {
     AccelStructBuildInputs buildInputs = inputs;
-
-    const bool rebuildTopLevel =
-        (
-        Util::TestAnyFlagSet(Settings().forceRebuildForUpdates, ForceRebuildForUpdatesMode::TopLevel)) &&
-        (buildInputs.type == GpuRt::AccelStructType::TopLevel);
-    const bool rebuildBottomLevel =
-        Util::TestAnyFlagSet(Settings().forceRebuildForUpdates, ForceRebuildForUpdatesMode::BottomLevel) &&
-        (buildInputs.type == GpuRt::AccelStructType::BottomLevel);
-
-    bool rebuildAS = rebuildBottomLevel || rebuildTopLevel;
+    const bool rebuildAS = BvhBuilder::ForceRebuild(this, inputs);
 
     if (rebuildAS)
     {

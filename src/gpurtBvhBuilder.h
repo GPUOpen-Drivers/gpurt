@@ -37,6 +37,15 @@ struct Constants;
 }
 
 // =====================================================================================================================
+// Helper structure for encapsulating triangle index buffer information
+struct IndexBufferInfo
+{
+    uint32 format;
+    uint64 byteOffset;
+    uint64 gpuVa;
+};
+
+// =====================================================================================================================
 // Helper class used by GPURT to perform various BVH operations like building, copying, etc.
 class BvhBuilder
 {
@@ -65,6 +74,11 @@ public:
     // Helper function to determine geometry info size
     static uint32 CalculateGeometryInfoSize(
         uint32 numGeometryDescs);
+
+    // Helper function for when to perform a rebuild
+    static bool ForceRebuild(
+        const Internal::Device*      pDevice,
+        const AccelStructBuildInputs inputs);
 
     // Builds or updates an acceleration structure and stores it in a result buffer
     void BuildRaytracingAccelerationStructure();
@@ -106,12 +120,10 @@ public:
 
     ResultBufferInfo CalculateResultBufferInfo(
         AccelStructDataOffsets* pOffsets,
-        uint32* pMetadataSizeInBytes);
+        uint32* pMetadataSizeInBytes,
+        uint remapScratchBufferSize);
 
     ScratchBufferInfo CalculateScratchBufferInfo(
-        RayTracingScratchDataOffsets* pOffsets);
-
-    ScratchBufferInfo CalculateScratchBufferInfoDefault(
         RayTracingScratchDataOffsets* pOffsets);
 
     uint32 CalculateUpdateScratchBufferInfo(
@@ -169,6 +181,12 @@ public:
     static uint32 GetGeometryPrimCount(
         const Geometry& geometry);
 
+    static IndexBufferInfo GetIndexBufferInfo(
+        const GeometryTriangles& geometry);
+
+    static uint32 TrianglePairBlockCount(
+        uint32 numTriangles);
+
 private:
 
     // Configs that change within build calls, private to the bvh builder.
@@ -205,6 +223,7 @@ private:
         bool                            enableFastLBVH;
         bool                            enableMergeSort;
         bool                            enableInstanceRebraid;
+        bool                            rebuildAccelStruct;
     };
 
     BvhBuilder(
@@ -212,6 +231,19 @@ private:
         const Pal::DeviceProperties& deviceProps,
         ClientCallbacks              clientCb,
         const DeviceSettings&        deviceSettings);
+
+    uint32 CalculateMetadataSize(
+        const uint32  internalNodeSize,
+        const uint32  leafNodeSize,
+        uint32* const pRunningOffset);
+
+    ResultBufferInfo CalculateResultBufferInfoDefault(
+        AccelStructDataOffsets* pOffsets,
+        uint32* pMetadataSizeInBytes,
+        uint remapScratchBufferSize);
+
+    ScratchBufferInfo CalculateScratchBufferInfoDefault(
+        RayTracingScratchDataOffsets* pOffsets);
 
     uint32 CalculateInternalNodesSize()const;
     uint32 CalculateLeafNodesSize() const;

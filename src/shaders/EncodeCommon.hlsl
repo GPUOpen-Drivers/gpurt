@@ -343,7 +343,12 @@ void EncodeTriangleNode(
 
 //=====================================================================================================================
 // Fetch API bounding box from source buffer which is a typed R32G32 buffer.
-BoundingBox FetchBoundingBoxData(RWBuffer<float3> buffer, uint index, uint offsetInElements, uint boxStrideInElements)
+template<typename Float3Buffer>
+BoundingBox FetchBoundingBoxData(
+    Float3Buffer buffer,
+    uint         index,
+    uint         offsetInElements,
+    uint         boxStrideInElements)
 {
     const uint baseElementIndex = index * boxStrideInElements + offsetInElements;
 

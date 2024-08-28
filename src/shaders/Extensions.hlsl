@@ -117,6 +117,7 @@ __decl float3 AmdExtD3DShaderIntrinsics_FloatOpWithRoundMode(
 
 //=====================================================================================================================
 // Sub-group wave reductions
+// Ref: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html#_instructions
 
 [[vk::ext_capability(/* GroupNonUniform */ 61)]]
 [[vk::ext_capability(/* GroupNonUniformArithmetic */ 63)]]
@@ -147,6 +148,24 @@ float AmdExtD3DShaderIntrinsics_WaveClusterMax(float x, uint dxClusterSize)
 {
     const uint clusterSize = (1u << (dxClusterSize - 1));
     return spirv_OpGroupNonUniformFMax_clustered(/* Subgroup */ 3, /* ClusteredReduce */ 3, x, clusterSize);
+}
+
+[[vk::ext_instruction(359)]]
+uint spirv_OpGroupNonUniformBitwiseAnd_clustered(uint scope, [[vk::ext_literal]] uint op, uint value, uint clusterSize);
+
+uint AmdExtD3DShaderIntrinsics_WaveClusterBitAnd(uint x, uint dxClusterSize)
+{
+    const uint clusterSize = (1u << (dxClusterSize - 1));
+    return spirv_OpGroupNonUniformBitwiseAnd_clustered(/* Subgroup */ 3, /* ClusteredReduce */ 3, x, clusterSize);
+}
+
+[[vk::ext_instruction(360)]]
+uint spirv_OpGroupNonUniformBitwiseOr_clustered(uint scope, [[vk::ext_literal]] uint op, uint value, uint clusterSize);
+
+uint AmdExtD3DShaderIntrinsics_WaveClusterBitOr(uint x, uint dxClusterSize)
+{
+    const uint clusterSize = (1u << (dxClusterSize - 1));
+    return spirv_OpGroupNonUniformBitwiseOr_clustered(/* Subgroup */ 3, /* ClusteredReduce */ 3, x, clusterSize);
 }
 
 #endif

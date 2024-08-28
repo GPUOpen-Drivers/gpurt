@@ -99,6 +99,8 @@ list(APPEND gpurtSharedDependencies
     ${gpurtCompileScript}
 )
 
+set(RT_SHADER_VALIDATION_COMMAND "")
+
 # Create custom command that outputs the generated BVH shaders
 # The generated shaders depend on all the above mentioned files
 if(GPURT_CLIENT_API STREQUAL "VULKAN")
@@ -130,16 +132,7 @@ if(GPURT_CLIENT_API STREQUAL "VULKAN")
             ${gpurtStripWhitelist}
             ${gpurtDxcCompiler}
             ${gpurtSpirvRemap}
-
-        COMMAND Python3::Interpreter "${gpurtCompileScript}"
-            --outputDir "${gpurtOutputDir}"
-            --validateShadersClean
-            ${COMPILER_ARGUMENT}
-            --defines "\"${gpurtDefines}\""
-            --includePaths "\"${gpurtIncludeDirectories}\""
-            "${gpurtDxilBvhShader}"
-            "${gpurtShadersSourceDir}"
-            "${gpurtSscStrict}"
+        COMMAND ${RT_SHADER_VALIDATION_COMMAND}
 
         COMMAND Python3::Interpreter "${gpurtCompileScript}"
             --vulkan

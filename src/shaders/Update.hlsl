@@ -133,18 +133,15 @@ void Update(
 
     const uint numGroups = ShaderRootConstants.numThreads / BUILD_THREADGROUP_SIZE;
 
-    {
-        ClearUpdateFlags(globalId);
-        BEGIN_TASK(numGroups);
-        EncodePrimitives(globalId, GEOMETRY_TYPE_TRIANGLES);
-        END_TASK(numGroups);
+    ClearUpdateFlags(globalId);
+    BEGIN_TASK(numGroups);
+    EncodePrimitives(globalId, GEOMETRY_TYPE_TRIANGLES);
+    END_TASK(numGroups);
 
-        const uint numWorkItems = ScratchBuffer.Load(UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET);
-        UpdateQBVHImpl(globalId,
-                    numWorkItems,
-                    ShaderRootConstants.numThreads);
-    }
-
+    const uint numWorkItems = ScratchBuffer.Load(UPDATE_SCRATCH_STACK_NUM_ENTRIES_OFFSET);
+    UpdateQBVHImpl(globalId,
+                   numWorkItems,
+                   ShaderRootConstants.numThreads);
 }
 
 //======================================================================================================================

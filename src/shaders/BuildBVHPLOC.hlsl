@@ -56,7 +56,6 @@ struct BuildPlocArgs
     uint  currentStateScratchOffset;
     uint  taskQueueCounterScratchOffset;
     uint  atomicFlagsScratchOffset;
-    uint  offsetsScratchOffset;
     uint  dynamicBlockIndexScratchOffset;
     uint  numBatchesScratchOffset;
     uint  baseBatchIndicesScratchOffset;
@@ -878,7 +877,6 @@ void BuildBVHPLOC(
     plocArgs.currentStateScratchOffset      = ShaderConstants.offsets.currentState;
     plocArgs.taskQueueCounterScratchOffset  = ShaderConstants.offsets.plocTaskQueueCounter;
     plocArgs.atomicFlagsScratchOffset       = ShaderConstants.offsets.atomicFlagsPloc;
-    plocArgs.offsetsScratchOffset           = ShaderConstants.offsets.clusterOffsets;
     plocArgs.dynamicBlockIndexScratchOffset = ShaderConstants.offsets.dynamicBlockIndex;
     plocArgs.numBatchesScratchOffset        = ShaderConstants.offsets.numBatches;
     plocArgs.baseBatchIndicesScratchOffset  = ShaderConstants.offsets.batchIndices;

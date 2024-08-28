@@ -24,12 +24,14 @@
  **********************************************************************************************************************/
 
 #include "palCmdBuffer.h"
+#include "palHashMapImpl.h"
 #include "palMetroHash.h"
 #include "palVectorImpl.h"
 
 #include "gpurt/gpurt.h"
 #include "gpurt/gpurtLib.h"
 #include "gpurt/gpurtAccelStruct.h"
+#include "gpurt/gpurtInlineFuncs.h"
 #include "gpurtInternal.h"
 #include "gpurtInternalShaderBindings.h"
 #include "gpurtBvhBatcher.h"

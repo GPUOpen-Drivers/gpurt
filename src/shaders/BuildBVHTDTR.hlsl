@@ -984,23 +984,13 @@ void BuildBVHTDImpl(
                 uint numRefsAllocated = ScratchBuffer.Load(numRefsAllocatedOffset);
                 if (globalId == 0)
                 {
-                    UintBoundingBox sceneBounds;
-
-                    uint4 data;
-                    data    = ScratchBuffer.Load4(args.SceneBoundsOffset); // todo: recalc based on ACTIVE nodes
-                    sceneBounds.min = data.xyz;
-                    data.xy = ScratchBuffer.Load2(args.SceneBoundsOffset + 0x10);
-                    sceneBounds.max = data.wxy;
-
-                    BoundingBox bbox;
-                    bbox.min = Uint3ToFloat3(sceneBounds.min);
-                    bbox.max = Uint3ToFloat3(sceneBounds.max);
+                    BoundingBox bbox = FetchSceneBounds(args.SceneBoundsOffset); // todo: recalc based on ACTIVE nodes
 
                     BoundingBox bboxCentroid;
 
                     UintBoundingBox boxCentroidUint;
 
-                    data = ScratchBuffer.Load4(args.CurrentStateScratchOffset + STATE_TD_CENTROID_BBOX_OFFSET);
+                    uint4 data = ScratchBuffer.Load4(args.CurrentStateScratchOffset + STATE_TD_CENTROID_BBOX_OFFSET);
                     boxCentroidUint.min = data.xyz;
                     data.xy = ScratchBuffer.Load2(args.CurrentStateScratchOffset + STATE_TD_CENTROID_BBOX_OFFSET + 0x10);
                     boxCentroidUint.max = data.wxy;

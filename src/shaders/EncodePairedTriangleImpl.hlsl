@@ -46,11 +46,10 @@ void WriteScratchTriangleNode(
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V2_OFFSET, data);
 
     const BoundingBox box = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
-
-    const uint triangleId = WriteTriangleIdField(0, NODE_TYPE_TRIANGLE_0, 0, geometryFlags);
-
     // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
     const uint instanceMask = (box.min.x > box.max.x) ? 0 : 0xff;
+    const uint triangleId = WriteTriangleIdField(0, NODE_TYPE_TRIANGLE_0, 0, geometryFlags);
+
     const uint packedFlags = PackScratchNodeFlags(instanceMask, CalcTriangleBoxNodeFlags(geometryFlags), triangleId);
 
     data = uint4(0, 0, 0, packedFlags);
@@ -118,7 +117,6 @@ void WriteScratchQuadNode(
 
     // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
     const uint instanceMask = (box.min.x > box.max.x) ? 0 : 0xff;
-
     const uint packedFlags = PackScratchNodeFlags(instanceMask, CalcTriangleBoxNodeFlags(geometryFlags), triangleId);
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_FLAGS_OFFSET, packedFlags);
 }
@@ -197,16 +195,47 @@ float ComputePairAreaRatio(
 }
 
 //======================================================================================================================
+float ComputeEdgeBoxSurfaceArea(
+    float3x3 vertices,
+    uint rotation)
+{
+    // triangle v1, v2, v0
+    float3 e0 = (vertices[1]);
+    float3 e1 = (vertices[0]);
+
+    if (rotation == 0)
+    {
+        // triangle v0, v1, v2
+        e0 = (vertices[0]);
+        e1 = (vertices[2]);
+    }
+    else if (rotation == 1)
+    {
+        // triangle v2, v0, v1
+        e0 = (vertices[2]);
+        e1 = (vertices[1]);
+    }
+
+    BoundingBox edgeBox = (BoundingBox)0;
+    edgeBox.min = min(e0, e1);
+    edgeBox.max = max(e0, e1);
+
+    return ComputeBoxSurfaceArea(edgeBox);
+}
+
+//======================================================================================================================
 template<typename T>
 int PairTrianglesOptimal(
     T tri,
-    BoundingBox bbox,
+    float3x3 vertices,
     bool isActive)
 {
     bool valid = isActive;
 
     // Initialise to unpaired triangle
     int pairInfo = -1;
+
+    const BoundingBox bbox = GenerateTriangleBoundingBox(vertices[0], vertices[1], vertices[2]);
 
     while (valid)
     {
@@ -230,7 +259,13 @@ int PairTrianglesOptimal(
             WaveReadLaneFirst(bbox.max),
         };
 
-        const float ratio = (packedOffset == -1) ? FLT_MAX : ComputePairAreaRatio(broadcastTriBounds, bbox);
+        const uint tri1Rotation = (packedOffset >> 4) & 0xF;
+        const float edgeBoxSa = ComputeEdgeBoxSurfaceArea(vertices, tri1Rotation);
+
+        // Skip unpaired triangles and pairs with perpendicular shared edges (i.e. edge box area = 0)
+        const float ratio =
+            ((packedOffset == -1) || (edgeBoxSa == 0.0f)) ?
+                FLT_MAX : ComputePairAreaRatio(broadcastTriBounds, bbox);
 
         const float waveMinRatio = WaveActiveMin(ratio);
 
@@ -325,13 +360,17 @@ int PairTriangles(
 
     const bool isActiveTriangle = IsActive(tri);
 
+    float3x3 faceVertices;
+    faceVertices[0] = tri.v0;
+    faceVertices[1] = tri.v1;
+    faceVertices[2] = tri.v2;
+
     // Indexed triangles can always be paired as their connectivity cannot change on updates.
     if (isIndexed)
     {
         if (Settings.enablePairCostCheck)
         {
-            const BoundingBox bbox = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
-            pairInfo = PairTrianglesOptimal(faceIndices, bbox, isActiveTriangle);
+            pairInfo = PairTrianglesOptimal(faceIndices, faceVertices, isActiveTriangle);
         }
         else
         {
@@ -341,15 +380,9 @@ int PairTriangles(
     // Only pair non-indexed triangles for non-updateable as the triangle positions can change on updates
     else if (IsUpdateAllowed() == false)
     {
-        float3x3 faceVertices;
-        faceVertices[0] = tri.v0;
-        faceVertices[1] = tri.v1;
-        faceVertices[2] = tri.v2;
-
         if (Settings.enablePairCostCheck)
         {
-            const BoundingBox bbox = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
-            pairInfo = PairTrianglesOptimal(faceVertices, bbox, isActiveTriangle);
+            pairInfo = PairTrianglesOptimal(faceVertices, faceVertices, isActiveTriangle);
         }
         else
         {

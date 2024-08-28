@@ -49,6 +49,13 @@ inline uint32_t bit(uint32_t index)
 }
 
 //=====================================================================================================================
+// Helper function for producing a 16 bit mask of one bit
+inline uint16_t bit16(uint16_t index)
+{
+    return uint16_t(1u << index);
+}
+
+//=====================================================================================================================
 // Helper function for producing a 64 bit mask of one bit
 inline uint64_t bit64(uint32_t index)
 {

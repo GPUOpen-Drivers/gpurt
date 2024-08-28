@@ -101,17 +101,8 @@ static VertexFormatInfo VertexFormatInfoTable[] =
 };
 
 // =====================================================================================================================
-// Helper structure for encapsulating triangle index buffer information
-struct IndexBufferInfo
-{
-    uint32 format;
-    uint64 byteOffset;
-    uint64 gpuVa;
-};
-
-// =====================================================================================================================
 // Helper function to convert triangle geometry information into index buffer info
-IndexBufferInfo GetIndexBufferInfo(
+IndexBufferInfo BvhBuilder::GetIndexBufferInfo(
     const GeometryTriangles& geometry)
 {
     IndexBufferInfo indexBuffer = {};
@@ -149,7 +140,7 @@ static uint32 DispatchSize(
 
 // =====================================================================================================================
 // Helper function that calculates the block count for input number of triangles
-static uint32 TrianglePairBlockCount(
+uint32 BvhBuilder::TrianglePairBlockCount(
     uint32 numTriangles)
 {
     constexpr uint32 TrianglePairBlockSize = 64;
@@ -454,19 +445,27 @@ BvhBuilder::BvhBuilder(
     const AccelStructBuildInfo&  buildInfo)       // Build args
     :
     m_pDevice(pDevice),
-    m_deviceSettings(deviceSettings),
     m_clientCb(clientCb),
+    m_deviceSettings(deviceSettings),
+    m_buildConfig({}),
+    m_resultOffsets({}),
     m_buildArgs(buildInfo),
     m_deviceProps(deviceProps),
+    m_metadataSizeInBytes(0),
     m_cmdBuffer(cmdBuffer),
+    m_scratchOffsets({}),
     m_backend(backend),
     m_buildSettings({}),
+    m_shaderConstantsGpuVa(0ull),
+    m_geomConstSrdTable(0ull),
+    m_geomBufferSrdTable(0ull),
     m_radixSortConfig(GetRadixSortConfig(deviceSettings)),
     m_emitCompactDstGpuVa(0ull),
-    m_buildSettingsHash(0)
+    m_buildSettingsHash(0u),
+    m_resultBufferInfo({}),
+    m_scratchBufferInfo({}),
+    m_dumpInfo({})
 {
-    // Determine if the flags have to be overriden based on the build inputs.
-    m_buildArgs.inputs = m_pDevice->OverrideBuildInputs(m_buildArgs.inputs);
     InitializeBuildConfigs();
 
     {
@@ -491,16 +490,26 @@ BvhBuilder::BvhBuilder(
     const DeviceSettings&        deviceSettings)  // Device settings
     :
     m_pDevice(pDevice),
-    m_deviceSettings(deviceSettings),
     m_clientCb(clientCb),
+    m_deviceSettings(deviceSettings),
+    m_buildConfig({}),
+    m_resultOffsets({}),
     m_buildArgs(AccelStructBuildInfo{}),
     m_deviceProps(deviceProps),
+    m_metadataSizeInBytes(0),
     m_cmdBuffer(cmdBuffer),
+    m_scratchOffsets({}),
     m_backend(backend),
     m_buildSettings({}),
+    m_shaderConstantsGpuVa(0ull),
+    m_geomConstSrdTable(0ull),
+    m_geomBufferSrdTable(0ull),
     m_radixSortConfig(GetRadixSortConfig(deviceSettings)),
     m_emitCompactDstGpuVa(0ull),
-    m_buildSettingsHash(0)
+    m_buildSettingsHash(0u),
+    m_resultBufferInfo({}),
+    m_scratchBufferInfo({}),
+    m_dumpInfo({})
 {
     InitCopySettings();
 }
@@ -549,10 +558,16 @@ BvhBuildMode BvhBuilder::OverrideBuildMode(
 // Remapped scratch buffer base address
 bool BvhBuilder::AllowRemappingScratchBuffer() const
 {
+    bool encodeQuadPrimitives = m_buildConfig.enableEarlyPairCompression;
+
+    bool usePrimIndicesArray = false;
+
     return
         (m_deviceSettings.enableRemapScratchBuffer == true) &&
         (IsUpdate() == false) &&
-        (m_deviceSettings.enableBuildAccelStructScratchDumping == false);
+        (m_deviceSettings.enableBuildAccelStructScratchDumping == false) &&
+        (encodeQuadPrimitives == false) &&
+        (usePrimIndicesArray == false);
 }
 
 // =====================================================================================================================
@@ -588,10 +603,40 @@ uint32 BvhBuilder::CalculateScratchBufferSize(
 }
 
 // =====================================================================================================================
+// Calculates the result buffer's metadata size
+uint32 BvhBuilder::CalculateMetadataSize(
+    const uint32  internalNodeSize,
+    const uint32  leafNodeSize,
+    uint32* const pRunningOffset)
+{
+    uint metadataSizeInBytes;
+    {
+        metadataSizeInBytes = CalcMetadataSizeInBytes(internalNodeSize, leafNodeSize);
+        // Align metadata size to cache line
+        metadataSizeInBytes = Util::Pow2Align(metadataSizeInBytes, 128);
+
+        *pRunningOffset += metadataSizeInBytes;
+    }
+
+    return metadataSizeInBytes;
+}
+
+// =====================================================================================================================
 // Calculates the result buffer offsets and returns the total result memory size
 BvhBuilder::ResultBufferInfo BvhBuilder::CalculateResultBufferInfo(
     AccelStructDataOffsets* pOffsets,
-    uint32* pMetadataSizeInBytes)
+    uint32* pMetadataSizeInBytes,
+    uint32 remapScratchBufferSize)
+{
+    return CalculateResultBufferInfoDefault(pOffsets, pMetadataSizeInBytes, remapScratchBufferSize);
+}
+
+// =====================================================================================================================
+// Calculates the result buffer offsets and returns the total result memory size
+BvhBuilder::ResultBufferInfo BvhBuilder::CalculateResultBufferInfoDefault(
+    AccelStructDataOffsets* pOffsets,
+    uint32* pMetadataSizeInBytes,
+    uint32 remapScratchBufferSize)
 {
     ResultBufferInfo info = {};
 
@@ -623,14 +668,23 @@ BvhBuilder::ResultBufferInfo BvhBuilder::CalculateResultBufferInfo(
 
     uint32 internalNodeSize = 0;
     uint32 leafNodeSize = 0;
+    uint32 nodeSize = 0;
 
     if (m_buildConfig.maxNumPrimitives > 0)
     {
         internalNodeSize = CalculateInternalNodesSize();
         leafNodeSize = CalculateLeafNodesSize();
+        nodeSize = internalNodeSize + leafNodeSize;
 
         offsets.internalNodes = ReserveBytes(internalNodeSize, &runningOffset);
         offsets.leafNodes = ReserveBytes(leafNodeSize, &runningOffset);
+
+        if (AllowRemappingScratchBuffer() && (remapScratchBufferSize > nodeSize))
+        {
+            ReserveBytes(remapScratchBufferSize - nodeSize, &runningOffset);
+
+            nodeSize = remapScratchBufferSize;
+        }
 
         if (m_buildConfig.topLevelBuild == false)
         {
@@ -638,22 +692,16 @@ BvhBuilder::ResultBufferInfo BvhBuilder::CalculateResultBufferInfo(
             offsets.geometryInfo = ReserveBytes(geometryInfoSize, &runningOffset);
         }
 
-        offsets.primNodePtrs = ReserveBytes(m_buildConfig.maxNumPrimitives * sizeof(uint32), &runningOffset);
+        {
+            offsets.primNodePtrs = ReserveBytes(m_buildConfig.maxNumPrimitives * sizeof(uint32), &runningOffset);
 
+        }
     }
 
     uint32 totalSizeInBytes = runningOffset;
 
     // Metadata section is at the beginning of the acceleration structure buffer
-    uint32 metadataSizeInBytes;
-    {
-        metadataSizeInBytes = CalcMetadataSizeInBytes(internalNodeSize, leafNodeSize);
-        // Align metadata size to cache line
-        metadataSizeInBytes = Util::Pow2Align(metadataSizeInBytes, 128);
-
-        totalSizeInBytes += metadataSizeInBytes;
-    }
-
+    const uint32 metadataSizeInBytes = CalculateMetadataSize(internalNodeSize, leafNodeSize, &totalSizeInBytes);
     if (pOffsets != nullptr)
     {
         memcpy(pOffsets, &offsets, sizeof(offsets));
@@ -664,8 +712,8 @@ BvhBuilder::ResultBufferInfo BvhBuilder::CalculateResultBufferInfo(
         *pMetadataSizeInBytes = metadataSizeInBytes;
     }
 
-    info.baseOffset = metadataSizeInBytes + sizeof(AccelStructHeader);
-    info.nodeSize = internalNodeSize + leafNodeSize;
+    info.baseOffset = sizeof(AccelStructHeader);
+    info.nodeSize = nodeSize;
     info.dataSize = totalSizeInBytes;
     return info;
 }
@@ -1082,7 +1130,6 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
             neighbourIndices = ReserveBytes(aabbCount * sizeof(uint32), &runningOffset);
             // TODO: calculate number of blocks based on KEYS_PER_THREAD
             atomicFlagsPloc = ReserveBytes(aabbCount * RayTracingPLOCFlags, &runningOffset);
-            clusterOffsets = ReserveBytes(aabbCount * sizeof(uint32), &runningOffset);
         }
     }
     bvh2PhaseMaxSize = Util::Max(bvh2PhaseMaxSize, runningOffset);
@@ -1205,11 +1252,36 @@ GeometryType BvhBuilder::GetGeometryType(
 }
 
 // =====================================================================================================================
+bool BvhBuilder::ForceRebuild(
+    const Internal::Device*      pDevice,
+    const AccelStructBuildInputs inputs)
+{
+    const DeviceSettings settings = pDevice->Settings();
+    const bool rebuildTopLevel =
+        Util::TestAnyFlagSet(settings.forceRebuildForUpdates, ForceRebuildForUpdatesMode::TopLevel) &&
+        (inputs.type == GpuRt::AccelStructType::TopLevel);
+    const bool rebuildBottomLevel =
+        Util::TestAnyFlagSet(settings.forceRebuildForUpdates, ForceRebuildForUpdatesMode::BottomLevel) &&
+        (inputs.type == GpuRt::AccelStructType::BottomLevel);
+
+    bool rebuildAS = rebuildBottomLevel || rebuildTopLevel;
+
+    return rebuildAS;
+}
+
+// =====================================================================================================================
 // Initialize buildConfig
 void BvhBuilder::InitBuildConfig(
     const AccelStructBuildInfo& buildArgs) // Input build args
 {
     m_buildConfig = {};
+
+    if (ForceRebuild(m_pDevice, m_buildArgs.inputs))
+    {
+        // Determine if the flags have to be overriden based on the build inputs.
+        m_buildArgs.inputs = m_pDevice->OverrideBuildInputs(m_buildArgs.inputs);
+        m_buildConfig.rebuildAccelStruct = true;
+    }
 
     // For top-level acceleration structure, inputElementCount represents the number of instances
     uint32 primitiveCount =
@@ -1272,8 +1344,7 @@ void BvhBuilder::InitBuildConfig(
     m_buildConfig.topDownBuild = m_buildConfig.allowTopDownBuild &&
         (buildArgs.inputs.inputElemCount <= m_deviceSettings.maxTopDownBuildInstances);
 
-    if ((Util::TestAnyFlagSet(m_buildArgs.inputs.flags, AccelStructBuildFlagAllowUpdate) == false) &&
-        m_buildConfig.topLevelBuild)
+    if ((UpdateAllowed() == false) && m_buildConfig.topLevelBuild)
     {
         if (m_buildConfig.rebraidType == RebraidType::V1)
         {
@@ -1300,8 +1371,7 @@ void BvhBuilder::InitBuildConfig(
 
     m_buildConfig.triangleSplitting = (m_deviceSettings.enableParallelBuild) &&
         m_deviceSettings.enableTriangleSplitting && (buildArgs.inputs.type == AccelStructType::BottomLevel) &&
-        (Util::TestAnyFlagSet(buildArgs.inputs.flags, AccelStructBuildFlagAllowUpdate) == false) &&
-        Util::TestAnyFlagSet(buildArgs.inputs.flags, AccelStructBuildFlagPreferFastTrace);
+        (UpdateAllowed() == false) && Util::TestAnyFlagSet(buildArgs.inputs.flags, AccelStructBuildFlagPreferFastTrace);
 
     m_buildConfig.buildMode = OverrideBuildMode(buildArgs);
 
@@ -1384,7 +1454,8 @@ void BvhBuilder::InitBuildConfig(
         (IsUpdate() &&
          (m_deviceSettings.enableMergedEncodeUpdate == 0)) ||
         ((IsUpdate() == false) && (m_deviceSettings.enableMergedEncodeBuild == 0)) ||
-        (buildArgs.inputs.type == AccelStructType::TopLevel) ||
+        ((buildArgs.inputs.type == AccelStructType::TopLevel)
+         ) ||
         ((IsUpdate() == false) && (m_buildConfig.geometryType == GeometryType::Aabbs))
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 46
         || (buildArgs.inputs.inputElemCount > maxDescriptorTableSize)
@@ -1552,6 +1623,7 @@ AccelStructHeader BvhBuilder::InitAccelStructHeader() const
     header.accelStructVersion       = GPURT_ACCEL_STRUCT_VERSION;
     header.metadataSizeInBytes      = m_metadataSizeInBytes;
     header.sizeInBytes              = accelStructSize;
+    header.compactedSizeInBytes     = accelStructSize;
     header.numPrimitives            = m_buildConfig.maxNumPrimitives; // Is this correct?
     header.numDescs                 = m_buildArgs.inputs.inputElemCount;
     header.geometryType             = static_cast<uint32>(m_buildConfig.geometryType);
@@ -1823,9 +1895,9 @@ void BvhBuilder::InitAccelerationStructure()
         }
     }
 
-    // Merged encode/build writes the header using the shader. However, we don't launch the build shader in the case
-    // of an empty BVH.
-    if (m_buildConfig.needEncodeDispatch || (m_buildConfig.maxNumPrimitives == 0))
+    // Merged encode/build and BuildParallel write the header using the shader.
+    // However, we don't launch the build shader in the case of an empty BVH.
+    if ((m_buildConfig.maxNumPrimitives == 0) || (m_deviceSettings.enableParallelBuild == false))
     {
         WriteImmediateData(HeaderBufferBaseVa(), InitAccelStructMetadataHeader());
         WriteImmediateData(ResultBufferBaseVa(), InitAccelStructHeader());
@@ -2176,6 +2248,7 @@ void BvhBuilder::InitBuildSettings()
 
     m_buildSettings.updateFlags =
         m_buildArgs.inputs.flags & (AccelStructBuildFlagPerformUpdate | AccelStructBuildFlagAllowUpdate);
+    m_buildSettings.rebuildAccelStruct = m_buildConfig.rebuildAccelStruct;
 
     m_buildSettings.isUpdateInPlace = IsUpdateInPlace();
     m_buildSettings.encodeArrayOfPointers =
@@ -2215,19 +2288,26 @@ void BvhBuilder::GetAccelerationStructurePrebuildInfo(
 
     AccelStructPrebuildInfo prebuildInfo = {};
 
-    // Calculate the amount of space needed to store the result.
-    const ResultBufferInfo resultBufferInfo = CalculateResultBufferInfo(nullptr, nullptr);
-    const uint32 resultDataSize = resultBufferInfo.dataSize;
-
     // Calculate the amount of scratch space needed during the construction process.
     const ScratchBufferInfo scratchBufferInfo = CalculateScratchBufferInfo(nullptr);
+
+    // Calculate the amount of space needed to store the result.
+    const ResultBufferInfo resultBufferInfo = CalculateResultBufferInfo(nullptr, nullptr, scratchBufferInfo.bvh2PhaseSize);
+
     uint32 scratchDataSize = CalculateScratchBufferSize(resultBufferInfo, scratchBufferInfo);
+    const uint32 resultDataSize = resultBufferInfo.dataSize;
 
     uint32 updateDataSize = 0;
-    if (UpdateAllowed())
+    if (m_buildConfig.rebuildAccelStruct)
+    {
+        // When we force a rebuild the acceleration structure should use scratch data size for updates
+        updateDataSize = Util::Max(1u, scratchDataSize);
+    }
+    else if (UpdateAllowed())
     {
         updateDataSize = Util::Max(1u, CalculateUpdateScratchBufferInfo(nullptr));
     }
+
     // Scratch size for builds may be smaller than updates, some apps will still try to use the scratch size from
     // the build when performing the update causing page faults.
     scratchDataSize = Util::Max(scratchDataSize, updateDataSize);
@@ -2380,8 +2460,26 @@ void BvhBuilder::PreBuildDumpEvents()
 {
     PAL_ASSERT(HasBuildDumpEvents());
 
-    const ResultBufferInfo resultBufferInfo = CalculateResultBufferInfo(nullptr, nullptr);
-    const uint32 resultDataSize = resultBufferInfo.dataSize;
+    uint32 scratchDataSize;
+    uint32 resultDataSize;
+
+    if (IsUpdate() == false)
+    {
+        const ScratchBufferInfo scratchBufferInfo = CalculateScratchBufferInfo(nullptr);
+
+        const ResultBufferInfo resultBufferInfo = CalculateResultBufferInfo(nullptr, nullptr, scratchBufferInfo.bvh2PhaseSize);
+
+        scratchDataSize = CalculateScratchBufferSize(resultBufferInfo, scratchBufferInfo);
+
+        resultDataSize = resultBufferInfo.dataSize;
+    }
+    else
+    {
+        scratchDataSize = CalculateUpdateScratchBufferInfo(nullptr);
+
+        const ResultBufferInfo resultBufferInfo = CalculateResultBufferInfo(nullptr, nullptr, 0);
+        resultDataSize = resultBufferInfo.dataSize;
+    }
 
     // Initialise acceleration structure information for dump purposes
     m_dumpInfo = {};
@@ -2397,18 +2495,9 @@ void BvhBuilder::PreBuildDumpEvents()
     m_dumpInfo.gpuVa                   = HeaderBufferBaseVa();
     m_dumpInfo.sizeInBytes             = resultDataSize;
     m_dumpInfo.scratchGpuVa            = ScratchBufferBaseVa();
+    m_dumpInfo.scratchSizeInBytes      = scratchDataSize;
     m_dumpInfo.pTimeStampVidMem        = nullptr;
     m_dumpInfo.timeStampVidMemoffset   = 0;
-
-    if (IsUpdate() == false)
-    {
-        const ScratchBufferInfo scratchBufferInfo = CalculateScratchBufferInfo(nullptr);
-        m_dumpInfo.scratchSizeInBytes = CalculateScratchBufferSize(resultBufferInfo, scratchBufferInfo);
-    }
-    else
-    {
-        m_dumpInfo.scratchSizeInBytes = CalculateUpdateScratchBufferInfo(nullptr);
-    }
 
     if (m_deviceSettings.enableBuildAccelStructStats)
     {
@@ -2509,18 +2598,20 @@ void BvhBuilder::InitializeBuildConfigs()
     InitBuildConfig(m_buildArgs);
     InitBuildSettings();
 
-    m_resultBufferInfo = CalculateResultBufferInfo(&m_resultOffsets, &m_metadataSizeInBytes);
-
-    m_scratchBufferInfo = {};
     if (IsUpdate() == false)
     {
         // Compute the offsets into the scratch buffer for all of our scratch resources.
         m_scratchBufferInfo = CalculateScratchBufferInfo(&m_scratchOffsets);
+
+        m_resultBufferInfo = CalculateResultBufferInfo(&m_resultOffsets, &m_metadataSizeInBytes, m_scratchBufferInfo.bvh2PhaseSize);
     }
     else
     {
         // Compute the offsets into the scratch buffer for all of our scratch resources.
+        m_scratchBufferInfo = {};
         CalculateUpdateScratchBufferInfo(&m_scratchOffsets);
+
+        m_resultBufferInfo = CalculateResultBufferInfo(&m_resultOffsets, &m_metadataSizeInBytes, 0);
     }
 
     // Add tlas to m_tlas
@@ -3487,46 +3578,46 @@ void BvhBuilder::UpdateParallel()
 // Perform geometry encoding and update in one dispatch
 void BvhBuilder::EncodeUpdate()
 {
-    BindPipeline((m_buildConfig.geometryType == GeometryType::Triangles) ?
-        InternalRayTracingCsType::UpdateTriangles : InternalRayTracingCsType::UpdateAabbs);
+    uint32 numThreadGroups = 0;
 
-    const uint32 threadGroupSize  = DefaultThreadGroupSize;
-    const uint32 wavesPerSimd     = 8;
-    uint32 numThreadGroups        = 0;
     {
-        const uint32 numWorkItems = Util::Max(1u, m_buildConfig.numPrimitives);
-        numThreadGroups    = GetNumPersistentThreadGroups(numWorkItems, threadGroupSize, wavesPerSimd);
+        BindPipeline((m_buildConfig.geometryType == GeometryType::Triangles) ?
+            InternalRayTracingCsType::UpdateTriangles : InternalRayTracingCsType::UpdateAabbs);
+
+        const uint32 threadGroupSize = DefaultThreadGroupSize;
+        const uint32 wavesPerSimd    = 8;
+        const uint32 numWorkItems    = Util::Max(1u, m_buildConfig.numPrimitives);
+        const uint32 numThreadGroups = GetNumPersistentThreadGroups(numWorkItems, threadGroupSize, wavesPerSimd);
+        const uint32 numThreads      = numThreadGroups * threadGroupSize;
+
+        uint32 entryOffset = 0;
+
+        const Update::Constants shaderConstants =
+        {
+            .numThreads = numThreads,
+        };
+
+        // Set shader constants
+        entryOffset = WriteUserDataEntries(&shaderConstants, Update::NumEntries, entryOffset);
+
+        entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
+
+        // Set result/scratch/source buffers
+        entryOffset = WriteUpdateBuffers(entryOffset);
+
+        const uint32 cbvSrdTableGpuVaLo = Util::LowPart(m_geomConstSrdTable);
+        entryOffset = WriteUserDataEntries(&cbvSrdTableGpuVaLo, 1, entryOffset);
+
+        const uint32 vbvSrdTableGpuVaLo = Util::LowPart(m_geomBufferSrdTable);
+        entryOffset = WriteUserDataEntries(&vbvSrdTableGpuVaLo, 1, entryOffset);
+
+        // NullBuffer binding
+        entryOffset = WriteBufferVa(0, entryOffset);
+
+        RGP_PUSH_MARKER("Update (NumPrimitives=%u)", m_buildConfig.maxNumPrimitives);
+        Dispatch(numThreadGroups);
+        RGP_POP_MARKER();
     }
-    const uint32 numThreads       = numThreadGroups * threadGroupSize;
-
-    uint32 entryOffset = 0;
-
-    const Update::Constants shaderConstants =
-    {
-        .numThreads = numThreads,
-    };
-
-    // Set shader constants
-    entryOffset = WriteUserDataEntries(&shaderConstants, Update::NumEntries, entryOffset);
-
-    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
-
-    // Set result/scratch/source buffers
-    entryOffset = WriteUpdateBuffers(entryOffset);
-
-    const uint32 cbvSrdTableGpuVaLo = Util::LowPart(m_geomConstSrdTable);
-    entryOffset = WriteUserDataEntries(&cbvSrdTableGpuVaLo, 1, entryOffset);
-
-    const uint32 vbvSrdTableGpuVaLo = Util::LowPart(m_geomBufferSrdTable);
-    entryOffset = WriteUserDataEntries(&vbvSrdTableGpuVaLo, 1, entryOffset);
-
-    // NullBuffer binding
-    entryOffset = WriteBufferVa(0, entryOffset);
-
-    RGP_PUSH_MARKER("Update (NumPrimitives=%u)", m_buildConfig.maxNumPrimitives);
-    Dispatch(numThreadGroups);
-
-    RGP_POP_MARKER();
 }
 
 // =====================================================================================================================

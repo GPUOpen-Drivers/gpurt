@@ -94,6 +94,8 @@ struct AccelStructMetadataHeader
                                 // numTasksDone can be reset in one 64 bit CP write.
     uint32 numTasksDone;        // Number of tasks done
     uint32 reserved0[16];       // Reserved
+    uint32 reserved1[3];        // Reserved
+    uint32 reserved2[3];        // Reserved
 };
 
 #define ACCEL_STRUCT_METADATA_VA_LO_OFFSET              0
@@ -102,7 +104,9 @@ struct AccelStructMetadataHeader
 #define ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET       12
 #define ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET     16
 #define ACCEL_STRUCT_METADATA_RESERVED_0                20
-#define ACCEL_STRUCT_METADATA_HEADER_SIZE               84
+#define ACCEL_STRUCT_METADATA_RESERVED_1                84
+#define ACCEL_STRUCT_METADATA_RESERVED_2                96
+#define ACCEL_STRUCT_METADATA_HEADER_SIZE               108
 
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_HEADER_SIZE == sizeof(AccelStructMetadataHeader), "Acceleration structure header mismatch");
 #ifdef __cplusplus
@@ -110,6 +114,7 @@ GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_VA_LO_OFFSET == offsetof(AccelStructMe
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_VA_HI_OFFSET == offsetof(AccelStructMetadataHeader, addressHi), "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_SIZE_OFFSET == offsetof(AccelStructMetadataHeader, sizeInBytes), "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET == offsetof(AccelStructMetadataHeader, taskCounter), "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET == offsetof(AccelStructMetadataHeader, numTasksDone), "");
 #endif
 
 #ifdef __cplusplus

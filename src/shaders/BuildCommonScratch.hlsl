@@ -591,6 +591,28 @@ float2 FetchSceneSize(uint sceneBoundsOffset)
     return minMax;
 }
 
+//=====================================================================================================================
+void InitSceneBounds(uint sceneBoundsOffset)
+{
+    // Initialize scene bounds
+    const uint maxVal = FloatToUint(FLT_MAX);
+    const uint minVal = FloatToUint(-FLT_MAX);
+
+    ScratchBuffer.Store3(sceneBoundsOffset, maxVal.xxx);
+    sceneBoundsOffset += sizeof(uint3);
+    ScratchBuffer.Store3(sceneBoundsOffset, minVal.xxx);
+    sceneBoundsOffset += sizeof(uint3);
+    ScratchBuffer.Store2(sceneBoundsOffset, uint2(maxVal, minVal));
+    sceneBoundsOffset += sizeof(uint2);
+
+    if (Settings.rebraidType == RebraidType::V2)
+    {
+        ScratchBuffer.Store3(sceneBoundsOffset, maxVal.xxx);
+        sceneBoundsOffset += sizeof(uint3);
+        ScratchBuffer.Store3(sceneBoundsOffset, minVal.xxx);
+    }
+}
+
 //======================================================================================================================
 uint GetBvhNodesOffset(
     uint numActivePrims,

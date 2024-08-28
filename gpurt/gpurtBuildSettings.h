@@ -99,6 +99,7 @@ struct CompileTimeBuildSettings
     uint32 unused11;
     uint32 unused12;
     uint32 unused13;
+    uint32 rebuildAccelStruct;
 };
 
 #define BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_ID                        0
@@ -134,6 +135,7 @@ struct CompileTimeBuildSettings
 #define BUILD_SETTINGS_DATA_ENCODE_ARRAY_OF_POINTERS_ID               41
 #define BUILD_SETTINGS_DATA_SCENE_BOUNDS_CALCULATION_TYPE_ID          42
 #define BUILD_SETTINGS_DATA_REBRAID_QUALITY_HEURISTIC_ID              43
+#define BUILD_SETTINGS_DATA_REBUILD_ACCELERATION_STRUCTURE_ID         47
 
 #ifdef __cplusplus
 } // namespace GpuRt

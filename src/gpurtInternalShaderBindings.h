@@ -82,6 +82,16 @@ namespace CopyAS
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
 }
 
+namespace BuildTrivialBvh
+{
+    struct Constants
+    {
+        uint32 maxGeometryCount;
+    };
+
+    constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
+}
+
 namespace CompactAS
 {
     struct Constants

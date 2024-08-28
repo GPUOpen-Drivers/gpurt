@@ -193,7 +193,7 @@ def getValidationCmdArgs(args) -> [str]:
 
     validateCommand =  [compilerPath]
 
-    validateCommand += getBaseDxcCommandArgs(True, True, True)
+    validateCommand += getBaseDxcCommandArgs(True, True, False)
     validateCommand += ["-Wno-misplaced-attributes"] # -Wmisplaced-attributes is triggered by [RootSignature()]
                                                      # used by entrypoint code and compiled as library
     validateCommand += ['-Fo', 'temp.bin']

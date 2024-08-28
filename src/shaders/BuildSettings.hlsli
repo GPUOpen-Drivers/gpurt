@@ -59,6 +59,7 @@
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENCODE_ARRAY_OF_POINTERS_ID)]]               uint encodeArrayOfPointers         = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_SCENE_BOUNDS_CALCULATION_TYPE_ID)]]          uint sceneBoundsCalculationType    = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_REBRAID_QUALITY_HEURISTIC_ID)]]              uint rebraidQualityHeuristic       = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_REBUILD_ACCELERATION_STRUCTURE_ID)]]         uint rebuildAccelStruct            = 0;
 
 static const CompileTimeBuildSettings Settings = {
     topLevelBuild,
@@ -108,6 +109,7 @@ static const CompileTimeBuildSettings Settings = {
     0,
     0,
     0,
+    rebuildAccelStruct,
 };
 
 #endif

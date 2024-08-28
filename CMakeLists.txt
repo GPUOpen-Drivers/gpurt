@@ -115,6 +115,10 @@ if (DEFINED GPURT_CLIENT_INTERFACE_MAJOR_VERSION)
     gpurt_add_compile_definitions(GPURT_CLIENT_INTERFACE_MAJOR_VERSION=${GPURT_CLIENT_INTERFACE_MAJOR_VERSION})
 endif()
 
+if (DEFINED PAL_CLIENT_INTERFACE_MAJOR_VERSION)
+    gpurt_add_compile_definitions(PAL_CLIENT_INTERFACE_MAJOR_VERSION=${PAL_CLIENT_INTERFACE_MAJOR_VERSION})
+endif()
+
 ### Add Source Directories
 target_include_directories(gpurt PUBLIC .)
 target_include_directories(gpurt_internal PUBLIC .)

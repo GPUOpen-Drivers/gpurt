@@ -604,11 +604,9 @@ static void PullUpChildren(
         }
         else
         {
-            {
-                // Note, box node flags are combined together by using an AND operation. Thus, we need to initialise
-                // invalid child flags as 0xff
-                boxNodeFlags = SetBoxNodeFlagsField(boxNodeFlags, 0xff, i);
-            }
+            // Note, box node flags are combined together by using an AND operation. Thus, we need to initialise
+            // invalid child flags as 0xff
+            boxNodeFlags = SetBoxNodeFlagsField(boxNodeFlags, 0xff, i);
         }
     }
 

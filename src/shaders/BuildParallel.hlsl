@@ -260,7 +260,6 @@ void BuildBvhPloc(
     plocArgs.currentStateScratchOffset      = ShaderConstants.offsets.currentState;
     plocArgs.taskQueueCounterScratchOffset  = ShaderConstants.offsets.plocTaskQueueCounter;
     plocArgs.atomicFlagsScratchOffset       = ShaderConstants.offsets.atomicFlagsPloc;
-    plocArgs.offsetsScratchOffset           = ShaderConstants.offsets.clusterOffsets;
     plocArgs.dynamicBlockIndexScratchOffset = ShaderConstants.offsets.dynamicBlockIndex;
     plocArgs.numBatchesScratchOffset        = ShaderConstants.offsets.numBatches;
     plocArgs.baseBatchIndicesScratchOffset  = ShaderConstants.offsets.batchIndices;
@@ -401,44 +400,31 @@ void InitAccelerationStructure()
 
     DstBuffer.Store(0, ShaderConstants.header);
 
-    // Initialise encode counters
-    WriteTaskCounterData(
-        ShaderConstants.offsets.encodeTaskCounter, ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET, 0);
-
-    // Early triangle pairing and triangle splitting dynamically increment primitive reference counter. Initialise
-    // counters to 0 when these features are enabled
-
-    const bool dynamicallyIncrementsPrimRefCount =
-        Settings.enableEarlyPairCompression || Settings.doTriangleSplitting || Settings.isIndirectBuild;
-    const uint primRefInitCount =
-        (dynamicallyIncrementsPrimRefCount) ? 0 : ShaderConstants.numPrimitives;
-
-    WriteTaskCounterData(
-        ShaderConstants.offsets.encodeTaskCounter, ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET, primRefInitCount);
-
-    // Initialize valid scratch buffer counters to 0
-    InitScratchCounter(ShaderConstants.offsets.plocTaskQueueCounter);
-    InitScratchCounter(ShaderConstants.offsets.tdTaskQueueCounter);
-    InitScratchCounter(CurrentSplitTaskQueueCounter());
-    ClearNumBatches(ShaderConstants.offsets.numBatches);
-
-    // Initialize scene bounds
-    const uint maxVal = FloatToUint(FLT_MAX);
-    const uint minVal = FloatToUint(-FLT_MAX);
-
-    uint offset = ShaderConstants.offsets.sceneBounds;
-    ScratchBuffer.Store3(offset, maxVal.xxx);
-    offset += sizeof(uint3);
-    ScratchBuffer.Store3(offset, minVal.xxx);
-    offset += sizeof(uint3);
-    ScratchBuffer.Store2(offset, uint2(maxVal, minVal));
-    offset += sizeof(uint2);
-
-    if (Settings.rebraidType == RebraidType::V2)
+    if (Settings.doEncode)
     {
-        ScratchBuffer.Store3(offset, maxVal.xxx);
-        offset += sizeof(uint3);
-        ScratchBuffer.Store3(offset, minVal.xxx);
+        // Initialise encode counters
+        WriteTaskCounterData(
+            ShaderConstants.offsets.encodeTaskCounter, ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET, 0);
+
+        // Early triangle pairing and triangle splitting dynamically increment primitive reference counter. Initialise
+        // counters to 0 when these features are enabled
+
+        const bool dynamicallyIncrementsPrimRefCount =
+            Settings.enableEarlyPairCompression || Settings.doTriangleSplitting || Settings.isIndirectBuild;
+        const uint primRefInitCount =
+            (dynamicallyIncrementsPrimRefCount) ? 0 : ShaderConstants.numPrimitives;
+
+        WriteTaskCounterData(
+            ShaderConstants.offsets.encodeTaskCounter, ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET, primRefInitCount);
+
+        // Initialize valid scratch buffer counters to 0
+        InitScratchCounter(ShaderConstants.offsets.plocTaskQueueCounter);
+        InitScratchCounter(ShaderConstants.offsets.tdTaskQueueCounter);
+        InitScratchCounter(CurrentSplitTaskQueueCounter());
+        ClearNumBatches(ShaderConstants.offsets.numBatches);
+
+        // Initialize scene bounds
+        InitSceneBounds(ShaderConstants.offsets.sceneBounds);
     }
 }
 
@@ -503,17 +489,17 @@ void BuildBvh(
 
     INIT_TASK;
 
+    BEGIN_TASK(1);
+
+    if (globalId == 0)
+    {
+        InitAccelerationStructure();
+    }
+
+    END_TASK(1);
+
     if (Settings.doEncode)
     {
-        BEGIN_TASK(1);
-
-        if (globalId == 0)
-        {
-            InitAccelerationStructure();
-        }
-
-        END_TASK(1);
-
         BEGIN_TASK(ShaderRootConstants.NumThreadGroups());
 
         EncodePrimitives(globalId, localId);
