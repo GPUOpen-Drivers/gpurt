@@ -22,31 +22,30 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#ifndef EXTENSIONS_HLSLI
-#define EXTENSIONS_HLSLI
+#ifndef INSTANCE_DESC_HLSLI
+#define INSTANCE_DESC_HLSLI
 
-#define __decl [noinline]
-
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TiesToEven     0x0
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardPositive 0x1
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardNegative 0x2
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardZero     0x3
-
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Add      0x0
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Subtract 0x1
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Multiply 0x2
+#include "TempAssert.hlsli"
 
 //=====================================================================================================================
-static float FloatOpWithRoundMode(uint roundMode, uint operation, float src0, float src1);
+// 64-byte aligned structure matching D3D12_RAYTRACING_INSTANCE_DESC
+struct InstanceDesc
+{
+    float4 Transform[3];                                    // Inverse transform for traversal
+    uint   InstanceID_and_Mask;                             // 24-bit instance ID and 8-bit mask
+    uint   InstanceContributionToHitGroupIndex_and_Flags;   // 24-bit instance contribution and 8-bit flags
+    uint   accelStructureAddressLo;                         // Lower part of acceleration structure base address
+    uint   accelStructureAddressHiAndFlags;                 // Upper part of acceleration structure base address and
+                                                            // HW raytracing IP 2.0 flags
+};
 
-//=====================================================================================================================
-static float2 FloatOpWithRoundMode(uint roundMode, uint operation, float2 src0, float2 src1);
+#define INSTANCE_DESC_SIZE                          64
+#define INSTANCE_DESC_WORLD_TO_OBJECT_XFORM_OFFSET   0
+#define INSTANCE_DESC_ID_AND_MASK_OFFSET            48
+#define INSTANCE_DESC_CONTRIBUTION_AND_FLAGS_OFFSET 52
+#define INSTANCE_DESC_VA_LO_OFFSET                  56
+#define INSTANCE_DESC_VA_HI_OFFSET                  60
 
-//=====================================================================================================================
-static float3 FloatOpWithRoundMode(uint roundMode, uint operation, float3 src0, float3 src1);
-
-#ifndef LIBRARY_COMPILATION
-#include "Extensions.hlsl"
-#endif
+GPURT_STATIC_ASSERT(INSTANCE_DESC_SIZE == sizeof(InstanceDesc), "InstanceDesc structure mismatch");
 
 #endif

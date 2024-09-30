@@ -326,33 +326,6 @@ float3 Uint3ToFloat3(in uint3 v)
 }
 
 //=====================================================================================================================
-// Divide uints and round up
-uint RoundUpQuotient(
-    uint dividend,
-    uint divisor)
-{
-    return (dividend + divisor - 1) / divisor;
-}
-
-//=====================================================================================================================
-// Divide ints and round up
-int RoundUpQuotient(
-    int dividend,
-    int divisor)
-{
-    return (dividend + divisor - 1) / divisor;
-}
-
-//=====================================================================================================================
-// Divide ints and round up
-uint64_t RoundUpQuotient(
-    uint64_t dividend,
-    uint64_t divisor)
-{
-    return (dividend + divisor - 1) / divisor;
-}
-
-//=====================================================================================================================
 static uint32_t GetNumInternalNodeCount(
     in uint32_t primitiveCount)
 {
@@ -678,9 +651,9 @@ uint PackInstanceMaskAndNodeFlags(
 uint PackScratchNodeFlags(
     uint instanceInclusionMask,
     uint nodeFlags,
-    uint triangleId)
+    uint quadSwizzle)
 {
-    const uint packedFlags = (triangleId << 16) | PackInstanceMaskAndNodeFlags(instanceInclusionMask, nodeFlags);
+    const uint packedFlags = (quadSwizzle << 16) | PackInstanceMaskAndNodeFlags(instanceInclusionMask, nodeFlags);
     return packedFlags;
 }
 

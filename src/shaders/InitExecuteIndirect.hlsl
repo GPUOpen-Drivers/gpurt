@@ -123,10 +123,13 @@ void InitExecuteIndirect(
     {
         DispatchRaysDimensions dispatchRaysDescDim;
 
+        // The DispatchRays indirect argument struct follows any resource bindings
+        const uint dispatchRaysDescOffset = (dispatchIdx * Constants.inputBytesPerDispatch) + Constants.bindingArgsSize;
+
         if (Constants.indirectMode == DispatchDimensions)
         {
             // vkCmdTraceRaysIndirectKHR - ray trace query dimensions
-            const DispatchRaysDimensions dispatchRaysDesc = InputArgBuffer.Load<DispatchRaysDimensions>(0);
+            const DispatchRaysDimensions dispatchRaysDesc = InputArgBuffer.Load<DispatchRaysDimensions>(dispatchRaysDescOffset);
 
             dispatchRaysDescDim = dispatchRaysDesc;
 
@@ -138,7 +141,7 @@ void InitExecuteIndirect(
         else
         {
             // vkCmdTraceRaysIndirect2KHR- shaderTable + ray trace query dimensions
-            const DispatchRaysDesc dispatchRaysDesc = InputArgBuffer.Load<DispatchRaysDesc>(0);
+            const DispatchRaysDesc dispatchRaysDesc = InputArgBuffer.Load<DispatchRaysDesc>(dispatchRaysDescOffset);
 
             dispatchRaysDescDim.width  = dispatchRaysDesc.width;
             dispatchRaysDescDim.height = dispatchRaysDesc.height;
@@ -164,7 +167,18 @@ void InitExecuteIndirect(
             OutputConstants[dispatchIdx].callableTableStrideInBytes  = uint(dispatchRaysDesc.callableShaderTable.stride);
         }
 
-        uint outputOffset = 0;
+        uint inputOffset  = dispatchIdx * Constants.inputBytesPerDispatch;
+        uint outputOffset = dispatchIdx * Constants.outputBytesPerDispatch;
+
+        // Directly copy all indirect binding args from the app buffer to our temp internal buffer
+        for (uint i = 0; i < Constants.bindingArgsSize; i += sizeof(uint))
+        {
+            const uint data = InputArgBuffer.Load(inputOffset);
+            OutputArgBuffer.Store(outputOffset, data);
+            outputOffset += sizeof(uint);
+            inputOffset  += sizeof(uint);
+        }
+
         uint3 dispatchDim = uint3(0, 0, 0);
 
         switch (Constants.dispatchDimSwizzleMode)

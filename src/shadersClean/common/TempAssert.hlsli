@@ -22,31 +22,17 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#ifndef EXTENSIONS_HLSLI
-#define EXTENSIONS_HLSLI
 
-#define __decl [noinline]
+// TODO: this is a temporary assert file to allow files with asserts to be "clean"
+// while the assert file itself cannot be. We need this as we have to move files out of "shared"
+// which use assert.h, but cannot then include assert.h as "clean" inclusion of shared files isn't set up yet,
+// *because* there are too many files in shared, and they can't be moved out because
+// they use assert.h and... (cyclical issue)
 
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TiesToEven     0x0
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardPositive 0x1
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardNegative 0x2
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardZero     0x3
-
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Add      0x0
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Subtract 0x1
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Multiply 0x2
-
-//=====================================================================================================================
-static float FloatOpWithRoundMode(uint roundMode, uint operation, float src0, float src1);
-
-//=====================================================================================================================
-static float2 FloatOpWithRoundMode(uint roundMode, uint operation, float2 src0, float2 src1);
-
-//=====================================================================================================================
-static float3 FloatOpWithRoundMode(uint roundMode, uint operation, float3 src0, float3 src1);
-
-#ifndef LIBRARY_COMPILATION
-#include "Extensions.hlsl"
+#ifndef ASSERT_HLSLI
+#define ASSERT_HLSLI
+#ifndef GPURT_STATIC_ASSERT
+// _Static_assert is not supported with -spirv: https://github.com/microsoft/DirectXShaderCompiler/issues/5750
+#define GPURT_STATIC_ASSERT(condition, message)
 #endif
-
 #endif

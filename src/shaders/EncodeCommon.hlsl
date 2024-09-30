@@ -24,6 +24,8 @@
  **********************************************************************************************************************/
 #include "BuildCommonScratch.hlsl"
 
+#include "../shared/rayTracingDefs.h"
+
 #include "TrianglePrimitive.hlsl"
 #include "UpdateCommon.hlsl"
 
@@ -62,8 +64,7 @@ void WriteScratchTriangleNode(
         flags |= SCRATCH_NODE_FLAGS_DISABLE_TRIANGLE_SPLIT_MASK;
     }
 
-    const uint triangleId = CalcUncompressedTriangleId(geometryFlags);
-    const uint packedFlags = PackScratchNodeFlags(instanceMask, flags, triangleId);
+    const uint packedFlags = PackScratchNodeFlags(instanceMask, flags, 0);
 
     data = uint4(INVALID_IDX, 0, 0, packedFlags);
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, data);
@@ -173,16 +174,15 @@ void EncodeTriangleNode(
                 const uint nodeOffset = metadataSize + ExtractNodePointerOffset(nodePointer);
                 const uint nodeType   = GetNodeType(nodePointer);
 
-                uint3 vertexOffsets;
+                triangleId = SrcBuffer.Load(nodeOffset + TRIANGLE_NODE_ID_OFFSET);
 
+                uint3 vertexOffsets;
                 if (Settings.triangleCompressionMode != NO_TRIANGLE_COMPRESSION)
                 {
-                    triangleId = SrcBuffer.Load(nodeOffset + TRIANGLE_NODE_ID_OFFSET);
                     vertexOffsets = CalcTriangleCompressionVertexOffsets(nodeType, triangleId);
                 }
                 else
                 {
-                    triangleId = CalcUncompressedTriangleId(geomConstants.geometryFlags);
                     vertexOffsets = CalcTriangleVertexOffsets(nodeType);
                 }
 
@@ -284,11 +284,11 @@ void EncodeTriangleNode(
             const bool isActiveTriangle = IsActive(tri);
             if (isActiveTriangle)
             {
-                if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometry)
+                if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometry)
                 {
                     UpdateSceneBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
                 }
-                else if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
+                else if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometryWithSize)
                 {
                     // TODO: with tri splitting, need to not update "size" here
                     UpdateSceneBoundsWithSize(ShaderConstants.offsets.sceneBounds, boundingBox);
@@ -411,12 +411,11 @@ void WriteScratchProceduralNode(
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V2_OFFSET, data);
 
     // type, flags, splitBox, numPrimitivesAndDoCollapse
-    uint triangleId = 0;
 
     // Instance mask is assumed 0 in bottom level acceleration structures
     const uint flags = CalcProceduralBoxNodeFlags(geometryFlags);
 
-    const uint packedFlags = PackScratchNodeFlags(instanceMask, flags, triangleId);
+    const uint packedFlags = PackScratchNodeFlags(instanceMask, flags, 0);
 
     data = uint4(INVALID_IDX, 0, 0, packedFlags);
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, data);
@@ -525,11 +524,11 @@ void EncodeAabbNode(
     }
     else
     {
-        if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometry)
+        if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometry)
         {
             UpdateSceneBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
         }
-        else if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
+        else if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometryWithSize)
         {
             UpdateSceneBoundsWithSize(ShaderConstants.offsets.sceneBounds, boundingBox);
         }

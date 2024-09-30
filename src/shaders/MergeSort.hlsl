@@ -134,6 +134,73 @@ uint NumElemsLessThanOrEqualTo64(uint64_t val, uint offset, uint offsetNext, uin
 }
 
 //=====================================================================================================================
+void GlobalMergeIteration(
+    uint groupId,
+    uint localId,
+    uint globalId,
+    uint groupSize,
+    uint groupCapacity,
+    uint cmpGap,
+    uint splitGap,
+    uint numPrimitives,
+    uint srcOffsetKey,
+    uint srcOffsetVal,
+    uint dstOffsetKey,
+    uint dstOffsetVal,
+    uint useMortonCode30)
+{
+    const uint groupIdNew = groupId / 2;
+    const uint capacity   = cmpGap * groupCapacity;
+    bool leftSubtree      = true;
+    uint subtreeOffset;
+    uint subtreeEnd;
+
+    // Left Subtree
+    if (groupIdNew % splitGap < cmpGap)
+    {
+        subtreeOffset = capacity * (groupIdNew / cmpGap) + capacity;
+        subtreeEnd    = (subtreeOffset + capacity > numPrimitives) ? numPrimitives : subtreeOffset + capacity;
+    }
+    // Right Subtree
+    else
+    {
+        subtreeEnd    = (groupIdNew / cmpGap) * capacity;
+        subtreeOffset = subtreeEnd - capacity;
+        leftSubtree   = false;
+    }
+
+    if (globalId < numPrimitives)
+    {
+        if (useMortonCode30)
+        {
+            const uint mortonCode = FetchMortonCode(srcOffsetKey, globalId);
+            const uint index      = FetchSortedPrimIndex(srcOffsetVal, globalId);
+
+            uint posInMergedList  =  localId + (groupId % splitGap) * groupSize + (groupIdNew / splitGap) * capacity * 2;
+
+            posInMergedList += (leftSubtree) ? NumElemsLessThan(mortonCode, subtreeOffset, subtreeEnd, srcOffsetKey) :
+                                               NumElemsLessThanOrEqualTo(mortonCode, subtreeOffset, subtreeEnd, srcOffsetKey);
+
+            WriteMortonCode(dstOffsetKey, posInMergedList, mortonCode);
+            WriteSortedPrimIndex(dstOffsetVal, posInMergedList, index);
+        }
+        else
+        {
+            const uint64_t mortonCode = FetchMortonCode64(srcOffsetKey, globalId);
+            const uint index          = FetchSortedPrimIndex(srcOffsetVal, globalId);
+
+            uint posInMergedList      =  localId + (groupId % splitGap) * groupSize + (groupIdNew / splitGap) * capacity * 2;
+
+            posInMergedList += (leftSubtree) ? NumElemsLessThan64(mortonCode, subtreeOffset, subtreeEnd, srcOffsetKey) :
+                                               NumElemsLessThanOrEqualTo64(mortonCode, subtreeOffset, subtreeEnd, srcOffsetKey);
+
+            WriteMortonCode64(dstOffsetKey, posInMergedList, mortonCode);
+            WriteSortedPrimIndex(dstOffsetVal, posInMergedList, index);
+        }
+    }
+}
+
+//=====================================================================================================================
 void GlobalMerge(
     inout uint numTasksWait,
     inout uint waveId,
@@ -141,93 +208,75 @@ void GlobalMerge(
     uint groupId,
     uint numPrimitives,
     uint groupCapacity,
-    uint activeGroups,
+    uint numLocalSortedGroups,
     uint groupSize,
-    uint outputKeysOffset,
-    uint outputValuesOffset,
-    uint keysOffsetSwap,
-    uint valuesOffsetSwap,
+    uint offsetKeysOutput,
+    uint offsetValsOutput,
+    uint offsetKeysInput,
+    uint offsetValsInput,
     uint useMortonCode30)
 {
-    const uint numLevelsOfMergeTree = ceil(log2(activeGroups));
-    activeGroups  = RoundUpQuotient(numPrimitives, groupSize);
-    uint cmpGap   = 1;
-    uint splitGap = 2;
+    const uint numLevelsOfMergeTree = ceil(log2(numLocalSortedGroups));
+    const uint activeGroups  = RoundUpQuotient(numPrimitives, groupSize);
+
+    // Level 0 is the local sort and always copies the sorted partitions into output buffers. The first iteration of global merge
+    // phase (i.e. Level 1) always copies from output buffers to swap buffers and then continues to ping-pong between these buffers
+    // at each iteration.
+    //
+    uint level = 1;
 
     // Level 0 is the sorted partitions
-    for (uint level = 1; level <= numLevelsOfMergeTree; level++)
+    for (; level <= numLevelsOfMergeTree; level++)
+    {
+        // Odd levels copy from output buffers to swap buffers, while even levels copy from swap buffers to output
+        // buffers.
+        const uint srcOffsetKey = ((level & 1) == 1) ? offsetKeysOutput : offsetKeysInput;
+        const uint srcOffsetVal = ((level & 1) == 1) ? offsetValsOutput : offsetValsInput;
+
+        const uint dstOffsetKey = ((level & 1) == 0) ? offsetKeysOutput : offsetKeysInput;
+        const uint dstOffsetVal = ((level & 1) == 0) ? offsetValsOutput : offsetValsInput;
+
+        BEGIN_TASK(activeGroups);
+
+        const uint cmpGap = 1u << (level - 1);
+        const uint splitGap = 1u << level;
+
+        GlobalMergeIteration(groupId,
+                             localId,
+                             globalId,
+                             groupSize,
+                             groupCapacity,
+                             cmpGap,
+                             splitGap,
+                             numPrimitives,
+                             srcOffsetKey,
+                             srcOffsetVal,
+                             dstOffsetKey,
+                             dstOffsetVal,
+                             useMortonCode30);
+
+        END_TASK(activeGroups);
+    }
+
+    // If we ping-ponged to an odd level, we need to copy back the data from swap buffers to output buffers
+    if ((level & 1) == 0)
     {
         BEGIN_TASK(activeGroups);
-        const uint groupIdNew = groupId / 2;
-        const uint capacity   = cmpGap * groupCapacity;
-        bool leftSubtree      = true;
-        uint subtreeOffset;
-        uint subtreeEnd;
-
-        // Left Subtree
-        if (groupIdNew % splitGap < cmpGap)
-        {
-            subtreeOffset = capacity * (groupIdNew / cmpGap) + capacity;
-            subtreeEnd    = (subtreeOffset + capacity > numPrimitives) ? numPrimitives : subtreeOffset + capacity;
-        }
-        // Right Subtree
-        else
-        {
-            subtreeEnd    = (groupIdNew / cmpGap) * capacity;
-            subtreeOffset = subtreeEnd - capacity;
-            leftSubtree   = false;
-        }
-
         if (globalId < numPrimitives)
         {
             if (useMortonCode30)
             {
-                const uint mortonCode = FetchMortonCode(outputKeysOffset, globalId);
-                const uint index      = FetchSortedPrimIndex(outputValuesOffset, globalId);
-
-                uint posInMergedList  =  localId + (groupId % splitGap) * groupSize + (groupIdNew / splitGap) * capacity * 2;
-
-                posInMergedList += (leftSubtree) ? NumElemsLessThan(mortonCode, subtreeOffset, subtreeEnd, outputKeysOffset) :
-                                                   NumElemsLessThanOrEqualTo(mortonCode, subtreeOffset, subtreeEnd, outputKeysOffset);
-
-                WriteMortonCode(keysOffsetSwap, posInMergedList, mortonCode);
-                WriteSortedPrimIndex(valuesOffsetSwap, posInMergedList, index);
+                const uint mortonCode = FetchMortonCode(offsetKeysInput, globalId);
+                WriteMortonCode(offsetKeysOutput, globalId, mortonCode);
             }
             else
             {
-                const uint64_t mortonCode = FetchMortonCode64(outputKeysOffset, globalId);
-                const uint index          = FetchSortedPrimIndex(outputValuesOffset, globalId);
-
-                uint posInMergedList      =  localId + (groupId % splitGap) * groupSize + (groupIdNew / splitGap) * capacity * 2;
-
-                posInMergedList += (leftSubtree) ? NumElemsLessThan64(mortonCode, subtreeOffset, subtreeEnd, outputKeysOffset) :
-                                                   NumElemsLessThanOrEqualTo64(mortonCode, subtreeOffset, subtreeEnd, outputKeysOffset);
-
-                WriteMortonCode64(keysOffsetSwap, posInMergedList, mortonCode);
-                WriteSortedPrimIndex(valuesOffsetSwap, posInMergedList, index);
-            }
-        }
-        END_TASK(activeGroups);
-
-        splitGap <<= 1;
-        cmpGap   <<= 1;
-
-        BEGIN_TASK(activeGroups);
-        if (globalId < numPrimitives)
-        {
-            if (useMortonCode30)
-            {
-                const uint mortonCode = FetchMortonCode(keysOffsetSwap, globalId);
-                WriteMortonCode( outputKeysOffset, globalId, mortonCode);
-            }
-            else
-            {
-                const uint64_t mortonCode = FetchMortonCode64(keysOffsetSwap, globalId);
-                WriteMortonCode64( outputKeysOffset, globalId, mortonCode);
+                const uint64_t mortonCode = FetchMortonCode64(offsetKeysInput, globalId);
+                WriteMortonCode64(offsetKeysOutput, globalId, mortonCode);
             }
 
-            const uint index = FetchSortedPrimIndex(valuesOffsetSwap, globalId);
-            WriteSortedPrimIndex(outputValuesOffset, globalId, index);
+            const uint index = FetchSortedPrimIndex(offsetValsInput, globalId);
+            WriteSortedPrimIndex(offsetValsOutput, globalId, index);
         }
         END_TASK(activeGroups);
     }
@@ -464,10 +513,10 @@ void MergeSortImpl(
     uint localId,
     uint groupId,
     uint numPrimitives,
-    uint inputKeysOffset,
-    uint outputKeysOffset,
-    uint outputValuesOffset,
-    uint valuesOffsetSwap,
+    uint offsetKeysInput,
+    uint offsetKeysOutput,
+    uint offsetValsInput,
+    uint offsetValsOutput,
     uint useMortonCode30)
 {
     const uint groupCapacity = BUILD_THREADGROUP_SIZE * 2;
@@ -480,9 +529,9 @@ void MergeSortImpl(
                                   numPrimitives,
                                   groupCapacity,
                                   BUILD_THREADGROUP_SIZE,
-                                  inputKeysOffset,
-                                  outputKeysOffset,
-                                  outputValuesOffset,
+                                  offsetKeysInput,
+                                  offsetKeysOutput,
+                                  offsetValsOutput,
                                   useMortonCode30);
     END_TASK(activeGroups);
 
@@ -494,10 +543,10 @@ void MergeSortImpl(
                 groupCapacity,
                 activeGroups,
                 BUILD_THREADGROUP_SIZE,
-                outputKeysOffset,
-                outputValuesOffset,
-                inputKeysOffset,
-                valuesOffsetSwap,
+                offsetKeysOutput,
+                offsetValsOutput,
+                offsetKeysInput,
+                offsetValsInput,
                 useMortonCode30);
     // Implicit Global Sync at the end of GlobalMerge();
 }
@@ -526,8 +575,125 @@ void MergeSort(
                   numPrimitives,
                   ShaderConstants.offsets.mortonCodes,
                   ShaderConstants.offsets.mortonCodesSorted,
-                  ShaderConstants.offsets.primIndicesSorted,
                   ShaderConstants.offsets.primIndicesSortedSwap,
+                  ShaderConstants.offsets.primIndicesSorted,
                   Settings.useMortonCode30);
+}
+
+//=====================================================================================================================
+// Main Function : MergeSortLocal
+//=====================================================================================================================
+[RootSignature(RootSig)]
+[numthreads(BUILD_THREADGROUP_SIZE, 1, 1)]
+void MergeSortLocal(
+    uint globalId     : SV_DispatchThreadID,
+    uint localId      : SV_GroupThreadID,
+    uint groupId      : SV_GroupID)
+{
+    const uint numPrimitives = FetchTaskCounter(
+        ShaderConstants.offsets.encodeTaskCounter + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET);
+
+    const uint groupCapacity = BUILD_THREADGROUP_SIZE * 2;
+    FetchAndLocalSortAndWriteBack(localId,
+                                  groupId,
+                                  globalId,
+                                  numPrimitives,
+                                  groupCapacity,
+                                  BUILD_THREADGROUP_SIZE,
+                                  ShaderConstants.offsets.mortonCodes,
+                                  ShaderConstants.offsets.mortonCodesSorted,
+                                  ShaderConstants.offsets.primIndicesSorted,
+                                  Settings.useMortonCode30);
+}
+
+//=====================================================================================================================
+// Main Function : MergeSortGlobalIteration
+//=====================================================================================================================
+[RootSignature(RootSig)]
+[numthreads(BUILD_THREADGROUP_SIZE, 1, 1)]
+void MergeSortGlobalIteration(
+    uint globalId : SV_DispatchThreadID,
+    uint localId  : SV_GroupThreadID,
+    uint groupId  : SV_GroupID)
+{
+    const uint numPrimitives = FetchTaskCounter(
+        ShaderConstants.offsets.encodeTaskCounter + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET);
+
+    const uint groupSize = BUILD_THREADGROUP_SIZE;
+    const uint groupCapacity = BUILD_THREADGROUP_SIZE * 2;
+
+    const uint offsetKeysOutput = ShaderConstants.offsets.mortonCodesSorted;
+    const uint offsetValsOutput = ShaderConstants.offsets.primIndicesSorted;
+    const uint offsetKeysInput  = ShaderConstants.offsets.mortonCodes;
+    const uint offsetValsInput  = ShaderConstants.offsets.primIndicesSortedSwap;
+
+    // Level 0 is the local sort and always copies the sorted partitions into output buffers. The first iteration of global merge
+    // phase (i.e. Level 1) always copies from output buffers to swap buffers and then continues to ping-pong between these buffers
+    // at each iteration.
+    //
+
+    // TODO: Fetch from root constants
+    const uint level = ShaderRootConstants.PassIndex();
+
+    // Odd levels copy from output buffers to swap buffers, while even levels copy from swap buffers to output
+    // buffers.
+    const uint srcOffsetKey = ((level & 1) == 1) ? offsetKeysOutput : offsetKeysInput;
+    const uint srcOffsetVal = ((level & 1) == 1) ? offsetValsOutput : offsetValsInput;
+
+    const uint dstOffsetKey = ((level & 1) == 0) ? offsetKeysOutput : offsetKeysInput;
+    const uint dstOffsetVal = ((level & 1) == 0) ? offsetValsOutput : offsetValsInput;
+
+    const uint cmpGap = 1u << (level - 1);
+    const uint splitGap = 1u << level;
+
+    GlobalMergeIteration(groupId,
+                         localId,
+                         globalId,
+                         groupSize,
+                         groupCapacity,
+                         cmpGap,
+                         splitGap,
+                         numPrimitives,
+                         srcOffsetKey,
+                         srcOffsetVal,
+                         dstOffsetKey,
+                         dstOffsetVal,
+                         Settings.useMortonCode30);
+}
+
+//=====================================================================================================================
+// Main Function : MergeSortCopyLastLevel
+//=====================================================================================================================
+[RootSignature(RootSig)]
+[numthreads(BUILD_THREADGROUP_SIZE, 1, 1)]
+void MergeSortCopyLastLevel(
+    uint globalId : SV_DispatchThreadID,
+    uint localId : SV_GroupThreadID,
+    uint groupId : SV_GroupID)
+{
+    const uint numPrimitives = FetchTaskCounter(
+        ShaderConstants.offsets.encodeTaskCounter + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET);
+
+    const uint offsetKeysOutput = ShaderConstants.offsets.mortonCodesSorted;
+    const uint offsetValsOutput = ShaderConstants.offsets.primIndicesSorted;
+    const uint offsetKeysInput  = ShaderConstants.offsets.mortonCodes;
+    const uint offsetValsInput  = ShaderConstants.offsets.primIndicesSortedSwap;
+
+    if (globalId < numPrimitives)
+    {
+        if (Settings.useMortonCode30)
+        {
+            const uint mortonCode = FetchMortonCode(offsetKeysInput, globalId);
+            WriteMortonCode(offsetKeysOutput, globalId, mortonCode);
+        }
+        else
+        {
+            const uint64_t mortonCode = FetchMortonCode64(offsetKeysInput, globalId);
+            WriteMortonCode64(offsetKeysOutput, globalId, mortonCode);
+        }
+
+        const uint index = FetchSortedPrimIndex(offsetValsInput, globalId);
+        WriteSortedPrimIndex(offsetValsOutput, globalId, index);
+    }
 }
 #endif

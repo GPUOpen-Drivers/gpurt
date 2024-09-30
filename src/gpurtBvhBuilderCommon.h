@@ -49,7 +49,7 @@ enum class BuildPhaseFlags : uint32_t
     MergeSort                     = 1 << 4,
     RadixSort                     = 1 << 5,
     BuildBVH                      = 1 << 6,
-    BuildBVHPLOC                  = 1 << 7,
+    BuildPLOC                     = 1 << 7,
     RefitBounds                   = 1 << 8,
     PairCompression               = 1 << 9,
     SeparateEmitPostBuildInfoPass = 1 << 12,
@@ -78,8 +78,8 @@ static const char* BuildPhaseName(BuildPhaseFlags phase)
         return "RadixSort";
     case GpuRt::BuildPhaseFlags::BuildBVH:
         return "BuildBVH";
-    case GpuRt::BuildPhaseFlags::BuildBVHPLOC:
-        return "BuildBVHPLOC";
+    case GpuRt::BuildPhaseFlags::BuildPLOC:
+        return "BuildPLOC";
     case GpuRt::BuildPhaseFlags::RefitBounds:
         return "RefitBounds";
     case GpuRt::BuildPhaseFlags::PairCompression:

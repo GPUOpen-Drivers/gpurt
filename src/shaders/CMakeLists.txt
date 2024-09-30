@@ -39,7 +39,7 @@ set(gpurtHlsl
     AccelStructTracker.hlsl
     BuildRootSignature.hlsl
     BuildBVH.hlsl
-    BuildBVHPLOC.hlsl
+    BuildPLOC.hlsl
     BuildBVHTDTR.hlsl
     BuildCommon.hlsl
     BuildCommonScratch.hlsl
@@ -119,11 +119,22 @@ set(otherDeps
     ../shared/gpurtBuildConstants.h
     ../shared/hlslTypes.h
     ../shared/rayTracingDefs.h
-    ../shared/scratchNode.h
+    ../shadersClean/common/Bits.hlsli
     ../shadersClean/common/Math.hlsli
     ../shadersClean/common/Math.hlsl
     ../shadersClean/common/Extensions.hlsli
+    ../shadersClean/common/Extensions.hlsl
     ../shadersClean/common/ShaderDefs.hlsli
+    ../shadersClean/common/BoundingBox.hlsli
+    ../shadersClean/common/InstanceDesc.hlsli
+    ../shadersClean/common/NodePointers.hlsli
+    ../shadersClean/common/ScratchNode.hlsli
+    ../shadersClean/common/TempAssert.hlsli
+    ../shadersClean/traversal/TraversalDefs.hlsli
+    ../shadersClean/common/gfx10/BoxNode1_0.hlsli
+    ../shadersClean/common/gfx10/InstanceNode1_0.hlsli
+    ../shadersClean/common/gfx10/ProceduralNode1_0.hlsli
+    ../shadersClean/common/gfx10/TriangleNode1_0.hlsli
 )
 
 set(GPURT_SHADER_SOURCE_FILES "${gpurtHlsl}" "${otherDeps}" PARENT_SCOPE)

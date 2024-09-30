@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -22,10 +22,11 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
+
 #ifndef _SCRATCHNODE_HLSL
 #define _SCRATCHNODE_HLSL
 
-#include "rayTracingDefs.h"
+#include "gfx10/BoxNode1_0.hlsli"
 
 //=====================================================================================================================
 // The structure is 64-byte aligned
@@ -49,7 +50,7 @@ struct ScratchNode
                                            // scratch node index of the tri in the pair in PAIR_TRIANGLE_COMPRESSION /
                                            // BLAS metadata size for instance nodes
     uint   sortedPrimIndex;                // it's the index of the sorted primitive (leaf) or start index of the sorted primitives
-    uint   packedFlags;                    // flags [0:7], instanceMask [8:15], triangleId [16:31]
+    uint   packedFlags;                    // flags [0:7], instanceMask [8:15], quadSwizzle [16:23]
 };
 
 #define SCRATCH_NODE_FLAGS_DISABLE_TRIANGLE_SPLIT_SHIFT 31
@@ -176,11 +177,11 @@ static uint ExtractScratchNodeInstanceMask(
 }
 
 //=====================================================================================================================
-// Extract triangle ID from scratch node
-static uint ExtractScratchNodeTriangleId(
+// Extract quad swizzle from scratch node
+static uint ExtractScratchNodeQuadSwizzle(
     in uint packedFlags)
 {
-    return (packedFlags >> 16);
+    return (packedFlags >> 16) & 0xFF;
 }
 
 //=====================================================================================================================

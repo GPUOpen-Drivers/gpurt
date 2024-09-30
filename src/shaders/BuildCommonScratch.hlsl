@@ -47,7 +47,7 @@
 #ifndef _BUILDCOMMONSCRATCH_HLSL
 #define _BUILDCOMMONSCRATCH_HLSL
 
-#include "../shared/scratchNode.h"
+#include "../shadersClean/common/ScratchNode.hlsli"
 #include "BuildCommon.hlsl"
 #include "BuildCommonScratchGlobal.hlsl"
 #include "TaskCounter.hlsl"
@@ -853,16 +853,17 @@ void RefitNode(
 }
 
 //=====================================================================================================================
-static TriangleData GetScratchNodeTrianglePairVertices(
+static TriangleData GetScratchNodeQuadVertices(
     in uint scratchNodesOffset,
     in uint nodeIndex,
     in uint triangleIndex)
 {
-    const uint nodeType = (triangleIndex == 0) ? NODE_TYPE_TRIANGLE_0 : NODE_TYPE_TRIANGLE_1;
-
     const uint packedFlags = FETCH_SCRATCH_NODE_DATA(uint, scratchNodesOffset, nodeIndex, SCRATCH_NODE_FLAGS_OFFSET);
 
-    uint3 indices = CalcTriangleCompressionVertexIndices(nodeType, ExtractScratchNodeTriangleId(packedFlags));
+    const uint quadSwizzle = ExtractScratchNodeQuadSwizzle(packedFlags);
+    const uint triSwizzle = (quadSwizzle >> (triangleIndex * 4)) & 0xFF;
+
+    uint3 indices = ComputeQuadTriangleVertexIndex(triangleIndex, triSwizzle);
 
     TriangleData tri;
 

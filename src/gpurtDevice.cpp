@@ -387,6 +387,8 @@ Device::Device(
     m_tlasCaptureList(this),
     m_isTraceActive(false),
     m_accelStructTraceSource(this),
+    m_typedBufferSrdSizeDw{},
+    m_untypedBufferSrdSizeDw{},
     m_rayHistoryTraceSource(this),
 #if GPURT_ENABLE_GPU_DEBUG
     m_debugMonitor(this),
@@ -421,7 +423,8 @@ Pal::Result Device::Init()
     Pal::DeviceProperties props = {};
     m_info.pPalDevice->GetProperties(&props);
 
-    m_bufferSrdSizeDw = props.gfxipProperties.srdSizes.bufferView / sizeof(uint32);
+    m_typedBufferSrdSizeDw   = props.gfxipProperties.srdSizes.typedBufferView / sizeof(uint32);
+    m_untypedBufferSrdSizeDw = props.gfxipProperties.srdSizes.untypedBufferView / sizeof(uint32);
 
     if (m_info.deviceSettings.emulatedRtIpLevel == Pal::RayTracingIpLevel::None)
     {
@@ -812,7 +815,7 @@ void* Device::AllocateDescriptorTable(
     uint32                count,
     gpusize*              pGpuAddress) const
 {
-    const uint32 srdSizeBytes = m_bufferSrdSizeDw * sizeof(uint32);
+    const uint32 srdSizeBytes = m_typedBufferSrdSizeDw * sizeof(uint32);
     const uint32 srdBufferSizeBytes = srdSizeBytes * count;
     return AllocateTemporaryData(cmdBuffer, srdBufferSizeBytes, pGpuAddress);
 }
@@ -828,7 +831,7 @@ uint32 Device::WriteBufferSrdTable(
 {
     gpusize tableVa;
     void* pTable = AllocateDescriptorTable(cmdBuffer, count, &tableVa);
-    const uint32 srdSizeBytes = m_bufferSrdSizeDw * sizeof(uint32);
+    const uint32 srdSizeBytes = (typedBuffer ? m_typedBufferSrdSizeDw  : m_untypedBufferSrdSizeDw) * sizeof(uint32);
 
     for (uint32 i = 0; i < count; i++)
     {
@@ -2133,6 +2136,10 @@ const AccelStructBuildInputs Device::OverrideBuildInputs(
     if (rebuildAS)
     {
         buildInputs.flags &= ~(GpuRt::AccelStructBuildFlagAllowUpdate | GpuRt::AccelStructBuildFlagPerformUpdate);
+    }
+    if (Settings().disableCompaction)
+    {
+        buildInputs.flags &= ~(GpuRt::AccelStructBuildFlagAllowCompaction);
     }
 
     return buildInputs;

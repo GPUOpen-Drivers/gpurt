@@ -22,6 +22,38 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
+#define TS_PHASE_INIT                 0
+#define TS_PHASE_CALC_SUM             1
+#define TS_PHASE_ALLOC_REFS           2
+#define TS_PHASE_SPLIT                3
+#define TS_PHASE_DONE                 4
+
+struct ScratchTSRef
+{
+    uint leafIndex;
+    uint numSplits;
+
+    uint splitLeafBaseIndex;
+
+    BoundingBox bbox;
+};
+
+struct ScratchTSState
+{
+    uint                    refListIndex;
+    uint                    numRefs;
+    uint                    numRefsAlloc;
+    float                   sum;
+    uint                    mutex;
+};
+
+#define STATE_TS_REF_LIST_INDEX_OFFSET       0
+#define STATE_TS_NUM_REFS_OFFSET             STATE_TS_REF_LIST_INDEX_OFFSET + 4
+#define STATE_TS_NUM_REFS_ALLOC_OFFSET       STATE_TS_NUM_REFS_OFFSET + 4
+#define STATE_TS_SUM_OFFSET                  STATE_TS_NUM_REFS_ALLOC_OFFSET + 4
+#define STATE_TS_MUTEX_OFFSET                STATE_TS_SUM_OFFSET + 4
+
+//=====================================================================================================================
 // 32 bit constants
 struct TriangleSplittingArgs
 {

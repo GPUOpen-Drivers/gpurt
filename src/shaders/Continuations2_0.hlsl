@@ -46,7 +46,6 @@ static _AmdTraversalState InitTraversalState2_0(
     traversal.committed.currNodePtr = INVALID_NODE;
 
     // Start traversing from root node
-    traversal.nextNodePtr = isValid ? CreateRootNodePointer1_1() : TERMINAL_NODE;
     traversal.reservedNodePtr         = INVALID_NODE;
     traversal.lastInstanceRootNodePtr = INVALID_NODE;
 
@@ -127,7 +126,7 @@ static void TraversalInternal2_0(
 
     instanceFlagsPreserveBits <<= POINTER_FLAGS_HIDWORD_SHIFT;
 
-    uint   nextNodePtr             = data.traversal.nextNodePtr;
+    uint   nextNodePtr             = data.dispatch.nextNodePtr;
     float3 candidateRayOrigin      = topLevelRayOrigin;
     float3 candidateRayDirection   = topLevelRayDirection;
     state                          = TRAVERSAL_STATE_COMMITTED_NOTHING;
@@ -361,7 +360,7 @@ static void TraversalInternal2_0(
                     candidate.currNodePtr    = nodePtr;
                     if (Options::getCpsCandidatePrimitiveMode() == CpsCandidatePrimitiveMode::DeferFirst)
                     {
-                       haveCandidate = true;
+                        haveCandidate = true;
                     }
                     else
                     {
@@ -552,7 +551,7 @@ static void TraversalInternal2_0(
     }
 
     // Pack traversal results back into traversal state structure
-    data.traversal.nextNodePtr             = nextNodePtr;
+    data.dispatch.nextNodePtr              = nextNodePtr;
     data.traversal.committed               = committed;
     data.traversal.committedBarycentrics   = committedBarycentrics;
 #if REMAT_INSTANCE_RAY == 0

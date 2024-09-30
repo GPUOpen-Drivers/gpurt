@@ -22,6 +22,8 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
+#include "../shadersClean/common/BoundingBox.hlsli"
+
 #define USE_SAH             1
 //=====================================================================================================================
 // 32 bit constants
@@ -45,6 +47,142 @@ struct TDArgs
 #define FLT_MAX         3.402823466e+38F        /* max value */
 #define INVALID_IDX     0xffffffff
 #define TD_EPSILON      0.99999
+
+//=====================================================================================================================
+#define REF_SCRATCH_SIDE_LEFT       0
+#define REF_SCRATCH_SIDE_RIGHT      1
+#define REF_SCRATCH_SIDE_LEAF       2
+
+struct TDRefScratch
+{
+    uint        primitiveIndex;
+    uint        nodeIndex;
+    float3      center;
+    BoundingBox box;
+    uint        side;
+#if USE_BVH_REBRAID
+    uint        nodePointer; //rebraid only
+#endif
+#if USE_BLAS_PRIM_COUNT
+    uint        numPrimitives;
+#endif
+};
+
+#define TD_REF_PRIM_INDEX_OFFSET    0
+#define TD_REF_NODE_INDEX_OFFSET    4
+#define TD_REF_CENTER_OFFSET        8
+#define TD_REF_BOX_OFFSET           20
+#define TD_REF_SIDE_OFFSET          (TD_REF_BOX_OFFSET + sizeof(BoundingBox))
+#define TD_REF_NODE_POINTER_OFFSET  (TD_REF_SIDE_OFFSET + 4)
+#if USE_BLAS_PRIM_COUNT
+#define TD_REF_NUM_PRIM_OFFSET      (TD_REF_NODE_POINTER_OFFSET + sizeof(uint))
+#endif
+
+//=====================================================================================================================
+#define NUM_SPLIT_BINS        4
+
+#define TD_NODE_REBRAID_STATE_OPEN   0
+#define TD_NODE_REBRAID_STATE_CLOSED 1
+
+struct TDBins
+{
+    uint64_t        firstRefIndex;
+
+    UintBoundingBox binBoxes[3][NUM_SPLIT_BINS];
+    uint            binPrimCount[3][NUM_SPLIT_BINS];
+
+    uint            bestAxis;
+    uint            bestSplit;
+    uint            numLeft;
+    uint            numRight;
+
+#if USE_BLAS_PRIM_COUNT
+    uint            binBLASPrimCount[3][NUM_SPLIT_BINS];
+#endif
+};
+
+#define TD_BINS_FIRST_REF_INDEX_OFFSET        0
+#define TD_BINS_BIN_BOXES_OFFSET              (TD_BINS_FIRST_REF_INDEX_OFFSET + 8)
+#define TD_BINS_BIN_PRIM_COUNT_OFFSET         (TD_BINS_BIN_BOXES_OFFSET + sizeof(UintBoundingBox) * NUM_SPLIT_BINS * 3)
+#define TD_BINS_BEST_AXIS_OFFSET              (TD_BINS_BIN_PRIM_COUNT_OFFSET + sizeof(uint) * NUM_SPLIT_BINS * 3)
+#define TD_BINS_BEST_SPLIT_OFFSET             (TD_BINS_BEST_AXIS_OFFSET + 4)
+#define TD_BINS_NUM_LEFT_OFFSET               (TD_BINS_BEST_SPLIT_OFFSET + 4)
+#define TD_BINS_NUM_RIGHT_OFFSET              (TD_BINS_NUM_LEFT_OFFSET + 4)
+#if USE_BLAS_PRIM_COUNT
+#define TD_BINS_BLAS_PRIM_COUNT_OFFSET        (TD_BINS_NUM_RIGHT_OFFSET + 4)
+#endif
+
+struct TDNode
+{
+    UintBoundingBox centroidBox;
+    uint            binsIndex;
+    uint            childCount;
+
+#if USE_BVH_REBRAID
+    uint            largestAxis;    // rebraid only
+    float           largestWidth;   // rebraid only
+    uint            rebraidState;   // rebraid only
+    uint            primIndex;      // rebraid only
+#endif
+};
+
+#define TD_NODE_CENTROID_BOX_OFFSET           0
+#define TD_NODE_BINS_INDEX_OFFSET             (TD_NODE_CENTROID_BOX_OFFSET + sizeof(UintBoundingBox))
+#define TD_NODE_CHILD_COUNT_OFFSET            (TD_NODE_BINS_INDEX_OFFSET + 4)
+#define TD_NODE_LARGEST_AXIS_OFFSET           (TD_NODE_CHILD_COUNT_OFFSET + 4)
+#define TD_NODE_LARGEST_WIDTH_OFFSET          (TD_NODE_LARGEST_AXIS_OFFSET + 4)
+#define TD_NODE_REBRAID_STATE_OFFSET          (TD_NODE_LARGEST_WIDTH_OFFSET + 4)
+#define TD_NODE_PRIM_INDEX_OFFSET             (TD_NODE_REBRAID_STATE_OFFSET + 4)
+
+//=====================================================================================================================
+
+#define TD_REBRAID_STATE_NO_OPEN    0
+#define TD_REBRAID_STATE_NEED_OPEN  1
+#define TD_REBRAID_STATE_OOM        2
+
+#define TD_PHASE_INIT_STATE                 0
+#define TD_PHASE_INIT_REFS_TO_LEAVES        1
+#define TD_PHASE_CHECK_NEED_ALLOC           2
+#define TD_PHASE_ALLOC_ROOT_NODE            3
+#define TD_PHASE_REBRAID_COUNT_OPENINGS     4
+#define TD_PHASE_REBRAID_CHECK_TERMINATION  5
+#define TD_PHASE_REBRAID_OPEN               6
+#define TD_PHASE_REBRAID_UPDATE_NODES       7
+#define TD_PHASE_BIN_REFS                   8
+#define TD_PHASE_FIND_BEST_SPLIT            9
+#define TD_PHASE_SECOND_PASS                10
+#define TD_PHASE_UPDATE_NEW_NODES           11
+#define TD_PHASE_DONE                       12
+
+struct StateTDBuild
+{
+    uint            numNodes;
+    uint            numProcessedNodes;
+    uint            numNodesAllocated;
+    uint            numRefs;
+    uint            numRefsAllocated;
+    uint            numInactiveInstance;
+    UintBoundingBox rootCentroidBBox;
+    uint            numLeaves;
+    uint            binsCounter;
+
+#if USE_BVH_REBRAID
+    uint            rebraidState;
+    uint            leafAllocOffset;
+#endif
+};
+
+#define STATE_TD_NUM_NODES_OFFSET               0
+#define STATE_TD_NUM_PROCESSED_NODES_OFFSET     4
+#define STATE_TD_NUM_NODES_ALLOCATED_OFFSET     8
+#define STATE_TD_NUM_REFS_OFFSET                12
+#define STATE_TD_NUM_REFS_ALLOCATED_OFFSET      16
+#define STATE_TD_NUM_INACTIVE_INSTANCE_OFFSET   20
+#define STATE_TD_CENTROID_BBOX_OFFSET           24
+#define STATE_TD_NUM_LEAVES_OFFSET              (STATE_TD_CENTROID_BBOX_OFFSET + sizeof(UintBoundingBox))
+#define STATE_TD_BINS_COUNTER_OFFSET            (STATE_TD_NUM_LEAVES_OFFSET + 4)
+#define STATE_TD_REBRAID_STATE_OFFSET           (STATE_TD_BINS_COUNTER_OFFSET + 4)
+#define STATE_TD_LEAF_ALLOC_OFFSET_OFFSET       (STATE_TD_REBRAID_STATE_OFFSET + 4)
 
 #if NO_SHADER_ENTRYPOINT == 0
 #define USE_LDS     1

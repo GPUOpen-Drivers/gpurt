@@ -88,7 +88,7 @@ struct BuildPlocArgs
 #include "Common.hlsl"
 
 //=====================================================================================================================
-#include "..\shared\rayTracingDefs.h"
+#include "../shared/rayTracingDefs.h"
 
 #define GC_DSTMETADATA
 #define GC_SCRATCHBUFFER
@@ -748,7 +748,7 @@ void UpdateClusterCount(
 }
 
 //=====================================================================================================================
-void BuildBvhPlocImpl(
+void BuildPlocImpl(
     uint            globalId,
     uint            localId,
     uint            groupId,
@@ -858,7 +858,7 @@ void BuildBvhPlocImpl(
 //====================================================================================================================
 [RootSignature(RootSig)]
 [numthreads(BUILD_THREADGROUP_SIZE, 1, 1)]
-void BuildBVHPLOC(
+void BuildPLOC(
     uint globalIdIn : SV_DispatchThreadID,
     uint groupIdIn  : SV_GroupID,
     uint localIdIn  : SV_GroupThreadID)
@@ -890,7 +890,7 @@ void BuildBVHPLOC(
 
     if (numActivePrims > 0)
     {
-        BuildBvhPlocImpl(globalId, localId, groupId, numActivePrims, plocArgs);
+        BuildPlocImpl(globalId, localId, groupId, numActivePrims, plocArgs);
     }
 }
 #endif

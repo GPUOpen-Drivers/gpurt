@@ -43,7 +43,6 @@
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_TOP_DOWN_BUILD_ID)]]                  uint enableTopDownBuild            = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_USE_MORTON_CODE_30_ID)]]                     uint useMortonCode30               = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_MERGE_SORT_ID)]]                      uint enableMergeSort               = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_FAST_BUILD_THRESHOLD_ID)]]                   uint fastBuildThreshold            = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_FUSED_INSTANCE_NODE_ID)]]             uint enableFusedInstanceNode       = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_TS_PRIORITY_ID)]]                            float tsPriority                   = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_NUM_REBRAID_ITERATIONS_ID)]]                 uint numRebraidIterations          = 0;
@@ -59,7 +58,7 @@
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENCODE_ARRAY_OF_POINTERS_ID)]]               uint encodeArrayOfPointers         = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_SCENE_BOUNDS_CALCULATION_TYPE_ID)]]          uint sceneBoundsCalculationType    = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_REBRAID_QUALITY_HEURISTIC_ID)]]              uint rebraidQualityHeuristic       = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_REBUILD_ACCELERATION_STRUCTURE_ID)]]         uint rebuildAccelStruct            = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_DISABLE_COMPACTION_ID)]]                     uint disableCompaction            = 0;
 
 static const CompileTimeBuildSettings Settings = {
     topLevelBuild,
@@ -79,7 +78,7 @@ static const CompileTimeBuildSettings Settings = {
     enableTopDownBuild,
     useMortonCode30,
     enableMergeSort,
-    fastBuildThreshold,
+    0,
     enableFusedInstanceNode,
     tsPriority,
     numRebraidIterations,
@@ -109,7 +108,7 @@ static const CompileTimeBuildSettings Settings = {
     0,
     0,
     0,
-    rebuildAccelStruct,
+    disableCompaction,
 };
 
 #endif

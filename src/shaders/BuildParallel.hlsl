@@ -85,7 +85,7 @@ void WaitForEncodeTasksToFinish(
 #include "GenerateMortonCodes.hlsl"
 #include "RadixSort/ScanExclusiveInt4DLBCommon.hlsl"
 #include "RadixSort/RadixSortParallel.hlsl"
-#include "BuildBVHPLOC.hlsl"
+#include "BuildPLOC.hlsl"
 #include "BuildQBVH.hlsl"
 #include "BuildBVHTDTR.hlsl"
 #include "BuildBVH.hlsl"
@@ -242,7 +242,7 @@ void TriangleSplitting(
 }
 
 //======================================================================================================================
-void BuildBvhPloc(
+void BuildPloc(
     inout uint numTasksWait,
     inout uint waveId,
     uint       globalId,
@@ -270,7 +270,7 @@ void BuildBvhPloc(
     plocArgs.primIndicesSortedScratchOffset = ShaderConstants.offsets.primIndicesSorted;
     plocArgs.unsortedBvhLeafNodesOffset     = ShaderConstants.offsets.bvhLeafNodeData;
 
-    BuildBvhPlocImpl(globalId, localId, groupId, numActivePrims, plocArgs);
+    BuildPlocImpl(globalId, localId, groupId, numActivePrims, plocArgs);
 }
 
 //======================================================================================================================
@@ -376,8 +376,8 @@ void MergeSort(inout uint numTasksWait, inout uint waveId, uint localId, uint gr
                   numPrimitives,
                   ShaderConstants.offsets.mortonCodes,
                   ShaderConstants.offsets.mortonCodesSorted,
-                  ShaderConstants.offsets.primIndicesSorted,
                   ShaderConstants.offsets.primIndicesSortedSwap,
+                  ShaderConstants.offsets.primIndicesSorted,
                   Settings.useMortonCode30);
 }
 
@@ -543,75 +543,59 @@ void BuildBvh(
     {
         bool needRefit = false;
 
-        if ((Settings.fastBuildThreshold) && (numPrimitives <= Settings.fastBuildThreshold) && (numPrimitives <= WaveGetLaneCount()))
+        BEGIN_TASK(ShaderRootConstants.NumThreadGroups());
+
+        GenerateMortonCodes(globalId, numPrimitives);
+
+        END_TASK(ShaderRootConstants.NumThreadGroups());
+        WriteDebugCounter(COUNTER_MORTONGEN_OFFSET);
+        numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+
+        if (numActivePrims > 0)
         {
-            BEGIN_TASK(1);
-
-            FastBuildBVH(globalId,
-                         numPrimitives,
-                         ShaderConstants.offsets.bvhLeafNodeData,
-                         ShaderConstants.offsets.bvhNodeData);
-
-            END_TASK(1);
-            needRefit = true;
-            numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
-        }
-        else
-        {
-            BEGIN_TASK(ShaderRootConstants.NumThreadGroups());
-
-            GenerateMortonCodes(globalId, numPrimitives);
-
-            END_TASK(ShaderRootConstants.NumThreadGroups());
-            WriteDebugCounter(COUNTER_MORTONGEN_OFFSET);
-            numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
-
-            if (numActivePrims > 0)
+            if (Settings.enableMergeSort)
             {
-                if (Settings.enableMergeSort)
-                {
-                    MergeSort(numTasksWait, waveId, localId, groupId, numPrimitives);
-                }
-                else
-                {
-                    RadixSort(numTasksWait, waveId, globalId, localId, groupId, numPrimitives, Settings.radixSortScanLevel, Settings.useMortonCode30);
-                }
-                WriteDebugCounter(COUNTER_MORTON_SORT_OFFSET);
-                // Note there is an implicit sync on the last pass of the sort
+                MergeSort(numTasksWait, waveId, localId, groupId, numPrimitives);
+            }
+            else
+            {
+                RadixSort(numTasksWait, waveId, globalId, localId, groupId, numPrimitives, Settings.radixSortScanLevel, Settings.useMortonCode30);
+            }
+            WriteDebugCounter(COUNTER_MORTON_SORT_OFFSET);
+            // Note there is an implicit sync on the last pass of the sort
 
-                // If the top down builder is off, the unsorted leaves will stay where the
+            // If the top down builder is off, the unsorted leaves will stay where the
                 // Encode step put them. On top of that, if TS or Rebraid is also on,
                 // there might be a gap between the last inner node and the first leaf
                 // if we place the root of the tree at ShaderConstants.offsets.bvhNodeData.
-                // To avoid that gap, the root is moved forward by numLeafNodes - numActivePrims
-                // nodes from this point onwards.
+            // To avoid that gap, the root is moved forward by numLeafNodes - numActivePrims
+            // nodes from this point onwards.
 
-                if (Settings.buildMode == BUILD_MODE_PLOC)
+            if (Settings.buildMode == BUILD_MODE_PLOC)
+            {
+                BuildPloc(numTasksWait, waveId, globalId, localId, groupId, numActivePrims);
+                WriteDebugCounter(COUNTER_BUILDPLOC_OFFSET);
+            }
+            else
+            {
+                if (Settings.enableFastLBVH == false)
                 {
-                    BuildBvhPloc(numTasksWait, waveId, globalId, localId, groupId, numActivePrims);
-                    WriteDebugCounter(COUNTER_BUILDPLOC_OFFSET);
+                    BEGIN_TASK(ShaderRootConstants.NumThreadGroups());
+
+                    BuildBvhLinear(globalId, numActivePrims, numPrimitives);
+
+                    END_TASK(ShaderRootConstants.NumThreadGroups());
+                    WriteDebugCounter(COUNTER_BUILDLBVH_OFFSET);
+                    needRefit = true;
                 }
                 else
                 {
-                    if (Settings.enableFastLBVH == false)
-                    {
-                        BEGIN_TASK(ShaderRootConstants.NumThreadGroups());
+                    BEGIN_TASK(ShaderRootConstants.NumThreadGroups());
 
-                        BuildBvhLinear(globalId, numActivePrims, numPrimitives);
+                    FastAgglomerativeLbvh(globalId, numActivePrims);
 
-                        END_TASK(ShaderRootConstants.NumThreadGroups());
-                        WriteDebugCounter(COUNTER_BUILDLBVH_OFFSET);
-                        needRefit = true;
-                    }
-                    else
-                    {
-                        BEGIN_TASK(ShaderRootConstants.NumThreadGroups());
-
-                        FastAgglomerativeLbvh(globalId, numActivePrims);
-
-                        END_TASK(ShaderRootConstants.NumThreadGroups());
-                        WriteDebugCounter(COUNTER_BUILDFASTLBVH_OFFSET);
-                    }
+                    END_TASK(ShaderRootConstants.NumThreadGroups());
+                    WriteDebugCounter(COUNTER_BUILDFASTLBVH_OFFSET);
                 }
             }
         }

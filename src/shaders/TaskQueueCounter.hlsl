@@ -22,6 +22,13 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
+#define STATE_TASK_QUEUE_PHASE_OFFSET               0
+#define STATE_TASK_QUEUE_START_PHASE_INDEX_OFFSET   4
+#define STATE_TASK_QUEUE_END_PHASE_INDEX_OFFSET     8
+#define STATE_TASK_QUEUE_TASK_COUNTER_OFFSET        12
+#define STATE_TASK_QUEUE_NUM_TASKS_DONE_OFFSET      16
+
+//=====================================================================================================================
 void AllocTasks(const uint numTasks, const uint phase, uint taskQueueOffset)
 {
     // start = end

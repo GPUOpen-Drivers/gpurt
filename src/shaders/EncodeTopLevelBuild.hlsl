@@ -22,6 +22,10 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
+#include "../shared/rayTracingDefs.h"
+#include "../shadersClean/common/ScratchNode.hlsli"
+
+//=====================================================================================================================
 void WriteScratchInstanceNode(
     uint                offset,
     uint                instanceIndex,
@@ -137,7 +141,7 @@ void EncodeInstancesBuild(
                 if (IsRebraidEnabled() == false)
                 {
                     // Update scene bounding box
-                    if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
+                    if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometryWithSize)
                     {
                         UpdateSceneBoundsWithSize(ShaderConstants.offsets.sceneBounds, boundingBox);
                     }

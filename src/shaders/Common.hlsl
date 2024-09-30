@@ -35,7 +35,7 @@
 #define _COMMON_HLSL
 
 #include "../shared/rayTracingDefs.h"
-#include "../shared/scratchNode.h"
+#include "../shadersClean/common/ScratchNode.hlsli"
 
 typedef AccelStructDataOffsets AccelStructOffsets;
 
@@ -62,16 +62,19 @@ typedef AccelStructDataOffsets AccelStructOffsets;
 #define INVALID_IDX       0xffffffff
 
 // Node pointer values with special meanings
-#define INVALID_NODE      0xffffffff
-#define TERMINAL_NODE     0xfffffffe
-#define SKIP_0_3          0xfffffffd
-#define SKIP_4_7          0xfffffffb
-#define SKIP_0_7          0xfffffff9
-#define END_SEARCH        0xfffffff8
-#define DEAD_LANE         0xfffffff7
+#define INVALID_NODE            0xffffffff
+#define TERMINAL_NODE           0xfffffffe
+#define SKIP_0_3                0xfffffffd
+#define SKIP_4_7                0xfffffffb
+#define SKIP_0_7                0xfffffff9
+#define END_SEARCH              0xfffffff8
+#define DEAD_LANE_WITHOUT_STACK 0xfffffff7
+#define DEAD_LANE_WITH_STACK    0xfffffff6
 
 #include "Extensions.hlsl"
 #include "../shadersClean/common/Math.hlsli"
+#include "../shadersClean/common/BoundingBox.hlsli"
+#include "../shadersClean/common/NodePointers.hlsli"
 
 #ifdef __cplusplus
 static const float NaN = std::numeric_limits<float>::quiet_NaN();
@@ -399,27 +402,55 @@ static bool CheckHandleProceduralUserNode(in uint nodePointer)
 }
 
 //=====================================================================================================================
-static uint WriteTriangleIdField(uint triangleId, uint nodeType, uint rotation, uint geometryFlags)
+static uint3 ComputeQuadTriangleVertexIndex(
+    uint triangleIndex, // Numeric constant (0 or 1)
+    uint rotation)
 {
-    const uint triangleShift = nodeType * TRIANGLE_ID_BIT_STRIDE;
+    // triangle_0 vertex mapping
+    //
+    // rotation 0: t0: v0, v1, v2
+    // rotation 1: t0: v1, v2, v0
+    // rotation 2: t0: v2, v0, v1
+    //
 
-    // Compute the barycentrics mapping table that is stored in triangle_id for RT IP 1.1
-    triangleId |= ((rotation + 1) % 3) << (triangleShift + TRIANGLE_ID_I_SRC_SHIFT);
-    triangleId |= ((rotation + 2) % 3) << (triangleShift + TRIANGLE_ID_J_SRC_SHIFT);
+    // triangle_1 vertex mapping
+    //
+    // rotation 0: t0: v1, v3, v2
+    // rotation 1: t0: v3, v2, v1
+    // rotation 2: t0: v2, v1, v3
+    //
+    const uint packedVertexMapping = (triangleIndex == 0) ? 0x10210 : 0x31231;
+    const uint packedMapping = packedVertexMapping >> (rotation * 4);
 
-    // Add in the flags stored in triangle_id for RT IP 2.0
-    if (geometryFlags & D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE)
-    {
-        triangleId |= 1u << (triangleShift + TRIANGLE_ID_OPAQUE_SHIFT);
-    }
-
-    return triangleId;
+    return uint3((packedMapping >> 0) & 0xF,
+                 (packedMapping >> 4) & 0xF,
+                 (packedMapping >> 8) & 0xF);
 }
 
 //=====================================================================================================================
-static uint CalcUncompressedTriangleId(uint geometryFlags)
+static uint WriteTriangleIdField(uint triangleId, uint nodeType, uint rotation, uint boxNodeFlags)
 {
-    return WriteTriangleIdField(0, NODE_TYPE_TRIANGLE_0, 0, geometryFlags);
+    const uint triangleShift = nodeType * TRIANGLE_ID_BIT_STRIDE;
+
+    // Hardware triangle ID barycentric mapping indicates the triangle vertex rotation. This maps to triangle vertex
+    // mapping for triangle index 0 in the quad.
+    const uint3 index = ComputeQuadTriangleVertexIndex(0, rotation);
+
+    // Compute the barycentrics mapping table that is stored in triangle_id for RT IP 1.1
+    triangleId |= (index.y) << (triangleShift + TRIANGLE_ID_I_SRC_SHIFT);
+    triangleId |= (index.z) << (triangleShift + TRIANGLE_ID_J_SRC_SHIFT);
+
+    // Add in the flags stored in triangle_id for RT IP 2.0
+    if (boxNodeFlags & (1u << BOX_NODE_FLAGS_ONLY_OPAQUE_SHIFT))
+    {
+        triangleId |= 1u << (triangleShift + TRIANGLE_ID_OPAQUE_SHIFT);
+    }
+    if (boxNodeFlags & (1u << BOX_NODE_FLAGS_ONLY_PROCEDURAL_SHIFT))
+    {
+        triangleId |= 1u << (triangleShift + TRIANGLE_ID_PROCEDURAL_SHIFT);
+    }
+
+    return triangleId;
 }
 
 //=====================================================================================================================
@@ -810,7 +841,7 @@ static uint32_t GetInstanceSidebandOffset(
 // Node pointers with all upper bits set are sentinels: INVALID_NODE, TERMINAL_NODE, SKIP_*
 static bool IsValidNode(uint nodePtr)
 {
-    return nodePtr < DEAD_LANE;
+    return nodePtr < DEAD_LANE_WITH_STACK;
 }
 
 //======================================================================================================================

@@ -142,24 +142,18 @@ void WriteCompressedNodes(
         const uint packedGeometryInfoData = DstBuffer.Load(geometryInfoOffset + GEOMETRY_INFO_FLAGS_AND_NUM_PRIMS_OFFSET);
         const uint geometryFlags = ExtractGeometryInfoFlags(packedGeometryInfoData);
 
-        uint triangleId = WriteTriangleIdField(0,
-                                               NODE_TYPE_TRIANGLE_0,
-                                               GetQuadScratchNodeVertexOffset(quad.scratchNodeIndexAndOffset[0]),
-                                               geometryFlags);
+        uint quadSwizzle = GetQuadScratchNodeVertexOffset(quad.scratchNodeIndexAndOffset[0]);
 
         // If this quad has another triangle, update triangle ID for the pair and update referenced scratch
         // triangle node
         if (quad.scratchNodeIndexAndOffset[1] != INVALID_IDX)
         {
-            triangleId = WriteTriangleIdField(triangleId,
-                                              NODE_TYPE_TRIANGLE_1,
-                                              GetQuadScratchNodeVertexOffset(quad.scratchNodeIndexAndOffset[1]),
-                                              geometryFlags);
+            quadSwizzle |= GetQuadScratchNodeVertexOffset(quad.scratchNodeIndexAndOffset[1]) << 4;
 
             const uint scratchNodeOffset = CalcScratchNodeOffset(scratchNodesScratchOffset, keptIndex);
 
             // Update triangle ID field in scratch node
-            const uint packedFlags = (triangleNode.packedFlags & 0x0000ffff) | (triangleId << 16);
+            const uint packedFlags = (triangleNode.packedFlags & 0x0000ffff) | (quadSwizzle << 16);
             WriteScratchNodeDataAtOffset(scratchNodeOffset, SCRATCH_NODE_FLAGS_OFFSET, packedFlags);
 
             // Repurpose the node pointer for saving the index of the other node in the pair.

@@ -29,8 +29,10 @@
 #include "Common.hlsl"
 #include "Extensions.hlsl"
 
+#define GPURT_DEBUG_BUFFER_AVAILABLE (GPURT_ENABLE_GPU_DEBUG && GPURT_BVH_BUILD_SHADER && defined(DEBUG_BUFFER_SLOT))
+
 #if GPURT_ENABLE_GPU_DEBUG
-    #if BUILD_PARALLEL || TRIVIAL_BUILDER
+    #if GPURT_DEBUG_BUFFER_AVAILABLE
         #define GPU_ASSERT_IMPL(id, cond) DoGpuAssert(id, (cond))
         #define GPU_DPF_IMPL(id, msg, ...) \
         do \
@@ -44,7 +46,6 @@
         {  \
             if (IsDebugHaltEnabled() && !(cond)) { Halt(); } \
         } while (false)
-
         #define GPU_DPF_IMPL(msg, ...)
     #endif
 
@@ -69,7 +70,7 @@ void Halt()
     AmdExtD3DShaderIntrinsics_Halt();
 }
 
-#if GPURT_ENABLE_GPU_DEBUG && (BUILD_PARALLEL || TRIVIAL_BUILDER)
+#if GPURT_DEBUG_BUFFER_AVAILABLE
 
 globallycoherent RWByteAddressBuffer DebugBuffer : register( DEBUG_BUFFER_SLOT );
 

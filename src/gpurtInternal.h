@@ -231,14 +231,6 @@ using InternalPipelineMap = std::unordered_map<InternalPipelineKey,
                                                InternalPipelineMemoryPair,
                                                InternalPipelineKeyHasher>;
 
-//=====================================================================================================================
-// different ways to encode the scene bounds used to generate morton codes
-enum class SceneBoundsCalculation : uint32
-{
-    BasedOnGeometry = 0,
-    BasedOnGeometryWithSize
-};
-
 namespace Internal {
 
 // =====================================================================================================================
@@ -691,8 +683,11 @@ public:
 
     virtual bool ShouldUseGangedAceForBuild(const AccelStructBuildInputs& inputs) const override;
 
-    // Returns size in DWORDs of a buffer view SRD
-    uint32 GetBufferSrdSizeDw() const { return m_bufferSrdSizeDw; };
+    // Returns size in DWORDs of a typed buffer view SRD
+    uint32 GetTypedBufferSrdSizeDw() const { return m_typedBufferSrdSizeDw; };
+
+    // Returns size in DWORDs of a untyped buffer view SRD
+    uint32 GetUntypedBufferSrdSizeDw() const { return m_untypedBufferSrdSizeDw; };
 
     Pal::RayTracingIpLevel GetRtIpLevel() const { return m_rtIpLevel; }
 
@@ -736,7 +731,8 @@ private:
     Util::Mutex                              m_traceBvhLock;
     bool                                     m_isTraceActive;
     GpuRt::AccelStructTraceSource            m_accelStructTraceSource;
-    uint32                                   m_bufferSrdSizeDw;
+    uint32                                   m_typedBufferSrdSizeDw;
+    uint32                                   m_untypedBufferSrdSizeDw;
     ClientCallbacks                          m_clientCb;
     Pal::RayTracingIpLevel                   m_rtIpLevel;           // the actual RTIP level GPURT is using,
                                                                     // is based on emulatedRtIpLevel and the actual device.

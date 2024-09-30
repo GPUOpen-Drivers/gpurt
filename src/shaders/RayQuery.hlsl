@@ -108,7 +108,7 @@ static bool RayQueryProceedCommon(
 
             if (rayQuery.committed.currNodePtr != INVALID_NODE)
             {
-                uint instNodeIndex = FetchInstanceIdx(rtIpLevel, GetRayQueryTopBvhAddress(rayQuery), rayQuery.lastInstanceNode);
+                uint instNodeIndex = FetchInstanceIdx(rtIpLevel, GetRayQueryTopBvhAddress(rayQuery), rayQuery.committed.instNodePtr);
 
                 WriteRayHistoryTokenEnd(
                     rayId,

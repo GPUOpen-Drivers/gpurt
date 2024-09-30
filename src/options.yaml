@@ -54,3 +54,20 @@ Options:
     cpsCandidatePrimitiveMode:
         Type: CpsCandidatePrimitiveMode
         Default: CpsCandidatePrimitiveMode::SuspendLane
+
+    persistentLaunchEnabled:
+        Type: uint32
+        Default: 0
+
+    rayFlagsOverrideForceEnableMask:
+        # The incoming TraceRay ray flags are ORed with this mask before use, allowing to force-enable specific flags.
+        # In case of conflicting bits with the disable mask, the enable mask wins, as it is applied after the disable mask.
+        # Only supported with continuations.
+        Type: uint32
+        Default: 0
+
+    rayFlagsOverrideForceDisableMask:
+        # The incoming TraceRay ray flags are ANDed with the bitwise inverse of this mask before use, allowing to force-disable specific flags.
+        # Only supported with continuations.
+        Type: uint32
+        Default: 0

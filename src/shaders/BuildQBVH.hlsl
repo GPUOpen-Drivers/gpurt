@@ -306,7 +306,8 @@ uint WritePrimitiveNode(
         nodeOffset = offsets.leafNodes + (destIndex * primitiveNodeSize);
     }
 
-    const uint triangleId = ExtractScratchNodeTriangleId(scratchNode.packedFlags);
+    const uint quadSwizzle = ExtractScratchNodeQuadSwizzle(scratchNode.packedFlags);
+    const uint boxNodeFlags = ExtractScratchNodeBoxFlags(scratchNode.packedFlags);
 
     if (nodeType == NODE_TYPE_USER_NODE_PROCEDURAL)
     {
@@ -320,8 +321,6 @@ uint WritePrimitiveNode(
     }
     else
     {
-        DstBuffer.Store(nodeOffset + TRIANGLE_NODE_ID_OFFSET, triangleId);
-
         bool isPairCompressed = (Settings.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION);
         if (Settings.enableEarlyPairCompression)
         {
@@ -334,6 +333,18 @@ uint WritePrimitiveNode(
 
         // Pair compressed triangles nodes are referenced by triangle 1
         nodeType = isPairCompressed ? NODE_TYPE_TRIANGLE_1 : NODE_TYPE_TRIANGLE_0;
+
+        uint triangleId = WriteTriangleIdField(0, NODE_TYPE_TRIANGLE_0, (quadSwizzle >> 0) & 0xF, boxNodeFlags);
+
+        // The compaction shader (CompactASImpl1_1) looks at triangleId to determine the node type of a leaf node.
+        // Hence, we must only set the triangleId fields for NODE_TYPE_TRIANGLE_1 to non-zero for a pair
+        // compressed triangle.
+        if (isPairCompressed)
+        {
+            triangleId = WriteTriangleIdField(triangleId, NODE_TYPE_TRIANGLE_1, (quadSwizzle >> 4) & 0xF, boxNodeFlags);
+        }
+
+        DstBuffer.Store(nodeOffset + TRIANGLE_NODE_ID_OFFSET, triangleId);
 
         {
             DstBuffer.Store(nodeOffset + TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);

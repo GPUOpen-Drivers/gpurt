@@ -22,31 +22,51 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#ifndef EXTENSIONS_HLSLI
-#define EXTENSIONS_HLSLI
+#ifndef INSTANCE_NODE_1_1_HLSLI
+#define INSTANCE_NODE_1_1_HLSLI
 
-#define __decl [noinline]
-
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TiesToEven     0x0
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardPositive 0x1
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardNegative 0x2
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardZero     0x3
-
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Add      0x0
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Subtract 0x1
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Multiply 0x2
+#include "BoxNode1_0.hlsli"
+#include "../InstanceDesc.hlsli"
+#include "../TempAssert.hlsli"
 
 //=====================================================================================================================
-static float FloatOpWithRoundMode(uint roundMode, uint operation, float src0, float src1);
+struct InstanceSidebandData1_1
+{
+    uint   instanceIndex;
+    uint   blasNodePointer; // might not point to root
+    uint   blasMetadataSize;
+    uint   padding0;
+    float4 Transform[3]; // Non-inverse (original D3D12_RAYTRACING_INSTANCE_DESC.Transform)
+};
+
+#define RTIP1_1_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET        0
+#define RTIP1_1_INSTANCE_SIDEBAND_CHILD_POINTER_OFFSET         4
+#define RTIP1_1_INSTANCE_SIDEBAND_CHILD_METADATA_SIZE_OFFSET   8
+#define RTIP1_1_INSTANCE_SIDEBAND_OBJECT2WORLD_OFFSET         16
+#define RTIP1_1_INSTANCE_SIDEBAND_SIZE                        64
+
+GPURT_STATIC_ASSERT(RTIP1_1_INSTANCE_SIDEBAND_SIZE == sizeof(InstanceSidebandData1_1), "Instance sideband structure mismatch");
 
 //=====================================================================================================================
-static float2 FloatOpWithRoundMode(uint roundMode, uint operation, float2 src0, float2 src1);
+struct FusedInstanceNode
+{
+    InstanceDesc            desc;
+    InstanceSidebandData1_1 sideband;
+    Float32BoxNode          blasRootNode;
+};
 
 //=====================================================================================================================
-static float3 FloatOpWithRoundMode(uint roundMode, uint operation, float3 src0, float3 src1);
+struct InstanceNode
+{
+    InstanceDesc            desc;
+    InstanceSidebandData1_1 sideband;
+};
 
-#ifndef LIBRARY_COMPILATION
-#include "Extensions.hlsl"
-#endif
+#define INSTANCE_NODE_DESC_OFFSET       0
+#define INSTANCE_NODE_EXTRA_OFFSET      64
+#define INSTANCE_NODE_SIZE              128
+#define FUSED_INSTANCE_NODE_ROOT_OFFSET INSTANCE_NODE_SIZE
+#define FUSED_INSTANCE_NODE_SIZE        256
+GPURT_STATIC_ASSERT(INSTANCE_NODE_SIZE == sizeof(InstanceNode), "InstanceNode structure mismatch");
 
 #endif

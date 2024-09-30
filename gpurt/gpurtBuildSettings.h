@@ -69,7 +69,7 @@ struct CompileTimeBuildSettings
     uint32 enableTopDownBuild;
     uint32 useMortonCode30;
     uint32 enableMergeSort;
-    uint32 fastBuildThreshold;
+    uint32 unused14;
     uint32 enableFusedInstanceNode;
     float  tsPriority;
     uint32 numRebraidIterations;
@@ -99,7 +99,7 @@ struct CompileTimeBuildSettings
     uint32 unused11;
     uint32 unused12;
     uint32 unused13;
-    uint32 rebuildAccelStruct;
+    uint32 disableCompaction;
 };
 
 #define BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_ID                        0
@@ -119,7 +119,7 @@ struct CompileTimeBuildSettings
 #define BUILD_SETTINGS_DATA_ENABLE_TOP_DOWN_BUILD_ID                  14
 #define BUILD_SETTINGS_DATA_USE_MORTON_CODE_30_ID                     15
 #define BUILD_SETTINGS_DATA_ENABLE_MERGE_SORT_ID                      16
-#define BUILD_SETTINGS_DATA_FAST_BUILD_THRESHOLD_ID                   17
+// unused14 id                                                          17
 #define BUILD_SETTINGS_DATA_ENABLE_FUSED_INSTANCE_NODE_ID             18
 #define BUILD_SETTINGS_DATA_TS_PRIORITY_ID                            19
 #define BUILD_SETTINGS_DATA_NUM_REBRAID_ITERATIONS_ID                 20
@@ -135,7 +135,7 @@ struct CompileTimeBuildSettings
 #define BUILD_SETTINGS_DATA_ENCODE_ARRAY_OF_POINTERS_ID               41
 #define BUILD_SETTINGS_DATA_SCENE_BOUNDS_CALCULATION_TYPE_ID          42
 #define BUILD_SETTINGS_DATA_REBRAID_QUALITY_HEURISTIC_ID              43
-#define BUILD_SETTINGS_DATA_REBUILD_ACCELERATION_STRUCTURE_ID         47
+#define BUILD_SETTINGS_DATA_DISABLE_COMPACTION_ID                     47
 
 #ifdef __cplusplus
 } // namespace GpuRt

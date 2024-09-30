@@ -32,6 +32,7 @@
 #endif
 
 #include "../shadersClean/common/Math.hlsli"
+#include "../shadersClean/common/InstanceDesc.hlsli"
 
 // By default, Gpurt exports both non-continuation and continuation traversal functions. Dxcp picks one based on panel
 // setting.
@@ -251,12 +252,19 @@ struct _AmdDispatchSystemData
         return dispatchId;
     }
 
+    static _AmdDispatchSystemData MakeDeadLaneWithStack();
+    static _AmdDispatchSystemData MakeDeadLaneWithoutStack();
+
     uint  dispatchLinearId;   // Packed dispatch linear id. Combine x/y/z into 1 DWORD.
 
     uint  shaderRecIdx; // Record index for local root parameters.
 #if DEVELOPER
-    uint  parentId;     // Record the parent Id for ray history counter, -1 for RayGen shader.
+    uint  parentId;     // Record the parent's dynamic Id for ray history counter, -1 for RayGen shader.
+    uint  staticId;     // Record the static Id of current trace ray call site.
 #endif
+
+    uint nextNodePtr;   // Next node pointer (moved here from _AmdTraversalState due to launch kernel VGPR limits).
+                        // Also contains the state of the current lane (e.g. dead with or without valid stack).
 };
 
 //=====================================================================================================================
@@ -292,6 +300,10 @@ struct _AmdRaySystemState
         // Apply known bits common to all TraceRay calls
         incomingFlags = ((incomingFlags & ~AmdTraceRayGetKnownUnsetRayFlags()) | AmdTraceRayGetKnownSetRayFlags());
 #endif
+        // Apply options overrides
+        incomingFlags &= ~Options::getRayFlagsOverrideForceDisableMask();
+        incomingFlags |=  Options::getRayFlagsOverrideForceEnableMask();
+
         return incomingFlags;
     }
 
@@ -494,7 +506,6 @@ struct _AmdTraversalState
     // register space reserved for ray attributes in general
     float2 committedBarycentrics;
 
-    uint nextNodePtr;
     uint instNodePtr;
 
     // Traversal stack state. Note, on some hardware this data represents a packed stack pointer that will
@@ -647,14 +658,23 @@ struct _AmdSystemData
     }
 #endif
 
-    bool IsDeadLane()
+    bool IsDeadLaneWithoutStack()
     {
-        return traversal.nextNodePtr == DEAD_LANE;
+        // This type of dead lane is only possible when the continuations stack is in global memory.
+        // Explicitly check the compile time setting to help the compiler eliminte unnecessary code at runtime.
+        return (dispatch.nextNodePtr == DEAD_LANE_WITHOUT_STACK) && _AmdContinuationStackIsGlobal();
+    }
+
+    bool IsDeadLaneWithStack()
+    {
+        // This type of dead lane is only possible when persistent launch is enabled.
+        // Explicitly check the compile time setting to help the compiler eliminte unnecessary code at runtime.
+        return (dispatch.nextNodePtr == DEAD_LANE_WITH_STACK) && Options::getPersistentLaunchEnabled();
     }
 
     bool IsTraversal()
     {
-        return IsValidNode(traversal.nextNodePtr);
+        return IsValidNode(dispatch.nextNodePtr);
     }
 
     bool IsChsOrMiss(in uint state)
@@ -685,9 +705,14 @@ struct _AmdSystemData
         return IsChsOrMiss(state) && IsValidNode(traversal.committed.instNodePtr);
     }
 
-    static _AmdSystemData MakeDeadLane();
+    static _AmdSystemData MakeDeadLaneWithStack();
+    static _AmdSystemData MakeDeadLaneWithoutStack();
 
+    // Note: _AmdDispatchSystemData must be the first member of _AmdSystemData. This allows us to save some VGPRs if
+    //       we need to call a function that takes _AmdSystemData but doesn't actually need ray or traversal data.
+    //       For example, the launch kernel can make a dead lane and enqueue traversal with just dispatch.nextNodePtr.
     _AmdDispatchSystemData dispatch;
+
     _AmdRaySystemState     ray;
     _AmdTraversalState     traversal;
 #if DEVELOPER
@@ -739,6 +764,7 @@ DECLARE_ENQUEUE(, uint64_t returnAddr, _AmdSystemData data)
 DECLARE_ENQUEUE(Traversal, uint64_t dummyReturnAddr, _AmdSystemData data)
 DECLARE_ENQUEUE(RayGen, uint64_t dummyReturnAddr, _AmdDispatchSystemData data)
 DECLARE_WAIT_ENQUEUE(Traversal, uint64_t dummyReturnAddr, _AmdSystemData data)
+DECLARE_WAIT_ENQUEUE(Traversal, uint64_t dummyReturnAddr, _AmdDispatchSystemData data)
 
 DECLARE_ENQUEUE(AnyHit, uint64_t returnAddr, _AmdAnyHitSystemData data, float2 candidateBarycentrics)
 DECLARE_ENQUEUE(Intersection, uint64_t returnAddr, _AmdAnyHitSystemData data)
@@ -762,19 +788,39 @@ DECLARE_GET_UNINITIALIZED(F32, float)
 DECLARE_GET_UNINITIALIZED(I32, uint32_t)
 DECLARE_GET_UNINITIALIZED(I64, uint64_t)
 DECLARE_GET_UNINITIALIZED(SystemData, _AmdSystemData)
+DECLARE_GET_UNINITIALIZED(DispatchSystemData, _AmdDispatchSystemData)
 
-#if CONTINUATIONS_LGC_STACK_LOWERING
 DECLARE_CONT_STACK_LOAD_LAST_USE(U32, uint32_t)
 DECLARE_CONT_STACK_STORE(U32, uint32_t value)
 DECLARE_CONT_STACK_LOAD_LAST_USE(U64, uint64_t)
 DECLARE_CONT_STACK_STORE(U64, uint64_t value)
 #endif
-#endif
 
-inline _AmdSystemData _AmdSystemData::MakeDeadLane()
+inline _AmdDispatchSystemData _AmdDispatchSystemData::MakeDeadLaneWithStack()
+{
+    _AmdDispatchSystemData data = _AmdGetUninitializedDispatchSystemData();
+    data.nextNodePtr = DEAD_LANE_WITH_STACK;
+    return data;
+}
+
+inline _AmdDispatchSystemData _AmdDispatchSystemData::MakeDeadLaneWithoutStack()
+{
+    _AmdDispatchSystemData data = _AmdGetUninitializedDispatchSystemData();
+    data.nextNodePtr = DEAD_LANE_WITHOUT_STACK;
+    return data;
+}
+
+inline _AmdSystemData _AmdSystemData::MakeDeadLaneWithStack()
 {
     _AmdSystemData data = _AmdGetUninitializedSystemData();
-    data.traversal.nextNodePtr = DEAD_LANE;
+    data.dispatch.nextNodePtr = DEAD_LANE_WITH_STACK;
+    return data;
+}
+
+inline _AmdSystemData _AmdSystemData::MakeDeadLaneWithoutStack()
+{
+    _AmdSystemData data = _AmdGetUninitializedSystemData();
+    data.dispatch.nextNodePtr = DEAD_LANE_WITHOUT_STACK;
     return data;
 }
 
@@ -897,6 +943,14 @@ static float4x3 WorldToObject4x3(in uint64_t tlasBaseAddr, in uint instNodePtr)
 }
 
 //=====================================================================================================================
+__decl uint3 AmdExtThreadIdInGroupCompute() DUMMY_UINT3_FUNC
+__decl uint  AmdExtFlattenedThreadIdInGroupCompute() DUMMY_UINT_FUNC
+__decl uint  AmdExtLoadDwordAtAddr(uint64_t addr, uint offset) DUMMY_UINT_FUNC
+__decl void  AmdExtStoreDwordAtAddr(uint64_t addr, uint offset, uint value) DUMMY_VOID_FUNC
+__decl void  AmdExtDeviceMemoryAcquire() DUMMY_VOID_FUNC
+__decl void  AmdExtDeviceMemoryRelease() DUMMY_VOID_FUNC
+
+//=====================================================================================================================
 // Implementation of DispatchRaysIndex.
 export uint3 _cont_DispatchRaysIndex3(in _AmdDispatchSystemData data)
 {
@@ -907,11 +961,26 @@ export uint3 _cont_DispatchRaysIndex3(in _AmdDispatchSystemData data)
 // Load dispatch dimensions from constant buffer.
 static uint3 GetDispatchRaysDimensions()
 {
-    const uint  width  = DispatchRaysConstBuf.rayDispatchWidth;
-    const uint  height = DispatchRaysConstBuf.rayDispatchHeight;
-    const uint  depth  = DispatchRaysConstBuf.rayDispatchDepth;
+    const uint width  = DispatchRaysConstBuf.rayDispatchWidth;
+    const uint height = DispatchRaysConstBuf.rayDispatchHeight;
+    const uint depth  = DispatchRaysConstBuf.rayDispatchDepth;
 
     return uint3(width, height, depth);
+}
+
+//=====================================================================================================================
+// Persistent dispatch size (1D).
+static uint3 GetPersistentDispatchSize()
+{
+    // Groups needed to cover the dispatch if each thread only processes 1 ray
+    const uint3 rayDispatch   = GetDispatchRaysDimensions();
+    const uint  threadsNeeded = rayDispatch.x * rayDispatch.y * rayDispatch.z;
+    const uint3 groupDim      = AmdExtGroupDimCompute();
+    const uint  groupsNeeded  = RoundUpQuotient(threadsNeeded, groupDim.x * groupDim.y * groupDim.z);
+
+    // Dispatch size is the lesser of rayDispatchMaxGroups and groupsNeeded
+    // rayDispatchMaxGroups would mean threads handle >= 1 ray, groupsNeeded would mean threads handle <= 1 ray
+    return min(DispatchRaysConstBuf.rayDispatchMaxGroups, groupsNeeded);
 }
 
 //=====================================================================================================================
@@ -987,24 +1056,19 @@ export float _cont_RayTCurrent(in _AmdSystemData data, in _AmdPrimitiveSystemSta
 #endif
 
 //=====================================================================================================================
-__decl uint3 AmdExtThreadIdInGroupCompute() DUMMY_UINT3_FUNC
-__decl uint  AmdExtLoadDwordAtAddr(uint64_t addr, uint offset) DUMMY_UINT_FUNC
-__decl void  AmdExtStoreDwordAtAddr(uint64_t addr, uint offset, uint value) DUMMY_VOID_FUNC
-
-//=====================================================================================================================
-// Map a thread to a ray, some threads could end up with non-existent (invalid) rays. Assuming numthreads(32, 1, 1).
+// Map a thread to a ray, some threads could end up with non-existent (invalid) rays.
 // Note D3D12_DISPATCH_RAYS_DESC::(w x h x d) are organized to DispatchDims = (?, d, 1).
 static uint3 GetDispatchId()
 {
     const uint3 threadIdInGroup = AmdExtThreadIdInGroupCompute();
     const uint3 groupId         = AmdExtGroupIdCompute();
     const uint3 dims            = GetDispatchRaysDimensions();
+    const uint  threadGroupSize = AmdExtGroupDimCompute().x * AmdExtGroupDimCompute().y * AmdExtGroupDimCompute().z;
 
     uint3 dispatchId;
     dispatchId.z = groupId.y;
     if ((dims.x > 1) && (dims.y > 1))
     {
-        // Use 8 x 4 tiles.
         /*
         Sample: D3D12_DISPATCH_RAYS_DESC::(w x h x d) = (18, 6, 1). Divided into 8x4 tiles(boxes).
         A number in a box is the group id.
@@ -1020,18 +1084,57 @@ static uint3 GetDispatchId()
         const uint yTile = groupId.x / wTile;
 
         dispatchId.x = xTile * 8 + (threadIdInGroup.x % 8);
-        dispatchId.y = yTile * 4 + (threadIdInGroup.x / 8);
+        dispatchId.y = yTile * (threadGroupSize / 8) + (threadIdInGroup.x / 8);
     }
     else
     {
         // Do a naive 1:1 simple map.
-        const uint id = threadIdInGroup.x + 32 * groupId.x;
+        const uint id = threadIdInGroup.x + threadGroupSize * groupId.x;
         const uint gridSize = dims.x * dims.y; // width x height
         dispatchId.y = id / dims.x;
         dispatchId.x = id - (dispatchId.y * dims.x);
     }
 
     return dispatchId;
+}
+
+//=====================================================================================================================
+// Compute the X/Y/Z ray index based on the dispatch dimensions and a 32-bit dispatch ID
+static uint3 GetDispatchId(uint width, uint height, uint dispatchId)
+{
+    // Progressively work from Z to Y to X, subtracting as we go along
+
+    // Determine the Z index - divide by size of the 2D plane
+    const uint planeSize = width * height;
+    const uint z = dispatchId / planeSize;
+    dispatchId -= z * planeSize;
+
+    // Split the 2D plane into 8 x 64 tiles
+    const uint TileWidth  = 8;
+    const uint TileHeight = 64;
+
+    // Determine which tile along the Y axis - divide by size of the 2D strip
+    const uint yTile = dispatchId / TileHeight / width;
+    dispatchId      -= yTile * TileHeight * width;
+
+    // Determine which tile along the X axis - divide by size of the 2D strip
+    // Take care in case the dispatch height is not a multiple of TileHeight
+    const uint xStripHeight = min(TileHeight, height - (yTile * TileHeight));
+    const uint xStripSize   = TileWidth * xStripHeight;
+    const uint xTile        = dispatchId / xStripSize;
+    dispatchId             -= xTile * xStripSize;
+
+    // Determine Y position within the tile - divide by width of the 2D strip
+    // Take care in case the dispatch width is not a multiple of TileWidth
+    const uint xStripWidth = min(TileWidth, width - xTile * TileWidth);
+    const uint y           = dispatchId / xStripWidth;
+    dispatchId            -= y * xStripWidth;
+
+    // Remainder is the X position within the tile
+    const uint x = dispatchId;
+
+    // Return ray index - X/Y based on their respective tiles and position within
+    return uint3(xTile * TileWidth + x, yTile * TileHeight + y, z);
 }
 
 //=====================================================================================================================
@@ -1144,7 +1247,7 @@ static void AcceptHit(inout_param(_AmdAnyHitSystemData) data, bool endSearch)
         data.base.traversal.committed = data.candidate;
         if (endSearch)
         {
-            data.base.traversal.nextNodePtr = END_SEARCH;     // End search
+            data.base.dispatch.nextNodePtr = END_SEARCH;     // End search
         }
     }
 }
@@ -1186,9 +1289,9 @@ export bool _cont_IsEndSearch(in _AmdAnyHitSystemData data)
 {
     // If AnyHit shader called AcceptHitAndEndSearch, or RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH was set, nextNodePtr
     // is END_SEARCH.
-    // On the other side, the values Traversal function may set to traversal.nextNodePtr on its exit are different:
+    // On the other side, the values Traversal function may set to dispatch.nextNodePtr on its exit are different:
     // normal pointers, TERMINAL_NODE or INVALID_NODE.
-    return (data.base.traversal.nextNodePtr == END_SEARCH);
+    return (data.base.dispatch.nextNodePtr == END_SEARCH);
 }
 
 //=====================================================================================================================
@@ -1202,9 +1305,10 @@ export uint _cont_GetContinuationStackAddr()
     {
         const uint3 threadIdInGroup = AmdExtThreadIdInGroupCompute();
         const uint3 groupId         = AmdExtGroupIdCompute();
+        const uint  threadGroupSize = AmdExtGroupDimCompute().x * AmdExtGroupDimCompute().y * AmdExtGroupDimCompute().z;
 
-        // Do a naive 1:1 simple map. Also for now, assume numthreads(32, 1, 1)
-        const uint id = threadIdInGroup.x + 32 * groupId.x;
+        // Do a naive 1:1 simple map.
+        const uint id = threadIdInGroup.x + threadGroupSize * groupId.x;
 
         offset = id * DispatchRaysConstBuf.cpsFrontendStackSize;
     }
@@ -1377,12 +1481,17 @@ static void RayHistorySetCandidateTCurrent(inout_param(_AmdSystemData) data, flo
 }
 
 //=====================================================================================================================
-static void RayHistoryInitStaticId()
+static void RayHistoryInitStaticId(inout_param(_AmdSystemData) data)
 {
 #if DEVELOPER
     if (EnableTraversalCounter())
     {
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 50
+        data.dispatch.staticId = AmdTraceRayInitStaticId();
+#else
         AmdTraceRayInitStaticId();
+        data.dispatch.staticId = AmdTraceRayGetStaticId();
+#endif
     }
 #endif
 }
@@ -1436,7 +1545,7 @@ static void RayHistoryWriteBegin(inout_param(_AmdSystemData) data)
                                   data.ray.Flags(),
                                   data.ray.traceParameters,
                                   rayDesc,
-                                  AmdTraceRayGetStaticId(),
+                                  data.dispatch.staticId,
                                   data.counter.dynamicId,
                                   data.dispatch.parentId);
         WriteRayHistoryTokenTimeStamp(rayId, data.counter.timerBegin);
@@ -1582,7 +1691,7 @@ static void RayHistoryWriteAnyHitOrProceduralStatus(inout_param(_AmdSystemData) 
     if (EnableTraversalCounter())
     {
         const uint rayId  = GetRayId(_cont_DispatchRaysIndex3(data.dispatch));
-        const uint status = (data.traversal.nextNodePtr == END_SEARCH)
+        const uint status = (data.dispatch.nextNodePtr == END_SEARCH)
                             ? HIT_STATUS_ACCEPT_AND_END_SEARCH
                             : (data.ray.AnyHitDidAccept() ? HIT_STATUS_ACCEPT : HIT_STATUS_IGNORE);
 
@@ -1841,23 +1950,96 @@ static HitGroupInfo GetHitGroupInfo(
 
 #if CONTINUATION_ON_GPU
 //=====================================================================================================================
+static void LaunchRayGen(bool setupStack)
+{
+    uint3 dispatchId;
+    bool  valid;
+
+    if (Options::getPersistentLaunchEnabled() == false)
+    {
+        // Each thread will process <= 1 ray. No need for extra counter logic.
+        dispatchId = GetDispatchId();
+        valid      = (dispatchId.x < DispatchRaysConstBuf.rayDispatchWidth &&
+                      dispatchId.y < DispatchRaysConstBuf.rayDispatchHeight);
+    }
+    else
+    {
+        // This is a persistent launch where each thread will process >= 1 ray.
+
+        // This is written in a way that is intended to be correct even if threads don't reconverge after calling into
+        // the ray generation shader.
+        uint localWorkId;
+        const uint popCount = WaveActiveCountBits(true);
+
+        if (WaveIsFirstLane())
+        {
+            localWorkId = AmdTraceRayPersistentLdsAtomicAdd(0, popCount);
+        }
+        localWorkId = WaveReadLaneFirst(localWorkId) + WavePrefixCountBits(true);
+
+        const uint3 rayDims = GetDispatchRaysDimensions();
+        const uint  tgCount = GetPersistentDispatchSize();
+
+        // Single dimension dispatch so the flattened group ID is the same as the x component of the group ID
+        const uint tgId = AmdExtGroupIdCompute().x;
+
+        // Interleave waves' worth of work among CUs so that every CU does approximately the same amount of work even
+        // for dispatches that are smaller than the maximum occupancy of the GPU. This is probably also a bit better
+        // for memory and shader execution locality, since CUs should tend to stay roughly within the same region of
+        // the dispatch. Assume numthreads(32, 1, 1).
+        const uint lowPart        = localWorkId & 31;
+        const uint highPart       = localWorkId & ~31;
+        const uint flatDispatchId = highPart * tgCount + tgId * 32 + lowPart;
+
+        dispatchId = GetDispatchId(rayDims.x, rayDims.y, flatDispatchId);
+        valid      = flatDispatchId < (rayDims.x * rayDims.y * rayDims.z);
+    }
+
+    // With persistent launch every lane gets a stack
+    if (setupStack)
+    {
+        _AmdContStackSetPtr(_cont_GetContinuationStackAddr());
+    }
+
+    if (WaveActiveAllTrue(!valid))
+    {
+        // This wave is done.
+        _AmdComplete();
+    }
+
+    // But only lanes that have a valid dispatch id execute RGS, the others stay dead:
+    if (valid)
+    {
+        _AmdDispatchSystemData systemData;
+        systemData.PackDispatchId(dispatchId);
+        systemData.shaderRecIdx = _AmdGetUninitializedI32();
+#if DEVELOPER
+        systemData.parentId = -1;
+#endif
+        _AmdEnqueueRayGen(GetRayGenVpc(), _AmdGetUninitializedI64(), systemData);
+    }
+    else if (Options::getPersistentLaunchEnabled())
+    {
+        _AmdDispatchSystemData systemData = _AmdDispatchSystemData::MakeDeadLaneWithStack();
+        _AmdWaitEnqueueTraversal(GetTraversalVpc(), -1, _AmdGetUninitializedI64(), systemData);
+    }
+}
+
+//=====================================================================================================================
 // KernelEntry is entry function of the RayTracing continuation mode
 export void _cont_KernelEntry()
 {
-    _AmdDispatchSystemData systemData;
-    uint3 dispatchId = GetDispatchId();
-    systemData.PackDispatchId(dispatchId);
-    systemData.shaderRecIdx = _AmdGetUninitializedI32();
-    GPU_ASSERT(dispatchId.z < DispatchRaysConstBuf.rayDispatchDepth);
-    if (dispatchId.x >= DispatchRaysConstBuf.rayDispatchWidth ||
-        dispatchId.y >= DispatchRaysConstBuf.rayDispatchHeight)
+    if (Options::getPersistentLaunchEnabled())
     {
-        return;
+        if (AmdExtFlattenedThreadIdInGroupCompute() == 0)
+        {
+            AmdTraceRayPersistentLdsWrite(0, 0);
+        }
+
+        GroupMemoryBarrierWithGroupSync();
     }
 
-    _AmdContStackSetPtr(_cont_GetContinuationStackAddr());
-
-    _AmdEnqueueRayGen(GetRayGenVpc(), _AmdGetUninitializedI64(), systemData);
+    LaunchRayGen(true);
 }
 
 //=====================================================================================================================
@@ -1934,9 +2116,11 @@ export void _cont_TraceRay(
     {
     case RayTracingIpLevel::RtIp1_1:
         traversal = InitTraversalState1_1(instanceInclusionMask, rayDesc, isValid);
+        dispatch.nextNodePtr = isValid ? CreateRootNodePointer1_1() : INVALID_NODE;
         break;
     case RayTracingIpLevel::RtIp2_0:
         traversal = InitTraversalState2_0(instanceInclusionMask, rayDesc, isValid);
+        dispatch.nextNodePtr = isValid ? CreateRootNodePointer1_1() : TERMINAL_NODE;
         break;
     default:
         break;
@@ -1947,7 +2131,7 @@ export void _cont_TraceRay(
     data.ray       = ray;
     data.traversal = traversal;
 
-    RayHistoryInitStaticId();
+    RayHistoryInitStaticId(data);
     RayHistoryWriteBegin(data);
 
     const uint     callerShaderRecIdx    = dispatch.shaderRecIdx; // 0 if from RayGen.
@@ -2028,8 +2212,7 @@ static void TraversalInternal(
 {
     switch (_AmdGetRtip())
     {
-#if   (GPURT_RTIP_LEVEL == 20) || (GPURT_RTIP_LEVEL == 0)
-    // Level 20 is used for legacy variants
+#if (GPURT_RTIP_LEVEL == GPURT_RTIP_LEGACY_LEVEL) || (GPURT_RTIP_LEVEL == 0)
     case RayTracingIpLevel::RtIp1_1:
         TraversalInternal1_1(data, state, candidate, candidateBarycentrics);
         break;
@@ -2049,7 +2232,8 @@ static void EnqueueNextShader(bool hasWorkToDo, uint64_t nextShaderAddr, uint64_
         if (_AmdContinuationStackIsGlobal())
         {
             // No work to do = dead lane, jump to traversal as a synchronization point with an empty system data
-            _AmdWaitEnqueueTraversal(GetTraversalVpc(), -1, _AmdGetUninitializedI64(), _AmdSystemData::MakeDeadLane());
+            _AmdSystemData sysData = _AmdSystemData::MakeDeadLaneWithoutStack();
+            _AmdWaitEnqueueTraversal(GetTraversalVpc(), -1, _AmdGetUninitializedI64(), sysData);
         }
         else
         {
@@ -2118,11 +2302,6 @@ static void EnterSchedulerSection()
 export void _cont_Traversal(
     inout_param(_AmdSystemData) data)
 {
-#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION  >= 41
-    data.ray.PackAccelStructAndRayflags(
-        data.ray.AccelStruct(),
-        (data.ray.IncomingFlags() & ~AmdTraceRayGetKnownUnsetRayFlags()) | AmdTraceRayGetKnownSetRayFlags());
-#endif
     // Discard data that doesn't need to be kept alive during Traversal
     data.dispatch.shaderRecIdx = _AmdGetUninitializedI32();
     if (!IsBvhRebraid())
@@ -2132,7 +2311,8 @@ export void _cont_Traversal(
     }
 
     // Write AHS/IS returned status
-    if (!data.IsDeadLane())
+    bool IsDeadLane = (data.IsDeadLaneWithoutStack() || data.IsDeadLaneWithStack());
+    if (!IsDeadLane)
     {
         RayHistoryWriteAnyHitOrProceduralStatus(data);
     }
@@ -2278,6 +2458,12 @@ static IntersectionResult TraceRayInternalCPSDebug(
 
     const bool isValid = true; // already verified in the caller
 
+    _AmdDispatchSystemData dispatch = (_AmdDispatchSystemData)0;
+    dispatch.PackDispatchId(GetDispatchId());
+#if DEVELOPER
+    dispatch.parentId = -1;
+#endif
+
     // Initialise traversal system state from driver intrinsic
     _AmdTraversalState traversal = (_AmdTraversalState)0;
     switch (rtIpLevel)
@@ -2286,27 +2472,25 @@ static IntersectionResult TraceRayInternalCPSDebug(
         traversal = InitTraversalState1_1(0,
                                           rayDesc,
                                           isValid);
+        dispatch.nextNodePtr = isValid ? CreateRootNodePointer1_1() : INVALID_NODE;
         break;
     case GPURT_RTIP2_0:
         traversal = InitTraversalState2_0(0,
                                           rayDesc,
                                           isValid);
+        dispatch.nextNodePtr = isValid ? CreateRootNodePointer1_1() : TERMINAL_NODE;
         break;
     default:
         break;
     }
 
     _AmdSystemData sysData = (_AmdSystemData)0;
-    sysData.dispatch       = (_AmdDispatchSystemData)0;
-    sysData.dispatch.PackDispatchId(GetDispatchId());
-#if DEVELOPER
-    sysData.dispatch.parentId = -1;
-#endif
-    sysData.ray            = ray;
-    sysData.traversal      = traversal;
+    sysData.dispatch  = dispatch;
+    sysData.ray       = ray;
+    sysData.traversal = traversal;
 
     // Begin outer while loop
-    while (sysData.traversal.nextNodePtr < TERMINAL_NODE)
+    while (sysData.dispatch.nextNodePtr < TERMINAL_NODE)
     {
         _AmdTraversalResultData ret = TraversalInternalDebugWrapper(sysData);
         uint state = ret.state;
@@ -2372,7 +2556,7 @@ static IntersectionResult TraceRayInternalCPSDebug(
 
                         if (status == HIT_STATUS_ACCEPT_AND_END_SEARCH)
                         {
-                            sysData.traversal.nextNodePtr = INVALID_NODE;
+                            sysData.dispatch.nextNodePtr = INVALID_NODE;
                         }
                     }
                 }
@@ -2407,7 +2591,7 @@ static IntersectionResult TraceRayInternalCPSDebug(
                     sysData.traversal.committed = ret.candidate;
                     if (status == HIT_STATUS_ACCEPT_AND_END_SEARCH)
                     {
-                        sysData.traversal.nextNodePtr = INVALID_NODE;
+                        sysData.dispatch.nextNodePtr = INVALID_NODE;
                     }
                 }
             }

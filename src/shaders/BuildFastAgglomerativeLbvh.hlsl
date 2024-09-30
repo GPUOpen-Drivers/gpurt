@@ -104,15 +104,14 @@ uint32_t Delta30(
     const int leftCode  = ScratchBuffer.Load(mortonCodesOffset + (left * sizeof(int)));
     const int rightCode = ScratchBuffer.Load(mortonCodesOffset + (right * sizeof(int)));
 
-    // logical xor can be used instead of finding the index of the highest differing bit as we can compare the numbers.
-    // The higher the index of the differing bit, the larger the number
-    return (leftCode != rightCode) ? (leftCode ^ rightCode) : (left ^ right);
+    // returns number of matching bits starting from MSB
+    return (leftCode != rightCode) ? clz(leftCode ^ rightCode) : (32 + clz(left ^ right));
 }
 
 //=====================================================================================================================
 // This function indicates a distance metric between the two keys where each internal node splits the hierarchy
 // Optionally, we can use the squared distance to compute the distance between two centroids
-uint64_t Delta64(
+uint32_t Delta64(
     uint mortonCodesOffset,
     uint id)
 {
@@ -123,9 +122,8 @@ uint64_t Delta64(
     const uint64_t leftCode  = ScratchBuffer.Load<uint64_t>(mortonCodesOffset + (left * sizeof(uint64_t)));
     const uint64_t rightCode = ScratchBuffer.Load<uint64_t>(mortonCodesOffset + (right * sizeof(uint64_t)));
 
-    // logical xor can be used instead of finding the index of the highest differing bit as we can compare the numbers.
-    // The higher the index of the differing bit, the larger the number
-    return (leftCode != rightCode) ? (leftCode ^ rightCode) : (left ^ right);
+    // returns number of matching bits starting from MSB
+    return (leftCode != rightCode) ? clz64(leftCode ^ rightCode) : (64 + clz64(left ^ right));
 }
 
 //=====================================================================================================================
@@ -137,11 +135,11 @@ bool IsSplitRight(
 {
     if (useMortonCode30)
     {
-        return (Delta30(mortonCodesOffset, right) < Delta30(mortonCodesOffset, left - 1));
+        return (Delta30(mortonCodesOffset, right) > Delta30(mortonCodesOffset, left - 1));
     }
     else
     {
-        return (Delta64(mortonCodesOffset, right) < Delta64(mortonCodesOffset, left - 1));
+        return (Delta64(mortonCodesOffset, right) > Delta64(mortonCodesOffset, left - 1));
     }
 }
 
@@ -172,6 +170,21 @@ void FastAgglomerativeLbvhImpl(
 
     // Total number of internal nodes is N - 1
     const uint numInternalNodes = args.numActivePrims - 1;
+
+    if (numInternalNodes == 0)
+    {
+        if (primitiveIndex == 0)
+        {
+            const uint rootIndex = FetchSortedPrimIndex(args.sortedPrimIndicesOffset, 0);
+            {
+                // Store invalid index as parent of root
+                WriteScratchNodeData(args.baseScratchNodesOffset, rootIndex, SCRATCH_NODE_PARENT_OFFSET, 0xffffffff);
+            }
+
+            WriteRootNodeIndex(args.rootNodeIndexOffset, rootIndex);
+        }
+        return;
+    }
 
     // The root of the tree will be stored in the left child of the n-th internal node, where n represents the size of
     // the key array
@@ -244,8 +257,11 @@ void FastAgglomerativeLbvhImpl(
         // the root node index and remove this conditional
         if (parentNodeIndex == numInternalNodes)
         {
-            // Store invalid index as parent of root
-            WriteScratchNodeData(args.baseScratchNodesOffset, currentNodeIndex, SCRATCH_NODE_PARENT_OFFSET, 0xffffffff);
+            {
+                // Store invalid index as parent of root
+                WriteScratchNodeData(args.baseScratchNodesOffset, currentNodeIndex, SCRATCH_NODE_PARENT_OFFSET, 0xffffffff);
+            }
+
             // Store the index of the root node
             WriteRootNodeIndex(args.rootNodeIndexOffset, currentNodeIndex);
             // Do not write the parent node since it's invalid.
@@ -286,7 +302,14 @@ void BuildFastAgglomerativeLbvh(
     const uint numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
     const FastLBVHArgs args   = GetFastLbvhArgs(numActivePrims);
 
-    if (globalId < numActivePrims)
+    if (numActivePrims == 0)
+    {
+        if (globalId == 0)
+        {
+            WriteRootNodeIndex(args.rootNodeIndexOffset, 0);
+        }
+    }
+    else if (globalId < numActivePrims)
     {
         FastAgglomerativeLbvhImpl(globalId, args);
     }

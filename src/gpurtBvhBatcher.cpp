@@ -200,7 +200,14 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
     }
     if ((updaters.IsEmpty() == false) || (builders.IsEmpty() == false))
     {
-        Barrier();
+        uint32 barrierFlags = BarrierFlagSyncDispatch;
+        if (updaters.IsEmpty() == false)
+        {
+            // Updates can be launched with indirect dispatch. We need to avoid fetching the indirect arguments
+            // from the header before they are written by a previous build/update/copy.
+            barrierFlags |= BarrierFlagSyncIndirectArg;
+        }
+        Barrier(barrierFlags);
     }
     RGP_POP_MARKER();
 
@@ -304,11 +311,72 @@ void BvhBatcher::BuildMultiDispatch(Util::Span<BvhBuilder> builders)
     if (PhaseEnabled(BuildPhaseFlags::MergeSort))
     {
         Barrier();
-        const uint32 wavesPerSimd = builders.size() == 1 ? 16U : 2U;
-        BuildFunction(BuildPhaseFlags::MergeSort, builders, [wavesPerSimd](BvhBuilder& builder)
+
+        if (builders.size() > 1)
         {
-            builder.MergeSort(wavesPerSimd);
-        });
+            const uint32 wavesPerSimd = 2U;
+            BuildFunction(BuildPhaseFlags::MergeSort, builders, [wavesPerSimd](BvhBuilder& builder)
+            {
+                builder.MergeSort(wavesPerSimd);
+            });
+        }
+        else
+        {
+            RGP_PUSH_MARKER("Merge Sort");
+
+            // Batch local sorts together.
+            BuildPhase("Merge Sort (Local)", builders, &BvhBuilder::MergeSortLocal);
+
+            Barrier();
+
+            // Batch global sort iterations together. Compute max iterations amongst the builder batch
+            uint32 maxMergeSortTreeLevel = 0;
+
+            bool batchNeedsLastLevelCopy = false;
+
+            for (const auto& builder : builders)
+            {
+                const uint32 mergeSortTreeLevel = builder.GetMaxMergeSortTreeLevel();
+                maxMergeSortTreeLevel = Util::Max(maxMergeSortTreeLevel, mergeSortTreeLevel);
+                batchNeedsLastLevelCopy |= ((mergeSortTreeLevel & 1) == 1);
+            }
+
+            if (maxMergeSortTreeLevel > 0)
+            {
+                RGP_PUSH_MARKER("Merge Sort (Global Iteration)");
+                for (uint32 level = 1; level <= maxMergeSortTreeLevel; level++)
+                {
+                    Barrier();
+
+                    BuildFunction(nullptr, builders, [level](BvhBuilder& builder)
+                    {
+                        if (level <= builder.GetMaxMergeSortTreeLevel())
+                        {
+                            builder.MergeSortGlobalIteration(level);
+                        }
+                    });
+                }
+                RGP_POP_MARKER();
+
+                if (batchNeedsLastLevelCopy)
+                {
+                    Barrier();
+
+                    RGP_PUSH_MARKER("Merge Sort (Copy Last Level)");
+                    BuildFunction(nullptr, builders, [](BvhBuilder& builder)
+                    {
+                        const uint32 mergeSortTreeLevel = builder.GetMaxMergeSortTreeLevel();
+                        if ((mergeSortTreeLevel & 1) == 1)
+                        {
+                            builder.MergeSortCopyLastLevel();
+                        }
+                    });
+                    RGP_POP_MARKER();
+                }
+            }
+
+            RGP_POP_MARKER();
+        }
     }
     if (PhaseEnabled(BuildPhaseFlags::RadixSort))
     {
@@ -327,13 +395,13 @@ void BvhBatcher::BuildMultiDispatch(Util::Span<BvhBuilder> builders)
         Barrier();
         BuildPhase(BuildPhaseFlags::BuildFastAgglomerativeLbvh, builders, &BvhBuilder::BuildFastAgglomerativeLbvh);
     }
-    if (PhaseEnabled(BuildPhaseFlags::BuildBVHPLOC))
+    if (PhaseEnabled(BuildPhaseFlags::BuildPLOC))
     {
         Barrier();
         const uint32 wavesPerSimd = builders.size() == 1 ? 8U : 1U;
-        BuildFunction(BuildPhaseFlags::BuildBVHPLOC, builders, [wavesPerSimd](BvhBuilder& builder)
+        BuildFunction(BuildPhaseFlags::BuildPLOC, builders, [wavesPerSimd](BvhBuilder& builder)
         {
-            builder.BuildBVHPLOC(wavesPerSimd);
+            builder.BuildPLOC(wavesPerSimd);
         });
     }
     if (PhaseEnabled(BuildPhaseFlags::RefitBounds))

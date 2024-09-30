@@ -22,7 +22,8 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "Common.hlsl"
+#include "../../gpurt/gpurtAccelStruct.h"
+#include "../shared/rayTracingDefs.h"
 
 // Note, CBV(b255) must be the last used binding in the root signature.
 #define RootSig "RootConstants(num32BitConstants=3, b0, visibility=SHADER_VISIBILITY_ALL), "\
@@ -78,7 +79,7 @@ void CopyAS(in uint3 globalThreadId : SV_DispatchThreadID)
     if (globalID == 0)
     {
         // Offset to acceleration structure header
-        uint64_t gpuVa = MakeGpuVirtualAddress(ShaderConstants.AddressLo, ShaderConstants.AddressHi);
+        uint64_t gpuVa = PackUint64(ShaderConstants.AddressLo, ShaderConstants.AddressHi);
         gpuVa += metadataSizeInBytes;
 
         // Patch metadata header

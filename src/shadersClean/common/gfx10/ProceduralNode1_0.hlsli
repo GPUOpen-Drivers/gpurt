@@ -22,31 +22,35 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#ifndef EXTENSIONS_HLSLI
-#define EXTENSIONS_HLSLI
+#ifndef PROCEDURAL_NODE_1_1_HLSLI
+#define PROCEDURAL_NODE_1_1_HLSLI
 
-#define __decl [noinline]
-
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TiesToEven     0x0
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardPositive 0x1
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardNegative 0x2
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardZero     0x3
-
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Add      0x0
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Subtract 0x1
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Multiply 0x2
+#include "../TempAssert.hlsli"
 
 //=====================================================================================================================
-static float FloatOpWithRoundMode(uint roundMode, uint operation, float src0, float src1);
+#define USER_NODE_PROCEDURAL_MIN_OFFSET 0
+#define USER_NODE_PROCEDURAL_MAX_OFFSET 12
+#define USER_NODE_PROCEDURAL_SIZE       64
 
 //=====================================================================================================================
-static float2 FloatOpWithRoundMode(uint roundMode, uint operation, float2 src0, float2 src1);
+// Procedural node primitive data offsets
+#define USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET            TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET
+#define USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET   TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET
+#define USER_NODE_PROCEDURAL_TRIANGLE_ID_OFFSET                TRIANGLE_NODE_ID_OFFSET
 
 //=====================================================================================================================
-static float3 FloatOpWithRoundMode(uint roundMode, uint operation, float3 src0, float3 src1);
+// User defined procedural node format
+struct ProceduralNode
+{
+    float3 bbox_min;
+    float3 bbox_max;
+    uint   padding1[6];
+    uint   geometryIndexAndFlags;
+    uint   reserved;
+    uint   primitiveIndex;
+    uint   triangleId;
+};
 
-#ifndef LIBRARY_COMPILATION
-#include "Extensions.hlsl"
-#endif
+GPURT_STATIC_ASSERT(USER_NODE_PROCEDURAL_SIZE == sizeof(ProceduralNode), "ProceduralNode structure mismatch");
 
 #endif

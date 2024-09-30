@@ -26,6 +26,9 @@
 #ifndef _GPURT_LIBRARY_HLSL
 #define _GPURT_LIBRARY_HLSL
 
+#include "../shadersClean/traversal/TraversalDefs.hlsli"
+#include "../shadersClean/common/InstanceDesc.hlsli"
+
 // Following order matters as AccelStructTracker relies on defines from TraceRayCommon.hlsl
 #include "TraceRayCommon.hlsl"
 #include "AccelStructTracker.hlsl"

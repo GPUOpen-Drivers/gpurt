@@ -22,7 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "..\shared\rayTracingDefs.h"
+#include "../shared/rayTracingDefs.h"
 
 #include "BuildRootSignature.hlsl"
 

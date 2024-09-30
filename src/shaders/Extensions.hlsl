@@ -29,11 +29,7 @@
 #include "../shadersClean/common/Extensions.hlsli"
 #include "../shadersClean/common/Math.hlsli"
 
-#if !defined(__cplusplus)
-
 // Dummy implementation for Vulkan build only
-__decl uint AmdExtLaneCount() DUMMY_UINT_FUNC
-
 __decl uint AmdExtD3DShaderIntrinsics_LoadDwordAtAddr(
     uint gpuVaLoBits, uint gpuVaHiBits, uint offset) DUMMY_UINT_FUNC
 
@@ -168,8 +164,6 @@ uint AmdExtD3DShaderIntrinsics_WaveClusterBitOr(uint x, uint dxClusterSize)
     return spirv_OpGroupNonUniformBitwiseOr_clustered(/* Subgroup */ 3, /* ClusteredReduce */ 3, x, clusterSize);
 }
 
-#endif
-
 //=====================================================================================================================
 // The following extension functions are driver intrinsic functions
 //
@@ -281,7 +275,13 @@ __decl uint AmdTraceRayGetBoxSortHeuristicMode() DUMMY_UINT_FUNC
 __decl uint2 AmdTraceRayMakePC(uint pcVaLow) DUMMY_UINT2_FUNC
 __decl uint AmdTraceRayGetKnownSetRayFlags() DUMMY_UINT_FUNC
 __decl uint AmdTraceRayGetKnownUnsetRayFlags() DUMMY_UINT_FUNC
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 50
+__decl uint AmdTraceRayInitStaticId() DUMMY_UINT_FUNC
+#else
 __decl void AmdTraceRayInitStaticId() DUMMY_VOID_FUNC
+#endif
+__decl uint AmdTraceRayPersistentLdsAtomicAdd(uint offset, uint data) DUMMY_UINT_FUNC
+__decl uint AmdTraceRayPersistentLdsWrite(uint offset, uint data) DUMMY_UINT_FUNC
 
 //=====================================================================================================================
 // Ref: GpuRt::Device::GetStaticPipelineFlags
@@ -324,11 +324,12 @@ __decl uint  AmdExtLoadDwordAtAddrUncached(uint64_t addr, uint offset) DUMMY_UIN
 __decl void  AmdExtStoreDwordAtAddrUncached(uint64_t addr, uint offset, uint value) DUMMY_VOID_FUNC
 __decl uint3 AmdExtGroupIdCompute() DUMMY_UINT3_FUNC
 __decl uint3 AmdExtGroupDimCompute() DUMMY_UINT3_FUNC
-__decl void AmdExtSleep(uint value) DUMMY_VOID_FUNC
+__decl uint  AmdExtLaneCount() DUMMY_UINT_FUNC
+__decl void  AmdExtSleep(uint value) DUMMY_VOID_FUNC
 
 #if USE_TEMP_ARRAY_STACK
 //=====================================================================================================================
-// Register based stack (shared with __cplusplus path)
+// Register based stack
 #define SHORT_STACK_SIZE  16
 
 //=====================================================================================================================
@@ -358,203 +359,46 @@ __decl uint AmdTraceRayGetStackSize()   DUMMY_UINT_FUNC
 #define ANYHIT_CALLTYPE_NO_DUPLICATE    1
 #define ANYHIT_CALLTYPE_DUPLICATE       2
 
-#ifdef __cplusplus
-//=====================================================================================================================
-static uint LoadDwordAtAddr(GpuVirtualAddress addr)
-{
-    return *reinterpret_cast<uint*>(addr);
-}
-#else
 //=====================================================================================================================
 static uint LoadDwordAtAddr(GpuVirtualAddress addr)
 {
     return AmdExtD3DShaderIntrinsics_LoadDwordAtAddr(LowPart(addr), HighPart(addr), 0);
 }
-#endif
 
 //=====================================================================================================================
 static uint2 LoadDwordAtAddrx2(GpuVirtualAddress addr)
 {
-#if !defined(__cplusplus)
     return AmdExtD3DShaderIntrinsics_LoadDwordAtAddrx2(LowPart(addr), HighPart(addr), 0);
-#else
-    uint2 retVal;
-    retVal.x = LoadDwordAtAddr(addr);
-    retVal.y = LoadDwordAtAddr(addr + 4);
-
-    return retVal;
-#endif
 }
 
 //=====================================================================================================================
 static uint3 LoadDwordAtAddrx3(GpuVirtualAddress addr)
 {
-#if !defined(__cplusplus)
     return AmdExtD3DShaderIntrinsics_LoadDwordAtAddrx3(LowPart(addr), HighPart(addr), 0);
-#else
-    uint3 retVal;
-    retVal.x = LoadDwordAtAddr(addr);
-    retVal.y = LoadDwordAtAddr(addr + 4);
-    retVal.z = LoadDwordAtAddr(addr + 8);
-
-    return retVal;
-#endif
 }
 
 //=====================================================================================================================
 static uint4 LoadDwordAtAddrx4(GpuVirtualAddress addr)
 {
-#if !defined(__cplusplus)
     return AmdExtD3DShaderIntrinsics_LoadDwordAtAddrx4(LowPart(addr), HighPart(addr), 0);
-#else
-    uint4 retVal;
-    retVal.x = LoadDwordAtAddr(addr);
-    retVal.y = LoadDwordAtAddr(addr + 4);
-    retVal.z = LoadDwordAtAddr(addr + 8);
-    retVal.w = LoadDwordAtAddr(addr + 12);
-
-    return retVal;
-#endif
 }
 
 static uint ConstantLoadDwordAtAddr(GpuVirtualAddress addr)
 {
-#if !defined(__cplusplus)
     return AmdExtD3DShaderIntrinsics_ConstantLoadDwordAtAddr(LowPart(addr), HighPart(addr), 0);
-#else
-    return AmdExtConstantLoadDwordAtAddr(addr, 0);
-#endif
 }
 
 static uint64_t ConstantLoadDwordAtAddrx2(GpuVirtualAddress addr)
 {
-#if !defined(__cplusplus)
     uint2 retVal = AmdExtD3DShaderIntrinsics_ConstantLoadDwordAtAddrx2(LowPart(addr), HighPart(addr), 0);
     return PackUint64(retVal.x, retVal.y);
-#else
-    return AmdExtConstantLoad64AtAddr(addr, 0);
-#endif
 }
 
 static uint4 ConstantLoadDwordAtAddrx4(GpuVirtualAddress addr)
 {
-#if !defined(__cplusplus)
     return AmdExtD3DShaderIntrinsics_ConstantLoadDwordAtAddrx4(LowPart(addr), HighPart(addr), 0);
-#else
-    uint4 retVal;
-    retVal.xy = SplitUint64(AmdExtConstantLoad64AtAddr(addr, 0));
-    retVal.zw = SplitUint64(AmdExtConstantLoad64AtAddr(addr + 8, 0));
-
-    return retVal;
-#endif
 }
 
-#ifdef __cplusplus
-#include <cfenv>
-static constexpr uint RoundModeTable[] =
-{
-    FE_TONEAREST,
-    FE_UPWARD,
-    FE_DOWNWARD,
-    FE_TOWARDZERO,
-};
-
-//=====================================================================================================================
-static float FloatOpWithRoundMode(uint roundMode, uint operation, float src0, float src1)
-{
-    std::fesetround(RoundModeTable[roundMode]);
-
-    float result;
-
-    switch (operation)
-    {
-        case AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Add:
-            result = src0 + src1;
-            break;
-
-        case AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Subtract:
-            result = src0 - src1;
-            break;
-
-        case AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Multiply:
-            result = src0 * src1;
-            break;
-
-        default:
-            printf("Unknown operation for FloatOpWithRoundMode\n");
-            assert(false);
-            break;
-    }
-
-    std::fesetround(FE_TONEAREST);
-
-    return result;
-}
-
-//=====================================================================================================================
-static float2 FloatOpWithRoundMode(uint roundMode, uint operation, float2 src0, float2 src1)
-{
-    std::fesetround(RoundModeTable[roundMode]);
-
-    float2 result;
-
-    switch (operation)
-    {
-        case AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Add:
-            result = src0 + src1;
-            break;
-
-        case AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Subtract:
-            result = src0 - src1;
-            break;
-
-        case AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Multiply:
-            result = src0 * src1;
-            break;
-
-        default:
-            printf("Unknown operation for FloatOpWithRoundMode\n");
-            assert(false);
-            break;
-    }
-
-    std::fesetround(FE_TONEAREST);
-
-    return result;
-}
-
-//=====================================================================================================================
-static float3 FloatOpWithRoundMode(uint roundMode, uint operation, float3 src0, float3 src1)
-{
-    std::fesetround(RoundModeTable[roundMode]);
-
-    float3 result;
-
-    switch (operation)
-    {
-        case AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Add:
-            result = src0 + src1;
-            break;
-
-        case AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Subtract:
-            result = src0 - src1;
-            break;
-
-        case AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Multiply:
-            result = src0 * src1;
-            break;
-
-        default:
-            printf("Unknown operation for FloatOpWithRoundMode\n");
-            assert(false);
-            break;
-    }
-
-    std::fesetround(FE_TONEAREST);
-
-    return result;
-}
-#else
 //=====================================================================================================================
 static float FloatOpWithRoundMode(uint roundMode, uint operation, float src0, float src1)
 {
@@ -572,6 +416,5 @@ static float3 FloatOpWithRoundMode(uint roundMode, uint operation, float3 src0, 
 {
     return AmdExtD3DShaderIntrinsics_FloatOpWithRoundMode(roundMode, operation, src0, src1);
 }
-#endif
 
 #endif

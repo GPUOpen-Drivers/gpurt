@@ -167,7 +167,9 @@ uint32 PalBackend::GetMaxDescriptorTableSize(
     ClientCmdBufferHandle cmdBuffer
     ) const
 {
-    const uint32 bufferSrdSizeDw = m_deviceProperties.gfxipProperties.srdSizes.bufferView / sizeof(uint32);
+    const uint32 bufferSrdSizeDw = Util::Max(m_deviceProperties.gfxipProperties.srdSizes.typedBufferView,
+                                             m_deviceProperties.gfxipProperties.srdSizes.untypedBufferView) /
+                                   sizeof(uint32);
     return GetCmdBuffer(cmdBuffer)->GetLargeEmbeddedDataLimit() / bufferSrdSizeDw;
 }
 
@@ -239,81 +241,39 @@ void PalBackend::InsertBarrier(
     const bool syncPostCpWrite  = flags & BarrierFlagSyncPostCpWrite;
 
     Pal::ICmdBuffer* pCmdBuffer = GetCmdBuffer(cmdBuffer);
-    if (m_deviceSettings.enableAcquireReleaseInterface)
+
+    Pal::AcquireReleaseInfo acqRelInfo  = {};
+    Pal::MemBarrier memoryBarrier       = {};
+
+    if (syncDispatch || syncIndirectArgs)
     {
-        Pal::AcquireReleaseInfo acqRelInfo  = {};
-        Pal::MemBarrier memoryBarrier       = {};
-
-        if (syncDispatch || syncIndirectArgs)
-        {
-            memoryBarrier.srcStageMask  = Pal::PipelineStageCs;
-            memoryBarrier.srcAccessMask = Pal::CoherShader;
-        }
-
-        if (syncPostCpWrite)
-        {
-            memoryBarrier.srcStageMask  |= Pal::PipelineStagePostPrefetch;
-            memoryBarrier.srcAccessMask |= Pal::CoherCp;
-        }
-
-        if (syncDispatch || syncPostCpWrite)
-        {
-            memoryBarrier.dstStageMask  = Pal::PipelineStageCs;
-            memoryBarrier.dstAccessMask = Pal::CoherShader;
-        }
-
-        if (syncIndirectArgs)
-        {
-            memoryBarrier.dstStageMask  |= Pal::PipelineStageFetchIndirectArgs;
-            memoryBarrier.dstAccessMask |= Pal::CoherIndirectArgs;
-        }
-
-        acqRelInfo.memoryBarrierCount = 1;
-        acqRelInfo.pMemoryBarriers    = &memoryBarrier;
-        acqRelInfo.reason             = m_deviceSettings.rgpBarrierReason;
-
-        pCmdBuffer->CmdReleaseThenAcquire(acqRelInfo);
+        memoryBarrier.srcStageMask  = Pal::PipelineStageCs;
+        memoryBarrier.srcAccessMask = Pal::CoherShader;
     }
-    else
+
+    if (syncPostCpWrite)
     {
-        Pal::BarrierInfo barrierInfo = {};
-
-        const uint32 pipePointCount  = (syncDispatch || syncIndirectArgs) ? 1 : 0;
-        Pal::HwPipePoint pipePoint   = Pal::HwPipePostCs;
-
-        Pal::BarrierTransition transition = {};
-
-        if (syncDispatch)
-        {
-            transition.srcCacheMask = Pal::CoherShader;
-        }
-
-        if (syncPostCpWrite)
-        {
-            transition.srcCacheMask |= Pal::CoherCp;
-        }
-
-        if (syncDispatch || syncPostCpWrite)
-        {
-            barrierInfo.waitPoint   = Pal::HwPipePreCs;
-            transition.dstCacheMask = Pal::CoherShader;
-        }
-
-        if (syncIndirectArgs)
-        {
-            barrierInfo.waitPoint    = Pal::HwPipeTop;
-            transition.dstCacheMask |= Pal::CoherIndirectArgs;
-        }
-
-        barrierInfo.pipePointWaitCount  = pipePointCount;
-        barrierInfo.pPipePoints         = &pipePoint;
-        barrierInfo.transitionCount     = 1;
-        barrierInfo.pTransitions        = &transition;
-
-        barrierInfo.reason = m_deviceSettings.rgpBarrierReason;
-
-        pCmdBuffer->CmdBarrier(barrierInfo);
+        memoryBarrier.srcStageMask  |= Pal::PipelineStagePostPrefetch;
+        memoryBarrier.srcAccessMask |= Pal::CoherCp;
     }
+
+    if (syncDispatch || syncPostCpWrite)
+    {
+        memoryBarrier.dstStageMask  = Pal::PipelineStageCs;
+        memoryBarrier.dstAccessMask = Pal::CoherShader;
+    }
+
+    if (syncIndirectArgs)
+    {
+        memoryBarrier.dstStageMask  |= Pal::PipelineStageFetchIndirectArgs;
+        memoryBarrier.dstAccessMask |= Pal::CoherIndirectArgs;
+    }
+
+    acqRelInfo.memoryBarrierCount = 1;
+    acqRelInfo.pMemoryBarriers    = &memoryBarrier;
+    acqRelInfo.reason             = m_deviceSettings.rgpBarrierReason;
+
+    pCmdBuffer->CmdReleaseThenAcquire(acqRelInfo);
 }
 
 // =====================================================================================================================
@@ -324,7 +284,11 @@ void PalBackend::CreateBufferViewSrds(
     bool                  isTyped
     ) const
 {
-    const uint32 bufferSrdSizeDw = m_deviceProperties.gfxipProperties.srdSizes.bufferView / sizeof(uint32);
+    const uint32 bufferSrdSizeDw = ((isTyped) ?
+                                    m_deviceProperties.gfxipProperties.srdSizes.typedBufferView :
+                                    m_deviceProperties.gfxipProperties.srdSizes.untypedBufferView)
+                                   / sizeof(uint32);
+
     const Pal::BufferViewInfo palBufferViewInfo = ConvertBufferViewToPalBufferView(bufferViewInfo);
     const void* pNullBuffer = m_deviceProperties.gfxipProperties.nullSrds.pNullBufferView;
 

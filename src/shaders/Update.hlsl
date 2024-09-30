@@ -133,8 +133,8 @@ void Update(
 
     const uint numGroups = ShaderRootConstants.numThreads / BUILD_THREADGROUP_SIZE;
 
-    ClearUpdateFlags(globalId);
     BEGIN_TASK(numGroups);
+    ClearUpdateFlags(globalId);
     EncodePrimitives(globalId, GEOMETRY_TYPE_TRIANGLES);
     END_TASK(numGroups);
 

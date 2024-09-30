@@ -70,11 +70,11 @@ struct DispatchRaysConstantData
     uint32 missTableBaseAddressLo;      // Miss shader table base address low 32-bits
     uint32 missTableBaseAddressHi;      // Miss shader table base address high 32-bits
     uint32 missTableStrideInBytes;      // Miss shader table record byte stride
-    uint32 reserved0;                   // Reserved padding
+    uint32 rayDispatchMaxGroups;        // Max groups dispatched if persistent launch is enabled, else 0
     uint32 hitGroupTableBaseAddressLo;  // Hit group table base address low 32-bits
     uint32 hitGroupTableBaseAddressHi;  // Hit group table base address high 32-bits
     uint32 hitGroupTableStrideInBytes;  // Hit group table record byte stride
-    uint32 reserved1;                   // Reserved padding
+    uint32 reserved0;                   // Reserved padding
     uint32 callableTableBaseAddressLo;  // Callable shader table base address low 32-bits
     uint32 callableTableBaseAddressHi;  // Callable shader table base address high 32-bits
     uint32 callableTableStrideInBytes;  // Callable shader table byte stride
@@ -146,6 +146,7 @@ struct InitExecuteIndirectConstants
     uint32 rtThreadGroupSizeX;      // Internal RT threadgroup size X
     uint32 rtThreadGroupSizeY;      // Internal RT threadgroup size Y
     uint32 rtThreadGroupSizeZ;      // Internal RT threadgroup size Z
+    uint32 rayDispatchMaxGroups;    // Max groups dispatched if persistent launch is enabled, else 0
     uint32 counterMask;             // Mask for filtering ray history token
     uint32 pipelineCount;           // Number of pipelines to launch (1 for indirect launch, raygen count for unified)
     uint32 maxIterations;           // Max traversal interations for profiling
@@ -160,7 +161,6 @@ struct InitExecuteIndirectConstants
     uint32 counterRayIdRangeEnd;    // Counter ray ID range end
     uint32 cpsBackendStackSize;     // Scratch memory used by a compiler backend, start at offset 0
     uint32 padding0;                // Padding for 16-byte alignment
-    uint32 padding1;                // Padding for 16-byte alignment
 
 #if __cplusplus
      // Internal counter buffer SRDs

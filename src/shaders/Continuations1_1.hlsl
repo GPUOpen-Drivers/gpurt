@@ -161,7 +161,6 @@ static _AmdTraversalState InitTraversalState1_1(
     traversal.committed.currNodePtr = INVALID_NODE;
 
     // Start traversing from root node
-    traversal.nextNodePtr = isValid ? CreateRootNodePointer1_1() : INVALID_NODE;
     traversal.reservedNodePtr         = INVALID_NODE;
     traversal.lastInstanceRootNodePtr = INVALID_NODE;
 
@@ -239,7 +238,7 @@ static void TraversalInternal1_1(
     float2 committedBarycentrics = data.traversal.committedBarycentrics;
     candidateBarycentrics = float2(0.0f, 0.0f);
 
-    uint   nextNodePtr             = data.traversal.nextNodePtr;
+    uint   nextNodePtr             = data.dispatch.nextNodePtr;
     float3 candidateRayOrigin      = topLevelRayOrigin;
     float3 candidateRayDirection   = topLevelRayDirection;
     state                          = TRAVERSAL_STATE_COMMITTED_NOTHING;
@@ -546,7 +545,7 @@ static void TraversalInternal1_1(
     data.traversal.stackPtr = stack.Pack();
 
     // Pack traversal results back into traversal state structure
-    data.traversal.nextNodePtr             = nextNodePtr;
+    data.dispatch.nextNodePtr              = nextNodePtr;
     data.traversal.committed               = committed;
     data.traversal.committedBarycentrics   = committedBarycentrics;
 #if REMAT_INSTANCE_RAY == 0

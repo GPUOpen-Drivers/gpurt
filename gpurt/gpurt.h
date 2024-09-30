@@ -285,7 +285,10 @@ enum class InternalRayTracingCsType : uint32
     BuildBVH,
     BuildBVHTD,
     BuildBVHTDTR,
-    BuildBVHPLOC,
+    BuildPLOC,
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 52
+    BuildBVHPLOC = BuildPLOC,
+#endif
     UpdateQBVH,
     UpdateParallel,
     RefitBounds,
@@ -311,6 +314,9 @@ enum class InternalRayTracingCsType : uint32
     InitExecuteIndirect,
     PairCompression,
     MergeSort,
+    MergeSortLocal,
+    MergeSortGlobalIteration,
+    MergeSortCopyLastLevel,
     UpdateTriangles,
     UpdateAabbs,
     InitAccelerationStructure,
@@ -753,7 +759,9 @@ struct DeviceSettings
         uint32 enableParallelUpdate : 1;
         uint32 enableParallelBuild : 1;
         uint32 enablePrefixScanDLB : 1;
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 51
         uint32 enableAcquireReleaseInterface : 1;
+#endif
         uint32 enableBuildAccelStructDumping : 1;
         uint32 enableBuildAccelStructScratchDumping : 1;
         uint32 enableBuildAccelStructStats : 1;
@@ -779,6 +787,7 @@ struct DeviceSettings
 
         uint32 enableRemapScratchBuffer : 1;                // Enable remapping bvh2 data from ScratchBuffer to ResultBuffer
         uint32 checkBufferOverlapsInBatch : 1;
+        uint32 disableCompaction : 1;                       // Reports and perform copy instead of compaction
     };
 
     uint64                      accelerationStructureUUID;  // Acceleration Structure UUID

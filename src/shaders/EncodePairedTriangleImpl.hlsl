@@ -48,9 +48,8 @@ void WriteScratchTriangleNode(
     const BoundingBox box = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
     // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
     const uint instanceMask = (box.min.x > box.max.x) ? 0 : 0xff;
-    const uint triangleId = WriteTriangleIdField(0, NODE_TYPE_TRIANGLE_0, 0, geometryFlags);
 
-    const uint packedFlags = PackScratchNodeFlags(instanceMask, CalcTriangleBoxNodeFlags(geometryFlags), triangleId);
+    const uint packedFlags = PackScratchNodeFlags(instanceMask, CalcTriangleBoxNodeFlags(geometryFlags), 0);
 
     data = uint4(0, 0, 0, packedFlags);
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, data);
@@ -63,21 +62,12 @@ void WriteScratchQuadNode(
     uint         geometryFlags,
     TriangleData tri1,
     uint         tri1PrimIdx,
-    uint         triT1Rotation,
     TriangleData tri0,
     uint         tri0PrimIdx,
-    uint         triT0Rotation)
+    uint         quadSwizzle)
 {
     // TODO: For Navi3, we can directly write the scratch node data to the result leaf node data section
     //
-    uint triangleId = 0;
-
-    // triT0 - NODE_TYPE_TRIANGLE_0 (2nd to intersect)
-    triangleId = WriteTriangleIdField(triangleId, NODE_TYPE_TRIANGLE_0, triT0Rotation, geometryFlags);
-
-    // triT1 - NODE_TYPE_TRIANGLE_1 (1st to intersect)
-    triangleId = WriteTriangleIdField(triangleId, NODE_TYPE_TRIANGLE_1, triT1Rotation, geometryFlags);
-
     uint offset = CalcScratchNodeOffset(ShaderConstants.offsets.bvhLeafNodeData, dstScratchNodeIdx);
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_PRIMITIVE_ID_OFFSET, tri1PrimIdx);
 
@@ -90,8 +80,8 @@ void WriteScratchQuadNode(
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_GEOMETRY_INDEX_OFFSET, packedGeomId);
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_PARENT_OFFSET, INVALID_IDX);
 
-    const uint3 t0VtxIndices = CalcTriangleCompressionVertexIndices(NODE_TYPE_TRIANGLE_0, triangleId);
-    const uint3 t1VtxIndices = CalcTriangleCompressionVertexIndices(NODE_TYPE_TRIANGLE_1, triangleId);
+    const uint3 t0VtxIndices = ComputeQuadTriangleVertexIndex(0, (quadSwizzle >> 0) & 0xF);
+    const uint3 t1VtxIndices = ComputeQuadTriangleVertexIndex(1, (quadSwizzle >> 4) & 0xF);
 
     const uint3 t1VtxOffsets = SCRATCH_NODE_V0_OFFSET + (t1VtxIndices * SCRATCH_NODE_TRIANGLE_VERTEX_STRIDE);
     WriteScratchNodeDataAtOffset(offset, t1VtxOffsets.x, tri1.v0);
@@ -117,7 +107,8 @@ void WriteScratchQuadNode(
 
     // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
     const uint instanceMask = (box.min.x > box.max.x) ? 0 : 0xff;
-    const uint packedFlags = PackScratchNodeFlags(instanceMask, CalcTriangleBoxNodeFlags(geometryFlags), triangleId);
+
+    const uint packedFlags = PackScratchNodeFlags(instanceMask, CalcTriangleBoxNodeFlags(geometryFlags), quadSwizzle);
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_FLAGS_OFFSET, packedFlags);
 }
 
@@ -200,20 +191,20 @@ float ComputeEdgeBoxSurfaceArea(
     uint rotation)
 {
     // triangle v1, v2, v0
-    float3 e0 = (vertices[1]);
-    float3 e1 = (vertices[0]);
+    float3 e0 = vertices[1];
+    float3 e1 = vertices[0];
 
     if (rotation == 0)
     {
         // triangle v0, v1, v2
-        e0 = (vertices[0]);
-        e1 = (vertices[2]);
+        e0 = vertices[0];
+        e1 = vertices[2];
     }
     else if (rotation == 1)
     {
         // triangle v2, v0, v1
-        e0 = (vertices[2]);
-        e1 = (vertices[1]);
+        e0 = vertices[2];
+        e1 = vertices[1];
     }
 
     BoundingBox edgeBox = (BoundingBox)0;

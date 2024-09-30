@@ -22,31 +22,53 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#ifndef EXTENSIONS_HLSLI
-#define EXTENSIONS_HLSLI
 
-#define __decl [noinline]
-
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TiesToEven     0x0
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardPositive 0x1
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardNegative 0x2
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_TowardZero     0x3
-
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Add      0x0
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Subtract 0x1
-#define AmdExtD3DShaderIntrinsicsFloatOpWithRoundMode_Multiply 0x2
+#ifndef BOUNDING_BOX_HLSLI
+#define BOUNDING_BOX_HLSLI
 
 //=====================================================================================================================
-static float FloatOpWithRoundMode(uint roundMode, uint operation, float src0, float src1);
+struct BoundingBox // matches D3D12_RAYTRACING_AABB
+{
+    float3 min;
+    float3 max;
+};
 
 //=====================================================================================================================
-static float2 FloatOpWithRoundMode(uint roundMode, uint operation, float2 src0, float2 src1);
+struct BoundingBox4
+{
+    float4 min;
+    float4 max;
+};
 
 //=====================================================================================================================
-static float3 FloatOpWithRoundMode(uint roundMode, uint operation, float3 src0, float3 src1);
+// Internal bounding box type for scene bounds.
+struct UintBoundingBox
+{
+    uint3 min;
+    uint3 max;
+};
 
-#ifndef LIBRARY_COMPILATION
-#include "Extensions.hlsl"
-#endif
+struct UintBoundingBox4
+{
+    uint4 min;
+    uint4 max;
+};
+
+struct PackedUintBoundingBox4
+{
+    uint64_t min;
+    uint64_t max;
+};
+
+//=====================================================================================================================
+static BoundingBox CombineAABB(
+    BoundingBox b0,
+    BoundingBox b1)
+{
+    BoundingBox bbox;
+    bbox.min = min(b0.min, b1.min);
+    bbox.max = max(b0.max, b1.max);
+    return bbox;
+}
 
 #endif

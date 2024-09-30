@@ -341,7 +341,7 @@ private:
 
     void BuildBVHTD();
 
-    void BuildBVHPLOC(uint32 wavesPerSimd);
+    void BuildPLOC(uint32 wavesPerSimd);
 
     void BuildFastAgglomerativeLbvh();
 
@@ -374,6 +374,10 @@ private:
         uint32 numElems);
 
     void MergeSort(uint32 wavesPerSimd);
+    void MergeSortLocal();
+    void MergeSortGlobalIteration(uint32 level);
+    void MergeSortCopyLastLevel();
+    uint32 GetMaxMergeSortTreeLevel() const;
     void SortRadixInt32();
 
     void ScanExclusiveAdd(

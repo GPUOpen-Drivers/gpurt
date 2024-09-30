@@ -39,7 +39,6 @@ import struct
 import shutil
 import glob
 import pathlib
-from typing import List
 
 DWORDS_PER_LINE = 8
 
@@ -92,15 +91,18 @@ class ShaderConfig:
     def isBVH(self):
         return not self.isLibrary()
 
-traceShaderConfigs = [
-    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibrarySw", defines="GPURT_RTIP_LEVEL=0"),
-    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibrarySwDev", defines="DEVELOPER=1,GPURT_RTIP_LEVEL=0"),
-    # Below 2 lines will be removed after GPURT_MINIMUM_INTERFACE_MAJOR_VERSION is bumped to 48
-    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibrary", defines="USE_HW_INTRINSIC=1,GPURT_RTIP_LEVEL=0"),
-    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibraryDev", defines="USE_HW_INTRINSIC=1,DEVELOPER=1,GPURT_RTIP_LEVEL=0"),
+# Explicitly pass the legacy RtIp level as a separate define so HLSL code can determine whether its GPURT_RTIP_LEVEL is the legacy one.
+commonTraceDefines = f"GPURT_RTIP_LEGACY_LEVEL={maxLegacyRtIpLevel}"
 
-    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibraryLegacy", defines=f"USE_HW_INTRINSIC=1,GPURT_RTIP_LEVEL={maxLegacyRtIpLevel}"),
-    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibraryDevLegacy", defines=f"USE_HW_INTRINSIC=1,DEVELOPER=1,GPURT_RTIP_LEVEL={maxLegacyRtIpLevel}"),
+traceShaderConfigs = [
+    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibrarySw", defines=f"GPURT_RTIP_LEVEL=0,{commonTraceDefines}"),
+    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibrarySwDev", defines=f"DEVELOPER=1,GPURT_RTIP_LEVEL=0,{commonTraceDefines}"),
+    # Below 2 lines will be removed after GPURT_MINIMUM_INTERFACE_MAJOR_VERSION is bumped to 48
+    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibrary", defines=f"USE_HW_INTRINSIC=1,GPURT_RTIP_LEVEL=0,{commonTraceDefines}"),
+    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibraryDev", defines=f"USE_HW_INTRINSIC=1,DEVELOPER=1,GPURT_RTIP_LEVEL=0,{commonTraceDefines}"),
+
+    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibraryLegacy", defines=f"USE_HW_INTRINSIC=1,GPURT_RTIP_LEVEL={maxLegacyRtIpLevel},{commonTraceDefines}"),
+    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibraryDevLegacy", defines=f"USE_HW_INTRINSIC=1,DEVELOPER=1,GPURT_RTIP_LEVEL={maxLegacyRtIpLevel},{commonTraceDefines}"),
 ]
 
 bvhShaderConfigs = [
@@ -117,7 +119,7 @@ bvhShaderConfigs = [
     ShaderConfig(path="GenerateMortonCodes.hlsl", entryPoint="GenerateMortonCodes"),
     ShaderConfig(path="Rebraid.hlsl", entryPoint="Rebraid"),
     ShaderConfig(path="BuildBVH.hlsl", entryPoint="BuildBVH", defines="USE_BUILD_LBVH=1"),
-    ShaderConfig(path="BuildBVHPLOC.hlsl", entryPoint="BuildBVHPLOC"),
+    ShaderConfig(path="BuildPLOC.hlsl", entryPoint="BuildPLOC"),
     ShaderConfig(path="UpdateQBVH.hlsl", entryPoint="UpdateQBVH"),
     ShaderConfig(path="RefitBounds.hlsl", entryPoint="RefitBounds"),
     ShaderConfig(path="ClearBuffer.hlsl", entryPoint="ClearBuffer"),
@@ -142,6 +144,9 @@ bvhShaderConfigs = [
     ShaderConfig(path="InitExecuteIndirect.hlsl", entryPoint="InitExecuteIndirect", outputName="InitExecuteIndirect"),
     ShaderConfig(path="PairCompression.hlsl", entryPoint="PairCompression"),
     ShaderConfig(path="MergeSort.hlsl", entryPoint="MergeSort"),
+    ShaderConfig(path="MergeSort.hlsl", entryPoint="MergeSortLocal"),
+    ShaderConfig(path="MergeSort.hlsl", entryPoint="MergeSortGlobalIteration"),
+    ShaderConfig(path="MergeSort.hlsl", entryPoint="MergeSortCopyLastLevel"),
     ShaderConfig(path="InitAccelerationStructure.hlsl", entryPoint="InitAccelerationStructure"),
     ShaderConfig(path="InitAccelerationStructure.hlsl", entryPoint="InitAccelerationStructure", defines="IS_UPDATE=1", outputName="InitUpdateAccelerationStructure"),
     ShaderConfig(path="BuildFastAgglomerativeLbvh.hlsl", entryPoint="BuildFastAgglomerativeLbvh"),
@@ -179,8 +184,6 @@ def getBaseDxcCommandArgs(isBvh:bool, isLibrary:bool, isSpirv:bool):
 
     return dxcOptions
 
-validationSpecialCaseDefines = {x.path:x.defines for x in list(filter(lambda a : a.defines is not None, bvhShaderConfigs))}
-
 """
 Combines args into an array of strings that can be used as compilation command by InvokeSubprocess.
 Output command lacks: filename, -M flag for listing includes and entrypoint-specific defines like USE_HW_INTRINSIC
@@ -192,8 +195,7 @@ def getValidationCmdArgs(args) -> [str]:
     compilerPath = FixExePath(compilerPath)
 
     validateCommand =  [compilerPath]
-
-    validateCommand += getBaseDxcCommandArgs(True, True, False)
+    validateCommand += getBaseDxcCommandArgs(True, True, args.spirv)
     validateCommand += ["-Wno-misplaced-attributes"] # -Wmisplaced-attributes is triggered by [RootSignature()]
                                                      # used by entrypoint code and compiled as library
     validateCommand += ['-Fo', 'temp.bin']
@@ -201,7 +203,7 @@ def getValidationCmdArgs(args) -> [str]:
     validateCommand += ['-DLIBRARY_COMPILATION']
 
     #use defines from cmake
-    for d in args.defines.split(';'):
+    for d in args.defines.split(' '):
         d = d.strip()
         if d != '':
             validateCommand += ['-D' + d]
@@ -212,32 +214,36 @@ def getValidationCmdArgs(args) -> [str]:
     validateCommand += ['-DUSE_HW_INTRINSIC=1']
 
     #use include pathes from cmake
-    for p in args.includePaths.split(';'):
+    for p in args.includePaths.split(' '):
         p = p.strip()
         if p != '':
             validateCommand += ['-I', p]
 
     return validateCommand
 
-"""
-Finds all hlsl-hlsli pairs of files under basePath (recursively).
-Outputs dict of filenames (without extension) to pair of bools meaning (has_hlsl_implementation, has_hlsli_header)
-"""
-def getHlslHlsliPairs(basePath: str) -> {str: (bool, bool)}:
-    # pairs -> {hlsl_hlsli_pair_path_without_extension: (has_hlsl, has_hlsli)}
-    pairs = {}
-    # insert hlsl part of pairs
-    for hlslfile in glob.glob(basePath+"/**/*.hlsl", recursive=True):
-        withoutExtension = pathlib.Path(hlslfile).with_suffix("")
-        pairs[withoutExtension] = (True, False)
+def removeSuffix(path: pathlib.Path, suffix: str) -> pathlib.Path:
+    return pathlib.Path(path.as_posix()[:-len(suffix)])
 
-    #insert hlsli part of pairs
-    for hlslifile in glob.glob(basePath+"/**/*.hlsli", recursive=True):
-        withoutExtension = pathlib.Path(hlslifile).with_suffix("")
-        hasHlslFile = pairs.get(withoutExtension, (False, False))[0]
-        pairs[withoutExtension] = (hasHlslFile, True)
+"""
+Finds all implementation-interface pairs of files under basePath (recursively).
+Outputs dict of filenames (without extension) to pair of bools meaning (has_implementation, has_interface)
+"""
+def getImplInterfacePairs(directory: pathlib.Path, implementationSuffix: str, interfaceSuffix: str) -> {pathlib.Path, (bool, bool)}:
+    # pairs -> {pair_path_without_extension: (has_implementation, has_interface)}
+    pairs = {}
+    # insert implementation part of pairs
+    for implPath in directory.rglob("*" + implementationSuffix):
+        pairs[removeSuffix(implPath.resolve(), implementationSuffix)] = (True, False)
+
+    # insert interface part of pairs
+    for interfacePath in directory.rglob("*" + interfaceSuffix):
+        withoutSuffix = removeSuffix(interfacePath.resolve(), interfaceSuffix)
+        hasImplFile = pairs.get(withoutSuffix, (False, False))[0]
+        pairs[withoutSuffix] = (hasImplFile, True)
 
     return pairs
+
+validationSpecialCaseDefines = {x.path:x.defines for x in list(filter(lambda a : a.defines is not None, bvhShaderConfigs))}
 
 """
 Some files/functions can be included conditionally behind ifdefs.
@@ -261,38 +267,34 @@ def getDefineCombos(path: pathlib.Path) -> [[str]]:
 
 """
 shaderClean's hlsl-hlsli pair is considered clean when:
-1. it does not include anything else than .hlsli files;
-2. it does not include anything from outside of shaderClean directory.
+1. let [(dir, suffix)] = allowedDirSuffix, it includes only -suffix files from dir/ directory, and
+2. it does not include any other files except its own .hlsl file.
 """
-def validateIncludes(cmd: List[str], path: pathlib.Path, shadersCleanStr: str) -> bool:
+def validateIncludes(cmd: [str], path: pathlib.Path, implSuffix: str, interfaceSuffix: str,
+                     allowedDirSuffix: [(pathlib.Path, str)]) -> bool:
+    allowedDirSuffix = [(dirPath.as_posix(), suffix) for (dirPath, suffix) in allowedDirSuffix]
     listIncludesCmd = cmd + ["-M"]
     threadOutput = []
     retVal = InvokeSubprocess(listIncludesCmd, None, threadOutput, linuxLibraryPath=listIncludesCmd[0], expectNoOutput=False)
-    assert retVal == 0, "Could not list includes of {0} with cmd {1} because:\n {2}".format(path, listIncludesCmd, threadOutput)
+    assert retVal == 0, "Could not list includes of {0} with cmd {1} because:\n {2}".format(path, listIncludesCmd, "\n".join(threadOutput))
 
-    includedPaths = set()
+    includedFilesStr = set()
     for line in threadOutput[0].split("\n")[1:]:
-        includedPaths |= {pathlib.Path(line.strip(" \n\r\t\\/"))}
-    includedPaths -= {path.with_suffix(".hlsl")}
-    includedPaths -= {path.with_suffix(".hlsli")}
+        # use resolve() + as_posix() to avoid path mismatches when using drive mapping
+        includedFilesStr |= {pathlib.Path(line.strip(" \n\r\t\\/")).resolve().as_posix()}
+    includedFilesStr -= {path.as_posix() + implSuffix}
+    includedFilesStr -= {path.as_posix() + interfaceSuffix}
 
-    # On windows, make sure that shadersCleanPath is also interpreted in the same way as hlsiStr via as_posix() otherwise
-    # use of a drive mapping may cause errors.
-    shadersCleanPath = pathlib.Path(shadersCleanStr)
-    shadersCleanStrPosix = str(shadersCleanPath.resolve().as_posix())
+    for includedFileStr in includedFilesStr:
+        isAllowed = False
+        for (dirStr, suffix) in allowedDirSuffix:
+            if (includedFileStr.endswith(suffix)) and (dirStr in includedFileStr):
+                isAllowed = True
+                break
 
-    for hlsli in includedPaths:
-        hlsliStr = str(hlsli.resolve().as_posix())
-        if hlsli.suffix != ".hlsli":
+        if not isAllowed:
             print("GPURT clean shader validation failed:")
-            print("\tIncluding non-hlsli files is not allowed.")
-            print("\t{0} includes {1}".format(path, hlsliStr))
-            return False
-
-        if shadersCleanStrPosix not in hlsliStr:
-            print("GPURT clean shader validation failed:")
-            print("\tIncluding non-clean files is not allowed.")
-            print("\t{0} includes {1}".format(path, hlsliStr))
+            print("\t{0} includes {1} which is not allowed.".format(path, includedFileStr))
             return False
 
     return True
@@ -301,12 +303,12 @@ def validateIncludes(cmd: List[str], path: pathlib.Path, shadersCleanStr: str) -
 hlsl-hlsli pairs must compile on its own. It tests whether pairs contain or include everything needed.
 If they do it allows including them anywhere in any order, except for some macros.
 """
-def validateCompilation(cmd: List[str], path: pathlib.Path, shadersCleanStr: str) -> bool:
+def validateCompilation(cmd: [str], path: pathlib.Path) -> bool:
     threadOutput = []
     retVal = InvokeSubprocess(cmd, None, threadOutput, linuxLibraryPath=cmd[0], expectNoOutput=False)
     if retVal != 0:
         print("GPURT clean shader validation failed:")
-        print("\tCould not compile {0} as library with cmd {1} because:\n {2}".format(path, cmd, threadOutput))
+        print("\tCould not compile {0} as library with cmd {1} because:\n {2}".format(path, cmd, threadOutput[-1]))
         return False
 
     return True
@@ -318,17 +320,20 @@ This helps keep the shader library untangled and easier to maintain.
 """
 def validateShadersClean(args) -> bool:
     cmdBase = getValidationCmdArgs(args)
-    shadersCleanPath = pathlib.Path(FixInputPath(args.basepath)).parent.as_posix() + "/shadersClean"
-    shadersCleanStr = str(shadersCleanPath)
+    # use resolve() + as_posix() to avoid path mismatches when using drive mapping
+    srcPath = pathlib.Path(FixInputPath(args.basepath)).parent.resolve()
+    shadersCleanPath = srcPath / "shadersClean"
 
-    for path, (hasImpl, hasHeader) in getHlslHlsliPairs(shadersCleanPath).items():
+    implExt = ".hlsl"
+    headerExt = ".hlsli"
+    for path, (hasImpl, hasHeader) in getImplInterfacePairs(shadersCleanPath, implExt, headerExt).items():
         assert (hasImpl or hasHeader), "There should not be files without impl nor header."
-        fullPath = path.with_suffix(".hlsl" if hasImpl else ".hlsli")
+        fullPath = path.with_suffix(path.suffix + (implExt if hasImpl else headerExt))
         for defines in getDefineCombos(fullPath):
-            compileCmd = cmdBase + defines + [str(fullPath.as_posix())]
-            if not validateIncludes(compileCmd, fullPath, shadersCleanStr):
+            compileCmd = cmdBase + defines + [fullPath.as_posix()]
+            if not validateIncludes(compileCmd, path, implExt, headerExt, [(shadersCleanPath, headerExt)]):
                 return False
-            if not validateCompilation(compileCmd, fullPath, shadersCleanStr):
+            if not validateCompilation(compileCmd, fullPath):
                 return False
 
     return True
@@ -760,12 +765,20 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.validateShadersClean:
-        print("Validating shadersClean directory")
+        print("Validating shadersClean directory.")
         tBegin = time.perf_counter()
+
         validIncludes = validateShadersClean(args)
+        # For vulkan, we validate SPIR-V shaders in the same run instead of running the script again.
+        if args.vulkan and not args.spirv:
+            print("Now doing SPIR-V validation...")
+            args.spirv = True
+            validIncludes &= validateShadersClean(args)
+
         tDuration = time.perf_counter() - tBegin
         if validIncludes:
-            print("Validated shadersClean directory in ", round(tDuration, 4))
+            tDuration = round(time.perf_counter() - tBegin, 4)
+            print(f"Validated shadersClean directory in {tDuration}s.")
         else:
             print("Some files are not clean. See errors above.")
         return 0 if validIncludes else -1

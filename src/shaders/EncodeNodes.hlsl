@@ -22,7 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "..\shared\rayTracingDefs.h"
+#include "../shared/rayTracingDefs.h"
 
 #define GC_DSTBUFFER
 #define GC_DSTMETADATA
@@ -212,11 +212,11 @@ void EncodeQuadNodes(
         const bool isActive = IsActive(tri);
         if (isActive)
         {
-            if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometry)
+            if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometry)
             {
                 UpdateSceneBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
             }
-            else if (Settings.sceneBoundsCalculationType == SceneBoundsBasedOnGeometryWithSize)
+            else if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometryWithSize)
             {
                 // TODO: with tri splitting, need to not update "size" here
                 UpdateSceneBoundsWithSize(ShaderConstants.offsets.sceneBounds, boundingBox);
@@ -295,18 +295,14 @@ void EncodeQuadNodes(
 
         if (hasValidQuad)
         {
-            const uint triT0Rotation = (pairInfo & 0xF);
-            const uint triT1Rotation = (pairInfo >> 4) & 0xF;
-
             WriteScratchQuadNode(dstScratchNodeIdx,
                                  geomId,
                                  geomConstants.geometryFlags,
                                  tri1,
                                  primId1,
-                                 triT1Rotation,
                                  tri,
                                  primId,
-                                 triT0Rotation);
+                                 pairInfo & 0xFF);
         }
         else if (pairInfo == -1)
         {

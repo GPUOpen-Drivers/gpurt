@@ -1523,7 +1523,7 @@ void BvhBuilder::InitGeometryConstants()
 
     void* pVbvTable = m_pDevice->AllocateDescriptorTable(m_cmdBuffer, geometryCount, &m_geomBufferSrdTable);
     void* pCbvTable = m_pDevice->AllocateDescriptorTable(m_cmdBuffer, geometryCount, &m_geomConstSrdTable);
-    const uint32 srdSizeBytes = m_pDevice->GetBufferSrdSizeDw() * sizeof(uint32);
+    const uint32 srdSizeBytes = m_pDevice->GetUntypedBufferSrdSizeDw() * sizeof(uint32);
 
     for (uint32 i = 0; i < geometryCount; i++)
     {
@@ -2201,7 +2201,6 @@ void BvhBuilder::InitBuildSettings()
     m_buildSettings.rebraidType                  = static_cast<uint32>(m_buildConfig.rebraidType);
     m_buildSettings.enableTopDownBuild           = m_buildConfig.topDownBuild;
     m_buildSettings.useMortonCode30              = m_deviceSettings.enableMortonCode30;
-    m_buildSettings.fastBuildThreshold           = m_deviceSettings.fastBuildThreshold;
     m_buildSettings.enableFusedInstanceNode      = m_deviceSettings.enableFusedInstanceNode;
     m_buildSettings.enableMergeSort              = m_buildConfig.enableMergeSort;
 
@@ -2248,7 +2247,9 @@ void BvhBuilder::InitBuildSettings()
 
     m_buildSettings.updateFlags =
         m_buildArgs.inputs.flags & (AccelStructBuildFlagPerformUpdate | AccelStructBuildFlagAllowUpdate);
-    m_buildSettings.rebuildAccelStruct = m_buildConfig.rebuildAccelStruct;
+
+    // Rebuilding an updateable acceleration structure need to use the original size and not compacted one.
+    m_buildSettings.disableCompaction = m_buildConfig.rebuildAccelStruct || m_deviceSettings.disableCompaction;
 
     m_buildSettings.isUpdateInPlace = IsUpdateInPlace();
     m_buildSettings.encodeArrayOfPointers =
@@ -2821,7 +2822,14 @@ void BvhBuilder::EmitAccelerationStructurePostBuildInfo(
         break;
 
     case AccelStructPostBuildInfoType::CompactedSize:
-        EmitASCompactedType(postBuildInfo);
+        if (m_deviceSettings.disableCompaction)
+        {
+            EmitASCurrentSize(postBuildInfo);
+        }
+        else
+        {
+            EmitASCompactedType(postBuildInfo);
+        }
         break;
 
     case AccelStructPostBuildInfoType::ToolsVisualization:
@@ -2990,7 +2998,14 @@ void BvhBuilder::CopyAccelerationStructure(
         break;
 
     case AccelStructCopyMode::Compact:
-        CopyASCompactMode(copyArgs);
+        if (m_deviceSettings.disableCompaction)
+        {
+            CopyASCloneMode(copyArgs);
+        }
+        else
+        {
+            CopyASCompactMode(copyArgs);
+        }
         break;
 
     case AccelStructCopyMode::Serialize:
@@ -3257,7 +3272,7 @@ BuildPhaseFlags BvhBuilder::EnabledPhases() const
                 }
                 if (m_buildConfig.buildMode == BvhBuildMode::PLOC)
                 {
-                    flags |= BuildPhaseFlags::BuildBVHPLOC;
+                    flags |= BuildPhaseFlags::BuildPLOC;
                 }
                 if (AllowLatePairCompression())
                 {
@@ -3341,6 +3356,78 @@ void BvhBuilder::MergeSort(
     const uint32 tgSize          = 512;
     const uint32 numThreadGroups = GetNumPersistentThreadGroups(m_buildConfig.maxNumPrimitives, tgSize, wavesPerSimd);
     Dispatch(numThreadGroups);
+
+    RGP_POP_MARKER();
+}
+
+// =====================================================================================================================
+// Executes merge sort shader to sort the input keys and values
+void BvhBuilder::MergeSortLocal()
+{
+    PAL_ASSERT(m_buildConfig.enableMergeSort);
+
+    BindPipeline(InternalRayTracingCsType::MergeSortLocal);
+
+    WriteBuildBufferBindings();
+
+    RGP_PUSH_MARKER("Merge Sort Local (maxNumPrimitives %u)", m_buildConfig.maxNumPrimitives);
+
+    const uint32 tgSize = 512;
+    Dispatch(Util::RoundUpQuotient(m_buildConfig.maxNumPrimitives, tgSize));
+
+    RGP_POP_MARKER();
+}
+
+// =====================================================================================================================
+uint32 BvhBuilder::GetMaxMergeSortTreeLevel() const
+{
+    const uint32 tgSize = 512;
+
+    const uint32 groupSize = tgSize;
+    const uint32 numKeysPerThread = 2u;
+    const uint32 groupCapacity = groupSize * numKeysPerThread;
+    const uint32 numLocalSortedGroups = Util::RoundUpQuotient(m_buildConfig.maxNumPrimitives, groupCapacity);
+    const uint32 numLevelsOfMergeTree = Util::CeilLog2(numLocalSortedGroups);
+
+    return numLevelsOfMergeTree;
+}
+
+// =====================================================================================================================
+// Executes merge sort shader to sort the input keys and values
+void BvhBuilder::MergeSortGlobalIteration(
+    uint32 level)
+{
+    PAL_ASSERT(m_buildConfig.enableMergeSort);
+
+    BindPipeline(InternalRayTracingCsType::MergeSortGlobalIteration);
+
+    const BuildShaderRootConstants1 constants = {
+        .passIndex = level,
+    };
+    WriteBuildBufferBindings(constants);
+
+    RGP_PUSH_MARKER("Merge Sort Global Iteration (maxNumPrimitives %u, level %u)", m_buildConfig.maxNumPrimitives, level);
+
+    const uint32 tgSize = 512;
+    Dispatch(Util::RoundUpQuotient(m_buildConfig.maxNumPrimitives, tgSize));
+
+    RGP_POP_MARKER();
+}
+
+// =====================================================================================================================
+// Executes merge sort shader to sort the input keys and values
+void BvhBuilder::MergeSortCopyLastLevel()
+{
+    PAL_ASSERT(m_buildConfig.enableMergeSort);
+
+    BindPipeline(InternalRayTracingCsType::MergeSortCopyLastLevel);
+
+    WriteBuildBufferBindings();
+
+    RGP_PUSH_MARKER("Merge Sort Copy (maxNumPrimitives %u)", m_buildConfig.maxNumPrimitives);
+
+    const uint32 tgSize = 512;
+    Dispatch(Util::RoundUpQuotient(m_buildConfig.maxNumPrimitives, tgSize));
 
     RGP_POP_MARKER();
 }
@@ -3476,10 +3563,10 @@ void BvhBuilder::BuildBVHTD()
 
 // =====================================================================================================================
 // Executes the build BVH PLOC shader
-void BvhBuilder::BuildBVHPLOC(
+void BvhBuilder::BuildPLOC(
     uint32 wavesPerSimd)
 {
-    BindPipeline(InternalRayTracingCsType::BuildBVHPLOC);
+    BindPipeline(InternalRayTracingCsType::BuildPLOC);
 
     const uint32 tgSize = 256u;
     const uint32 numThreadGroups = GetNumPersistentThreadGroups(m_buildConfig.maxNumPrimitives, tgSize, wavesPerSimd);
@@ -3664,9 +3751,7 @@ void BvhBuilder::EncodeHwBvh()
     }
 
     const uint32 nodeCount       = GetNumInternalNodeCount();
-    const uint32 numThreadGroups =
-        m_buildSettings.topLevelBuild ? Util::RoundUpQuotient(nodeCount, DefaultThreadGroupSize) :
-        GetNumPersistentThreadGroups(nodeCount);
+    const uint32 numThreadGroups = Util::RoundUpQuotient(nodeCount, DefaultThreadGroupSize);
 
     BuildShaderRootConstants0 shaderConstants =
     {
