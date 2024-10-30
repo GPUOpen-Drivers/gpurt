@@ -76,6 +76,7 @@ if (GPURT_ENABLE_GPU_DEBUG)
     set(debugShaderDirectory "${CMAKE_CURRENT_BINARY_DIR}/debugShaders/src/shaders/")
     set(gpurtShaderSource ${GPURT_SHADER_SOURCE_FILES})
     set(gpurtShadersSourceDir ${debugShaderDirectory})
+    set(gpurtShadersPreprocessInputFile "${CMAKE_CURRENT_BINARY_DIR}/debugShaders/DebugPreprocessShadersInput.txt")
     list(TRANSFORM gpurtShaderSource PREPEND "${debugShaderDirectory}")
     set(preprocessArgs "")
     foreach(originalSourceFile ${GPURT_SHADER_SOURCE_FILES})
@@ -84,10 +85,13 @@ if (GPURT_ENABLE_GPU_DEBUG)
         list(APPEND preprocessArgs "${originalSourcePath}" "${newSourceFilePath}")
     endforeach()
     set(gpurtDebugPreprocessorScript "${gpurtToolsDir}/DebugPreprocessShaders.py")
+    configure_file("${gpurtToolsDir}/DebugPreprocessShadersInput.txt.in"
+    ${gpurtShadersPreprocessInputFile}
+    )
     add_custom_command(
         OUTPUT  ${gpurtShaderSource} ${gpurtDebugInfoFile}
-        DEPENDS ${originalShaderSource} ${gpurtDebugPreprocessorScript}
-        COMMAND Python3::Interpreter ${gpurtDebugPreprocessorScript} ${preprocessArgs} ${gpurtDebugInfoFile}
+        DEPENDS ${originalShaderSource} ${gpurtDebugPreprocessorScript} ${gpurtShadersPreprocessInputFile}
+        COMMAND Python3::Interpreter ${gpurtDebugPreprocessorScript} -i ${gpurtShadersPreprocessInputFile} -o ${gpurtDebugInfoFile}
     )
 else()
     set(gpurtShaderSource "${originalShaderSource}")

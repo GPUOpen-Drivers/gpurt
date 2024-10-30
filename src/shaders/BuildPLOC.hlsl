@@ -88,7 +88,7 @@ struct BuildPlocArgs
 #include "Common.hlsl"
 
 //=====================================================================================================================
-#include "../shared/rayTracingDefs.h"
+#include "../shadersClean/common/ShaderDefs.hlsli"
 
 #define GC_DSTMETADATA
 #define GC_SCRATCHBUFFER

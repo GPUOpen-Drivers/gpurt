@@ -25,7 +25,7 @@
 #ifndef INSTANCE_DESC_HLSLI
 #define INSTANCE_DESC_HLSLI
 
-#include "TempAssert.hlsli"
+#include "../../shared/assert.h"
 
 //=====================================================================================================================
 // 64-byte aligned structure matching D3D12_RAYTRACING_INSTANCE_DESC

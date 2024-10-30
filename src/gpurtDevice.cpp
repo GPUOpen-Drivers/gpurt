@@ -468,15 +468,35 @@ Pal::Result Device::InitializeCpsMemory(
 }
 
 //=====================================================================================================================
+// Populates the GPU addresses in the Constant structure
+template<typename ConstantsType>
+void Device::PatchConstants(ConstantsType* pConstant,
+                            const gpusize  cpsMemoryGpuAddr,
+                            const gpusize  cpsMemoryBytes)
+{
+    pConstant->cpsGlobalMemoryAddressLo = Util::LowPart(cpsMemoryGpuAddr);
+    pConstant->cpsGlobalMemoryAddressHi = Util::HighPart(cpsMemoryGpuAddr);
+
+}
+
+//=====================================================================================================================
 // Populates the GPU addresses in the DispatchRaysConstants structure
 void Device::PatchDispatchRaysConstants(
     DispatchRaysConstants* pDispatchRaysConstants,
     const gpusize          cpsMemoryGpuAddr,
     const gpusize          cpsMemoryBytes)
 {
-    pDispatchRaysConstants->constData.cpsGlobalMemoryAddressLo = Util::LowPart(cpsMemoryGpuAddr);
-    pDispatchRaysConstants->constData.cpsGlobalMemoryAddressHi = Util::HighPart(cpsMemoryGpuAddr);
+    PatchConstants(&pDispatchRaysConstants->constData, cpsMemoryGpuAddr, cpsMemoryBytes);
+}
 
+//=====================================================================================================================
+// Populates the GPU addresses in the InitExecuteIndirectConstants structure
+void Device::PatchInitExecuteIndirectConstants(
+    GpuRt::InitExecuteIndirectConstants* pInitExecuteIndirectConstants,
+    const gpusize                        cpsMemoryGpuAddr,
+    const gpusize                        cpsMemoryBytes)
+{
+    PatchConstants(pInitExecuteIndirectConstants, cpsMemoryGpuAddr, cpsMemoryBytes);
 }
 
 //=====================================================================================================================
@@ -2123,6 +2143,27 @@ bool Device::ShouldUseGangedAceForBuild(
     bool shouldUseGangedAce = Util::TestAnyFlagSet(buildInputs.flags, AccelStructBuildFlagPerformUpdate);
 
     return shouldUseGangedAce;
+}
+
+// =====================================================================================================================
+uint32 Device::CalculateBvhPrimitiveCount(
+    const AccelStructBuildInputs& inputs
+    ) const
+{
+    // For top-level acceleration structure, inputElementCount represents the number of instances
+    uint32 primitiveCount = (inputs.type == AccelStructType::TopLevel) ? inputs.inputElemCount : 0;
+
+    if (inputs.type == AccelStructType::BottomLevel)
+    {
+        for (uint32 i = 0; i < inputs.inputElemCount; ++i)
+        {
+            const Geometry geometry = m_clientCb.pfnConvertAccelStructBuildGeometry(inputs, i);
+            const uint32 geometryPrimCount = BvhBuilder::GetGeometryPrimCount(geometry);
+            primitiveCount += geometryPrimCount;
+        }
+    }
+
+    return primitiveCount;
 }
 
 // =====================================================================================================================

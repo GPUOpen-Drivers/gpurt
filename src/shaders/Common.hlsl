@@ -34,7 +34,7 @@
 #ifndef _COMMON_HLSL
 #define _COMMON_HLSL
 
-#include "../shared/rayTracingDefs.h"
+#include "../shadersClean/common/ShaderDefs.hlsli"
 #include "../shadersClean/common/ScratchNode.hlsli"
 
 typedef AccelStructDataOffsets AccelStructOffsets;

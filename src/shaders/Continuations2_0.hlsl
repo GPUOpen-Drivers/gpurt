@@ -509,39 +509,10 @@ static void TraversalInternal2_0(
         }
 
         bool laneHasCandidate = (state < TRAVERSAL_STATE_COMMITTED_NOTHING);
-        if (Options::getCpsCandidatePrimitiveMode() == CpsCandidatePrimitiveMode::SuspendWave)
+        if (laneHasCandidate)
         {
-
-            // Stopping the Traversal loop for the whole wave on the first AHS/IS might be too aggressive.
-            // We implement this basic version here as basis for further experiments.
-            // Delaying it a bit could have potential benefits:
-            //   * avoid overhead of wave-intrinsic in every iteration (depending on the implementation of delaying)
-            //   * letting more lanes join the IS/AHS work
-            if (WaveActiveAnyTrue(laneHasCandidate))
-            {
-                if (laneHasCandidate)
-                {
-                    // Break out of traversal to run AHS/IS
-                }
-                else if (IsValidNode(nextNodePtr))
-                {
-                    // Break out of traversal so other lanes can run AHS/IS and re-join traversal
-                    state = TRAVERSAL_STATE_SUSPEND_TRAVERSAL;
-                }
-                else
-                {
-                    // The lane is done with Traversal, and wants to run CHS or Miss
-                }
-                break;
-            }
-        }
-        else
-        {
-            if (laneHasCandidate)
-            {
-                // Break out of traversal to run AHS/IS
-                break;
-            }
+            // Break out of traversal to run AHS/IS
+            break;
         }
     }
 

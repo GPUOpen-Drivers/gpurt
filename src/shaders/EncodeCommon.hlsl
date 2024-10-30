@@ -24,7 +24,7 @@
  **********************************************************************************************************************/
 #include "BuildCommonScratch.hlsl"
 
-#include "../shared/rayTracingDefs.h"
+#include "../shadersClean/common/ShaderDefs.hlsli"
 
 #include "TrianglePrimitive.hlsl"
 #include "UpdateCommon.hlsl"

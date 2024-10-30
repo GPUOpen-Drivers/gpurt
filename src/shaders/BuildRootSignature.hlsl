@@ -22,7 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "../shared/rayTracingDefs.h"
+#include "../shadersClean/common/ShaderDefs.hlsli"
 
 // DebugBuffer
 #if GPURT_ENABLE_GPU_DEBUG

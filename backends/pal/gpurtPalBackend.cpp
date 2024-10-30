@@ -152,11 +152,11 @@ void PalBackend::WriteImmediateSingle(
     ImmediateDataWidth    width
     ) const
 {
-    // We want to use HwPipePreCs (ME) so that the writes do not occur before UAV barriers are done waiting.
+    // We want to use StagePostPrefetch (ME) so that the writes do not occur before UAV barriers are done waiting.
     // Both internal barriers during the build and application barriers synchronizing access to acceleration
-    // structure memory wait at HwPipePreCs.
+    // structure memory wait at StagePostPrefetch.
     GetCmdBuffer(cmdBuffer)->CmdWriteImmediate(
-        Pal::HwPipePoint::HwPipePreCs,
+        Pal::PipelineStageFlag::PipelineStagePostPrefetch,
         value,
         GpuRtToPalImmediateDataWidth(width),
         destVa);

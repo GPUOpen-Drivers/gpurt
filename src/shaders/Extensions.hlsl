@@ -29,6 +29,13 @@
 #include "../shadersClean/common/Extensions.hlsli"
 #include "../shadersClean/common/Math.hlsli"
 
+#define AmdExtD3DShaderIntrinsicsWaveOp_MinF        0x07
+#define AmdExtD3DShaderIntrinsicsWaveOp_MaxF        0x0a
+#define AmdExtD3DShaderIntrinsicsWaveOp_Inclusive   0x01
+
+#define AmdExtClusteredSubgroup                     3
+#define AmdExtClusteredReduce                       3
+
 // Dummy implementation for Vulkan build only
 __decl uint AmdExtD3DShaderIntrinsics_LoadDwordAtAddr(
     uint gpuVaLoBits, uint gpuVaHiBits, uint offset) DUMMY_UINT_FUNC
@@ -56,10 +63,6 @@ __decl uint2 AmdExtD3DShaderIntrinsics_AtomicMinU64(
 
 __decl uint2 AmdExtD3DShaderIntrinsics_ShaderClock() DUMMY_UINT2_FUNC
 __decl uint2 AmdExtD3DShaderIntrinsics_ShaderRealtimeClock() DUMMY_UINT2_FUNC
-
-#define AmdExtD3DShaderIntrinsicsWaveOp_MinF        0x07
-#define AmdExtD3DShaderIntrinsicsWaveOp_MaxF        0x0a
-#define AmdExtD3DShaderIntrinsicsWaveOp_Inclusive   0x01
 
 __decl float3 AmdExtD3DShaderIntrinsics_WaveScan(
     uint waveOp, uint flags, float3 src) DUMMY_FLOAT3_FUNC
@@ -112,56 +115,115 @@ __decl float3 AmdExtD3DShaderIntrinsics_FloatOpWithRoundMode(
     uint roundMode, uint operation, float3 src0, float3 src1) DUMMY_FLOAT3_FUNC
 
 //=====================================================================================================================
-// Sub-group wave reductions
+// Sub-group wave reductions spirv ops
 // Ref: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html#_instructions
 
 [[vk::ext_capability(/* GroupNonUniform */ 61)]]
 [[vk::ext_capability(/* GroupNonUniformArithmetic */ 63)]]
 [[vk::ext_capability(/* GroupNonUniformClustered */ 67)]]
-
 [[vk::ext_instruction(350)]]
 float spirv_OpGroupNonUniformFAdd_clustered(uint scope, [[vk::ext_literal]] uint op, float value, uint clusterSize);
 
-float AmdExtD3DShaderIntrinsics_WaveClusterSum(float x, uint dxClusterSize)
-{
-    const uint clusterSize = (1u << (dxClusterSize - 1));
-    return spirv_OpGroupNonUniformFAdd_clustered(/* Subgroup */ 3, /* ClusteredReduce */ 3, x, clusterSize);
-}
-
+[[vk::ext_capability(/* GroupNonUniform */ 61)]]
+[[vk::ext_capability(/* GroupNonUniformArithmetic */ 63)]]
+[[vk::ext_capability(/* GroupNonUniformClustered */ 67)]]
 [[vk::ext_instruction(355)]]
 float spirv_OpGroupNonUniformFMin_clustered(uint scope, [[vk::ext_literal]] uint op, float value, uint clusterSize);
 
-float AmdExtD3DShaderIntrinsics_WaveClusterMin(float x, uint dxClusterSize)
-{
-    const uint clusterSize = (1u << (dxClusterSize - 1));
-    return spirv_OpGroupNonUniformFMin_clustered(/* Subgroup */ 3, /* ClusteredReduce */ 3, x, clusterSize);
-}
-
+[[vk::ext_capability(/* GroupNonUniform */ 61)]]
+[[vk::ext_capability(/* GroupNonUniformArithmetic */ 63)]]
+[[vk::ext_capability(/* GroupNonUniformClustered */ 67)]]
 [[vk::ext_instruction(358)]]
 float spirv_OpGroupNonUniformFMax_clustered(uint scope, [[vk::ext_literal]] uint op, float value, uint clusterSize);
 
-float AmdExtD3DShaderIntrinsics_WaveClusterMax(float x, uint dxClusterSize)
-{
-    const uint clusterSize = (1u << (dxClusterSize - 1));
-    return spirv_OpGroupNonUniformFMax_clustered(/* Subgroup */ 3, /* ClusteredReduce */ 3, x, clusterSize);
-}
-
+[[vk::ext_capability(/* GroupNonUniform */ 61)]]
+[[vk::ext_capability(/* GroupNonUniformArithmetic */ 63)]]
+[[vk::ext_capability(/* GroupNonUniformClustered */ 67)]]
 [[vk::ext_instruction(359)]]
 uint spirv_OpGroupNonUniformBitwiseAnd_clustered(uint scope, [[vk::ext_literal]] uint op, uint value, uint clusterSize);
 
-uint AmdExtD3DShaderIntrinsics_WaveClusterBitAnd(uint x, uint dxClusterSize)
-{
-    const uint clusterSize = (1u << (dxClusterSize - 1));
-    return spirv_OpGroupNonUniformBitwiseAnd_clustered(/* Subgroup */ 3, /* ClusteredReduce */ 3, x, clusterSize);
-}
-
+[[vk::ext_capability(/* GroupNonUniform */ 61)]]
+[[vk::ext_capability(/* GroupNonUniformArithmetic */ 63)]]
+[[vk::ext_capability(/* GroupNonUniformClustered */ 67)]]
 [[vk::ext_instruction(360)]]
 uint spirv_OpGroupNonUniformBitwiseOr_clustered(uint scope, [[vk::ext_literal]] uint op, uint value, uint clusterSize);
 
+//=====================================================================================================================
+// GpuRt WaveClusterSum Intrinsics
+float AmdExtD3DShaderIntrinsics_WaveClusterSum(float x, uint dxClusterSize)
+{
+    const uint clusterSize = (1u << (dxClusterSize - 1));
+    return spirv_OpGroupNonUniformFAdd_clustered(AmdExtClusteredSubgroup, AmdExtClusteredReduce, x, clusterSize);
+}
+
+//=====================================================================================================================
+// GpuRt WaveClusterMin Intrinsics
+float AmdExtD3DShaderIntrinsics_WaveClusterMin(float x, uint dxClusterSize)
+{
+    const uint clusterSize = (1u << (dxClusterSize - 1));
+    return spirv_OpGroupNonUniformFMin_clustered(AmdExtClusteredSubgroup, AmdExtClusteredReduce, x, clusterSize);
+}
+
+float2 AmdExtD3DShaderIntrinsics_WaveClusterMin(float2 val, uint dxClusterSize)
+{
+    float2 result;
+    const uint clusterSize = (1u << (dxClusterSize - 1));
+    result.x = spirv_OpGroupNonUniformFMin_clustered(AmdExtClusteredSubgroup, AmdExtClusteredReduce, val.x, clusterSize);
+    result.y = spirv_OpGroupNonUniformFMin_clustered(AmdExtClusteredSubgroup, AmdExtClusteredReduce, val.y, clusterSize);
+    return result;
+}
+
+float3 AmdExtD3DShaderIntrinsics_WaveClusterMin(float3 val, uint dxClusterSize)
+{
+    float3 result;
+    const uint clusterSize = (1u << (dxClusterSize - 1));
+    result.x = spirv_OpGroupNonUniformFMin_clustered(AmdExtClusteredSubgroup, AmdExtClusteredReduce, val.x, clusterSize);
+    result.y = spirv_OpGroupNonUniformFMin_clustered(AmdExtClusteredSubgroup, AmdExtClusteredReduce, val.y, clusterSize);
+    result.z = spirv_OpGroupNonUniformFMin_clustered(AmdExtClusteredSubgroup, AmdExtClusteredReduce, val.z, clusterSize);
+    return result;
+}
+
+//=====================================================================================================================
+// GpuRt WaveClusterMax Intrinsics
+float AmdExtD3DShaderIntrinsics_WaveClusterMax(float val, uint dxClusterSize)
+{
+    const uint clusterSize = (1u << (dxClusterSize - 1));
+    return spirv_OpGroupNonUniformFMax_clustered(AmdExtClusteredSubgroup, AmdExtClusteredReduce, val, clusterSize);
+}
+
+float2 AmdExtD3DShaderIntrinsics_WaveClusterMax(float2 val, uint dxClusterSize)
+{
+    float2 result;
+    const uint clusterSize = (1u << (dxClusterSize - 1));
+    result.x = spirv_OpGroupNonUniformFMax_clustered(AmdExtClusteredSubgroup, AmdExtClusteredReduce, val.x, clusterSize);
+    result.y = spirv_OpGroupNonUniformFMax_clustered(AmdExtClusteredSubgroup, AmdExtClusteredReduce, val.y, clusterSize);
+    return result;
+}
+
+float3 AmdExtD3DShaderIntrinsics_WaveClusterMax(float3 val, uint dxClusterSize)
+{
+    float3 result;
+    const uint clusterSize = (1u << (dxClusterSize - 1));
+    result.x = spirv_OpGroupNonUniformFMax_clustered(AmdExtClusteredSubgroup, AmdExtClusteredReduce, val.x, clusterSize);
+    result.y = spirv_OpGroupNonUniformFMax_clustered(AmdExtClusteredSubgroup, AmdExtClusteredReduce, val.y, clusterSize);
+    result.z = spirv_OpGroupNonUniformFMax_clustered(AmdExtClusteredSubgroup, AmdExtClusteredReduce, val.z, clusterSize);
+    return result;
+}
+
+//=====================================================================================================================
+// GpuRt WaveClusterBitAnd Intrinsics
+uint AmdExtD3DShaderIntrinsics_WaveClusterBitAnd(uint x, uint dxClusterSize)
+{
+    const uint clusterSize = (1u << (dxClusterSize - 1));
+    return spirv_OpGroupNonUniformBitwiseAnd_clustered(AmdExtClusteredSubgroup, AmdExtClusteredReduce, x, clusterSize);
+}
+
+//=====================================================================================================================
+// GpuRt WaveClusterBitOr Intrinsics
 uint AmdExtD3DShaderIntrinsics_WaveClusterBitOr(uint x, uint dxClusterSize)
 {
     const uint clusterSize = (1u << (dxClusterSize - 1));
-    return spirv_OpGroupNonUniformBitwiseOr_clustered(/* Subgroup */ 3, /* ClusteredReduce */ 3, x, clusterSize);
+    return spirv_OpGroupNonUniformBitwiseOr_clustered(AmdExtClusteredSubgroup, AmdExtClusteredReduce, x, clusterSize);
 }
 
 //=====================================================================================================================
@@ -317,6 +379,7 @@ __decl uint64_t AmdExtConstantLoad64AtAddr(GpuVirtualAddress addr, uint offset) 
 __decl uint AmdExtDispatchThreadIdFlat() DUMMY_UINT_FUNC;
 
 //=====================================================================================================================
+__decl uint AmdExtAtomicAddAtAddr(uint64_t gpuVa, uint offset, uint value) DUMMY_UINT_FUNC;
 __decl uint64_t AmdExtAtomic64AddAtAddr(uint64_t gpuVa, uint offset, uint64_t value) DUMMY_UINT_FUNC
 __decl uint64_t AmdExtAtomic64CmpXchgAtAddr(uint64_t gpuVa, uint offset, uint64_t compare_value, uint64_t value) DUMMY_UINT_FUNC
 __decl uint64_t AmdExtLoad64AtAddrUncached(uint64_t gpuVa, uint offset) DUMMY_UINT_FUNC
@@ -324,6 +387,12 @@ __decl uint  AmdExtLoadDwordAtAddrUncached(uint64_t addr, uint offset) DUMMY_UIN
 __decl void  AmdExtStoreDwordAtAddrUncached(uint64_t addr, uint offset, uint value) DUMMY_VOID_FUNC
 __decl uint3 AmdExtGroupIdCompute() DUMMY_UINT3_FUNC
 __decl uint3 AmdExtGroupDimCompute() DUMMY_UINT3_FUNC
+__decl uint3 AmdExtThreadIdInGroupCompute() DUMMY_UINT3_FUNC
+__decl uint  AmdExtFlattenedThreadIdInGroupCompute() DUMMY_UINT_FUNC
+__decl uint  AmdExtLoadDwordAtAddr(uint64_t addr, uint offset) DUMMY_UINT_FUNC
+__decl void  AmdExtStoreDwordAtAddr(uint64_t addr, uint offset, uint value) DUMMY_VOID_FUNC
+__decl void  AmdExtDeviceMemoryAcquire() DUMMY_VOID_FUNC
+__decl void  AmdExtDeviceMemoryRelease() DUMMY_VOID_FUNC
 __decl uint  AmdExtLaneCount() DUMMY_UINT_FUNC
 __decl void  AmdExtSleep(uint value) DUMMY_VOID_FUNC
 

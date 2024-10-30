@@ -26,6 +26,8 @@
 #ifndef _BUILDSETTINGS_HLSLI
 #define _BUILDSETTINGS_HLSLI
 
+#include "../shadersClean/common/ShaderDefs.hlsli"
+
 [[vk::constant_id(BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_ID)]]                        uint topLevelBuild                 = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_BUILD_MODE_ID)]]                             uint buildMode                     = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_TRIANGLE_COMPRESSION_MODE_ID)]]              uint triangleCompressionMode       = 0;

@@ -22,8 +22,8 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "../../gpurt/gpurtAccelStruct.h"
-#include "../shared/rayTracingDefs.h"
+#include "../../../gpurt/gpurtAccelStruct.h"
+#include "../common/ShaderDefs.hlsli"
 
 // Note, CBV(b255) must be the last used binding in the root signature.
 #define RootSig "RootConstants(num32BitConstants=3, b0, visibility=SHADER_VISIBILITY_ALL), "\

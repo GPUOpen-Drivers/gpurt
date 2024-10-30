@@ -136,7 +136,7 @@ bvhShaderConfigs = [
     ShaderConfig(path="EmitAS.hlsl", entryPoint="EmitCompactSize"),
     ShaderConfig(path="EmitAS.hlsl", entryPoint="EmitSerializeDesc"),
     ShaderConfig(path="EmitAS.hlsl", entryPoint="EmitToolVisDesc"),
-    ShaderConfig(path="CopyAS.hlsl", entryPoint="CopyAS"),
+    ShaderConfig(path="../shadersClean/build/CopyAS.hlsl", entryPoint="CopyAS"),
     ShaderConfig(path="CompactAS.hlsl", entryPoint="CompactAS"),
     ShaderConfig(path="DecodeAS.hlsl", entryPoint="DecodeAS"),
     ShaderConfig(path="SerializeAS.hlsl", entryPoint="SerializeAS"),
@@ -314,6 +314,37 @@ def validateCompilation(cmd: [str], path: pathlib.Path) -> bool:
     return True
 
 """
+Validates the organization of files in the shared folder to enforce cpp/h a src/header sort of structure
+This helps keep the shader library untangled and easier to maintain.
+#define'ing LIBRARY_COMPILATION enables including files in any order and does not include implementation dependencies.
+"""
+def validateShared(args) -> bool:
+    cmdBase = getValidationCmdArgs(args)
+    # use resolve() + as_posix() to avoid path mismatches when using drive mapping
+    srcPath = pathlib.Path(FixInputPath(args.basepath)).parent.resolve()
+
+    gpurtInterfacePath = (srcPath / "../gpurt").resolve()
+    sharedPath = srcPath / "shared"
+    generatedFilepath = pathlib.Path(args.g_FilePath)
+    implExt = "._unused_"
+    headerExt = ".h"
+
+    # shared files need to be able to include the gpurt interface files due to the requirements of the interface
+    # we treat this as an exception for rules about what files can be included
+
+    for path, (hasImpl, hasHeader) in getImplInterfacePairs(sharedPath, implExt, headerExt).items():
+        assert (hasHeader and not hasImpl), "Shared files should be header only."
+        fullPath = path.with_suffix(path.suffix + (implExt if hasImpl else headerExt))
+        for defines in getDefineCombos(fullPath):
+            compileCmd = cmdBase + defines + [fullPath.as_posix()]
+            if not validateIncludes(compileCmd, path, implExt, headerExt, [(sharedPath, headerExt), (gpurtInterfacePath, ".h"), (generatedFilepath, ".h")]):
+                return False
+            if not validateCompilation(compileCmd, fullPath):
+                return False
+
+    return True
+
+"""
 Validates the organization of shaders to enforce cpp/h a src/header sort of structure
 This helps keep the shader library untangled and easier to maintain.
 #define'ing LIBRARY_COMPILATION enables including files in any order and does not include implementation dependencies.
@@ -322,6 +353,11 @@ def validateShadersClean(args) -> bool:
     cmdBase = getValidationCmdArgs(args)
     # use resolve() + as_posix() to avoid path mismatches when using drive mapping
     srcPath = pathlib.Path(FixInputPath(args.basepath)).parent.resolve()
+
+    gpurtInterfacePath = (srcPath / "../gpurt").resolve()
+    sharedPath = srcPath / "shared"
+    generatedFilepath = pathlib.Path(args.g_FilePath)
+# Validation of the shadersClean folder
     shadersCleanPath = srcPath / "shadersClean"
 
     implExt = ".hlsl"
@@ -331,11 +367,10 @@ def validateShadersClean(args) -> bool:
         fullPath = path.with_suffix(path.suffix + (implExt if hasImpl else headerExt))
         for defines in getDefineCombos(fullPath):
             compileCmd = cmdBase + defines + [fullPath.as_posix()]
-            if not validateIncludes(compileCmd, path, implExt, headerExt, [(shadersCleanPath, headerExt)]):
+            if not validateIncludes(compileCmd, path, implExt, headerExt, [(shadersCleanPath, headerExt), (sharedPath, ".hlsli"), (gpurtInterfacePath, ".h"), (generatedFilepath, ".h")]):
                 return False
             if not validateCompilation(compileCmd, fullPath):
                 return False
-
     return True
 
 def isSpirvShader(shaderConfig, args):
@@ -751,6 +786,7 @@ def main() -> int:
     parser.add_argument('--verbose', action='store_true', help='Output verbose inforation', default=False)
     parser.add_argument('--defines', help='Defines for the shader compiler, separated by ; or ,.', default="")
     parser.add_argument('--includePaths', help='Include paths for the shader compiler, separated by ; or ,.', default="")
+    parser.add_argument('--g_FilePath', help='Path to the build destination where generated headers are written', default="")
     parser.add_argument('--compilerPath', help='Path to standalone compiler.', default='./dxc.exe')
     parser.add_argument('--dxcompilerLibPath', help='Path to dxcompiler.dll/libdxcompiler.so', default='./dxcompiler.dll')
     parser.add_argument('--spirvRemapPath', help='Path to spirv-remap executable', default='./spirv-remap.exe')
@@ -769,11 +805,14 @@ def main() -> int:
         tBegin = time.perf_counter()
 
         validIncludes = validateShadersClean(args)
+        validIncludes &= validateShared(args)
+
         # For vulkan, we validate SPIR-V shaders in the same run instead of running the script again.
         if args.vulkan and not args.spirv:
             print("Now doing SPIR-V validation...")
             args.spirv = True
             validIncludes &= validateShadersClean(args)
+            validIncludes &= validateShared(args)
 
         tDuration = time.perf_counter() - tBegin
         if validIncludes:

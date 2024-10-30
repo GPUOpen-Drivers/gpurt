@@ -27,7 +27,7 @@
 
 #include "BoxNode1_0.hlsli"
 #include "../InstanceDesc.hlsli"
-#include "../TempAssert.hlsli"
+#include "../../../shared/assert.h"
 
 //=====================================================================================================================
 struct InstanceSidebandData1_1

@@ -26,6 +26,7 @@
 import sys
 import os
 import re
+import argparse
 
 cpp_file_header = """
 /* Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved. */
@@ -62,7 +63,7 @@ def process_file(src_path, dst_path):
         for line in src_file:
             # Find something that looks like a GPU_ASSERT macro invocation (GPU_ASSERT + '(' or space)
             if line.find('#define') == -1:
-                m = re.match('.*GPU_ASSERT\s*(\()', line)
+                m = re.match('.*GPU_ASSERT\\s*(\\()', line)
                 if m is not None:
                     open_paren = m.start(1)
                     assert_id = add_assert(src_name, line_num, line)
@@ -71,7 +72,7 @@ def process_file(src_path, dst_path):
                     line = line.replace('GPU_ASSERT', 'GPU_ASSERT_IMPL', 1)
                 else:
                     # Find something that looks like a GPU_DPF macro invocation (GPU_DPF + '(' or space)
-                    m = re.match('.*GPU_DPF\s*(\().*"(.*)"', line)
+                    m = re.match('.*GPU_DPF\\s*(\\().*"(.*)"', line)
                     if m is not None:
                         open_paren = m.start(1)
                         msg_id = add_print_msg(src_name, line_num, m.group(2))
@@ -91,13 +92,26 @@ def generate_cpp_file(output_file_path):
         output_str += cpp_file_footer
         output_file.write(output_str)
 
-def main():
+def main(cpp_file, input_pair_list):
     # Process each file in the argument list
     # The argments are pairs of input and ouput files then the path to the output file
-    for i in range(1, len(sys.argv) - 1, 2):
-        process_file(sys.argv[i], sys.argv[i+1])
-    generate_cpp_file(sys.argv[-1])
+    for i in range(0, len(input_pair_list), 2):
+        process_file(input_pair_list[i], input_pair_list[i+1])
+    generate_cpp_file(cpp_file)
     return 0
 
 if __name__ == '__main__':
-    sys.exit(main())
+    parser = argparse.ArgumentParser(
+        prog='DebugPreprocessShaders',
+        description='Preprocesses shaders for GPU_ASSERT/GPU_DPF lines and generates a lookup table to match their text with their ID'
+    )
+    parser.add_argument('-i', '--input', help='File containing a list of input shader/output processed shader path pairs, semicolon delimited', required=True)
+    parser.add_argument('-o', '--output', help='Path to output cpp header', required=True)
+    args = parser.parse_args()
+
+    input_file = open(args.input, 'r')
+    # Strip any newlines or whitespace from the beginning/end, and split by ';'
+    input_pair_list = input_file.read().strip().split(';')
+
+    sys.exit(main(args.output, input_pair_list))
+

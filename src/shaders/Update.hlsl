@@ -47,7 +47,7 @@ struct RootConstants
     uint numThreads;
 };
 
-#include "../shared/rayTracingDefs.h"
+#include "../shadersClean/common/ShaderDefs.hlsli"
 
 [[vk::push_constant]] ConstantBuffer<RootConstants>                ShaderRootConstants  : register(b0);
 [[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants>         ShaderConstants      : register(b1);

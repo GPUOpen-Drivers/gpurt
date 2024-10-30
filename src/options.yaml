@@ -32,12 +32,12 @@ enum CpsCandidatePrimitiveMode:
     # Controls how candidate primitives are handled in the continuations (CPS) software Traversal loop.
     SuspendLane:  # Suspend a lane upon candidate hits and wait for other lanes to end the Traversal loop.
                   #  This is the default. Other modes are experimental and might not be implemented on all RtIps.
-    SuspendWave:  # On each Traversal iteration, check whether any lane has a candidate, and break if so.
-                  #  Only implemented for RtIp 2.0, all other cases use SuspendLane.
     DeferFirst:   # When finding the first candidate, record it and ignore it for the time being. At the end of the
                   #  Traversal loop, process pending candidates. When finding the second candidate, immediately break
                   #  out of the loop to first process the first one.
-                  #  Only implemented for triangle primitives on RtIp 2.0, all other cases use SuspendLane.
+                  #  Implementation status:
+                  #   * RtIp 1.1: Not supported, SuspendLane is always used.
+                  #   * RtIp 2.0: DeferFirst is supported, but only for triangle primitives.
 
 # ------------------------------------------------------------------------------------------------------------------
 # This is the definition of the single options struct.

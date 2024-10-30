@@ -22,7 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "../../shared/rayTracingDefs.h"
+#include "../../shadersClean/common/ShaderDefs.hlsli"
 
 #define NUMBER_OF_BLOCKS_PER_GROUP 1
 #define NUM_BINS                   16

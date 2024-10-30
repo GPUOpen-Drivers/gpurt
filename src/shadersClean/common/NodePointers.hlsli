@@ -26,7 +26,7 @@
 #ifndef NODE_POINTERS_HLSLI
 #define NODE_POINTERS_HLSLI
 
-#include "../common/TempAssert.hlsli"
+#include "../../shared/assert.h"
 
 //=====================================================================================================================
 // Node pointer size in bytes

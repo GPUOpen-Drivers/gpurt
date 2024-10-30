@@ -106,6 +106,42 @@ enum EncodeFlags : uint32
     EncodeFlagFusedInstanceNode     = 0x00000008,
 };
 
+// Values should remain stable for RRA binary-compatibility (PAL equivalents do not guarantee stability)
+enum RtIpLevel : uint32
+{
+    RtIpNone        = 0x0,  ///< The device does not have an RayTracing Ip Level
+    RtIp1_0         = 0x1,  ///< First Implementation of HW RT
+    RtIp1_1         = 0x2,  ///< Added computation of triangle barycentrics into HW
+    RtIp2_0         = 0x3,  ///< Added more Hardware RayTracing features, such as BoxSort, PointerFlag, etc
+    RtIpReserved    = 0x5,  ///< Special value, should not be used
+};
+
+// =====================================================================================================================
+// Convert PAL RtIpLevel values to their GpuRT equivalent
+static RtIpLevel PalToGpuRtIpLevel(Pal::RayTracingIpLevel palRtIpLevel)
+{
+    RtIpLevel gpuRtIpLevel = RtIpLevel::RtIpNone;
+
+    switch (palRtIpLevel)
+    {
+    case Pal::RayTracingIpLevel::RtIp1_0:
+        gpuRtIpLevel = RtIpLevel::RtIp1_0;
+        break;
+    case Pal::RayTracingIpLevel::RtIp1_1:
+        gpuRtIpLevel = RtIpLevel::RtIp1_1;
+        break;
+    case Pal::RayTracingIpLevel::RtIp2_0:
+        gpuRtIpLevel = RtIpLevel::RtIp2_0;
+        break;
+    case Pal::RayTracingIpLevel::None:
+    default:
+        gpuRtIpLevel = RtIpLevel::RtIpNone;
+        break;
+    }
+
+    return gpuRtIpLevel;
+}
+
 struct RadixSortConfig
 {
     uint32 workGroupSize;
@@ -336,12 +372,20 @@ public:
     // @param pDispatchRaysConstants  (in/out) Non-null pointer to a DispatchRaysConstants
     // @param cpsMemoryGpuAddr        (in) GPU address pointing to the beginning of cps memory
     // @param cpsMemoryBytes          (in) Cps allocated memory size in bytes
-    //
-    // @return the required global memory allocation size in bytes
     virtual void PatchDispatchRaysConstants(
         DispatchRaysConstants* pDispatchRaysConstants,
         const gpusize          cpsMemoryGpuAddr,
         const gpusize          cpsMemoryBytes) override;
+
+    // Populates the GPU addresses in the InitExecuteIndirectConstants structure
+    //
+    // @param pInitExecuteIndirectConstants (in/out) Non-null pointer to a InitExecuteIndirectConstants
+    // @param cpsMemoryGpuAddr              (in) GPU address pointing to the beginning of cps memory
+    // @param cpsMemoryBytes                (in) Cps allocated memory size in bytes
+    virtual void PatchInitExecuteIndirectConstants(
+        GpuRt::InitExecuteIndirectConstants* pInitExecuteIndirectConstants,
+        const gpusize                        cpsMemoryGpuAddr,
+        const gpusize                        cpsMemoryBytes) override;
 
     //
     // @param cpsVideoMem          [in] Cps video memory
@@ -683,6 +727,8 @@ public:
 
     virtual bool ShouldUseGangedAceForBuild(const AccelStructBuildInputs& inputs) const override;
 
+    virtual uint32 CalculateBvhPrimitiveCount(const AccelStructBuildInputs& inputs) const override;
+
     // Returns size in DWORDs of a typed buffer view SRD
     uint32 GetTypedBufferSrdSizeDw() const { return m_typedBufferSrdSizeDw; };
 
@@ -721,6 +767,12 @@ private:
         ClientCallbacks* pClientCb);
 
     virtual ~Device() override;
+
+    template<typename ConstantsType>
+    void PatchConstants(
+        ConstantsType* pConstant,
+        const gpusize  cpsMemoryGpuAddr,
+        const gpusize  cpsMemoryBytes);
 
     DeviceInitInfo  m_info;
 

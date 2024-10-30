@@ -55,6 +55,8 @@ struct DispatchRaysTopLevelData
     uint32 accelStructTrackerSrd[MaxBufferSrdSize]; // Structured buffer SRD pointing to the accel struct tracker
 };
 
+#define DISPATCHRAYSCONSTANTDATA_STRUCT_OFFSET_DISPATCHID  48
+
 // Dispatch rays constant buffer data (GPU structure). Note, using unaligned uint64_t in HLSL constant buffers requires
 // -no-legacy-cbuf-layout for cpp style structure alignment to work. But currently that support is incomplete in DXC
 // and until that is resolved we need to use uint32's explicitly.
@@ -74,7 +76,8 @@ struct DispatchRaysConstantData
     uint32 hitGroupTableBaseAddressLo;  // Hit group table base address low 32-bits
     uint32 hitGroupTableBaseAddressHi;  // Hit group table base address high 32-bits
     uint32 hitGroupTableStrideInBytes;  // Hit group table record byte stride
-    uint32 reserved0;                   // Reserved padding
+    uint32 cpsDispatchId;               // Continuations DispatchId, written in the persistent mode.
+                                        // This value should not be read via constant buffer.
     uint32 callableTableBaseAddressLo;  // Callable shader table base address low 32-bits
     uint32 callableTableBaseAddressHi;  // Callable shader table base address high 32-bits
     uint32 callableTableStrideInBytes;  // Callable shader table byte stride
@@ -96,6 +99,8 @@ struct DispatchRaysConstantData
     uint32 cpsGlobalMemoryAddressLo;    // Separate CPS stack memory base address low 32-bits
     uint32 cpsGlobalMemoryAddressHi;    // Separate CPS stack memory base address high 32-bits
     uint32 counterMask;                 // Mask for filtering ray history token
+    uint32 cpsDispatchIdAddressLo;      // Continuations cpsDispatchId address low 32-bits
+    uint32 cpsDispatchIdAddressHi;      // Continuations cpsDispatchId address high 32-bits
 };
 #pragma pack(pop)
 
@@ -109,6 +114,8 @@ struct DispatchRaysConstants
 #if __cplusplus
 static_assert((sizeof(DispatchRaysConstants) % sizeof(uint32)) == 0,
               "DispatchRaysConstants is not dword-aligned");
+static_assert(DISPATCHRAYSCONSTANTDATA_STRUCT_OFFSET_DISPATCHID == offsetof(DispatchRaysConstantData, cpsDispatchId),
+              "DISPATCHRAYSCONSTANTDATA_STRUCT_OFFSET_DISPATCHID mismatches to cpsDispatchId");
 
 constexpr uint32 DispatchRaysConstantsDw = sizeof(DispatchRaysConstants) / sizeof(uint32);
 #endif
@@ -132,6 +139,17 @@ struct InitExecuteIndirectUserData
 // Constants for InitExecuteIndirect shader
 struct InitExecuteIndirectConstants
 {
+#if __cplusplus
+    // Internal counter buffer SRDs
+    uint32 internalUavSrd[MaxSupportedIndirectCounters][MaxBufferSrdSize];
+
+    // Internal acceleration structure tracker buffer SRD.
+    uint32 accelStructTrackerSrd[MaxBufferSrdSize];
+#else
+    uint4 internalUavSrd[MaxSupportedIndirectCounters][MaxBufferSrdSize / 4];
+    uint4 accelStructTrackerSrd[MaxBufferSrdSize / 4];
+#endif
+
     uint32 inputBytesPerDispatch;   // Size of application indirect arguments
     uint32 outputBytesPerDispatch;  // Size of resulting driver internal arguments
     uint32 bindingArgsSize;         // Size of binding arguments in the app buffer preceeding the dispatch
@@ -160,18 +178,10 @@ struct InitExecuteIndirectConstants
     uint32 counterRayIdRangeBegin;  // Counter ray ID range begin
     uint32 counterRayIdRangeEnd;    // Counter ray ID range end
     uint32 cpsBackendStackSize;     // Scratch memory used by a compiler backend, start at offset 0
-    uint32 padding0;                // Padding for 16-byte alignment
+    uint32 cpsFrontendStackSize;    // Scratch memory used by IR (Intermediate Representation), for a continuation passing shader
 
-#if __cplusplus
-     // Internal counter buffer SRDs
-    uint32 internalUavSrd[MaxSupportedIndirectCounters][MaxBufferSrdSize];
-
-    // Internal acceleration structure tracker buffer SRD.
-    uint32 accelStructTrackerSrd[MaxBufferSrdSize];
-#else
-    uint4 internalUavSrd[MaxSupportedIndirectCounters][MaxBufferSrdSize / 4];
-    uint4 accelStructTrackerSrd[MaxBufferSrdSize / 4];
-#endif
+    uint32 cpsGlobalMemoryAddressLo;    // Separate CPS stack memory base address low 32-bits
+    uint32 cpsGlobalMemoryAddressHi;    // Separate CPS stack memory base address high 32-bits
 };
 
 constexpr uint32 InitExecuteIndirectConstantsDw = sizeof(InitExecuteIndirectConstants) / sizeof(uint32);
@@ -184,7 +194,7 @@ static_assert((MaxBufferSrdSize == 4), "Buffer SRD size changed, affected shader
 #endif
 static_assert((sizeof(InitExecuteIndirectConstants) % sizeof(uint32)) == 0,
               "InitExecuteIndirectConstants is not dword-aligned");
-}
+}       // namespace GpuRt
 #endif
 
 #endif

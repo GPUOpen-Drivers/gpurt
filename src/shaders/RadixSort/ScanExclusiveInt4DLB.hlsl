@@ -24,7 +24,7 @@
  **********************************************************************************************************************/
 #if NO_SHADER_ENTRYPOINT == 0
 //=====================================================================================================================
-#include "../../shared/rayTracingDefs.h"
+#include "../../shadersClean/common/ShaderDefs.hlsli"
 
 #define GC_SCRATCHBUFFER
 #include "../BuildRootSignature.hlsl"

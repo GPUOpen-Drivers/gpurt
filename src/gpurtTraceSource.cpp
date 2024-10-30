@@ -51,7 +51,7 @@ void AccelStructTraceSource::OnTraceBegin(
     if (m_pDevice->AccelStructTrackerGpuAddr() != 0)
     {
         // Before starting the trace set tracking to enabled.
-        pCmdBuf->CmdWriteImmediate(Pal::HwPipeBottom, 1, Pal::ImmediateDataWidth::ImmediateData32Bit,
+        pCmdBuf->CmdWriteImmediate(Pal::PipelineStageBottomOfPipe, 1, Pal::ImmediateDataWidth::ImmediateData32Bit,
                                    m_pDevice->AccelStructTrackerGpuAddr() + offsetof(AccelStructTracker, enabled));
         m_pDevice->RaytracingBarrier(pCmdBuf, BarrierFlagSyncPostCpWrite);
     }
@@ -67,7 +67,7 @@ void AccelStructTraceSource::OnTraceEnd(
     if (m_pDevice->AccelStructTrackerGpuAddr() != 0)
     {
         // Disable tracking.
-        pCmdBuf->CmdWriteImmediate(Pal::HwPipeBottom, 0, Pal::ImmediateDataWidth::ImmediateData32Bit,
+        pCmdBuf->CmdWriteImmediate(Pal::PipelineStageBottomOfPipe, 0, Pal::ImmediateDataWidth::ImmediateData32Bit,
                                    m_pDevice->AccelStructTrackerGpuAddr() + offsetof(AccelStructTracker, enabled));
         m_pDevice->RaytracingBarrier(pCmdBuf, BarrierFlagSyncPostCpWrite);
     }

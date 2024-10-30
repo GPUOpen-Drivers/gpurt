@@ -1629,7 +1629,7 @@ AccelStructHeader BvhBuilder::InitAccelStructHeader() const
     header.geometryType             = static_cast<uint32>(m_buildConfig.geometryType);
     header.uuidLo                   = Util::LowPart(m_deviceSettings.accelerationStructureUUID);
     header.uuidHi                   = Util::HighPart(m_deviceSettings.accelerationStructureUUID);
-    header.rtIpLevel                = uint32(m_pDevice->GetRtIpLevel());
+    header.rtIpLevel                = static_cast<uint32>(PalToGpuRtIpLevel(m_pDevice->GetRtIpLevel()));
 
     if (m_buildConfig.topLevelBuild)
     {
@@ -2313,8 +2313,8 @@ void BvhBuilder::GetAccelerationStructurePrebuildInfo(
     // the build when performing the update causing page faults.
     scratchDataSize = Util::Max(scratchDataSize, updateDataSize);
 
-    // Some applications crash when the driver reports 0 scratch size. Use 1 instead.
-    scratchDataSize = Util::Max(1u, scratchDataSize);
+    // Some applications crash when the driver reports 0 scratch size. Use 1 DWORD instead.
+    scratchDataSize = Util::Max(static_cast<uint32>(sizeof(uint32)), scratchDataSize);
 
     prebuildInfo.scratchDataSizeInBytes       = scratchDataSize;
     prebuildInfo.updateScratchDataSizeInBytes = updateDataSize;

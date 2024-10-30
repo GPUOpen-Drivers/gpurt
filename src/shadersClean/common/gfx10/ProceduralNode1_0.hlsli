@@ -25,7 +25,7 @@
 #ifndef PROCEDURAL_NODE_1_1_HLSLI
 #define PROCEDURAL_NODE_1_1_HLSLI
 
-#include "../TempAssert.hlsli"
+#include "../../../shared/assert.h"
 
 //=====================================================================================================================
 #define USER_NODE_PROCEDURAL_MIN_OFFSET 0

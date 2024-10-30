@@ -31,7 +31,7 @@
 #ifndef _INDIRECTARGBUFFER_HLSL
 #define _INDIRECTARGBUFFER_HLSL
 
-#include "../shared/rayTracingDefs.h"
+#include "../shadersClean/common/ShaderDefs.hlsli"
 #include "BuildSettings.hlsli"
 
 //======================================================================================================================

@@ -24,7 +24,7 @@
  **********************************************************************************************************************/
 #define BUILD_PARALLEL 1
 
-#include "../shared/rayTracingDefs.h"
+#include "../shadersClean/common/ShaderDefs.hlsli"
 
 #define TASK_COUNTER_BUFFER   ScratchGlobal
 #define TASK_COUNTER_OFFSET   (ShaderConstants.offsets.taskLoopCounters + TASK_LOOP_BUILD_PARALLEL_COUNTER_OFFSET)

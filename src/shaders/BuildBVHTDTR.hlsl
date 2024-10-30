@@ -188,7 +188,7 @@ struct StateTDBuild
 #define USE_LDS     1
 
 //=====================================================================================================================
-#include "../shared/rayTracingDefs.h"
+#include "../shadersClean/common/ShaderDefs.hlsli"
 
 #define GC_DSTMETADATA
 #define GC_SCRATCHBUFFER

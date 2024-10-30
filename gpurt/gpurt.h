@@ -1471,12 +1471,20 @@ public:
     // @param pDispatchRaysConstants  (in/out) Non-null pointer to a DispatchRaysConstants
     // @param cpsMemoryGpuAddr        (in) GPU address pointing to the beginning of cps memory
     // @param cpsMemoryBytes          (in) Cps allocated memory size in bytes
-    //
-    // @return the required global memory allocation size in bytes
     virtual void PatchDispatchRaysConstants(
         DispatchRaysConstants* pDispatchRaysConstants,
         const gpusize          cpsMemoryGpuAddr,
         const gpusize          cpsMemoryBytes) = 0;
+
+    // Populates the GPU addresses in the InitExecuteIndirectConstants structure
+    //
+    // @param pInitExecuteIndirectConstants (in/out) Non-null pointer to a InitExecuteIndirectConstants
+    // @param cpsMemoryGpuAddr              (in) GPU address pointing to the beginning of cps memory
+    // @param cpsMemoryBytes                (in) Cps allocated memory size in bytes
+    virtual void PatchInitExecuteIndirectConstants(
+        GpuRt::InitExecuteIndirectConstants* pInitExecuteIndirectConstants,
+        const gpusize                        cpsMemoryGpuAddr,
+        const gpusize                        cpsMemoryBytes) = 0;
 
     //
     // @param cpsVideoMem          [in] Cps video memory
@@ -1629,6 +1637,8 @@ public:
 
     // Check if a build is a good candidate for ACE offload (typically barrier-free cases)
     virtual bool ShouldUseGangedAceForBuild(const AccelStructBuildInputs& inputs) const = 0;
+
+    virtual uint32 CalculateBvhPrimitiveCount(const AccelStructBuildInputs& inputs) const = 0;
 
 protected:
 

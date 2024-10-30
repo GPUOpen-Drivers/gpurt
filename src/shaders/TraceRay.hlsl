@@ -265,11 +265,17 @@ static bool TraceRayCommon(
     {
         if ((rayFlags & RAY_FLAG_SKIP_CLOSEST_HIT_SHADER) == 0)
         {
-            const uint instanceContribution = (result.instanceContribution & 0x00ffffff);
-            const HitGroupInfo hitInfo = GetHitGroupInfo(rayContributionToHitGroupIndex,
-                                                         multiplierForGeometryContributionToShaderIndex,
-                                                         result.geometryIndex,
-                                                         instanceContribution);
+            uint instanceContribution = 0;
+            HitGroupInfo hitInfo = (HitGroupInfo)0;
+
+            {
+                instanceContribution = (result.instanceContribution & 0x00ffffff);
+                hitInfo = GetHitGroupInfo(rayContributionToHitGroupIndex,
+                                          multiplierForGeometryContributionToShaderIndex,
+                                          result.geometryIndex,
+                                          instanceContribution);
+            }
+
             uint64_t instNodePtr64 = 0;
             {
                 instNodePtr64 = CalculateInstanceNodePtr64(rtIpLevel, accelStruct, result.instNodePtr);

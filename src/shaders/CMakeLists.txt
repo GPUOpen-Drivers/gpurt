@@ -59,7 +59,7 @@ set(gpurtHlsl
     CompactAS.hlsl
     CompactAS1_1.hlsl
     CompactCommon.hlsl
-    CopyAS.hlsl
+    ../shadersClean/build/CopyAS.hlsl
     ../shadersClean/build/CopyBufferRaw.hlsl
     DecodeAS.hlsl
     DecodeCommon.hlsl
@@ -129,7 +129,6 @@ set(otherDeps
     ../shadersClean/common/InstanceDesc.hlsli
     ../shadersClean/common/NodePointers.hlsli
     ../shadersClean/common/ScratchNode.hlsli
-    ../shadersClean/common/TempAssert.hlsli
     ../shadersClean/traversal/TraversalDefs.hlsli
     ../shadersClean/common/gfx10/BoxNode1_0.hlsli
     ../shadersClean/common/gfx10/InstanceNode1_0.hlsli

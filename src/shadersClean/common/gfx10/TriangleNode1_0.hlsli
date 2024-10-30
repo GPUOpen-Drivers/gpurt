@@ -25,7 +25,7 @@
 #ifndef TRIANGLE_NODE_1_0_HLSLI
 #define TRIANGLE_NODE_1_0_HLSLI
 
-#include "../TempAssert.hlsli"
+#include "../../../shared/assert.h"
 
 //=====================================================================================================================
 // Hardware triangle node format and offsets

@@ -27,10 +27,6 @@
 #ifndef _RAYTRACING_DEF_H
 #define _RAYTRACING_DEF_H
 
-#ifndef __cplusplus
-#include "../shadersClean/common/ShaderDefs.hlsli"
-#endif
-
 #include "../../gpurt/gpurtAccelStruct.h"
 #include "../../gpurt/gpurtBuildSettings.h"
 #include "../../gpurt/gpurtDispatch.h"

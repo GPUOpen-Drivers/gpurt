@@ -25,7 +25,7 @@
 #ifndef BOX_NODE_1_1_HLSLI
 #define BOX_NODE_1_1_HLSLI
 
-#include "../TempAssert.hlsli"
+#include "../../../shared/assert.h"
 
 //=====================================================================================================================
 // Hardware 32-bit box node format and offsets

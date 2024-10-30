@@ -37,7 +37,7 @@
 #define DUMMY_FLOAT2_FUNC { return float2(0, 0); }
 #define DUMMY_FLOAT3_FUNC { return float3(0, 0, 0); }
 
-#include "TempAssert.hlsli"
+#include "../../shared/assert.h"
 
 // TODO: there are functions that use values from these files, but really
 // those functions should be in these files, and then the files that use the functions
@@ -48,6 +48,8 @@
 #include "gfx10/BoxNode1_0.hlsli"
 #include "gfx10/InstanceNode1_0.hlsli"
 #include "NodePointers.hlsli"
+
+#include "../../shared/rayTracingDefs.h"
 
 #define SAH_COST_TRIANGLE_INTERSECTION       1.5
 #define SAH_COST_AABBB_INTERSECTION          1
@@ -473,14 +475,22 @@ enum RebraidType : uint
 //=====================================================================================================================
 struct TriangleData
 {
+#ifdef __cplusplus
+    TriangleData(uint val)
+    {
+        memset(this, val, sizeof(TriangleData));
+    }
+
+    TriangleData() : TriangleData(0)
+    {}
+#endif
     float3 v0; ///< Vertex 0
     float3 v1; ///< Vertex 1
     float3 v2; ///< Vertex 2
 };
 
 #ifndef LIBRARY_COMPILATION
-// This does not include RayTracingDefs.h as the goal is
-// to eventually have everything in this file alone
+
 #endif
 
 #endif

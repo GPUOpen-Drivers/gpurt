@@ -25,7 +25,7 @@
 #ifndef TRAVERSAL_DEFS_HLSLI
 #define TRAVERSAL_DEFS_HLSLI
 
-#include "../common/TempAssert.hlsli"
+#include "../../shared/assert.h"
 
 #define ENCODE_FLAG_ARRAY_OF_POINTERS          0x00000001
 #define ENCODE_FLAG_UPDATE_IN_PLACE            0x00000002
@@ -93,6 +93,15 @@ struct RaySystemData
 // Ray description matching the D3D12 HLSL header
 struct RayDesc
 {
+#ifdef __cplusplus
+    RayDesc(uint val)
+    {
+        memset(this, val, sizeof(RayDesc));
+    }
+
+    RayDesc() : RayDesc(0)
+    {}
+#endif
     float3 Origin;
     float TMin;
     float3 Direction;
