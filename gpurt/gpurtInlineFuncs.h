@@ -157,23 +157,6 @@ inline BufferViewFormat GetSingleComponentFormatForFormat(BufferViewFormat forma
 }
 
 //=====================================================================================================================
-// Converts the value of a Pal::HwPipePoint into a GpuRt::HwPipePoint without undefined behavior.
-inline HwPipePoint PalToGpuRtHwPipePoint(uint32 palHwPipePoint)
-{
-#define HWPIPEPOINTCASE(x) case static_cast<uint32>(HwPipePoint::x): return HwPipePoint::x
-    switch (palHwPipePoint)
-    {
-        HWPIPEPOINTCASE(HwPipeTop);
-        HWPIPEPOINTCASE(HwPipePreCs);
-        HWPIPEPOINTCASE(HwPipeBottom);
-        default:
-            PAL_ASSERT_ALWAYS_MSG("Unhandled HwPipePoint value in conversion: %u\n", palHwPipePoint);
-            return HwPipePoint::HwPipeTop;
-    }
-#undef HWPIPEPOINTCASE
-}
-
-//=====================================================================================================================
 // Return the number of components for a buffer view format when it's used as a vertex format.
 inline uint8 GetNumComponentsForVertexFormat(VertexFormat format)
 {

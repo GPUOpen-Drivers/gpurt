@@ -737,7 +737,7 @@ struct DeviceSettings
     uint32                      numRebraidIterations;
     uint32                      rebraidQualityHeuristic;
 
-    uint32                      plocRadius;                           // PLOC Radius
+    uint32                      plocRadius;                           // PLOC nearest neighbor search adius
     uint32                      maxTopDownBuildInstances;             // Max instances allowed for top down build
     uint32                      parallelBuildWavesPerSimd;            // Waves per SIMD to launch for parallel build
 

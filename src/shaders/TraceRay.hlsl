@@ -34,8 +34,11 @@ static IntersectionResult TraceRayInternal(
     in RayDesc           rayDesc,                 // Ray to be traced
     in uint              rayId,                   // Ray ID for profiling
     in uint              rtIpLevel                // HW version to determine TraceRay implementation
+#if DEVELOPER
+    , in uint            dynamicId                // dynamic ID
+#endif
 )
-#if GPURT_BUILD_CONTINUATION && GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
+#if GPURT_DEBUG_CONTINUATION_TRAVERSAL
 {
     return TraceRayInternalCPSDebug(topLevelBvh,
                                     rayFlags,
@@ -44,9 +47,12 @@ static IntersectionResult TraceRayInternal(
                                     rayId,
                                     rtIpLevel
 
+#if DEVELOPER
+                                    , dynamicId
+#endif
     );
 }
-#else // GPURT_BUILD_CONTINUATION && GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
+#else // GPURT_DEBUG_CONTINUATION_TRAVERSAL
 // Default path
 {
 #ifdef __cplusplus
@@ -116,6 +122,9 @@ static bool TraceRayCommon(
     uint  rtIpLevel
 )
 {
+#if GPURT_DEBUG_CONTINUATION_TRAVERSAL
+    uint oriRayFlags = rayFlags;
+#endif
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION  >= 41
     rayFlags = (rayFlags & ~AmdTraceRayGetKnownUnsetRayFlags()) | AmdTraceRayGetKnownSetRayFlags();
 #endif
@@ -188,11 +197,18 @@ static bool TraceRayCommon(
         {
             result = TraceRayInternal(
                 accelStruct,
+#if GPURT_DEBUG_CONTINUATION_TRAVERSAL
+                oriRayFlags,
+#else
                 rayFlags,
+#endif
                 packedTraceParams,
                 ray,
                 rayId,
                 rtIpLevel
+#if DEVELOPER
+              , dynamicId
+#endif
                 );
         }
         else
@@ -250,13 +266,13 @@ static bool TraceRayCommon(
         }
         AmdTraceRaySetParentId(dynamicId);
 
-        counter.data[TCID_NUM_RAY_BOX_TEST] = result.numRayBoxTest;
-        counter.data[TCID_NUM_RAY_TRIANGLE_TEST] = result.numRayTriangleTest;
-        counter.data[TCID_NUM_ITERATION] = result.numIterations;
-        counter.data[TCID_MAX_TRAVERSAL_DEPTH] = result.maxStackDepth;
-        counter.data[TCID_NUM_ANYHIT_INVOCATION] = result.numAnyHitInvocation;
-        counter.data[TCID_WAVE_ID] = AmdTraceRayGetHwWaveId();
-        counter.data[TCID_NUM_CANDIDATE_HITS] = result.numCandidateHits;
+        counter.data[TCID_NUM_RAY_BOX_TEST]       = result.numRayBoxTest;
+        counter.data[TCID_NUM_RAY_TRIANGLE_TEST]  = result.numRayTriangleTest;
+        counter.data[TCID_NUM_ITERATION]          = result.numIterations;
+        counter.data[TCID_MAX_TRAVERSAL_DEPTH]    = result.maxStackDepth;
+        counter.data[TCID_NUM_ANYHIT_INVOCATION]  = result.numAnyHitInvocation;
+        counter.data[TCID_WAVE_ID]                = AmdTraceRayGetHwWaveId();
+        counter.data[TCID_NUM_CANDIDATE_HITS]     = result.numCandidateHits;
         counter.data[TCID_INSTANCE_INTERSECTIONS] = result.instanceIntersections;
     }
 #endif

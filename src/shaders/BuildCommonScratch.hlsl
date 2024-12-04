@@ -683,6 +683,32 @@ bool IsLeafOrIsCollapsed(
 }
 
 //=====================================================================================================================
+uint GetMinimumNumOfTriangles()
+{
+    uint minNumOfTris = 2;
+    {
+        {
+            minNumOfTris = 0;
+        }
+    }
+
+    return minNumOfTris;
+}
+
+//=====================================================================================================================
+float GetTriangleIntersectionCost(uint numTris)
+{
+    float Ct;
+    {
+        {
+            Ct = SAH_COST_TRIANGLE_INTERSECTION * numTris;
+        }
+    }
+
+    return Ct;
+}
+
+//=====================================================================================================================
 void MergeScratchNodes(
     uint        scratchNodesOffset,
     uint        numBatchesScratchOffset,
@@ -724,18 +750,17 @@ void MergeScratchNodes(
         const uint numRight = FetchScratchNodeNumPrimitives(rightNode, IsLeafNode(rightNodeIndex, numActivePrims));
         const uint numTris = numLeft + numRight;
 
-        const float Ct =
-            SAH_COST_TRIANGLE_INTERSECTION;
-
         const float Ci = SAH_COST_AABBB_INTERSECTION;
 
         const float leftCost =
             IsLeafNode(leftNodeIndex, numActivePrims) ?
-                (Ct * ComputeBoxSurfaceArea(leftBounds)) : FetchScratchNodeCost(scratchNodesOffset, leftNodeIndex);
+                (GetTriangleIntersectionCost(numLeft) * ComputeBoxSurfaceArea(leftBounds)) :
+                FetchScratchNodeCost(scratchNodesOffset, leftNodeIndex);
 
         const float rightCost =
             IsLeafNode(rightNodeIndex, numActivePrims) ?
-                (Ct * ComputeBoxSurfaceArea(rightBounds)) : FetchScratchNodeCost(scratchNodesOffset, rightNodeIndex);
+                (GetTriangleIntersectionCost(numRight) * ComputeBoxSurfaceArea(rightBounds)) :
+                FetchScratchNodeCost(scratchNodesOffset, rightNodeIndex);
 
         const bool leftCollapse      = (leftNode.numPrimitivesAndDoCollapse & 0x1) ||
                                         IsLeafNode(leftNodeIndex, numActivePrims);
@@ -745,7 +770,7 @@ void MergeScratchNodes(
 
         float bestCost = leftCost + rightCost + Ci * mergedBoxSurfaceArea;
 
-        const float collapseCost = Ct * numTris;
+        const float collapseCost = GetTriangleIntersectionCost(numTris);
 
         const float splitCost    = Ci + leftCost / mergedBoxSurfaceArea + rightCost / mergedBoxSurfaceArea;
 

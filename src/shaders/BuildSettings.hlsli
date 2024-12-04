@@ -38,7 +38,7 @@
 [[vk::constant_id(BUILD_SETTINGS_DATA_RADIX_SORT_SCAN_LEVEL_ID)]]                  uint radixSortScanLevel            = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_EMIT_COMPACT_SIZE_ID)]]                      uint emitCompactSize               = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_BVH_BUILD_DEBUG_COUNTERS_ID)]]        uint enableBVHBuildDebugCounters   = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_PLOC_RADIUS_ID)]]                            uint plocRadius                    = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_NN_SEARCH_RADIUS_ID)]]                       uint nnSearchRadius                = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_PAIR_COST_CHECK_ID)]]                 uint enablePairCostCheck           = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_VARIABLE_BITS_MC_ID)]]                uint enableVariableBitsMortonCode  = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_REBRAID_TYPE_ID)]]                           uint rebraidType                   = 0;
@@ -73,7 +73,7 @@ static const CompileTimeBuildSettings Settings = {
     radixSortScanLevel,
     emitCompactSize,
     enableBVHBuildDebugCounters,
-    plocRadius,
+    nnSearchRadius,
     enablePairCostCheck,
     enableVariableBitsMortonCode,
     rebraidType,

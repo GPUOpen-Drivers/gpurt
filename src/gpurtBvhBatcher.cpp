@@ -104,7 +104,7 @@ void BvhBatcher::BuildAccelerationStructureBatch(
             // but otherwise do not participate in the rest of the build.
             if (isUpdate)
             {
-                builder.EmitPostBuildInfo();
+                builder.EmitPostBuildInfoDispatch();
             }
             else
             {
@@ -146,7 +146,11 @@ void BvhBatcher::BuildAccelerationStructureBatch(
     {
         RGP_PUSH_MARKER("Process Empty BVH builds");
         DispatchInitAccelerationStructure<false>(emptyBuilders);
-        BuildPhase(emptyBuilders, &BvhBuilder::EmitPostBuildInfo);
+        if (PhaseEnabled(BuildPhaseFlags::SeparateEmitPostBuildInfoPass))
+        {
+            Barrier();
+            BuildPhase(emptyBuilders, &BvhBuilder::EmitPostBuildInfoDispatch);
+        }
         RGP_POP_MARKER();
     }
 
@@ -264,16 +268,9 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
     {
         RGP_PUSH_MARKER("EmitPostBuildInfo");
         Barrier();
-        BuildPhase("Updates", updaters, &BvhBuilder::EmitPostBuildInfo);
-        BuildPhase("Builds", builders, &BvhBuilder::EmitPostBuildInfo);
-
+        BuildPhase(BuildPhaseFlags::SeparateEmitPostBuildInfoPass, updaters, &BvhBuilder::EmitPostBuildInfoDispatch);
+        BuildPhase(BuildPhaseFlags::SeparateEmitPostBuildInfoPass, builders, &BvhBuilder::EmitPostBuildInfoDispatch);
         RGP_POP_MARKER();
-    }
-    else
-    {
-        // Execute EmitPostBuildInfo without any RGP markers
-        BuildPhase(updaters, &BvhBuilder::EmitPostBuildInfo);
-        BuildPhase(builders, &BvhBuilder::EmitPostBuildInfo);
     }
 
     if (PhaseEnabled(BuildPhaseFlags::BuildDumpEvents))

@@ -71,7 +71,11 @@ public:
     }
 
     // Using this notification to do any preparation work that might be required before the trace begins.
+#if PAL_CLIENT_INTERFACE_MAJOR_VERSION >= 908
+    virtual void OnTraceAccepted(uint32 gpuIndex, Pal::ICmdBuffer* pCmdBuf) override
+#else
     virtual void OnTraceAccepted() override
+#endif
     {
     }
 
@@ -134,7 +138,11 @@ public:
     }
 
     // Using this notification to do any preparation work that might be required before the trace begins.
+#if PAL_CLIENT_INTERFACE_MAJOR_VERSION >= 908
+    virtual void OnTraceAccepted(uint32 gpuIndex, Pal::ICmdBuffer* pCmdBuf) override
+#else
     virtual void OnTraceAccepted() override
+#endif
     {
     }
 

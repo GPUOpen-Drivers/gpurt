@@ -279,25 +279,19 @@ uint WritePrimitiveNode(
     const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(geometryIndex, geometryFlags);
     const uint geometryPrimNodePtrsOffset = offsets.primNodePtrs + geometryInfo.primNodePtrsOffset;
 
-    const uint flattenedPrimIndex =
-        (geometryInfo.primNodePtrsOffset / sizeof(uint)) + scratchNode.left_or_primIndex_or_instIndex;
-
     uint numLeafsDone;
     ScratchGlobal.InterlockedAdd(ShaderConstants.offsets.qbvhGlobalStackPtrs + STACK_PTRS_NUM_LEAFS_DONE_OFFSET,
                                  1,
                                  numLeafsDone);
 
     {
-        uint destIndex;
-        if (IsTrianglePrimitiveBuild() &&
-            ((Settings.triangleCompressionMode != NO_TRIANGLE_COMPRESSION) || Settings.doTriangleSplitting))
-        {
-            destIndex = numLeafsDone;
-        }
-        else
-        {
-            destIndex = flattenedPrimIndex;
-        }
+        // Use 'numLeafsDone' as the destination index. This will pack all leaf nodes together
+        // without any holes (invalid nodes) in between.
+        // Note: Packing the triangle nodes this way causes the primNodePtrs to access the
+        // Triangle nodes in random order which results in perf drops of some Rayperf scenes
+        // when built/updated using 'asb'. Since 'asb' is a synthetic app, ignoring this perf drop
+        // for now, but need to revisit this change if any actual game/benchmark shows the perf. drop.
+        uint destIndex = numLeafsDone;
 
         const uint primitiveNodeSize = (nodeType == NODE_TYPE_USER_NODE_PROCEDURAL) ?
                                        USER_NODE_PROCEDURAL_SIZE :

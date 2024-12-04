@@ -121,7 +121,6 @@ public:
 
     virtual void WriteTimestamp(
         ClientCmdBufferHandle  cmdBuffer,
-        HwPipePoint            hwPipePoint,
         const Pal::IGpuMemory& timeStampVidMem,
         uint64                 offset
     ) const override;

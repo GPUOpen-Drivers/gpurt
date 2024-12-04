@@ -76,20 +76,12 @@ struct BufferViewInfo
 };
 
 // =====================================================================================================================
-// Copy of Pal::HwPipePoint with values we use.
-enum class HwPipePoint : uint32
-{
-    HwPipeTop    = 0x0,
-    HwPipePreCs  = 0x1,
-    HwPipeBottom = 0x7,
-};
-
-// =====================================================================================================================
 enum BarrierFlags : uint32
 {
     BarrierFlagSyncDispatch    = 0x1, // Stall the following dispatch until all previous dispatch done
     BarrierFlagSyncIndirectArg = 0x2, // Prepare previous shader output for indirect argument use
-    BarrierFlagSyncPostCpWrite = 0x4, // Prepare data set by CP for shader use
+    BarrierFlagSyncPreCpWrite  = 0x4, // Prepare for CP write
+    BarrierFlagSyncPostCpWrite = 0x8, // Prepare data set by CP for shader use
 };
 
 // =====================================================================================================================
@@ -185,7 +177,6 @@ public:
     // Will eventually replaced with a callback or other abstraction to avoid referencing video memory.
     virtual void WriteTimestamp(
         ClientCmdBufferHandle  cmdBuffer,
-        HwPipePoint            hwPipePoint,
         const Pal::IGpuMemory& timeStampVidMem,
         uint64                 offset) const = 0;
 

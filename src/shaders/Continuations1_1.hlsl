@@ -158,7 +158,7 @@ static _AmdTraversalState InitTraversalState1_1(
 
     uint schedulerState = TRAVERSAL_STATE_COMMITTED_NOTHING;
     traversal.committed.PackState(schedulerState);
-    traversal.committed.currNodePtr = INVALID_NODE;
+    traversal.committed.SetCurrNodePtr(INVALID_NODE);
 
     // Start traversing from root node
     traversal.reservedNodePtr         = INVALID_NODE;
@@ -173,7 +173,7 @@ static _AmdTraversalState InitTraversalState1_1(
     traversal.stackPtr = stack.Pack();
     traversal.PackStackPtrTop(INVALID_NODE);
 
-#if GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
+#if GPURT_DEBUG_CONTINUATION_TRAVERSAL
     traversal.committed.PackAnyHitCallType(0);
 #endif
 
@@ -354,7 +354,7 @@ static void TraversalInternal1_1(
                         candidate.PackInstanceContribution(instanceContributionToHitGroupIndex, hitKind);
                         candidate.PackGeometryIndex(primitiveData.geometryIndex);
                         candidate.PackIsOpaque(isOpaque);
-                        candidate.currNodePtr = nodePtr;
+                        candidate.SetCurrNodePtr(nodePtr);
 
                         bool hasAnyHit = false;
                         if ((rayForceOpaque == false) && (isOpaque == false))
@@ -416,9 +416,9 @@ static void TraversalInternal1_1(
                 candidate.PackGeometryIndex(primitiveData.geometryIndex);
                 candidate.PackIsOpaque(isOpaque);
                 candidate.PackInstanceContribution(instanceContributionToHitGroupIndex);
-                candidate.currNodePtr = nodePtr;
+                candidate.SetCurrNodePtr(nodePtr);
 
-#if GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
+#if GPURT_DEBUG_CONTINUATION_TRAVERSAL
                 uint anyHitCallType = rayForceOpaque ? ANYHIT_CALLTYPE_SKIP : ANYHIT_CALLTYPE_DUPLICATE;
                 const bool noDuplicateAnyHit = (geometryFlags & D3D12_RAYTRACING_GEOMETRY_FLAG_NO_DUPLICATE_ANYHIT_INVOCATION);
                 anyHitCallType = noDuplicateAnyHit ? ANYHIT_CALLTYPE_NO_DUPLICATE : anyHitCallType;

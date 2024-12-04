@@ -224,7 +224,7 @@ TriangleData FetchTransformedTriangleData(
 //======================================================================================================================
 bool IsActive(TriangleData tri)
 {
-    return ((isnan(tri.v0.x) == false) && (isnan(tri.v1.x) == false) && (isnan(tri.v2.x) == false));
+    return (any(isnan(tri.v0)) == false) && (any(isnan(tri.v1)) == false) && (any(isnan(tri.v2)) == false);
 }
 
 //=====================================================================================================================

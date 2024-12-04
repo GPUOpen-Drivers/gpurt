@@ -115,8 +115,14 @@ struct EncodeTaskCountersCommon
 };
 
 //=====================================================================================================================
-struct EncodeTaskCountersBuild : EncodeTaskCountersCommon
+// There is DXC bug that doesn't properly compile HLSL->SPRIV using structure inheritance.
+// Once it is fixed, EncodeTaskCountersBuild, EncodeTaskCountersUpdate can inherit from EncodeTaskCountersCommon
+// https://github.com/microsoft/DirectXShaderCompiler/issues/6986
+struct EncodeTaskCountersBuild
 {
+    uint numPrimitives;
+    uint primRefs;
+
     // The following indirect arguments are only used in mult-dispatch path. Note, currently only HPLOC dispatch uses
     // these, but it will be extended to other passes when early pair compression is enabled.
     uint groupCountX;
@@ -135,8 +141,10 @@ static_assert(ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET == offsetof(EncodeTaskCounter
 
 //=====================================================================================================================
 // Update scratch memory fields
-struct EncodeTaskCountersUpdate : EncodeTaskCountersCommon
+struct EncodeTaskCountersUpdate
 {
+    uint numPrimitives;
+    uint primRefs;
     uint refitTaskCounter;
     uint taskCount;
     uint tasksDone;

@@ -62,7 +62,7 @@ struct CompileTimeBuildSettings
     uint32 radixSortScanLevel;
     uint32 emitCompactSize;
     uint32 enableBVHBuildDebugCounters;
-    uint32 plocRadius;
+    uint32 nnSearchRadius;
     uint32 enablePairCostCheck;
     uint32 enableVariableBitsMortonCode;
     uint32 rebraidType;
@@ -112,7 +112,7 @@ struct CompileTimeBuildSettings
 #define BUILD_SETTINGS_DATA_RADIX_SORT_SCAN_LEVEL_ID                  7
 #define BUILD_SETTINGS_DATA_EMIT_COMPACT_SIZE_ID                      8
 #define BUILD_SETTINGS_DATA_ENABLE_BVH_BUILD_DEBUG_COUNTERS_ID        9
-#define BUILD_SETTINGS_DATA_PLOC_RADIUS_ID                            10
+#define BUILD_SETTINGS_DATA_NN_SEARCH_RADIUS_ID                       10
 #define BUILD_SETTINGS_DATA_ENABLE_PAIR_COST_CHECK_ID                 11
 #define BUILD_SETTINGS_DATA_ENABLE_VARIABLE_BITS_MC_ID                12
 #define BUILD_SETTINGS_DATA_REBRAID_TYPE_ID                           13

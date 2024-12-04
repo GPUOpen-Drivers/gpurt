@@ -98,11 +98,7 @@ static bool RayQueryProceedCommon(
     {
         if (continueTraversal == false)
         {
-#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 42
-            const uint rayId = AmdExtDispatchThreadIdFlat();
-#else
             const uint rayId = GetRayId(dispatchThreadId);
-#endif
             WriteDispatchCounters(rayQuery.numIterations);
             WriteTraversalCounter(rayQuery, rayId);
 

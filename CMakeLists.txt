@@ -99,6 +99,11 @@ option(GPURT_BUILD_CONTINUATION "GpuRt uses continuation traversal" ON)
 if (GPURT_BUILD_CONTINUATION)
     gpurt_add_compile_definitions(GPURT_BUILD_CONTINUATION=1)
 endif()
+
+cmake_dependent_option(GPURT_DEBUG_CONTINUATION_TRAVERSAL "Debug continuation traversal on legacy indirect path" OFF "GPURT_BUILD_CONTINUATION" OFF)
+if (GPURT_DEBUG_CONTINUATION_TRAVERSAL)
+    gpurt_add_compile_definitions(GPURT_DEBUG_CONTINUATION_TRAVERSAL=1)
+endif()
 #endif
 
 # Disable run time type information

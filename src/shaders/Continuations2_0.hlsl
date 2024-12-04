@@ -43,7 +43,7 @@ static _AmdTraversalState InitTraversalState2_0(
 
     uint schedulerState = TRAVERSAL_STATE_COMMITTED_NOTHING;
     traversal.committed.PackState(schedulerState);
-    traversal.committed.currNodePtr = INVALID_NODE;
+    traversal.committed.SetCurrNodePtr(INVALID_NODE);
 
     // Start traversing from root node
     traversal.reservedNodePtr         = INVALID_NODE;
@@ -58,7 +58,7 @@ static _AmdTraversalState InitTraversalState2_0(
 
     traversal.PackStackPtrTop(0);
 
-#if GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
+#if GPURT_DEBUG_CONTINUATION_TRAVERSAL
     traversal.committed.PackAnyHitCallType(0);
 #endif
 
@@ -72,14 +72,8 @@ static void TraversalInternal2_0(
     inout_param(_AmdPrimitiveSystemState) candidate,
     inout_param(float2) candidateBarycentrics)
 {
-    uint rayFlags = data.ray.Flags();
-
-    uint boxHeuristicMode = AmdTraceRayGetBoxSortHeuristicMode();
-    if ((boxHeuristicMode == BoxSortHeuristic::LargestFirstOrClosest) ||
-        (boxHeuristicMode == BoxSortHeuristic::LargestFirstOrClosestMidPoint))
-    {
-        boxHeuristicMode = GetBoxSortingHeuristicFromRayFlags(rayFlags, boxHeuristicMode);
-    }
+    const uint rayFlags         = data.ray.Flags();
+    const uint boxHeuristicMode = GetBoxHeuristicMode();
 
     // Root bvh address for reuse
     const GpuVirtualAddress topBvhAddress = data.ray.AccelStruct();
@@ -322,7 +316,8 @@ static void TraversalInternal2_0(
                     committed.PackInstanceContribution(instanceContributionToHitGroupIndex, hitKind);
                     committed.PackGeometryIndex(primitiveData.geometryIndex,
                         TRAVERSAL_STATE_COMMITTED_TRIANGLE_HIT, false);
-                    committed.currNodePtr    = nodePtr;
+                    committed.SetCurrNodePtr(nodePtr);
+
                     state = TRAVERSAL_STATE_COMMITTED_TRIANGLE_HIT;
 
                     // Exit traversal early if ray flags indicate end search after first hit
@@ -357,7 +352,8 @@ static void TraversalInternal2_0(
                     candidate.PackGeometryIndex(primitiveData.geometryIndex,
                     // This #ifdef is required until the legacy GPURT_RTIP_LEVEL == 0 lib has been removed:
                         TRAVERSAL_STATE_COMMITTED_TRIANGLE_HIT, isOpaque);
-                    candidate.currNodePtr    = nodePtr;
+                    candidate.SetCurrNodePtr(nodePtr);
+
                     if (Options::getCpsCandidatePrimitiveMode() == CpsCandidatePrimitiveMode::DeferFirst)
                     {
                         haveCandidate = true;
@@ -412,10 +408,10 @@ static void TraversalInternal2_0(
                 candidate.PackGeometryIndex(primitiveData.geometryIndex);
                 candidate.PackIsOpaque(isOpaque);
                 candidate.PackInstanceContribution(instanceContributionToHitGroupIndex);
-                candidate.currNodePtr = nodePtr;
+                candidate.SetCurrNodePtr(nodePtr);
                 candidate.instNodePtr = data.traversal.instNodePtr;
 
-#if GPURT_DEBUG_CONTINUATION_TRAVERSAL_RTIP
+#if GPURT_DEBUG_CONTINUATION_TRAVERSAL
                 // Determine anyHit shader call type
                 uint anyHitCallType = rayForceOpaque ? ANYHIT_CALLTYPE_SKIP : ANYHIT_CALLTYPE_DUPLICATE;
 

@@ -1462,6 +1462,31 @@ void BvhBuilder::InitBuildConfig(
 #endif
         ;
 
+    // The builder supports one compacted size emit during the build itself. Additional postbuild info requires
+    // extra dispatches or CP writes.
+    uint32 emitCompactCount = 0;
+    for (uint32 i = 0; i < m_buildArgs.postBuildInfoDescCount; ++i)
+    {
+        AccelStructPostBuildInfo args = m_clientCb.pfnConvertAccelStructPostBuildInfo(m_buildArgs, i);
+        if (args.desc.infoType == AccelStructPostBuildInfoType::CompactedSize)
+        {
+            // Cache emit destination GPU VA for inlined emit from build shaders
+            m_emitCompactDstGpuVa = args.desc.postBuildBufferAddr.gpu;
+            emitCompactCount++;
+        }
+        else
+        {
+            m_buildConfig.nonInlinePostBuildEmits = true;
+        }
+    }
+
+    // If maxNumPrimitives == 0, we never execute a BVH build, so we always need a separate emit pass.
+    if ((emitCompactCount > 1) || (m_buildConfig.maxNumPrimitives == 0))
+    {
+        m_emitCompactDstGpuVa = 0;
+        m_buildConfig.nonInlinePostBuildEmits = true;
+        m_buildConfig.enableEmitCompactSizeDispatch = true;
+    }
 }
 
 // =====================================================================================================================
@@ -2194,7 +2219,10 @@ void BvhBuilder::InitBuildSettings()
                                                    static_cast<uint32>(m_buildConfig.fp16BoxNodesInBlasMode);
     m_buildSettings.fp16BoxModeMixedSaThreshold  = m_deviceSettings.fp16BoxModeMixedSaThresh;
     m_buildSettings.enableBVHBuildDebugCounters  = m_deviceSettings.enableBVHBuildDebugCounters;
-    m_buildSettings.plocRadius                   = m_deviceSettings.plocRadius;
+    if (buildMode == BvhBuildMode::PLOC)
+    {
+        m_buildSettings.nnSearchRadius = m_deviceSettings.plocRadius;
+    }
     m_buildSettings.enablePairCostCheck          = m_deviceSettings.enablePairCompressionCostCheck;
     m_buildSettings.enableVariableBitsMortonCode = m_deviceSettings.enableVariableBitsMortonCodes;
 
@@ -2222,24 +2250,7 @@ void BvhBuilder::InitBuildSettings()
 
     m_buildSettings.rtIpLevel = static_cast<uint32>(m_pDevice->GetRtIpLevel());
 
-    uint32 emitBufferCount = 0;
-    for (uint32 i = 0; i < m_buildArgs.postBuildInfoDescCount; ++i)
-    {
-        AccelStructPostBuildInfo args = m_clientCb.pfnConvertAccelStructPostBuildInfo(m_buildArgs, i);
-        if (args.desc.infoType == AccelStructPostBuildInfoType::CompactedSize)
-        {
-            // Cache emit destination GPU VA for inlined emit from build shaders
-            m_emitCompactDstGpuVa = args.desc.postBuildBufferAddr.gpu;
-            emitBufferCount++;
-        }
-    }
-
-    if (emitBufferCount == 1)
-    {
-        // We only support one compacted emit size from the build shaders. If we have more than one emit
-        // destination buffers, we use the compute shader path
-        m_buildSettings.emitCompactSize = 1;
-    }
+    m_buildSettings.emitCompactSize = (m_emitCompactDstGpuVa != 0);
 
     m_buildSettings.doEncode = (m_buildConfig.needEncodeDispatch == false);
 
@@ -2313,8 +2324,10 @@ void BvhBuilder::GetAccelerationStructurePrebuildInfo(
     // the build when performing the update causing page faults.
     scratchDataSize = Util::Max(scratchDataSize, updateDataSize);
 
-    // Some applications crash when the driver reports 0 scratch size. Use 1 DWORD instead.
-    scratchDataSize = Util::Max(static_cast<uint32>(sizeof(uint32)), scratchDataSize);
+    // Some applications crash when the driver reports 0 scratch size.
+    // Additionally, the d3d12 debug layer does not like a scratch buffer
+    // that's only 4 bytes, so we pass back 8 bytes instead.
+    scratchDataSize = Util::Max(static_cast<uint32>(sizeof(uint64)), scratchDataSize);
 
     prebuildInfo.scratchDataSizeInBytes       = scratchDataSize;
     prebuildInfo.updateScratchDataSizeInBytes = updateDataSize;
@@ -2432,7 +2445,7 @@ void BvhBuilder::BuildRaytracingAccelerationStructure()
 
     if (m_buildArgs.postBuildInfoDescCount > 0)
     {
-        if (NeedsPostBuildEmitPass())
+        if (m_buildConfig.enableEmitCompactSizeDispatch)
         {
             // Make sure build is complete before emitting
             Barrier();
@@ -2513,7 +2526,6 @@ void BvhBuilder::PreBuildDumpEvents()
         if (result == Pal::Result::Success)
         {
             m_backend.WriteTimestamp(m_cmdBuffer,
-                                     HwPipePoint::HwPipeBottom,
                                      *m_dumpInfo.pTimeStampVidMem,
                                      m_dumpInfo.timeStampVidMemoffset);
         }
@@ -2530,7 +2542,6 @@ void BvhBuilder::PostBuildDumpEvents()
         if (m_dumpInfo.pTimeStampVidMem != nullptr)
         {
             m_backend.WriteTimestamp(m_cmdBuffer,
-                                     HwPipePoint::HwPipeBottom,
                                      *m_dumpInfo.pTimeStampVidMem,
                                      m_dumpInfo.timeStampVidMemoffset + sizeof(uint64));
         }
@@ -2739,23 +2750,17 @@ void BvhBuilder::EncodePrimitives()
 // Handles writing any requested postbuild information.
 void BvhBuilder::EmitPostBuildInfo()
 {
-    if (m_buildArgs.postBuildInfoDescCount == 0)
-    {
-        return;
-    }
-
     const uint32 resultDataSize = m_resultBufferInfo.dataSize;
 
     const bool isBottomLevel = (m_buildArgs.inputs.type == AccelStructType::BottomLevel);
-    const bool useSeparateEmitPass = NeedsPostBuildEmitPass();
+
     for (uint32 i = 0; i < m_buildArgs.postBuildInfoDescCount; i++)
     {
         const AccelStructPostBuildInfo args = m_clientCb.pfnConvertAccelStructPostBuildInfo(m_buildArgs, i);
         switch (args.desc.infoType)
         {
         case AccelStructPostBuildInfoType::CompactedSize:
-            // If maxNumPrimitives == 0, we never execute a BVH build, so we always need a separateEmitPass
-            if (useSeparateEmitPass || (m_buildConfig.maxNumPrimitives == 0))
+            if (m_buildConfig.enableEmitCompactSizeDispatch)
             {
                 EmitAccelerationStructurePostBuildInfo(args);
             }
@@ -2804,6 +2809,22 @@ void BvhBuilder::EmitPostBuildInfo()
         default:
             PAL_ASSERT_ALWAYS();
             break;
+        }
+    }
+}
+
+// =====================================================================================================================
+// Handles writing any requested postbuild information via dispatch (not CP writes).
+void BvhBuilder::EmitPostBuildInfoDispatch()
+{
+    for (uint32 i = 0; i < m_buildArgs.postBuildInfoDescCount; i++)
+    {
+        const AccelStructPostBuildInfo args = m_clientCb.pfnConvertAccelStructPostBuildInfo(m_buildArgs, i);
+
+        if ((args.desc.infoType != AccelStructPostBuildInfoType::CompactedSize) ||
+            m_buildConfig.enableEmitCompactSizeDispatch)
+        {
+            EmitAccelerationStructurePostBuildInfo(args);
         }
     }
 }
@@ -3137,6 +3158,7 @@ void BvhBuilder::CopyASDeserializeMode(
     };
 
     // Reset the task counter in destination buffer.
+    Barrier(BarrierFlagSyncPreCpWrite);
     ResetTaskCounter(copyArgs.dstAccelStructAddr.gpu);
     Barrier(BarrierFlagSyncPostCpWrite);
 
@@ -3195,7 +3217,7 @@ BuildPhaseFlags BvhBuilder::EnabledPhases() const
 {
     BuildPhaseFlags flags{};
 
-    if (NeedsPostBuildEmitPass())
+    if (m_buildConfig.nonInlinePostBuildEmits)
     {
         flags |= BuildPhaseFlags::SeparateEmitPostBuildInfoPass;
     }
@@ -3449,15 +3471,6 @@ bool BvhBuilder::AllowLatePairCompression() const
     const bool enableLatePairCompression = (m_buildConfig.triangleCompressionMode == TriangleCompressionMode::Pair) &&
                                            (m_buildConfig.enableEarlyPairCompression == false);
     return enableLatePairCompression;
-}
-
-// =====================================================================================================================
-// Returns true when the builder will require a separate dispatch for emitting build info
-bool BvhBuilder::NeedsPostBuildEmitPass() const
-{
-    const bool usesSeparateEmitPass = (m_buildArgs.postBuildInfoDescCount == 0) &&
-                                      (m_emitCompactDstGpuVa != 0) && (m_buildSettings.emitCompactSize == 0);
-    return usesSeparateEmitPass;
 }
 
 // =====================================================================================================================

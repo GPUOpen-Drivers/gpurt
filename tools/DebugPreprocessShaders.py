@@ -29,7 +29,7 @@ import re
 import argparse
 
 cpp_file_header = """
-/* Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved. */
+/* Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved. */
 
 namespace GpuRt
 {

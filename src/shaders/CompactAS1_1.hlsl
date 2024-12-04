@@ -391,40 +391,51 @@ void CompactASImpl1_1(
         // Copy leaf nodes
         if (type == TOP_LEVEL)
         {
-            for (uint nodeIndex = globalId; nodeIndex < srcHeader.numLeafNodes; nodeIndex += ShaderConstants.numThreads)
+            // Need to loop over all the prims, not just numLeafNodes.
+            for (uint nodeIndex = globalId; nodeIndex < srcHeader.numPrimitives; nodeIndex += ShaderConstants.numThreads)
             {
-                const uint nodeOffset
-                    = nodeIndex * GetBvhNodeSizeLeaf(PrimitiveType::Instance, Settings.enableFusedInstanceNode);
-                const uint srcNodeDataOffset  = srcOffsetDataLeafNodes + nodeOffset;
-                const uint dstNodeDataOffset  = dstOffsetDataLeafNodes + nodeOffset;
+                // Since there could be invalid instance nodes, we need to skip over them. Invalid instance nodes
+                // will have corresponding prim node pointers as -1. So check for this and skip the node if invalid.
+                // Note: We don't need to skip invalid nodes for BLASs because their leaf nodes will be packed one
+                // after another, ie: no holes -> no invalid nodes.
+                const uint primNodePtrOffset = srcOffsetDataPrimNodePtrs + (nodeIndex * NODE_PTR_SIZE);
 
-                // Copy instance node
-                // Note, fused instance nodes are twice the size of normal instance nodes. We need to copy it correspondingly.
-                if (Settings.enableFusedInstanceNode)
+                if (SrcBuffer.Load(primNodePtrOffset) != INVALID_IDX)
                 {
-                    const FusedInstanceNode node = SrcBuffer.Load<FusedInstanceNode>(srcNodeDataOffset);
-                    DstMetadata.Store<FusedInstanceNode>(dstNodeDataOffset, node);
+                    const uint nodeOffset
+                        = nodeIndex * GetBvhNodeSizeLeaf(PrimitiveType::Instance, Settings.enableFusedInstanceNode);
+                    const uint srcNodeDataOffset = srcOffsetDataLeafNodes + nodeOffset;
+                    const uint dstNodeDataOffset = dstOffsetDataLeafNodes + nodeOffset;
+
+                    // Copy instance node
+                    // Note, fused instance nodes are twice the size of normal instance nodes. We need to copy it correspondingly.
+                    if (Settings.enableFusedInstanceNode)
+                    {
+                        const FusedInstanceNode node = SrcBuffer.Load<FusedInstanceNode>(srcNodeDataOffset);
+                        DstMetadata.Store<FusedInstanceNode>(dstNodeDataOffset, node);
+                    }
+                    else
+                    {
+                        const InstanceNode node = SrcBuffer.Load<InstanceNode>(srcNodeDataOffset);
+                        DstMetadata.Store<InstanceNode>(dstNodeDataOffset, node);
+                    }
+
+                    // Top level acceleration structures do not have geometry info.
+
+                    const uint srcNodePointer = PackNodePointer(NODE_TYPE_USER_NODE_INSTANCE, srcOffsets.leafNodes + nodeOffset);
+                    const uint dstNodePointer = PackNodePointer(NODE_TYPE_USER_NODE_INSTANCE, dstOffsets.leafNodes + nodeOffset);
+
+                    // Update the parent pointer and fix up the child pointer in the parent node
+                    UpdateParentPointerAndChildPointer(srcMetadataSizeInBytes,
+                                                       srcNodePointer,
+                                                       dstMetadataSizeInBytes,
+                                                       dstNodePointer);
                 }
-                else
-                {
-                    const InstanceNode node = SrcBuffer.Load<InstanceNode>(srcNodeDataOffset);
-                    DstMetadata.Store<InstanceNode>(dstNodeDataOffset, node);
-                }
-
-                // Top level acceleration structures do not have geometry info.
-
-                const uint srcNodePointer = PackNodePointer(NODE_TYPE_USER_NODE_INSTANCE, srcOffsets.leafNodes + nodeOffset);
-                const uint dstNodePointer = PackNodePointer(NODE_TYPE_USER_NODE_INSTANCE, dstOffsets.leafNodes + nodeOffset);
-
-                // Update the parent pointer and fix up the child pointer in the parent node
-                UpdateParentPointerAndChildPointer(srcMetadataSizeInBytes,
-                                                   srcNodePointer,
-                                                   dstMetadataSizeInBytes,
-                                                   dstNodePointer);
             }
         }
         else if (srcHeader.geometryType == GEOMETRY_TYPE_TRIANGLES)
         {
+            // Unlike TOP_LEVEL, this assumes that all leaf nodes are packed contiguously without any holes in between.
             for (uint nodeIndex = globalId; nodeIndex < srcHeader.numLeafNodes; nodeIndex += ShaderConstants.numThreads)
             {
                 const uint nodeOffset         = (nodeIndex * sizeof(TriangleNode));

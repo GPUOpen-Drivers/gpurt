@@ -224,6 +224,8 @@ private:
         bool                            enableMergeSort;
         bool                            enableInstanceRebraid;
         bool                            rebuildAccelStruct;
+        bool                            enableEmitCompactSizeDispatch;
+        bool                            nonInlinePostBuildEmits;
     };
 
     BvhBuilder(
@@ -321,6 +323,7 @@ private:
     void UpdateAccelerationStructure();
 
     void EmitPostBuildInfo();
+    void EmitPostBuildInfoDispatch();
 
     void EncodeUpdate();
 
@@ -413,7 +416,6 @@ private:
     // Optional phase checks
     bool AllowRebraid() const;
     bool AllowLatePairCompression() const;
-    bool NeedsPostBuildEmitPass() const;
     bool HasBuildDumpEvents() const;
 
     // Helper functions

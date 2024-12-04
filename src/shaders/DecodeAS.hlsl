@@ -170,7 +170,7 @@ void DecodeAS(in uint3 globalThreadId : SV_DispatchThreadID)
             }
             else // GEOMETRY_TYPE_AABBS
             {
-                DstBuffer.Store(dstGeometryDescOffset + GEOMETRY_DESC_AABB_COUNT_OFFSET, geometryNumPrimitives);
+                DstBuffer.Store<uint64_t>(dstGeometryDescOffset + GEOMETRY_DESC_AABB_COUNT_OFFSET, geometryNumPrimitives);
                 DstBuffer.Store4(dstGeometryDescOffset + GEOMETRY_DESC_AABBS_OFFSET,
                                  uint4(addressLo, addressHi, DECODE_PRIMITIVE_STRIDE_AABB, 0));
             }

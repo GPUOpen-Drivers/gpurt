@@ -29,25 +29,6 @@ namespace GpuRt
 {
 
 // =====================================================================================================================
-// GPURT to PAL enum conversions without undefined behavior.
-static Pal::HwPipePoint GpuRtToPalHwPipePoint(
-    HwPipePoint gpurtHwPipePoint)
-{
-#define HWPIPEPOINTCASE(x) case static_cast<uint32>(Pal::HwPipePoint::x): return Pal::HwPipePoint::x
-    switch (static_cast<uint32>(gpurtHwPipePoint))
-    {
-        HWPIPEPOINTCASE(HwPipeTop);
-        HWPIPEPOINTCASE(HwPipePreCs);
-        HWPIPEPOINTCASE(HwPipeBottom);
-        default:
-            PAL_ASSERT_ALWAYS_MSG("Unhandled HwPipePoint value in conversion: %u\n",
-                                  static_cast<uint32>(gpurtHwPipePoint));
-            return Pal::HwPipePoint::HwPipeTop;
-    }
-#undef HWPIPEPOINTCASE
-}
-
-// =====================================================================================================================
 static Pal::ImmediateDataWidth GpuRtToPalImmediateDataWidth(
     ImmediateDataWidth gpurtImmediateDataWidth)
 {
@@ -132,7 +113,11 @@ void PalBackend::Dispatch(
     uint32                z
     ) const
 {
+#if PAL_INTERFACE_MAJOR_VERSION >= 909
+    GetCmdBuffer(cmdBuffer)->CmdDispatch({ x, y, z }, {});
+#else
     GetCmdBuffer(cmdBuffer)->CmdDispatch({ x, y, z });
+#endif
 }
 
 // =====================================================================================================================
@@ -238,6 +223,7 @@ void PalBackend::InsertBarrier(
 {
     const bool syncDispatch     = flags & BarrierFlagSyncDispatch;
     const bool syncIndirectArgs = flags & BarrierFlagSyncIndirectArg;
+    const bool syncPreCpWrite   = flags & BarrierFlagSyncPreCpWrite;
     const bool syncPostCpWrite  = flags & BarrierFlagSyncPostCpWrite;
 
     Pal::ICmdBuffer* pCmdBuffer = GetCmdBuffer(cmdBuffer);
@@ -247,8 +233,16 @@ void PalBackend::InsertBarrier(
 
     if (syncDispatch || syncIndirectArgs)
     {
-        memoryBarrier.srcStageMask  = Pal::PipelineStageCs;
-        memoryBarrier.srcAccessMask = Pal::CoherShader;
+        memoryBarrier.srcStageMask  |= Pal::PipelineStageCs;
+        memoryBarrier.srcAccessMask |= Pal::CoherShader;
+    }
+
+    if (syncPreCpWrite)
+    {
+        memoryBarrier.srcStageMask  |= Pal::PipelineStagePostPrefetch;
+        memoryBarrier.srcAccessMask |= Pal::CoherShader;
+        memoryBarrier.dstStageMask  |= Pal::PipelineStagePostPrefetch;
+        memoryBarrier.dstAccessMask |= Pal::CoherCp;
     }
 
     if (syncPostCpWrite)
@@ -359,12 +353,11 @@ void PalBackend::UpdateMemory(
 // =====================================================================================================================
 void PalBackend::WriteTimestamp(
     ClientCmdBufferHandle  cmdBuffer,
-    HwPipePoint            hwPipePoint,
     const Pal::IGpuMemory& timeStampVidMem,
     uint64                 offset
     ) const
 {
-    GetCmdBuffer(cmdBuffer)->CmdWriteTimestamp(GpuRtToPalHwPipePoint(hwPipePoint), timeStampVidMem, offset);
+    GetCmdBuffer(cmdBuffer)->CmdWriteTimestamp(Pal::PipelineStageBottomOfPipe, timeStampVidMem, offset);
 }
 
 // =====================================================================================================================

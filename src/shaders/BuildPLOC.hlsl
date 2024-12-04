@@ -882,7 +882,7 @@ void BuildPLOC(
     plocArgs.baseBatchIndicesScratchOffset  = ShaderConstants.offsets.batchIndices;
     plocArgs.fp16BoxNodesInBlasMode         = Settings.fp16BoxNodesMode;
     plocArgs.fp16BoxModeMixedSaThresh       = Settings.fp16BoxModeMixedSaThreshold;
-    plocArgs.plocRadius                     = Settings.plocRadius;
+    plocArgs.plocRadius                     = Settings.nnSearchRadius;
     plocArgs.splitBoxesByteOffset           = ShaderConstants.offsets.triangleSplitBoxes;
     plocArgs.primIndicesSortedScratchOffset = ShaderConstants.offsets.primIndicesSorted;
     plocArgs.unsortedBvhLeafNodesOffset     = ShaderConstants.offsets.bvhLeafNodeData;

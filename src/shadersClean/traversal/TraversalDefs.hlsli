@@ -160,6 +160,15 @@ struct RayQueryInternal
 //=====================================================================================================================
 struct HitGroupInfo
 {
+#ifdef __cplusplus
+    HitGroupInfo(uint val)
+    {
+        memset(this, val, sizeof(HitGroupInfo));
+    }
+
+    HitGroupInfo() : HitGroupInfo(0)
+    {}
+#endif
     uint2 closestHitId;
     uint2 anyHitId;
     uint2 intersectionId;

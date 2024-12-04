@@ -33,6 +33,39 @@
 #include "TraceRayCommon.hlsl"
 #include "AccelStructTracker.hlsl"
 
+#ifdef __cplusplus
+extern uint g_rtIpLevel;          // defined in cputraversal
+void _AmdSetRtip(uint rtIpLevel); // defined in cputraversal
+#endif
+
+// Only the default path (Continuation) provides _AmdGetRtip().
+static RayTracingIpLevel GetRtIpLevel()
+{
+#ifdef __cplusplus
+    switch (g_rtIpLevel)
+    {
+    case GPURT_RTIP1_1:
+        return RayTracingIpLevel::RtIp1_1;
+    case GPURT_RTIP2_0:
+        return RayTracingIpLevel::RtIp2_0;
+    default:
+        // Should never be called
+        GPU_ASSERT(false);
+        return RayTracingIpLevel::_None;
+    }
+#else // __cplusplus
+#if GPURT_DEBUG_CONTINUATION_TRAVERSAL
+    if (GPURT_RTIP_LEVEL == (uint)RayTracingIpLevel::_None)
+    {
+        return RayTracingIpLevel::_None;
+    }
+    return RayTracingIpLevel::RtIp2_0; //default to ip 2.0
+#else // GPURT_DEBUG_CONTINUATION_TRAVERSAL
+    return _AmdGetRtip(); // Continuation path
+#endif
+#endif
+}
+
 #if GPURT_BUILD_CONTINUATION && LLPC_CLIENT_INTERFACE_MAJOR_VERSION
 // Include the continuations library
 #include "GpuRtLibraryCont.hlsl"
@@ -294,8 +327,13 @@ export void TraceRayInline2_0(
 export uint GetInstanceID(
     in uint64_t instanceNodePtr) // 64-bit instance node address
 {
-    const uint instanceIdAndMask = LoadDwordAtAddr(instanceNodePtr + INSTANCE_DESC_ID_AND_MASK_OFFSET);
-    return (instanceIdAndMask & 0x00ffffff);
+    uint instanceId = 0;
+    if (instanceNodePtr != 0)
+    {
+        const uint instanceIdAndMask = LoadDwordAtAddr(instanceNodePtr + INSTANCE_DESC_ID_AND_MASK_OFFSET);
+        instanceId = (instanceIdAndMask & 0x00ffffff);
+    }
+    return instanceId;
 }
 
 //=====================================================================================================================
@@ -303,7 +341,13 @@ export uint GetInstanceID(
 export uint GetInstanceIndex(
     in uint64_t instanceNodePtr) // 64-bit instance node address
 {
-    return LoadDwordAtAddr(instanceNodePtr + sizeof(InstanceDesc) + RTIP1_1_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET);
+    uint instanceIndex = 0;
+    if (instanceNodePtr != 0)
+    {
+        instanceIndex = LoadDwordAtAddr(instanceNodePtr + sizeof(InstanceDesc) +
+                                        RTIP1_1_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET);
+    }
+    return instanceIndex;
 }
 
 //=====================================================================================================================
@@ -313,11 +357,16 @@ export float GetObjectToWorldTransform(
     in uint32_t row,             // row index
     in uint32_t col)             // column index
 {
-    const uint32_t elementOffset = (row * sizeof(float4)) + (col * sizeof(float));
-    return asfloat(LoadDwordAtAddr(instanceNodePtr +
-                                   sizeof(InstanceDesc) +
-                                   RTIP1_1_INSTANCE_SIDEBAND_OBJECT2WORLD_OFFSET +
-                                   elementOffset));
+    float transform = 0;
+    if (instanceNodePtr != 0)
+    {
+        const uint32_t elementOffset = (row * sizeof(float4)) + (col * sizeof(float));
+        transform = asfloat(LoadDwordAtAddr(instanceNodePtr +
+                                            sizeof(InstanceDesc) +
+                                            RTIP1_1_INSTANCE_SIDEBAND_OBJECT2WORLD_OFFSET +
+                                            elementOffset));
+    }
+    return transform;
 }
 
 //=====================================================================================================================
@@ -327,8 +376,14 @@ export float GetWorldToObjectTransform(
     in uint32_t row,             // row index
     in uint32_t col)             // column index
 {
-    const uint32_t elementOffset = (row * sizeof(float4)) + (col * sizeof(float));
-    return asfloat(LoadDwordAtAddr(instanceNodePtr + INSTANCE_DESC_WORLD_TO_OBJECT_XFORM_OFFSET + elementOffset));
+    float transform = 0;
+    if (instanceNodePtr != 0)
+    {
+        const uint32_t elementOffset = (row * sizeof(float4)) + (col * sizeof(float));
+        transform = asfloat(LoadDwordAtAddr(instanceNodePtr + INSTANCE_DESC_WORLD_TO_OBJECT_XFORM_OFFSET +
+                                            elementOffset));
+    }
+    return transform;
 }
 
 //=====================================================================================================================
@@ -336,17 +391,21 @@ export float GetWorldToObjectTransform(
 static float3x4 GetObjectToWorld3x4(
     in uint64_t instanceNodePtr)
 {
-    float3x4 transform;
-    switch (_AmdGetRtip())
+    float3x4 transform = (float3x4)0;
+
+    if (instanceNodePtr != 0)
     {
-    default:
-    {
-        const uint offset = RTIP1_1_INSTANCE_SIDEBAND_OBJECT2WORLD_OFFSET;
-        transform[0] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + sizeof(InstanceDesc) + offset + 0));
-        transform[1] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + sizeof(InstanceDesc) + offset + 16));
-        transform[2] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + sizeof(InstanceDesc) + offset + 32));
-        break;
-    }
+        switch (GetRtIpLevel())
+        {
+        default:
+        {
+            const uint offset = RTIP1_1_INSTANCE_SIDEBAND_OBJECT2WORLD_OFFSET;
+            transform[0] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + sizeof(InstanceDesc) + offset + 0));
+            transform[1] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + sizeof(InstanceDesc) + offset + 16));
+            transform[2] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + sizeof(InstanceDesc) + offset + 32));
+            break;
+        }
+        }
     }
 
     return transform;
@@ -357,20 +416,23 @@ static float3x4 GetObjectToWorld3x4(
 static float3x4 GetWorldToObject3x4(
     in uint64_t instanceNodePtr)
 {
-    float3x4 transform;
+    float3x4 transform = (float3x4)0;
 
-    switch (_AmdGetRtip())
+    if (instanceNodePtr != 0)
     {
-    default:
-    {
-        const uint offset = INSTANCE_DESC_WORLD_TO_OBJECT_XFORM_OFFSET;
+        switch (GetRtIpLevel())
+        {
+        default:
+        {
+            const uint offset = INSTANCE_DESC_WORLD_TO_OBJECT_XFORM_OFFSET;
 
-        transform[0] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + offset + 0));
-        transform[1] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + offset + 16));
-        transform[2] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + offset + 32));
+            transform[0] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + offset + 0));
+            transform[1] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + offset + 16));
+            transform[2] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + offset + 32));
 
-        break;
-    }
+            break;
+        }
+        }
     }
 
     return transform;
@@ -398,7 +460,12 @@ export uint64_t GetRayQuery64BitInstanceNodePtr(
     in uint64_t tlasBaseAddr,     // 64-bit TLAS base address
     in uint32_t instanceNodePtr)  // Instance node pointer
 {
-    return CalculateNodeAddr64(tlasBaseAddr, instanceNodePtr);
+    uint64_t nodeAddr = 0;
+    if (instanceNodePtr != 0)
+    {
+        nodeAddr = CalculateNodeAddr64(tlasBaseAddr, instanceNodePtr);
+    }
+    return nodeAddr;
 }
 
 //=====================================================================================================================
@@ -429,7 +496,7 @@ static uint GetGeneralInstanceID(
     in uint64_t instNodeAddr) // 64-bit instance node address
 {
     uint id = 0;
-    switch (_AmdGetRtip())
+    switch (GetRtIpLevel())
     {
     default:
     {
@@ -447,7 +514,7 @@ static uint GetGeneralInstanceIndex(
     in uint64_t instNodeAddr) // 64-bit instance node address
 {
     uint index = 0;
-    RayTracingIpLevel rtip = _AmdGetRtip();
+    RayTracingIpLevel rtip = GetRtIpLevel();
     switch (rtip)
     {
     default:
@@ -467,7 +534,7 @@ static uint64_t GetRayQueryInstanceNodePtr(
     in uint32_t instanceNodePtr)  // Instance node pointer
 {
     uint64_t instNodePtr = 0;
-    RayTracingIpLevel rtip = _AmdGetRtip();
+    RayTracingIpLevel rtip = GetRtIpLevel();
     switch (rtip)
     {
     default:
@@ -490,7 +557,7 @@ export RayQueryInternal _RayQuery_Allocate()
 export void _RayQuery_Abort(
     inout_param(RayQueryInternal) rayQuery)
 {
-    uint rtIp = (uint)_AmdGetRtip();
+    uint rtIp = (uint)GetRtIpLevel();
     if (rtIp >= (uint)RayTracingIpLevel::RtIp2_0)
     {
         rayQuery.currNodePtr = TERMINAL_NODE;
@@ -1011,7 +1078,7 @@ export TriangleData _RayQuery_FetchTrianglePosition(
     in bool                       committed) // Node pointer
 {
     TriangleData tdata;
-    RayTracingIpLevel rtip = _AmdGetRtip();
+    RayTracingIpLevel rtip = GetRtIpLevel();
     switch (rtip)
     {
     default:
@@ -1030,7 +1097,7 @@ export bool _RayQuery_Proceed(
     in    uint                    constRayFlags,
     in    uint3                   dispatchThreadId)
 {
-    uint rtIpLevel = ConvertRtIpLevel(_AmdGetRtip());
+    uint rtIpLevel = ConvertRtIpLevel(GetRtIpLevel());
     return RayQueryProceedCommon(
         rayQuery,
         constRayFlags,
@@ -1051,7 +1118,7 @@ export void _RayQuery_TraceRayInline(
     in    RayDesc                 rayDesc,
     in    uint3                   dispatchThreadId)
 {
-    uint rtIpLevel = ConvertRtIpLevel(_AmdGetRtip());
+    uint rtIpLevel = ConvertRtIpLevel(GetRtIpLevel());
     TraceRayInlineCommon(rayQuery,
                          accelStructLo,
                          accelStructHi,
