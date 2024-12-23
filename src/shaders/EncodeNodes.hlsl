@@ -27,7 +27,7 @@
 #define GC_DSTBUFFER
 #define GC_DSTMETADATA
 #define GC_SCRATCHBUFFER
-#include "BuildRootSignature.hlsl"
+#include "../shadersClean/build/BuildRootSignature.hlsli"
 
 template<typename T>
 T LoadInstanceDescBuffer(uint offset)
@@ -50,6 +50,7 @@ void EncodeTriangleNodes(
     in uint3 globalThreadId : SV_DispatchThreadID,
     in uint localId : SV_GroupThreadID)
 {
+
     const uint geometryIndex = ShaderRootConstants.GeometryIndex();
     const BuildShaderGeometryConstants geomConstants = GeometryConstants[geometryIndex];
     const NumPrimAndInputOffset inputOffsets = LoadInputOffsetsAndNumPrim(geometryIndex, true);
@@ -73,6 +74,7 @@ void EncodeTriangleNodes(
     IncrementPrimitiveTaskCounters(primitiveIndex,
                                    inputOffsets.numPrimitives,
                                    geomConstants.numPrimitives);
+
 }
 
 //=====================================================================================================================
@@ -114,6 +116,18 @@ static const uint COUNTS_MASK = (~(LOCAL_COUNTS_READY | LOCAL_PREFIX_SUM_READY))
 groupshared uint SharedMem[1];
 
 //=====================================================================================================================
+void WritePrimRefCount(uint id, uint data)
+{
+    ScratchBuffer.Store(ShaderConstants.offsets.primRefCount + (id * sizeof(uint)), data);
+}
+
+//=====================================================================================================================
+uint FetchPrimRefCount(uint id)
+{
+    return ScratchBuffer.Load(ShaderConstants.offsets.primRefCount + (id * sizeof(uint)));
+}
+
+//=====================================================================================================================
 void InitBlockPrefixSum(
     uint localId,
     uint numBlocks)
@@ -129,7 +143,7 @@ void InitBlockPrefixSum(
     if (globalId < numBlocks)
     {
         // Initialise block prefix sum to 0
-        DstBuffer.Store(ShaderConstants.header.offsets.leafNodes + (globalId * sizeof(uint)), 0);
+        WritePrimRefCount(globalId, 0);
     }
 
     END_TASK(numGroups);
@@ -143,6 +157,7 @@ void EncodeQuadNodes(
     in uint globalId : SV_DispatchThreadID,
     in uint localId : SV_GroupThreadID)
 {
+
     // Note, ShaderRootConstants.GeometryIndex() is reused for number of blocks needed across all geometries.
     InitBlockPrefixSum(localId, ShaderRootConstants.GeometryIndex());
 
@@ -177,6 +192,7 @@ void EncodeQuadNodes(
     int pairInfo = -2;
 
     TriangleData tri = (TriangleData)0;
+    bool isDegenTri0 = true; // We just initialized all vertices of 'tri' to 0. Hence, isDegenTri0 = true
     uint3 indices = uint3(0, 0, 0);
 
     const uint primId = globalId - startId;
@@ -209,17 +225,45 @@ void EncodeQuadNodes(
         // Generate triangle bounds and update scene bounding box
         const BoundingBox boundingBox = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
 
-        const bool isActive = IsActive(tri);
+        bool isActive = IsActive(tri);
+
+        const bool hasValidQuad = (pairInfo >= 0);
+        const uint pairLaneId = hasValidQuad ? pairInfo >> 16 : 0;
+
+        TriangleData tri1;
+        tri1.v0 = WaveReadLaneAt(tri.v0, pairLaneId);
+        tri1.v1 = WaveReadLaneAt(tri.v1, pairLaneId);
+        tri1.v2 = WaveReadLaneAt(tri.v2, pairLaneId);
+
+        bool isDegenTri1 = false;
+        bool isDegenQuad = false;
+        if (Settings.disableDegenPrims)
+        {
+            isDegenTri0 = IsDegenerateTriangle(tri); // Compute (before setting to NaN) for later use
+            isDegenTri1 = IsDegenerateTriangle(tri1);
+            isDegenQuad = hasValidQuad && isDegenTri1 && isDegenTri0;
+        }
+
         if (isActive)
         {
-            if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometry)
+            // Note: Make sure to check for Settings.disableDegenPrims as the very first test in the 'if'
+            if ((Settings.disableDegenPrims) && (IsUpdateAllowed() == false) && (isDegenQuad || isDegenTri0))
             {
-                UpdateSceneBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
+                // Override v0.x for inactive case
+                tri.v0.x = NaN;
+                isActive = false;
             }
-            else if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometryWithSize)
+            else
             {
-                // TODO: with tri splitting, need to not update "size" here
-                UpdateSceneBoundsWithSize(ShaderConstants.offsets.sceneBounds, boundingBox);
+                if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometry)
+                {
+                    UpdateSceneBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
+                }
+                else if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometryWithSize)
+                {
+                    // TODO: with tri splitting, need to not update "size" here
+                    UpdateSceneBoundsWithSize(ShaderConstants.offsets.sceneBounds, boundingBox);
+                }
             }
         }
         else
@@ -238,10 +282,10 @@ void EncodeQuadNodes(
 
         if (WaveIsFirstLane())
         {
-            const uint primRefCountOffset = ShaderConstants.header.offsets.leafNodes + (blockId * sizeof(uint));
-
-            const uint flags = LOCAL_COUNTS_READY | ((blockId == 0) ? LOCAL_PREFIX_SUM_READY : 0);
-            DstBuffer.Store(primRefCountOffset, blockPrimCount | flags);
+            {
+                const uint flags = LOCAL_COUNTS_READY | ((blockId == 0) ? LOCAL_PREFIX_SUM_READY : 0);
+                WritePrimRefCount(blockId, blockPrimCount | flags);
+            }
 
             DeviceMemoryBarrier();
 
@@ -251,7 +295,7 @@ void EncodeQuadNodes(
                 uint count = 0;
                 while (1)
                 {
-                    count = DstBuffer.Load(ShaderConstants.header.offsets.leafNodes + (prevId * sizeof(uint)));
+                    count = FetchPrimRefCount(prevId);
                     if (count & LOCAL_COUNTS_READY)
                     {
                         break;
@@ -271,9 +315,10 @@ void EncodeQuadNodes(
                 }
             }
 
-            DstBuffer.Store(primRefCountOffset,
-                (blockPrimCount + exclusivePrefixCount) | ((LOCAL_COUNTS_READY | LOCAL_PREFIX_SUM_READY)));
-
+            {
+                const uint flags = LOCAL_COUNTS_READY | LOCAL_PREFIX_SUM_READY;
+                WritePrimRefCount(blockId, (blockPrimCount + exclusivePrefixCount) | flags);
+            }
             DeviceMemoryBarrier();
         }
 
@@ -283,41 +328,51 @@ void EncodeQuadNodes(
         // triangle geometry
         const uint dstScratchNodeIdx = exclusivePrefixCount + laneActivePrimIdx;
 
-        const bool hasValidQuad = (pairInfo >= 0);
-        const uint pairLaneId = hasValidQuad ? pairInfo >> 16 : 0;
-
-        TriangleData tri1;
-        tri1.v0 = WaveReadLaneAt(tri.v0, pairLaneId);
-        tri1.v1 = WaveReadLaneAt(tri.v1, pairLaneId);
-        tri1.v2 = WaveReadLaneAt(tri.v2, pairLaneId);
-
-        const uint primId1 = WaveReadLaneAt(primId, pairLaneId);
-
-        if (hasValidQuad)
+        if (isActive)
         {
-            WriteScratchQuadNode(dstScratchNodeIdx,
-                                 geomId,
-                                 geomConstants.geometryFlags,
-                                 tri1,
-                                 primId1,
-                                 tri,
-                                 primId,
-                                 pairInfo & 0xFF);
-        }
-        else if (pairInfo == -1)
-        {
-            // Write out unpaired triangle
-            WriteScratchTriangleNode(dstScratchNodeIdx,
-                                     geomId,
-                                     geomConstants.geometryFlags,
-                                     tri,
-                                     primId);
-        }
-        else
-        {
-            // This triangle is a pair in a quad handled by the lead lane. Nothing to do here.
-        }
+            const uint primId1 = WaveReadLaneAt(primId, pairLaneId);
 
+            if (hasValidQuad)
+            {
+                uint instanceMask = 0;
+                if (Settings.disableDegenPrims)
+                {
+                    // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
+                    instanceMask = (isDegenTri0 && isDegenTri1) ? 0 : 0xff;
+                }
+
+                WriteScratchQuadNode(dstScratchNodeIdx,
+                                    geomId,
+                                    geomConstants.geometryFlags,
+                                    tri1,
+                                    primId1,
+                                    tri,
+                                    instanceMask,
+                                    primId,
+                                    pairInfo & 0xFF);
+            }
+            else if (pairInfo == -1)
+            {
+                uint instanceMask = 0;
+                if (Settings.disableDegenPrims)
+                {
+                    // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
+                    instanceMask = isDegenTri0 ? 0 : 0xff;
+                }
+
+                // Write out unpaired triangle
+                WriteScratchTriangleNode(dstScratchNodeIdx,
+                                        geomId,
+                                        geomConstants.geometryFlags,
+                                        tri,
+                                        instanceMask,
+                                        primId);
+            }
+            else
+            {
+                // This triangle is a pair in a quad handled by the lead lane. Nothing to do here.
+            }
+        }
         // Update primitive reference count
         if (blockId == (ShaderRootConstants.GeometryIndex() - 1))
         {
@@ -339,4 +394,5 @@ void EncodeQuadNodes(
                                  buildBlockCount);
         }
     }
+
 }

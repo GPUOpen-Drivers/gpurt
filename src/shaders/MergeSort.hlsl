@@ -30,7 +30,7 @@
 
 #define GC_DSTMETADATA
 #define GC_SCRATCHBUFFER
-#include "BuildRootSignature.hlsl"
+#include "../shadersClean/build/BuildRootSignature.hlsli"
 
 #define TASK_COUNTER_BUFFER   ScratchGlobal
 #define TASK_COUNTER_OFFSET   (ShaderConstants.offsets.taskLoopCounters + TASK_LOOP_MERGE_SORT_COUNTER_OFFSET)

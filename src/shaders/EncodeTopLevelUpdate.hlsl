@@ -64,15 +64,17 @@ void EncodeInstancesUpdate(
         const uint geometryType =
             FetchHeaderField(baseAddrAccelStructHeader, ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET);
 
-        // calc transformed AABB
-        BoundingBox boundingBox;
+        // Initialise to invalid bounds
+        BoundingBox boundingBox = InvalidBoundingBox;
 
         if (numActivePrims != 0)
         {
-            // Fetch root bounds from BLAS header
-            const BoundingBox rootBbox = FetchHeaderRootBoundingBox(baseAddrAccelStructHeader);
-
-            boundingBox = GenerateInstanceBoundingBox(desc.Transform, rootBbox);
+            {
+                // Fetch root bounds from BLAS header
+                const BoundingBox rootBbox = FetchHeaderRootBoundingBox(baseAddrAccelStructHeader);
+                // Compute transformed bounding box
+                boundingBox = GenerateInstanceBoundingBox(desc.Transform, rootBbox);
+            }
         }
 
         const uint packedFlags = FetchHeaderField(baseAddrAccelStructHeader, ACCEL_STRUCT_HEADER_PACKED_FLAGS_OFFSET);

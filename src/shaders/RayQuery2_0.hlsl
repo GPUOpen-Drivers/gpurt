@@ -103,6 +103,15 @@ static void TraceRayInlineImpl2_0(
     if (IsValidTrace(rayQuery.rayDesc, accelStruct, instanceMask, rayQuery.rayFlags, 0))
     {
         LogAccelStruct(accelStruct);
+
+        // Some applications may request candidate/committed intrinsics even when there is no candidate or
+        // committed hit. In order to return sane data we initialise candidate instance node pointer to the
+        // first instance in the leaf node array.
+        const uint32_t leafNodeOffset = FetchHeaderOffsetField(accelStruct, ACCEL_STRUCT_OFFSETS_LEAF_NODES_OFFSET);
+
+        rayQuery.candidate.instNodePtr = PackNodePointer(NODE_TYPE_USER_NODE_INSTANCE, leafNodeOffset);
+        rayQuery.committed.instNodePtr = PackNodePointer(NODE_TYPE_USER_NODE_INSTANCE, leafNodeOffset);
+
         rayQuery.currNodePtr = CreateRootNodePointer1_1();
     }
     else

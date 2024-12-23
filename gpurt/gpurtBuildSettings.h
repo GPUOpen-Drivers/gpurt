@@ -89,6 +89,7 @@ struct CompileTimeBuildSettings
     uint32 unused8;
     uint32 unused9;
     uint32 unused10;
+    uint32 unused11;
     uint32 enableInstanceRebraid;
     uint32 gpuDebugFlags;
     uint32 updateFlags;
@@ -96,10 +97,10 @@ struct CompileTimeBuildSettings
     uint32 encodeArrayOfPointers;
     uint32 sceneBoundsCalculationType;
     uint32 rebraidQualityHeuristic;
-    uint32 unused11;
     uint32 unused12;
     uint32 unused13;
     uint32 disableCompaction;
+    uint32 disableDegenPrims;
 };
 
 #define BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_ID                        0
@@ -128,14 +129,15 @@ struct CompileTimeBuildSettings
 #define BUILD_SETTINGS_DATA_ENABLE_FAST_LBVH_ID                       25
 #define BUILD_SETTINGS_DATA_RTIP_LEVEL_ID                             26
 #define BUILD_SETTINGS_DATA_GEOMETRY_TYPE_ID                          27
-#define BUILD_SETTINGS_DATA_ENABLE_INSTANCE_REBRAID_ID                37
-#define BUILD_SETTINGS_DATA_GPU_DEBUG_FLAGS_ID                        38
-#define BUILD_SETTINGS_DATA_UPDATE_FLAGS_ID                           39
-#define BUILD_SETTINGS_DATA_IS_UPDATE_IN_PLACE_ID                     40
-#define BUILD_SETTINGS_DATA_ENCODE_ARRAY_OF_POINTERS_ID               41
-#define BUILD_SETTINGS_DATA_SCENE_BOUNDS_CALCULATION_TYPE_ID          42
-#define BUILD_SETTINGS_DATA_REBRAID_QUALITY_HEURISTIC_ID              43
+#define BUILD_SETTINGS_DATA_ENABLE_INSTANCE_REBRAID_ID                38
+#define BUILD_SETTINGS_DATA_GPU_DEBUG_FLAGS_ID                        39
+#define BUILD_SETTINGS_DATA_UPDATE_FLAGS_ID                           40
+#define BUILD_SETTINGS_DATA_IS_UPDATE_IN_PLACE_ID                     41
+#define BUILD_SETTINGS_DATA_ENCODE_ARRAY_OF_POINTERS_ID               42
+#define BUILD_SETTINGS_DATA_SCENE_BOUNDS_CALCULATION_TYPE_ID          43
+#define BUILD_SETTINGS_DATA_REBRAID_QUALITY_HEURISTIC_ID              44
 #define BUILD_SETTINGS_DATA_DISABLE_COMPACTION_ID                     47
+#define BUILD_SETTINGS_DATA_DISABLE_DEGEN_PRIMS_ID                    48
 
 #ifdef __cplusplus
 } // namespace GpuRt

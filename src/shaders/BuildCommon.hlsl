@@ -305,24 +305,26 @@ int FloatToInt(float v)
 }
 
 //=====================================================================================================================
-float UintToFloat(in uint v)
+float UintToFloat(uint v)
 {
-    v ^= (((v >> 31) - 1) | 0x80000000);
+    const uint bitShift = 31;
+    const uint bitMask = 0x80000000;
+
+    v ^= (((v >> bitShift) - 1) | bitMask);
 
     return asfloat(v);
 }
 
 //=====================================================================================================================
+float2 Uint2ToFloat2(in uint2 v)
+{
+    return float2(UintToFloat(v.x), UintToFloat(v.y));
+}
+
+//=====================================================================================================================
 float3 Uint3ToFloat3(in uint3 v)
 {
-    const uint bitShift = 31;
-    const uint bitMask = 0x80000000;
-
-    v.x ^= (((v.x >> bitShift) - 1) | bitMask);
-    v.y ^= (((v.y >> bitShift) - 1) | bitMask);
-    v.z ^= (((v.z >> bitShift) - 1) | bitMask);
-
-    return asfloat(v);
+    return float3(UintToFloat(v.x), UintToFloat(v.y), UintToFloat(v.z));
 }
 
 //=====================================================================================================================
@@ -347,31 +349,6 @@ uint64_t WaveActiveBallot64(
 
     return (uint64_t(mask4.y) << 32) | mask4.x;
 }
-
-//=====================================================================================================================
-// Read the value in the previous lane (or the last lane if this is the first lane)
-#define WAVE_READ_PREV_LANE(val) WaveReadLaneAt((val), (WaveGetLaneIndex() - 1) & (WaveGetLaneCount() - 1))
-
-static const uint4 FullMaskUint4 = uint4(0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
-
-//=====================================================================================================================
-// OR specified value with all previous lanes and the current lane
-[[vk::ext_capability(/* GroupNonUniform */ 61)]]
-[[vk::ext_capability(/* GroupNonUniformArithmetic */ 63)]]
-[[vk::ext_instruction(360)]]
-uint spirv_OpGroupNonUniformBitwiseOr(uint scope, [[vk::ext_literal]] uint op, uint value);
-
-[[vk::ext_capability(/* GroupNonUniform */ 61)]]
-[[vk::ext_capability(/* GroupNonUniformArithmetic */ 63)]]
-[[vk::ext_instruction(360)]]
-uint64_t spirv_OpGroupNonUniformBitwiseOr(uint scope, [[vk::ext_literal]] uint op, uint64_t value);
-
-[[vk::ext_capability(/* GroupNonUniform */ 61)]]
-[[vk::ext_capability(/* GroupNonUniformArithmetic */ 63)]]
-[[vk::ext_instruction(360)]]
-uint3 spirv_OpGroupNonUniformBitwiseOr(uint scope, [[vk::ext_literal]] uint op, uint3 value);
-
-#define WAVE_POSTFIX_OR(val) spirv_OpGroupNonUniformBitwiseOr(/* Subgroup */ 3, /* InclusiveScan */ 1, (val))
 
 //=====================================================================================================================
 uint ReadParentPointer(
@@ -701,11 +678,13 @@ bool EnableLatePairCompression()
 //=====================================================================================================================
 bool UsePrimIndicesArray()
 {
-    if (Settings.enableEarlyPairCompression)
-    {
-        return false;
-    }
 
+    return false;
+}
+
+//=====================================================================================================================
+bool CollapseAnyPairs()
+{
     return false;
 }
 

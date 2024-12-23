@@ -673,7 +673,14 @@ bool IsLeafOrIsCollapsed(
     {
         const ScratchNode node = FetchScratchNode(baseScratchNodesOffset, nodeIndex);
 
-        if (node.numPrimitivesAndDoCollapse & 1)
+        if (CollapseAnyPairs())
+        {
+            if ((node.numPrimitivesAndDoCollapse >> 1) == 2)
+            {
+                result = true;
+            }
+        }
+        else if (node.numPrimitivesAndDoCollapse & 1)
         {
             result = true;
         }

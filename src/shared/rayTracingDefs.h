@@ -190,8 +190,6 @@ static_assert(TASK_LOOP_QBVH_COUNTER_OFFSET              == offsetof(TaskLoopCou
 static_assert(TASK_LOOP_QBVH_TASKS_DONE_OFFSET           == offsetof(TaskLoopCounters, qbvhTasksDone));
 #endif
 
-//=====================================================================================================================
-
 struct LutData {};
 
 //=====================================================================================================================

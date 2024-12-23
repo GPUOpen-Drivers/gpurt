@@ -102,7 +102,7 @@ struct RayTracingScratchDataOffsets
     uint32 reserved12;
     uint32 taskLoopCounters;
     uint32 debugCounters;
-    uint32 reserved13;
+    uint32 primRefCount;
 };
 
 struct BuildShaderConstants

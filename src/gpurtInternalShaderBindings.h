@@ -199,6 +199,7 @@ constexpr NodeMapping UpdateQBVHMapping[] =
 {
     { NodeType::Constant, Update::NumEntries },
     { NodeType::ConstantBuffer, 2 },
+    { NodeType::ConstantBuffer, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 }
@@ -208,6 +209,7 @@ constexpr NodeMapping UpdateParallelMapping[] =
 {
     { NodeType::Constant, Update::NumEntries },
     { NodeType::ConstantBuffer, 2 },
+    { NodeType::ConstantBuffer, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 }
@@ -216,6 +218,7 @@ constexpr NodeMapping UpdateParallelMapping[] =
 constexpr NodeMapping UpdateMapping[]
 {
     { NodeType::Constant, Update::NumEntries },
+    { NodeType::ConstantBuffer, 2 },
     { NodeType::ConstantBuffer, 2 },
     { NodeType::Uav, 2 },
     { NodeType::Uav, 2 },
@@ -328,6 +331,8 @@ constexpr NodeMapping InitAccelerationStructureMapping[] =
 
 constexpr NodeMapping InitUpdateAccelerationStructureMapping[] =
 {
+    { NodeType::UavTable, 1 },
+    { NodeType::UavTable, 1 },
     { NodeType::UavTable, 1 },
 };
 

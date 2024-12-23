@@ -226,6 +226,7 @@ private:
         bool                            rebuildAccelStruct;
         bool                            enableEmitCompactSizeDispatch;
         bool                            nonInlinePostBuildEmits;
+        uint32                          rebraidFactor;
     };
 
     BvhBuilder(

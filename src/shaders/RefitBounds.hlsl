@@ -26,7 +26,7 @@
 
 #define GC_DSTBUFFER
 #define GC_SCRATCHBUFFER
-#include "BuildRootSignature.hlsl"
+#include "../shadersClean/build/BuildRootSignature.hlsli"
 
 #include "IntersectCommon.hlsl"
 #include "RefitBoundsImpl.hlsl"

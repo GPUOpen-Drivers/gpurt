@@ -25,6 +25,11 @@
 #ifndef SHADERDEFS_HLSLI
 #define SHADERDEFS_HLSLI
 
+#if !defined(__cplusplus)
+#define out_param(x) out x
+#define inout_param(x) inout x
+#endif
+
 // These DUMMY_*_FUNC postfix stubs must be included at the end of every driver stub (AmdTraceRay*) declaration to
 // work around a DXC + Spirv issue where the compiler can't deal with calls to functions that don't have bodies.
 #define DUMMY_BOOL_FUNC   { return false; }

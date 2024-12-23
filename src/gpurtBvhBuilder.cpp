@@ -558,15 +558,12 @@ BvhBuildMode BvhBuilder::OverrideBuildMode(
 // Remapped scratch buffer base address
 bool BvhBuilder::AllowRemappingScratchBuffer() const
 {
-    bool encodeQuadPrimitives = m_buildConfig.enableEarlyPairCompression;
-
     bool usePrimIndicesArray = false;
 
     return
         (m_deviceSettings.enableRemapScratchBuffer == true) &&
         (IsUpdate() == false) &&
         (m_deviceSettings.enableBuildAccelStructScratchDumping == false) &&
-        (encodeQuadPrimitives == false) &&
         (usePrimIndicesArray == false);
 }
 
@@ -734,6 +731,7 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
     //--------------------------------------------
     // ScratchBuffer layout in each pass:
     //        [4]           [0]     [1]    [2]
+    // Counter | BVH2 & QBVH | Encode
     // Counter | BVH2 & QBVH | State | TS/Rebraid
     // Counter | BVH2 & QBVH | State | TD
     // Counter | BVH2 & QBVH | State | BVH2 | Sort
@@ -779,6 +777,10 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
     uint32 tdTaskQueueCounter = 0xFFFFFFFF;
     uint32 plocTaskQueueCounter = 0xFFFFFFFF;
     uint32 debugCounters = 0;
+
+    //--------------------------------------------
+    // EncodeQuadPrimitives
+    uint32 primRefCount = 0xFFFFFFFF;
 
     //--------------------------------------------
     // State
@@ -992,6 +994,7 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
             ReserveBytes(sizeof(Aabb), &runningOffset); // scene bounding box for rebraid
         }
     }
+    bvh2PhaseMaxSize = Util::Max(bvh2PhaseMaxSize, runningOffset);
     baseOffset1 = runningOffset;
 
     // ============ BVH2 ============
@@ -999,6 +1002,7 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
         // Sorted primitive indices buffer size.
         primIndicesSorted = ReserveBytes(aabbCount * sizeof(uint32), &runningOffset);
     }
+    bvh2PhaseMaxSize = Util::Max(bvh2PhaseMaxSize, runningOffset);
     baseOffset2 = runningOffset;
 
     // ============ TS/Rebraid ============
@@ -1164,6 +1168,7 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
         pOffsets->atomicFlagsPloc = atomicFlagsPloc;
         pOffsets->clusterOffsets = clusterOffsets;
         pOffsets->sceneBounds = sceneBounds;
+        pOffsets->primRefCount = primRefCount;
         pOffsets->mortonCodes = mortonCodes;
         pOffsets->mortonCodesSorted = mortonCodesSorted;
         pOffsets->primIndicesSorted = primIndicesSorted;
@@ -1375,9 +1380,11 @@ void BvhBuilder::InitBuildConfig(
 
     m_buildConfig.buildMode = OverrideBuildMode(buildArgs);
 
+    m_buildConfig.rebraidFactor = m_deviceSettings.rebraidFactor;
+
     if (m_buildConfig.rebraidType != RebraidType::Off)
     {
-        m_buildConfig.maxNumPrimitives *= m_deviceSettings.rebraidFactor;
+        m_buildConfig.maxNumPrimitives *= m_buildConfig.rebraidFactor;
     }
 
     if (m_buildConfig.triangleSplitting == true)
@@ -1506,7 +1513,7 @@ BuildShaderConstants BvhBuilder::GetBuildShaderConstants() const
         .tsBudgetPerTriangle     = IsUpdate() ? 0 : m_deviceSettings.tsBudgetPerTriangle,
 
         .maxNumPrimitives        = m_buildConfig.maxNumPrimitives,
-        .rebraidFactor           = IsUpdate() ? 0 : m_deviceSettings.rebraidFactor,
+        .rebraidFactor           = IsUpdate() ? 0 : m_buildConfig.rebraidFactor,
 
         .indirectArgBufferStride = m_buildArgs.indirect.indirectStride,
         .numDescs                = m_buildArgs.inputs.inputElemCount,
@@ -1546,9 +1553,10 @@ void BvhBuilder::InitGeometryConstants()
     BuildShaderGeometryConstants* pConstants = reinterpret_cast<BuildShaderGeometryConstants*>(
         m_pDevice->AllocateTemporaryData(m_cmdBuffer, sizeInBytes, &geometryConstGpuVa));
 
-    void* pVbvTable = m_pDevice->AllocateDescriptorTable(m_cmdBuffer, geometryCount, &m_geomBufferSrdTable);
-    void* pCbvTable = m_pDevice->AllocateDescriptorTable(m_cmdBuffer, geometryCount, &m_geomConstSrdTable);
-    const uint32 srdSizeBytes = m_pDevice->GetUntypedBufferSrdSizeDw() * sizeof(uint32);
+    void* pVbvTable = m_pDevice->AllocateTypedDescriptorTable(m_cmdBuffer, geometryCount, &m_geomBufferSrdTable);
+    void* pCbvTable = m_pDevice->AllocateUntypedDescriptorTable(m_cmdBuffer, geometryCount, &m_geomConstSrdTable);
+    const uint32 untypedSrdSizeBytes = m_pDevice->GetUntypedBufferSrdSizeDw() * sizeof(uint32);
+    const uint32 typedSrdSizeBytes = m_pDevice->GetTypedBufferSrdSizeDw() * sizeof(uint32);
 
     for (uint32 i = 0; i < geometryCount; i++)
     {
@@ -1574,8 +1582,8 @@ void BvhBuilder::InitGeometryConstants()
             vertexBufferViewInfo = SetupAabbBuffer(geometry.aabbs, &stride);
         }
 
-        m_backend.CreateBufferViewSrds(1, vertexBufferViewInfo, pVbvTable, true);
-        pVbvTable = Util::VoidPtrInc(pVbvTable, srdSizeBytes);
+        m_backend.CreateTypedBufferViewSrds(vertexBufferViewInfo, pVbvTable);
+        pVbvTable = Util::VoidPtrInc(pVbvTable, typedSrdSizeBytes);
 
         pConstants[i] =
         {
@@ -1601,8 +1609,8 @@ void BvhBuilder::InitGeometryConstants()
             .stride  = 1,
         };
 
-        m_backend.CreateBufferViewSrds(1, constBufferViewInfo, pCbvTable, false);
-        pCbvTable = Util::VoidPtrInc(pCbvTable, srdSizeBytes);
+        m_backend.CreateUntypedBufferViewSrds(constBufferViewInfo, pCbvTable);
+        pCbvTable = Util::VoidPtrInc(pCbvTable, untypedSrdSizeBytes);
 
         primitiveOffset += primitiveCount;
     }
@@ -1639,7 +1647,17 @@ AccelStructHeader BvhBuilder::InitAccelStructHeader() const
     info.triCompression             = static_cast<uint32>(m_buildConfig.triangleCompressionMode);
     info.fp16BoxNodesInBlasMode     = static_cast<uint32>(m_buildConfig.fp16BoxNodesInBlasMode);
     info.triangleSplitting          = m_buildConfig.triangleSplitting;
-    info.rebraid                    = m_buildConfig.rebraidType != RebraidType::Off;
+
+    if (m_buildConfig.topLevelBuild)
+    {
+        info.rebraid = m_buildConfig.rebraidType != RebraidType::Off;
+    }
+    else
+    {
+        // unused by BLAS unless EnableNonPrioritySortingRebraid() is enabled
+        info.rebraid = 0;
+    }
+
     info.fusedInstanceNode          = m_deviceSettings.enableFusedInstanceNode;
     info.flags                      = m_buildArgs.inputs.flags;
 
@@ -2261,6 +2279,8 @@ void BvhBuilder::InitBuildSettings()
 
     // Rebuilding an updateable acceleration structure need to use the original size and not compacted one.
     m_buildSettings.disableCompaction = m_buildConfig.rebuildAccelStruct || m_deviceSettings.disableCompaction;
+
+    m_buildSettings.disableDegenPrims = m_deviceSettings.disableDegenPrims;
 
     m_buildSettings.isUpdateInPlace = IsUpdateInPlace();
     m_buildSettings.encodeArrayOfPointers =
@@ -3631,6 +3651,10 @@ void BvhBuilder::UpdateQBVH()
 
     entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
 
+    {
+        entryOffset = WriteBufferVa(0, entryOffset);
+    }
+
     // Set result/scratch/source buffers
     entryOffset = WriteUpdateBuffers(entryOffset);
 
@@ -3664,6 +3688,10 @@ void BvhBuilder::UpdateParallel()
     entryOffset = WriteUserDataEntries(&shaderConstants, Update::NumEntries, entryOffset);
 
     entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
+
+    {
+        entryOffset = WriteBufferVa(0, entryOffset);
+    }
 
     // Set result/scratch/source buffers
     entryOffset = WriteUpdateBuffers(entryOffset);
@@ -3701,6 +3729,10 @@ void BvhBuilder::EncodeUpdate()
         entryOffset = WriteUserDataEntries(&shaderConstants, Update::NumEntries, entryOffset);
 
         entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
+
+        {
+            entryOffset = WriteBufferVa(0, entryOffset);
+        }
 
         // Set result/scratch/source buffers
         entryOffset = WriteUpdateBuffers(entryOffset);

@@ -145,7 +145,10 @@ void EncodeTriangleNode(
     const uint primNodePointerOffset =
         metadataSize + basePrimNodePtr + (flattenedPrimitiveIndex * sizeof(uint));
 
-    TriangleData tri = (TriangleData)0;
+    TriangleData tri      = (TriangleData)0;
+    TriangleData otherTri = (TriangleData)0;
+    bool isOtherTriValid  = false;
+
     uint3 indices = uint3(0, 0, 0);
     const bool validIndices =
         FetchTrianglePrimitive(
@@ -247,7 +250,6 @@ void EncodeTriangleNode(
                         uint otherPrimIndexOffset = TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET;
                         const uint otherPrimIndex = SrcBuffer.Load(triNodeOffset + otherPrimIndexOffset);
 
-                        TriangleData otherTri = (TriangleData)0;
                         uint3 otherIndices = uint3(0, 0, 0);
                         const bool validIndices =
                             FetchTrianglePrimitive(
@@ -264,12 +266,28 @@ void EncodeTriangleNode(
 
                             // Merge the bounding boxes of the two triangles.
                             boundingBox = CombineAABB(boundingBox, otherBox);
+                            isOtherTriValid = true;
                         }
                     }
                 }
 
-                // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
-                const uint instanceMask = (boundingBox.min.x > boundingBox.max.x) ? 0 : 0xff;
+                uint instanceMask = 0;
+                if (Settings.disableDegenPrims)
+                {
+                    bool isDegenTri = IsDegenerateTriangle(tri);
+                    if (isOtherTriValid)
+                    {
+                        isDegenTri = isDegenTri && IsDegenerateTriangle(otherTri);
+                    }
+
+                    // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
+                    instanceMask = isDegenTri ? 0 : 0xff;
+                }
+                else
+                {
+                    // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
+                    instanceMask = (boundingBox.min.x > boundingBox.max.x) ? 0 : 0xff;
+                }
 
                 PushNodeForUpdate(metadataSize,
                                   childNodePointer,
@@ -281,17 +299,33 @@ void EncodeTriangleNode(
         }
         else
         {
+            uint instanceMask = 0;
+            if (Settings.disableDegenPrims)
+            {
+                // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
+                // Do this before possibly setting tri's vertex to NaN.
+                instanceMask = IsDegenerateTriangle(tri) ? 0 : 0xff;
+            }
+
             const bool isActiveTriangle = IsActive(tri);
             if (isActiveTriangle)
             {
-                if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometry)
+                if ((Settings.disableDegenPrims) && (IsUpdateAllowed() == false) && IsDegenerateTriangle(tri))
                 {
-                    UpdateSceneBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
+                    // Override v0.x for inactive case
+                    tri.v0.x = NaN;
                 }
-                else if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometryWithSize)
+                else
                 {
-                    // TODO: with tri splitting, need to not update "size" here
-                    UpdateSceneBoundsWithSize(ShaderConstants.offsets.sceneBounds, boundingBox);
+                    if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometry)
+                    {
+                        UpdateSceneBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
+                    }
+                    else if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometryWithSize)
+                    {
+                        // TODO: with tri splitting, need to not update "size" here
+                        UpdateSceneBoundsWithSize(ShaderConstants.offsets.sceneBounds, boundingBox);
+                    }
                 }
             }
             else
@@ -300,8 +334,11 @@ void EncodeTriangleNode(
                 tri.v0.x = NaN;
             }
 
-            // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
-            const uint instanceMask = (boundingBox.min.x > boundingBox.max.x) ? 0 : 0xff;
+            if (Settings.disableDegenPrims == 0)
+            {
+                // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
+                instanceMask = (boundingBox.min.x > boundingBox.max.x) ? 0 : 0xff;
+            }
 
             // Triangle scratch nodes have a 1:1 mapping with global primitive index when pairing is disabled
             WriteScratchTriangleNode(flattenedPrimitiveIndex,

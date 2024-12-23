@@ -30,7 +30,7 @@
 #define GC_DSTBUFFER
 #define GC_DSTMETADATA
 #define GC_SCRATCHBUFFER
-#include "BuildRootSignature.hlsl"
+#include "../shadersClean/build/BuildRootSignature.hlsli"
 
 #include "Common.hlsl"
 #include "BuildCommonScratch.hlsl"

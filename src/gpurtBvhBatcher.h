@@ -63,7 +63,7 @@ private:
         Util::Span<BvhBuilder> builders,
         Util::Span<BvhBuilder> updaters);
 
-    template<bool IsUpdate>
+    template<bool IsUpdate, bool IsTlas>
     void DispatchInitAccelerationStructure(
         Util::Span<BvhBuilder> builders);
 

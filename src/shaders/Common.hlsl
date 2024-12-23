@@ -39,11 +39,6 @@
 
 typedef AccelStructDataOffsets AccelStructOffsets;
 
-#if !defined(__cplusplus)
-#define out_param(x) out x
-#define inout_param(x) inout x
-#endif
-
 //=====================================================================================================================
 // static definitions
 
@@ -52,6 +47,10 @@ typedef AccelStructDataOffsets AccelStructOffsets;
 #endif
 #ifndef FLT_MAX
 #define FLT_MAX 3.402823466e+38F
+#endif
+
+#ifndef FLT_MIN
+#define FLT_MIN 1.175494351e-38F
 #endif
 
 // Note: log(+/-0) always produces -inf. Reverse polarity here
@@ -68,10 +67,8 @@ typedef AccelStructDataOffsets AccelStructOffsets;
 #define SKIP_4_7                0xfffffffb
 #define SKIP_0_7                0xfffffff9
 #define END_SEARCH              0xfffffff8
-#define DEAD_LANE_WITHOUT_STACK 0xfffffff7
-#define DEAD_LANE_WITH_STACK    0xfffffff6
 
-#include "Extensions.hlsl"
+#include "../shadersClean/common/Extensions.hlsli"
 #include "../shadersClean/common/Math.hlsli"
 #include "../shadersClean/common/BoundingBox.hlsli"
 #include "../shadersClean/common/NodePointers.hlsli"
@@ -516,6 +513,45 @@ static uint3 CalcTriangleVertexOffsets(uint nodeType)
 }
 
 //=====================================================================================================================
+static bool IsDegenerateTriangle(TriangleData tri)
+{
+    bool degen = false;
+    // Trangles that are too small (with FLT_MIN for corners) cannot be accurately detected as degenerate
+    // since the 'cross' product with FLT_MIN numbers round to 0.0 returning 'degen = true' incorrectly.
+    // Hence, skip such triangles from degenerate test.
+    // Note: The logic below will skip processing triangles with any coord. = 0.0.
+    // Example: v0=(0, 10, 0), v1=(5, 10, 0), v2=(15, 10, 0) - eventhough this is a degenerate
+    // triangle, the code below will not process it. This is a limitaion of this method which can be
+    // further improved if needed. For now, leaving it as is.
+
+    // First, do a trivial test for equality
+    if (all_equal(tri.v0, tri.v1) || all_equal(tri.v0, tri.v2) || all_equal(tri.v1, tri.v2))
+    {
+        degen = true;
+    }
+    else if (all(abs(tri.v0) > FLT_MIN) &&
+             all(abs(tri.v1) > FLT_MIN) &&
+             all(abs(tri.v2) > FLT_MIN))
+    {
+        float3 edge1 = tri.v0 - tri.v1;
+        float3 edge2 = tri.v0 - tri.v2;
+        float3 perp  = cross(edge1, edge2);
+
+        // degenerate triangle, can do a range test instead of equality with 0.0
+        // to detect more degens in practice.
+        degen = (any(perp) == false);
+    }
+
+    return degen;
+}
+
+//=====================================================================================================================
+static bool IsUpdateAllowed()
+{
+    return (Settings.updateFlags & DDI_BUILD_FLAG_ALLOW_UPDATE);
+}
+
+//=====================================================================================================================
 // Calculate an AABB from the 3 points of the triangle.
 static BoundingBox GenerateTriangleBoundingBox(float3 v0, float3 v1, float3 v2)
 {
@@ -525,10 +561,13 @@ static BoundingBox GenerateTriangleBoundingBox(float3 v0, float3 v1, float3 v2)
         max(max(v0, v1), v2),
     };
 
-    // Generate degenerate bounding box for triangles that degenerate into line or point
-    if (all_equal(v0, v1) || all_equal(v0, v2) || all_equal(v1, v2))
+    if (Settings.disableDegenPrims == 0)
     {
-        bbox = InvalidBoundingBox;
+        // Generate degenerate bounding box for triangles that degenerate into line or point
+        if (all_equal(v0, v1) || all_equal(v0, v2) || all_equal(v1, v2))
+        {
+            bbox = InvalidBoundingBox;
+        }
     }
 
     return bbox;
@@ -653,12 +692,6 @@ static float max3(float3 val)
 static bool IsUpdate()
 {
     return (Settings.updateFlags & DDI_BUILD_FLAG_PERFORM_UPDATE);
-}
-
-//=====================================================================================================================
-static bool IsUpdateAllowed()
-{
-    return (Settings.updateFlags & DDI_BUILD_FLAG_ALLOW_UPDATE);
 }
 
 //=====================================================================================================================
@@ -841,7 +874,7 @@ static uint32_t GetInstanceSidebandOffset(
 // Node pointers with all upper bits set are sentinels: INVALID_NODE, TERMINAL_NODE, SKIP_*
 static bool IsValidNode(uint nodePtr)
 {
-    return nodePtr < DEAD_LANE_WITH_STACK;
+    return nodePtr < END_SEARCH;
 }
 
 //======================================================================================================================

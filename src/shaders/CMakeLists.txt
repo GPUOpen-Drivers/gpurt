@@ -37,7 +37,7 @@ set(gpurtHlsl
     RadixSort/ScatterKeysAndValues.hlsl
     IndirectArgBufferUtils.hlsl
     AccelStructTracker.hlsl
-    BuildRootSignature.hlsl
+    ../shadersClean/build/BuildRootSignature.hlsli
     BuildBVH.hlsl
     BuildPLOC.hlsl
     BuildBVHTDTR.hlsl
@@ -72,7 +72,6 @@ set(gpurtHlsl
     EncodeTopLevelBuild.hlsl
     EncodeTopLevelCommon.hlsl
     EncodeTopLevelUpdate.hlsl
-    Extensions.hlsl
     GenerateMortonCodes.hlsl
     GpuRtLibrary.hlsl
     InitAccelerationStructure.hlsl

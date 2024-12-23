@@ -92,7 +92,7 @@ struct BuildPlocArgs
 
 #define GC_DSTMETADATA
 #define GC_SCRATCHBUFFER
-#include "BuildRootSignature.hlsl"
+#include "../shadersClean/build/BuildRootSignature.hlsli"
 
 #include "BuildCommonScratch.hlsl"
 

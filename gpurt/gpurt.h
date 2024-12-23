@@ -788,6 +788,7 @@ struct DeviceSettings
         uint32 enableRemapScratchBuffer : 1;                // Enable remapping bvh2 data from ScratchBuffer to ResultBuffer
         uint32 checkBufferOverlapsInBatch : 1;
         uint32 disableCompaction : 1;                       // Reports and perform copy instead of compaction
+        uint32 disableDegenPrims : 1;                       // Disable degenerate primitives, ie: set their vertex.x = NaN
     };
 
     uint64                      accelerationStructureUUID;  // Acceleration Structure UUID

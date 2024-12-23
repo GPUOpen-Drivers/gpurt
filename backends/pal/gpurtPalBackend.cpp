@@ -271,17 +271,11 @@ void PalBackend::InsertBarrier(
 }
 
 // =====================================================================================================================
-void PalBackend::CreateBufferViewSrds(
-    uint32                count,
+void PalBackend::CreateTypedBufferViewSrds(
     const BufferViewInfo& bufferViewInfo,
-    void*                 pOut,
-    bool                  isTyped
-    ) const
+    void*                 pOut) const
 {
-    const uint32 bufferSrdSizeDw = ((isTyped) ?
-                                    m_deviceProperties.gfxipProperties.srdSizes.typedBufferView :
-                                    m_deviceProperties.gfxipProperties.srdSizes.untypedBufferView)
-                                   / sizeof(uint32);
+    const uint32 bufferSrdSizeDw = m_deviceProperties.gfxipProperties.srdSizes.typedBufferView  / sizeof(uint32);
 
     const Pal::BufferViewInfo palBufferViewInfo = ConvertBufferViewToPalBufferView(bufferViewInfo);
     const void* pNullBuffer = m_deviceProperties.gfxipProperties.nullSrds.pNullBufferView;
@@ -290,13 +284,29 @@ void PalBackend::CreateBufferViewSrds(
     {
         memcpy(pOut, pNullBuffer, bufferSrdSizeDw * sizeof(uint32));
     }
-    else if (isTyped)
+    else
     {
-        m_pDevice->CreateTypedBufferViewSrds(count, &palBufferViewInfo, pOut);
+        m_pDevice->CreateTypedBufferViewSrds(1, &palBufferViewInfo, pOut);
+    }
+}
+
+// =====================================================================================================================
+void PalBackend::CreateUntypedBufferViewSrds(
+    const BufferViewInfo& bufferViewInfo,
+    void*                 pOut) const
+{
+    const uint32 bufferSrdSizeDw = m_deviceProperties.gfxipProperties.srdSizes.untypedBufferView / sizeof(uint32);
+
+    const Pal::BufferViewInfo palBufferViewInfo = ConvertBufferViewToPalBufferView(bufferViewInfo);
+    const void* pNullBuffer = m_deviceProperties.gfxipProperties.nullSrds.pNullBufferView;
+
+    if (bufferViewInfo.gpuAddr == 0)
+    {
+        memcpy(pOut, pNullBuffer, bufferSrdSizeDw * sizeof(uint32));
     }
     else
     {
-        m_pDevice->CreateUntypedBufferViewSrds(count, &palBufferViewInfo, pOut);
+        m_pDevice->CreateUntypedBufferViewSrds(1, &palBufferViewInfo, pOut);
     }
 }
 

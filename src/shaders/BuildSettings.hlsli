@@ -61,6 +61,7 @@
 [[vk::constant_id(BUILD_SETTINGS_DATA_SCENE_BOUNDS_CALCULATION_TYPE_ID)]]          uint sceneBoundsCalculationType    = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_REBRAID_QUALITY_HEURISTIC_ID)]]              uint rebraidQualityHeuristic       = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_DISABLE_COMPACTION_ID)]]                     uint disableCompaction            = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_DISABLE_DEGEN_PRIMS_ID)]]                    uint disableDegenPrims            = 0;
 
 static const CompileTimeBuildSettings Settings = {
     topLevelBuild,
@@ -100,6 +101,7 @@ static const CompileTimeBuildSettings Settings = {
     0,
     0,
     0,
+    0,
     enableInstanceRebraid,
     gpuDebugFlags,
     updateFlags,
@@ -109,8 +111,8 @@ static const CompileTimeBuildSettings Settings = {
     rebraidQualityHeuristic,
     0,
     0,
-    0,
     disableCompaction,
+    disableDegenPrims,
 };
 
 #endif

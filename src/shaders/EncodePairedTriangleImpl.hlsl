@@ -27,6 +27,7 @@ void WriteScratchTriangleNode(
     uint         geometryIndex,
     uint         geometryFlags,
     TriangleData tri,
+    uint         instanceMask,
     uint         primitiveIndex)
 {
     uint offset = CalcScratchNodeOffset(ShaderConstants.offsets.bvhLeafNodeData, dstScratchNodeIdx);
@@ -45,11 +46,15 @@ void WriteScratchTriangleNode(
     data = uint4(asuint(tri.v2), INVALID_IDX);
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V2_OFFSET, data);
 
-    const BoundingBox box = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
-    // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
-    const uint instanceMask = (box.min.x > box.max.x) ? 0 : 0xff;
+    uint instanceMaskLocal = instanceMask;
+    if (Settings.disableDegenPrims == 0)
+    {
+        const BoundingBox box = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
+        // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
+        instanceMaskLocal = (box.min.x > box.max.x) ? 0 : 0xff;
+    }
 
-    const uint packedFlags = PackScratchNodeFlags(instanceMask, CalcTriangleBoxNodeFlags(geometryFlags), 0);
+    const uint packedFlags = PackScratchNodeFlags(instanceMaskLocal, CalcTriangleBoxNodeFlags(geometryFlags), 0);
 
     data = uint4(0, 0, 0, packedFlags);
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_SPLIT_BOX_INDEX_OFFSET, data);
@@ -63,6 +68,7 @@ void WriteScratchQuadNode(
     TriangleData tri1,
     uint         tri1PrimIdx,
     TriangleData tri0,
+    uint         instanceMask,
     uint         tri0PrimIdx,
     uint         quadSwizzle)
 {
@@ -100,15 +106,21 @@ void WriteScratchQuadNode(
 
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V0_OFFSET, v0);
 
-    // Account for the unshared vertex from triangle 0
-    BoundingBox box = GenerateTriangleBoundingBox(tri1.v0, tri1.v1, tri1.v2);
-    box.min = min(box.min, v0);
-    box.max = max(box.max, v0);
+    uint instanceMaskLocal = instanceMask;
+    if (Settings.disableDegenPrims == 0)
+    {
+        // Account for the unshared vertex from triangle 0
+        BoundingBox box = GenerateTriangleBoundingBox(tri1.v0, tri1.v1, tri1.v2);
+        box.min = min(box.min, v0);
+        box.max = max(box.max, v0);
 
-    // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
-    const uint instanceMask = (box.min.x > box.max.x) ? 0 : 0xff;
+        // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
+        instanceMaskLocal = (box.min.x > box.max.x) ? 0 : 0xff;
+    }
 
-    const uint packedFlags = PackScratchNodeFlags(instanceMask, CalcTriangleBoxNodeFlags(geometryFlags), quadSwizzle);
+    const uint packedFlags = PackScratchNodeFlags(instanceMaskLocal, CalcTriangleBoxNodeFlags(geometryFlags),
+                                                  quadSwizzle);
+
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_FLAGS_OFFSET, packedFlags);
 }
 
@@ -350,6 +362,11 @@ int PairTriangles(
     int pairInfo = -1;
 
     const bool isActiveTriangle = IsActive(tri);
+
+    if ((Settings.disableDegenPrims) && IsDegenerateTriangle(tri))
+    {
+        return -1;
+    }
 
     float3x3 faceVertices;
     faceVertices[0] = tri.v0;

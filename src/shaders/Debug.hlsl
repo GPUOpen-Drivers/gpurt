@@ -27,7 +27,7 @@
 
 #include "../shared/debugBuffer.h"
 #include "Common.hlsl"
-#include "Extensions.hlsl"
+#include "../shadersClean/common/Extensions.hlsli"
 
 #define GPURT_DEBUG_BUFFER_AVAILABLE (GPURT_ENABLE_GPU_DEBUG && GPURT_BVH_BUILD_SHADER && defined(DEBUG_BUFFER_SLOT))
 

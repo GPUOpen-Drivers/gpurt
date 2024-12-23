@@ -91,12 +91,15 @@ public:
 
     virtual void InsertBarrier(ClientCmdBufferHandle cmdBuffer, uint32 flags) const override;
 
-    virtual void CreateBufferViewSrds(
-        uint32                count,
+    // Creates typed buffer view SRDs, typically for writing descriptor tables.
+    virtual void CreateTypedBufferViewSrds(
         const BufferViewInfo& bufferViewInfo,
-        void*                 pOut,
-        bool                  isTyped
-    ) const override;
+        void*                 pOut) const override;
+
+    // Creates untyped buffer view SRDs, typically for writing descriptor tables.
+    virtual void CreateUntypedBufferViewSrds(
+        const BufferViewInfo& bufferViewInfo,
+        void*                 pOut) const override;
 
     virtual uint32 GetOptimalNumThreadGroups(uint32 threadGroupSize) const override;
 

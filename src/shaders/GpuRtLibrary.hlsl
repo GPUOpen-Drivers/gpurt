@@ -327,13 +327,8 @@ export void TraceRayInline2_0(
 export uint GetInstanceID(
     in uint64_t instanceNodePtr) // 64-bit instance node address
 {
-    uint instanceId = 0;
-    if (instanceNodePtr != 0)
-    {
-        const uint instanceIdAndMask = LoadDwordAtAddr(instanceNodePtr + INSTANCE_DESC_ID_AND_MASK_OFFSET);
-        instanceId = (instanceIdAndMask & 0x00ffffff);
-    }
-    return instanceId;
+    const uint instanceIdAndMask = LoadDwordAtAddr(instanceNodePtr + INSTANCE_DESC_ID_AND_MASK_OFFSET);
+    return (instanceIdAndMask & 0x00ffffff);
 }
 
 //=====================================================================================================================
@@ -341,13 +336,7 @@ export uint GetInstanceID(
 export uint GetInstanceIndex(
     in uint64_t instanceNodePtr) // 64-bit instance node address
 {
-    uint instanceIndex = 0;
-    if (instanceNodePtr != 0)
-    {
-        instanceIndex = LoadDwordAtAddr(instanceNodePtr + sizeof(InstanceDesc) +
-                                        RTIP1_1_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET);
-    }
-    return instanceIndex;
+    return LoadDwordAtAddr(instanceNodePtr + sizeof(InstanceDesc) + RTIP1_1_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET);
 }
 
 //=====================================================================================================================
@@ -357,16 +346,11 @@ export float GetObjectToWorldTransform(
     in uint32_t row,             // row index
     in uint32_t col)             // column index
 {
-    float transform = 0;
-    if (instanceNodePtr != 0)
-    {
-        const uint32_t elementOffset = (row * sizeof(float4)) + (col * sizeof(float));
-        transform = asfloat(LoadDwordAtAddr(instanceNodePtr +
-                                            sizeof(InstanceDesc) +
-                                            RTIP1_1_INSTANCE_SIDEBAND_OBJECT2WORLD_OFFSET +
-                                            elementOffset));
-    }
-    return transform;
+    const uint32_t elementOffset = (row * sizeof(float4)) + (col * sizeof(float));
+    return asfloat(LoadDwordAtAddr(instanceNodePtr +
+                                   sizeof(InstanceDesc) +
+                                   RTIP1_1_INSTANCE_SIDEBAND_OBJECT2WORLD_OFFSET +
+                                   elementOffset));
 }
 
 //=====================================================================================================================
@@ -376,14 +360,8 @@ export float GetWorldToObjectTransform(
     in uint32_t row,             // row index
     in uint32_t col)             // column index
 {
-    float transform = 0;
-    if (instanceNodePtr != 0)
-    {
-        const uint32_t elementOffset = (row * sizeof(float4)) + (col * sizeof(float));
-        transform = asfloat(LoadDwordAtAddr(instanceNodePtr + INSTANCE_DESC_WORLD_TO_OBJECT_XFORM_OFFSET +
-                                            elementOffset));
-    }
-    return transform;
+    const uint32_t elementOffset = (row * sizeof(float4)) + (col * sizeof(float));
+    return asfloat(LoadDwordAtAddr(instanceNodePtr + INSTANCE_DESC_WORLD_TO_OBJECT_XFORM_OFFSET + elementOffset));
 }
 
 //=====================================================================================================================
@@ -393,19 +371,16 @@ static float3x4 GetObjectToWorld3x4(
 {
     float3x4 transform = (float3x4)0;
 
-    if (instanceNodePtr != 0)
+    switch (GetRtIpLevel())
     {
-        switch (GetRtIpLevel())
-        {
-        default:
-        {
-            const uint offset = RTIP1_1_INSTANCE_SIDEBAND_OBJECT2WORLD_OFFSET;
-            transform[0] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + sizeof(InstanceDesc) + offset + 0));
-            transform[1] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + sizeof(InstanceDesc) + offset + 16));
-            transform[2] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + sizeof(InstanceDesc) + offset + 32));
-            break;
-        }
-        }
+    default:
+    {
+        const uint offset = RTIP1_1_INSTANCE_SIDEBAND_OBJECT2WORLD_OFFSET;
+        transform[0] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + sizeof(InstanceDesc) + offset + 0));
+        transform[1] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + sizeof(InstanceDesc) + offset + 16));
+        transform[2] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + sizeof(InstanceDesc) + offset + 32));
+        break;
+    }
     }
 
     return transform;
@@ -418,21 +393,18 @@ static float3x4 GetWorldToObject3x4(
 {
     float3x4 transform = (float3x4)0;
 
-    if (instanceNodePtr != 0)
+    switch (GetRtIpLevel())
     {
-        switch (GetRtIpLevel())
-        {
-        default:
-        {
-            const uint offset = INSTANCE_DESC_WORLD_TO_OBJECT_XFORM_OFFSET;
+    default:
+    {
+        const uint offset = INSTANCE_DESC_WORLD_TO_OBJECT_XFORM_OFFSET;
 
-            transform[0] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + offset + 0));
-            transform[1] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + offset + 16));
-            transform[2] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + offset + 32));
+        transform[0] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + offset + 0));
+        transform[1] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + offset + 16));
+        transform[2] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + offset + 32));
 
-            break;
-        }
-        }
+        break;
+    }
     }
 
     return transform;
@@ -460,12 +432,7 @@ export uint64_t GetRayQuery64BitInstanceNodePtr(
     in uint64_t tlasBaseAddr,     // 64-bit TLAS base address
     in uint32_t instanceNodePtr)  // Instance node pointer
 {
-    uint64_t nodeAddr = 0;
-    if (instanceNodePtr != 0)
-    {
-        nodeAddr = CalculateNodeAddr64(tlasBaseAddr, instanceNodePtr);
-    }
-    return nodeAddr;
+    return CalculateNodeAddr64(tlasBaseAddr, instanceNodePtr);
 }
 
 //=====================================================================================================================

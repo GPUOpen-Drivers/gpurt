@@ -24,7 +24,7 @@
  **********************************************************************************************************************/
 #include "../shadersClean/common/ShaderDefs.hlsli"
 
-#include "BuildRootSignature.hlsl"
+#include "../shadersClean/build/BuildRootSignature.hlsli"
 
 template<typename T>
 T LoadInstanceDescBuffer(uint offset)
@@ -158,4 +158,13 @@ void EncodeInstances(
     IncrementPrimitiveTaskCounters(index,
                                    numPrimAndOffset.numPrimitives,
                                    MaxNumPrimitives);
+}
+
+//=====================================================================================================================
+[RootSignature(RootSig)]
+[numthreads(BUILD_THREADGROUP_SIZE, 1, 1)]
+//=====================================================================================================================
+void RefitInstanceBounds(
+    in uint3 globalThreadId : SV_DispatchThreadID)
+{
 }

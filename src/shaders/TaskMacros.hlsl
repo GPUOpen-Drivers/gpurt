@@ -71,4 +71,32 @@
                                 DeviceMemoryBarrier();\
                             } while (TASK_COUNTER_BUFFER.Load(NUM_TASKS_DONE_OFFSET) < numTasksWait);
 
+#define END_TASK_NO_WAIT(n)     DeviceMemoryBarrierWithGroupSync();\
+                                if(localId == 0)\
+                                {\
+                                    TASK_COUNTER_BUFFER.InterlockedAdd(TASK_COUNTER_OFFSET, 1, SharedMem[0]);\
+                                    TASK_COUNTER_BUFFER.InterlockedAdd(NUM_TASKS_DONE_OFFSET, 1);\
+                                }\
+                                GroupMemoryBarrierWithGroupSync();\
+                                waveId = SharedMem[0];\
+                                GroupMemoryBarrierWithGroupSync();\
+                            }
+
+#define END_TASK_COND_WAIT(n, cond)     DeviceMemoryBarrierWithGroupSync();\
+                                        if(localId == 0)\
+                                        {\
+                                            TASK_COUNTER_BUFFER.InterlockedAdd(TASK_COUNTER_OFFSET, 1, SharedMem[0]);\
+                                            TASK_COUNTER_BUFFER.InterlockedAdd(NUM_TASKS_DONE_OFFSET, 1);\
+                                        }\
+                                        GroupMemoryBarrierWithGroupSync();\
+                                        waveId = SharedMem[0];\
+                                        GroupMemoryBarrierWithGroupSync();\
+                                    }\
+                                    if(cond) {\
+                                        numTasksWait += n;\
+                                        do\
+                                        {\
+                                            DeviceMemoryBarrier();\
+                                        } while (TASK_COUNTER_BUFFER.Load(NUM_TASKS_DONE_OFFSET) < numTasksWait); }
+
 #endif

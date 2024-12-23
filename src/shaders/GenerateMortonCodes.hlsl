@@ -26,7 +26,7 @@
 //=====================================================================================================================
 #include "../shadersClean/common/ShaderDefs.hlsli"
 
-#include "BuildRootSignature.hlsl"
+#include "../shadersClean/build/BuildRootSignature.hlsli"
 #endif
 
 #include "BuildCommonScratch.hlsl"

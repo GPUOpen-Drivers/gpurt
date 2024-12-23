@@ -25,6 +25,7 @@
 // Note, CBV(b255) must be the last used binding in the root signature.
 #define RootSig "RootConstants(num32BitConstants=1, b0),"\
                 "CBV(b1),"\
+                "CBV(b2),"\
                 "UAV(u0),"\
                 "UAV(u1),"\
                 "UAV(u2),"\
@@ -48,6 +49,7 @@ struct RootConstants
 
 [[vk::push_constant]] ConstantBuffer<RootConstants>        ShaderRootConstants : register(b0);
 [[vk::binding(1, 1)]] ConstantBuffer<BuildShaderConstants> ShaderConstants     : register(b1);
+[[vk::binding(2, 1)]] ConstantBuffer<LutData>              LutBuffer           : register(b2);
 
 [[vk::binding(0, 0)]] globallycoherent RWByteAddressBuffer DstMetadata     : register(u0);
 [[vk::binding(1, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer   : register(u1);

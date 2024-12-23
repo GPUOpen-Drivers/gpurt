@@ -518,6 +518,7 @@ void CompactASImpl1_1(
             const GeometryInfo geometryInfo = SrcBuffer.Load<GeometryInfo>(srcGeometryInfoOffset);
             DstMetadata.Store<GeometryInfo>(dstGeometryInfoOffset, geometryInfo);
         }
+
     }
 
     // Copy primitive node pointers

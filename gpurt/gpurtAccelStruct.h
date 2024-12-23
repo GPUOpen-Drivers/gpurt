@@ -45,7 +45,7 @@
 // Note this file is designed to be compilable as HLSL.
 
 #define GPURT_ACCEL_STRUCT_MAJOR_VERSION 16
-#define GPURT_ACCEL_STRUCT_MINOR_VERSION 3
+#define GPURT_ACCEL_STRUCT_MINOR_VERSION 4
 #define GPURT_ACCEL_STRUCT_VERSION       ((GPURT_ACCEL_STRUCT_MAJOR_VERSION << 16) | GPURT_ACCEL_STRUCT_MINOR_VERSION)
 
 #include "../src/shared/assert.h"
@@ -84,7 +84,7 @@ GPURT_STATIC_ASSERT(sizeof(AccelStructDataOffsets) == 16,
     "AccelStructDataOffsets size cannot change because it is embedded in AccelStructHeader.");
 
 // =====================================================================================================================
-// Header for acceleration structure metadata
+// Acceleration structure metadata header
 struct AccelStructMetadataHeader
 {
     uint32 addressLo;           // Address of acceleration structure data section (low bits)
@@ -96,6 +96,8 @@ struct AccelStructMetadataHeader
     uint32 reserved0[16];       // Reserved
     uint32 reserved1[3];        // Reserved
     uint32 reserved2[3];        // Reserved
+    uint32 padding[5];          // 128-byte alignment padding
+    uint32 reserved3[32];
 };
 
 #define ACCEL_STRUCT_METADATA_VA_LO_OFFSET              0
@@ -106,7 +108,8 @@ struct AccelStructMetadataHeader
 #define ACCEL_STRUCT_METADATA_RESERVED_0                20
 #define ACCEL_STRUCT_METADATA_RESERVED_1                84
 #define ACCEL_STRUCT_METADATA_RESERVED_2                96
-#define ACCEL_STRUCT_METADATA_HEADER_SIZE               108
+#define ACCEL_STRUCT_METADATA_RESERVED_3                128
+#define ACCEL_STRUCT_METADATA_HEADER_SIZE               256
 
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_HEADER_SIZE == sizeof(AccelStructMetadataHeader), "Acceleration structure header mismatch");
 #ifdef __cplusplus
@@ -115,6 +118,22 @@ GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_VA_HI_OFFSET == offsetof(AccelStructMe
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_SIZE_OFFSET == offsetof(AccelStructMetadataHeader, sizeInBytes), "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET == offsetof(AccelStructMetadataHeader, taskCounter), "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET == offsetof(AccelStructMetadataHeader, numTasksDone), "");
+#endif
+
+// =====================================================================================================================
+// Metadata header fields referenced by tools. The fields below must mirror the first N bytes of
+// AccelStructMetadataHeader. Any changes to this structure warrants a major revision change.
+struct ToolsMetadataHeader
+{
+    uint32 addressLo;           // Address of acceleration structure data section (low bits)
+    uint32 addressHi;           // Address of acceleration structure data section (high bits)
+    uint32 sizeInBytes;         // Metadata size in bytes (including this header)
+};
+
+#ifdef __cplusplus
+GPURT_STATIC_ASSERT(offsetof(ToolsMetadataHeader, addressLo) == offsetof(AccelStructMetadataHeader, addressLo), "");
+GPURT_STATIC_ASSERT(offsetof(ToolsMetadataHeader, addressHi) == offsetof(AccelStructMetadataHeader, addressHi), "");
+GPURT_STATIC_ASSERT(offsetof(ToolsMetadataHeader, sizeInBytes) == offsetof(AccelStructMetadataHeader, sizeInBytes), "");
 #endif
 
 #ifdef __cplusplus
@@ -132,7 +151,7 @@ union AccelStructHeaderInfo
         uint32 triCompression         : 3;  // BLAS TriangleCompressionMode: None=0, Two=1, Pair=2
         uint32 fp16BoxNodesInBlasMode : 2;  // BLAS FP16 box mode: None=0, Leaf=1, Mixed=2, All=3
         uint32 triangleSplitting      : 1;  // Enable TriangleSplitting
-        uint32 rebraid                : 1;  // Enable Rebraid
+        uint32 rebraid                : 1;  // Enable Rebraid for TLAS
         uint32 fusedInstanceNode      : 1;  // Enable fused instance nodes
         uint32 reserved               : 2;  // Unused bits
         uint32 flags                  : 16; // AccelStructBuildFlags

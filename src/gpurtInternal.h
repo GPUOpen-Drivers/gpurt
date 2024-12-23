@@ -621,16 +621,26 @@ public:
         gpusize               sizeInBytes,
         gpusize*              pGpuAddress) const;
 
-    void* AllocateDescriptorTable(
+    void* AllocateUntypedDescriptorTable(
         ClientCmdBufferHandle cmdBuffer,
         uint32                count,
         gpusize*              pGpuAddress) const;
 
-    uint32 WriteBufferSrdTable(
+    void* AllocateTypedDescriptorTable(
+        ClientCmdBufferHandle cmdBuffer,
+        uint32                count,
+        gpusize*              pGpuAddress) const;
+
+    uint32 WriteTypedBufferSrdTable(
         ClientCmdBufferHandle cmdBuffer,
         const BufferViewInfo* pBufferViews,
         uint32                count,
-        bool                  typedBuffer,
+        uint32                entryOffset) const;
+
+    uint32 WriteUntypedBufferSrdTable(
+        ClientCmdBufferHandle cmdBuffer,
+        const BufferViewInfo* pBufferViews,
+        uint32                count,
         uint32                entryOffset) const;
 
     // Computes size for decoded acceleration structure

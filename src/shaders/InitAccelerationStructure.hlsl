@@ -25,6 +25,8 @@
 // Note, CBV(b255) must be the last used binding in the root signature.
 #ifdef IS_UPDATE
 #define RootSig "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
+                "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 2)),"\
+                "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 3)),"\
                 "CBV(b255)"
 #else
 #define RootSig "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
@@ -37,7 +39,10 @@
 #include "Common.hlsl"
 
 [[vk::binding(0, 3)]] RWByteAddressBuffer       BatchScratchGlobals[]   : register(u0, space1);
-#ifndef IS_UPDATE
+#ifdef IS_UPDATE
+[[vk::binding(0, 4)]] RWByteAddressBuffer       BatchSrcHeaderBuffers[] : register(u0, space2);
+[[vk::binding(0, 5)]] RWByteAddressBuffer       BatchDstHeaderBuffers[] : register(u0, space3);
+#else
 struct Constants
 {
     uint maxNumPrimitives;
@@ -87,12 +92,16 @@ void ResetCounters(
 void InitAccelerationStructure(
     uint groupId  : SV_GroupId)
 {
+    const uint InitialMax = FloatToUint(-FLT_MAX);
+    const uint InitialMin = FloatToUint(FLT_MAX);
+
 #ifdef IS_UPDATE
     const RWByteAddressBuffer ScratchGlobal = BatchScratchGlobals[groupId];
 
     // Reset update stack pointer and update task counters.
     const EncodeTaskCountersUpdate encodeTaskCountersUpdate = (EncodeTaskCountersUpdate)0;
     ScratchGlobal.Store<EncodeTaskCountersUpdate>(0, encodeTaskCountersUpdate);
+
 #else
     const ConstantBuffer<Constants> BuilderConstants = BatchBuilderConstants[groupId];
     const RWByteAddressBuffer       HeaderBuffer     = BatchHeaderBuffers[groupId];
@@ -107,9 +116,6 @@ void InitAccelerationStructure(
         // Clear debug counters
         ResetCounters(ScratchGlobal, BuilderConstants.debugCountersScratchOffset, RayTracingBuildDebugCounters);
     }
-
-    const uint InitialMax = FloatToUint(-FLT_MAX);
-    const uint InitialMin = FloatToUint(FLT_MAX);
 
     if (BuilderConstants.maxNumPrimitives != 0)
     {

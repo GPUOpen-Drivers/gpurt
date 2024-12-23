@@ -35,7 +35,7 @@
 #define GC_DSTBUFFER
 #define GC_DSTMETADATA
 #define GC_SCRATCHBUFFER
-#include "BuildRootSignature.hlsl"
+#include "../shadersClean/build/BuildRootSignature.hlsli"
 
 template<typename T>
 T LoadInstanceDescBuffer(uint offset)
@@ -56,6 +56,7 @@ groupshared uint SharedMem[MAX_LDS_ELEMENTS];
 
 #define LOG_BASE_N                          10
 #define LIMIT_OPENINGS_BASED_ON_ITERATION   1
+#define CHECK_BLAS_HEADER_FOR_REBRAID       1
 
 //=====================================================================================================================
 struct RebraidArgs
@@ -216,63 +217,64 @@ void RebraidImpl(
                         WriteFlagsDLB(args.atomicFlagsScratchOffset, stage, type, flags);
                     }
                 }
-
-                if (iterationCount == 0)
                 {
-                    float localSum = 0;
-
-                    const uint currentSumValueOffset = sumValueOffset + ((iterationCount & 0x1) * sizeof(float));
-
-                    for (uint i = globalId; i < numPrims; i += numThreads)
+                    if (iterationCount == 0)
                     {
-                        const ScratchNode leaf = FetchScratchNode(args.bvhLeafNodeDataScratchOffset, i);
+                        float localSum = 0;
 
-                        if (IsNodeActive(leaf))
+                        const uint currentSumValueOffset = sumValueOffset + ((iterationCount & 0x1) * sizeof(float));
+
+                        for (uint i = globalId; i < numPrims; i += numThreads)
                         {
-                            const BoundingBox aabb = GetScratchNodeInstanceBounds(leaf);
+                            const ScratchNode leaf = FetchScratchNode(args.bvhLeafNodeDataScratchOffset, i);
 
-                            const uint nodePtr = leaf.splitBox_or_nodePointer == 0 ?
-                                                 rootNodePointer : leaf.splitBox_or_nodePointer;
-
-                            if (IsBoxNode(nodePtr))
+                            if (IsNodeActive(leaf))
                             {
-                                float instanceSA;
+                                const BoundingBox aabb = GetScratchNodeInstanceBounds(leaf);
 
-                                if (args.qualityHeuristic == 0)
-                                {
-                                    const float childSA = CalculateInstanceChildrenSA(args, nodePtr, leaf, instanceDescOffsetInBytes);
-                                    instanceSA = log(max(0, ComputeBoxSurfaceArea(aabb) - childSA) + 1)
-                                                    / log(LOG_BASE_N);
-                                }
-                                else
-                                {
-                                    instanceSA = log(ComputeBoxSurfaceArea(aabb) + 1)
-                                                    / log(LOG_BASE_N);
-                                }
+                                const uint nodePtr = leaf.splitBox_or_nodePointer == 0 ?
+                                                     rootNodePointer : leaf.splitBox_or_nodePointer;
 
-                                localSum += instanceSA;
+                                if (IsBoxNode(nodePtr))
+                                {
+                                    float instanceSA;
+
+                                    if (args.qualityHeuristic == 0)
+                                    {
+                                        const float childSA = CalculateInstanceChildrenSA(args, nodePtr, leaf, instanceDescOffsetInBytes);
+                                        instanceSA = log(max(0, ComputeBoxSurfaceArea(aabb) - childSA) + 1)
+                                                        / log(LOG_BASE_N);
+                                    }
+                                    else
+                                    {
+                                        instanceSA = log(ComputeBoxSurfaceArea(aabb) + 1)
+                                                        / log(LOG_BASE_N);
+                                    }
+
+                                    localSum += instanceSA;
+                                }
                             }
                         }
-                    }
 
-                    const float waveSum = WaveActiveSum(localSum);
-                    if (WaveIsFirstLane())
-                    {
-                        // mutex lock
-                        uint orig = 1;
+                        const float waveSum = WaveActiveSum(localSum);
+                        if (WaveIsFirstLane())
+                        {
+                            // mutex lock
+                            uint orig = 1;
 
-                        do {
+                            do {
+                                DeviceMemoryBarrier();
+                                ScratchBuffer.InterlockedCompareExchange(mutexOffset, 0, 1, orig);
+                            } while (orig);
+
+                            const float globalSum = ScratchBuffer.Load<float>(currentSumValueOffset);
+
+                            ScratchBuffer.Store<float>(currentSumValueOffset, globalSum + waveSum);
+
                             DeviceMemoryBarrier();
-                            ScratchBuffer.InterlockedCompareExchange(mutexOffset, 0, 1, orig);
-                        } while (orig);
 
-                        const float globalSum = ScratchBuffer.Load<float>(currentSumValueOffset);
-
-                        ScratchBuffer.Store<float>(currentSumValueOffset, globalSum + waveSum);
-
-                        DeviceMemoryBarrier();
-
-                        ScratchBuffer.Store(mutexOffset, 0); //unlock
+                            ScratchBuffer.Store(mutexOffset, 0); //unlock
+                        }
                     }
                 }
 
@@ -317,46 +319,47 @@ void RebraidImpl(
                     const ScratchNode leaf = FetchScratchNode(args.bvhLeafNodeDataScratchOffset, i);
 
                     bool isOpen = false;
-
-                    if (IsNodeActive(leaf) && (globalSum != 0))
                     {
-                        const BoundingBox aabb = GetScratchNodeInstanceBounds(leaf);
-
-                        const uint nodePtr = leaf.splitBox_or_nodePointer == 0 ?
-                                             rootNodePointer : leaf.splitBox_or_nodePointer;
-
-                        if (IsBoxNode(nodePtr))
+                        if (IsNodeActive(leaf) && (globalSum != 0))
                         {
-                            float instanceSA;
+                            const BoundingBox aabb = GetScratchNodeInstanceBounds(leaf);
 
-                            if (args.qualityHeuristic == 0)
+                            const uint nodePtr = leaf.splitBox_or_nodePointer == 0 ?
+                                rootNodePointer : leaf.splitBox_or_nodePointer;
+
+                            if (IsBoxNode(nodePtr))
                             {
-                                const float childSA = CalculateInstanceChildrenSA(args, nodePtr, leaf, instanceDescOffsetInBytes);
-                                instanceSA = log(max(0, ComputeBoxSurfaceArea(aabb) - childSA) + 1)
-                                                / log(LOG_BASE_N);
-                            }
-                            else
-                            {
-                                instanceSA = log(ComputeBoxSurfaceArea(aabb) + 1) / log(LOG_BASE_N);
-                            }
+                                float instanceSA;
 
-                            const float value = instanceSA;
+                                if (args.qualityHeuristic == 0)
+                                {
+                                    const float childSA = CalculateInstanceChildrenSA(args, nodePtr, leaf, instanceDescOffsetInBytes);
+                                    instanceSA = log(max(0, ComputeBoxSurfaceArea(aabb) - childSA) + 1)
+                                        / log(LOG_BASE_N);
+                                }
+                                else
+                                {
+                                    instanceSA = log(ComputeBoxSurfaceArea(aabb) + 1) / log(LOG_BASE_N);
+                                }
 
-                            const uint numOpenings = maxOpenings * (value / globalSum);
+                                const float value = instanceSA;
 
-                            if (numOpenings > 0)
-                            {
-                                const uint64_t instanceBasePointer =
-                                    PackUint64(asuint(leaf.sah_or_v2_or_instBasePtr.x),
-                                                asuint(leaf.sah_or_v2_or_instBasePtr.y));
+                                const uint numOpenings = maxOpenings * (value / globalSum);
 
-                                const uint childCount =
-                                    GetBlasRebraidChildCount(instanceBasePointer, nodePtr);
+                                if (numOpenings > 0)
+                                {
+                                    const uint64_t instanceBasePointer =
+                                        PackUint64(asuint(leaf.sah_or_v2_or_instBasePtr.x),
+                                            asuint(leaf.sah_or_v2_or_instBasePtr.y));
 
-                                localKeys[keyIndex] = childCount - 1; // Additional children
-                                open[keyIndex] = true;
+                                    const uint childCount =
+                                        GetBlasRebraidChildCount(instanceBasePointer, nodePtr);
 
-                                isOpen = true;
+                                    localKeys[keyIndex] = childCount - 1; // Additional children
+                                    open[keyIndex] = true;
+
+                                    isOpen = true;
+                                }
                             }
                         }
                     }
@@ -547,52 +550,54 @@ void RebraidImpl(
                         }
                         else // no openings
                         {
-                            // last iteration
-                            if (iterationCount == (args.numIterations - 1))
                             {
-                                if (leaf.splitBox_or_nodePointer == 0)
+                                // last iteration
+                                if (iterationCount == (args.numIterations - 1))
                                 {
-                                    // point instance to the root
-                                    WriteScratchNodeDataAtOffset(
-                                        scratchNodeOffset,
-                                        SCRATCH_NODE_NODE_POINTER_OFFSET,
-                                        CreateRootNodePointer());
-                                }
-
-                                const BoundingBox aabb = GetScratchNodeInstanceBounds(leaf);
-
-                                if (args.enableMortonSize)
-                                {
-                                    UpdateSceneBoundsWithSize(args.sceneBoundsOffset, aabb);
-                                }
-                                else
-                                {
-                                    UpdateSceneBounds(args.sceneBoundsOffset, aabb);
-                                }
-                            }
-                            else
-                            {
-                                const BoundingBox aabb = GetScratchNodeInstanceBounds(leaf);
-
-                                // TODO: maybe avoid this logic by subtracting the SA when opening
-                                const uint nodePtr = leaf.splitBox_or_nodePointer == 0 ?
-                                                     rootNodePointer : leaf.splitBox_or_nodePointer;
-
-                                if (IsBoxNode(nodePtr))
-                                {
-                                    float instanceSA;
-                                    if (args.qualityHeuristic == 0)
+                                    if (leaf.splitBox_or_nodePointer == 0)
                                     {
-                                        const float childSA = CalculateInstanceChildrenSA(args, nodePtr, leaf, instanceDescOffsetInBytes);
-                                        instanceSA = log(max(0, ComputeBoxSurfaceArea(aabb) - childSA) + 1)
-                                                        / log(LOG_BASE_N);
+                                        // point instance to the root
+                                        WriteScratchNodeDataAtOffset(
+                                            scratchNodeOffset,
+                                            SCRATCH_NODE_NODE_POINTER_OFFSET,
+                                            CreateRootNodePointer());
+                                    }
+
+                                    const BoundingBox aabb = GetScratchNodeInstanceBounds(leaf);
+
+                                    if (args.enableMortonSize)
+                                    {
+                                        UpdateSceneBoundsWithSize(args.sceneBoundsOffset, aabb);
                                     }
                                     else
                                     {
-                                        instanceSA = log(ComputeBoxSurfaceArea(aabb) + 1) / log(LOG_BASE_N);
+                                        UpdateSceneBounds(args.sceneBoundsOffset, aabb);
                                     }
+                                }
+                                else
+                                {
+                                    const BoundingBox aabb = GetScratchNodeInstanceBounds(leaf);
 
-                                    localSum += instanceSA;
+                                    // TODO: maybe avoid this logic by subtracting the SA when opening
+                                    const uint nodePtr = leaf.splitBox_or_nodePointer == 0 ?
+                                        rootNodePointer : leaf.splitBox_or_nodePointer;
+
+                                    if (IsBoxNode(nodePtr))
+                                    {
+                                        float instanceSA;
+                                        if (args.qualityHeuristic == 0)
+                                        {
+                                            const float childSA = CalculateInstanceChildrenSA(args, nodePtr, leaf, instanceDescOffsetInBytes);
+                                            instanceSA = log(max(0, ComputeBoxSurfaceArea(aabb) - childSA) + 1)
+                                                / log(LOG_BASE_N);
+                                        }
+                                        else
+                                        {
+                                            instanceSA = log(ComputeBoxSurfaceArea(aabb) + 1) / log(LOG_BASE_N);
+                                        }
+
+                                        localSum += instanceSA;
+                                    }
                                 }
                             }
                         }
@@ -623,27 +628,30 @@ void RebraidImpl(
                     }
                 }
 
-                // create sum for next iteration
-                if (iterationCount != (args.numIterations - 1))
                 {
-                    const float waveSum = WaveActiveSum(localSum);
-                    if (WaveIsFirstLane())
+
+                    // create sum for next iteration
+                    if (iterationCount != (args.numIterations - 1))
                     {
-                        // mutex lock
-                        uint orig = 1;
+                        const float waveSum = WaveActiveSum(localSum);
+                        if (WaveIsFirstLane())
+                        {
+                            // mutex lock
+                            uint orig = 1;
 
-                        do {
+                            do {
+                                DeviceMemoryBarrier();
+                                ScratchBuffer.InterlockedCompareExchange(mutexOffset, 0, 1, orig);
+                            } while (orig);
+
+                            const float globalSum = ScratchBuffer.Load<float>(writeSumValueOffset);
+
+                            ScratchBuffer.Store<float>(writeSumValueOffset, globalSum + waveSum);
+
                             DeviceMemoryBarrier();
-                            ScratchBuffer.InterlockedCompareExchange(mutexOffset, 0, 1, orig);
-                        } while (orig);
 
-                        const float globalSum = ScratchBuffer.Load<float>(writeSumValueOffset);
-
-                        ScratchBuffer.Store<float>(writeSumValueOffset, globalSum + waveSum);
-
-                        DeviceMemoryBarrier();
-
-                        ScratchBuffer.Store(mutexOffset, 0); //unlock
+                            ScratchBuffer.Store(mutexOffset, 0); //unlock
+                        }
                     }
                 }
 

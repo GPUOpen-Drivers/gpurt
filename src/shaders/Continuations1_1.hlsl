@@ -238,7 +238,7 @@ static void TraversalInternal1_1(
     float2 committedBarycentrics = data.traversal.committedBarycentrics;
     candidateBarycentrics = float2(0.0f, 0.0f);
 
-    uint   nextNodePtr             = data.dispatch.nextNodePtr;
+    uint   nextNodePtr             = data.traversal.nextNodePtr;
     float3 candidateRayOrigin      = topLevelRayOrigin;
     float3 candidateRayDirection   = topLevelRayDirection;
     state                          = TRAVERSAL_STATE_COMMITTED_NOTHING;
@@ -545,7 +545,7 @@ static void TraversalInternal1_1(
     data.traversal.stackPtr = stack.Pack();
 
     // Pack traversal results back into traversal state structure
-    data.dispatch.nextNodePtr              = nextNodePtr;
+    data.traversal.nextNodePtr             = nextNodePtr;
     data.traversal.committed               = committed;
     data.traversal.committedBarycentrics   = committedBarycentrics;
 #if REMAT_INSTANCE_RAY == 0

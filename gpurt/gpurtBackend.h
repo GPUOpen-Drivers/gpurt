@@ -143,12 +143,15 @@ public:
     // Performs a generic barrier that's used to synchronize internal ray tracing shaders
     virtual void InsertBarrier(ClientCmdBufferHandle cmdBuffer, uint32 flags) const = 0;
 
-    // Creates typed or untyped buffer view SRDs, typically for writing descriptor tables.
-    virtual void CreateBufferViewSrds(
-        uint32                count,
+    // Creates typed buffer view SRDs, typically for writing descriptor tables.
+    virtual void CreateTypedBufferViewSrds(
         const BufferViewInfo& bufferViewInfo,
-        void*                 pOut,
-        bool                  isTyped) const = 0;
+        void*                 pOut) const = 0;
+
+    // Creates untyped buffer view SRDs, typically for writing descriptor tables.
+    virtual void CreateUntypedBufferViewSrds(
+        const BufferViewInfo& bufferViewInfo,
+        void*                 pOut) const = 0;
 
     // Returns the optimal number of thread groups to use for the current hardware, given a desired thread group size.
     virtual uint32 GetOptimalNumThreadGroups(uint32 threadGroupSize) const = 0;

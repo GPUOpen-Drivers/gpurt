@@ -31,11 +31,11 @@ void WriteScratchInstanceNode(
     uint                instanceIndex,
     in BoundingBox      bbox,
     uint                boxNodeFlags,
-    uint                instanceBasePointerLo,
-    uint                instanceBasePointerHi,
+    uint64_t            instanceBasePointer,
     uint                instanceMask,
     uint                numActivePrims,
-    uint                blasMetadataSize)
+    uint                blasMetadataSize,
+    uint                rebraidBLAS)
 {
     uint4 data;
 
@@ -48,14 +48,14 @@ void WriteScratchInstanceNode(
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_V1_OFFSET, data);
 
     // LeafNode.instanceNodeBasePointerLo, instanceNodeBasePointerHi, numActivePrims, parent
-    data = uint4(instanceBasePointerLo, instanceBasePointerHi, numActivePrims, 0xffffffff);
+    data = uint4(LowPart(instanceBasePointer), HighPart(instanceBasePointer), numActivePrims, 0xffffffff);
     WriteScratchNodeDataAtOffset(offset, SCRATCH_NODE_INSTANCE_BASE_PTR_OFFSET, data);
 
     // When rebraid might occur, the traversal shader will read the root node pointer of the bottom level from the
     // instance extra data. If we actually perform rebraid during the build, the node pointer must be set to 0 to
     // indicate the leaf node is unused. The correct pointer will be filled in later. If we have rebraid support
     // enabled in traversal but not during this build, we need to set the pointer to the true root of the bottom level.
-    const uint rootNodePointer = IsRebraidEnabled() ? 0 : CreateRootNodePointer();
+    const uint rootNodePointer = rebraidBLAS ? 0 : CreateRootNodePointer();
 
     const uint packedFlags = PackScratchNodeFlags(instanceMask, boxNodeFlags, 0);
 
@@ -82,28 +82,16 @@ void EncodeInstancesBuild(
         const uint geometryType =
             FetchHeaderField(baseAddrAccelStructHeader, ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET);
 
-        const uint64_t instanceBasePointer =
-            PackInstanceBasePointer(baseAddrAccelStructHeader,
-                                    desc.InstanceContributionToHitGroupIndex_and_Flags >> 24,
-                                    geometryType);
-
-        desc.accelStructureAddressLo         = LowPart(instanceBasePointer);
-        desc.accelStructureAddressHiAndFlags = HighPart(instanceBasePointer);
-
-        // calc transformed AABB
-        BoundingBox boundingBox;
-
+        // Initialise to invalid bounds
+        BoundingBox boundingBox = InvalidBoundingBox;
         if (numActivePrims != 0)
         {
-            // Fetch root bounds from BLAS header
-            const BoundingBox rootBbox = FetchHeaderRootBoundingBox(baseAddrAccelStructHeader);
-
-            boundingBox = GenerateInstanceBoundingBox(desc.Transform, rootBbox);
-        }
-        else
-        {
-            // Generate a invalid dummy bounding box
-            boundingBox = InvalidBoundingBox;
+            {
+                // Fetch root bounds from BLAS header
+                const BoundingBox rootBbox = FetchHeaderRootBoundingBox(baseAddrAccelStructHeader);
+                // Compute transformed bounding box
+                boundingBox = GenerateInstanceBoundingBox(desc.Transform, rootBbox);
+            }
         }
 
         if ((allowUpdate == false) && (IsCorruptBox(boundingBox) || IsInvalidBoundingBox(boundingBox)))
@@ -113,6 +101,11 @@ void EncodeInstancesBuild(
         }
         else
         {
+            const uint64_t instanceBasePointer =
+                PackInstanceBasePointer(baseAddrAccelStructHeader,
+                                        desc.InstanceContributionToHitGroupIndex_and_Flags >> 24,
+                                        geometryType);
+
             const uint packedFlags = FetchHeaderField(baseAddrAccelStructHeader, ACCEL_STRUCT_HEADER_PACKED_FLAGS_OFFSET);
             const uint boxNodeFlags = CalcTopLevelBoxNodeFlags(geometryType,
                                                                desc.InstanceContributionToHitGroupIndex_and_Flags >> 24,
@@ -125,16 +118,25 @@ void EncodeInstancesBuild(
                                       0 :
                                       ((desc.InstanceID_and_Mask >> 24) & ExtractScratchNodeInstanceMask(packedFlags));
 
+            uint rebraidBLAS = 0;
+
+            if (IsRebraidEnabled())
+            {
+                {
+                    rebraidBLAS = true;
+                }
+            }
+
             // Write scratch node
             WriteScratchInstanceNode(destScratchNodeOffset,
                                      index,
                                      boundingBox,
                                      boxNodeFlags,
-                                     desc.accelStructureAddressLo,
-                                     desc.accelStructureAddressHiAndFlags,
+                                     instanceBasePointer,
                                      instanceMask,
                                      numActivePrims,
-                                     blasMetadataSize);
+                                     blasMetadataSize,
+                                     rebraidBLAS);
 
             if (numActivePrims != 0)
             {

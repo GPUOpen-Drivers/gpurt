@@ -401,6 +401,16 @@ Device::Device(
 // =====================================================================================================================
 Device::~Device()
 {
+#if PAL_BUILD_RDF
+    Pal::IPlatform* pPlatform = m_info.pPalPlatform;
+    GpuUtil::TraceSession* pTraceSession = pPlatform->GetTraceSession();
+    if (pTraceSession)
+    {
+        pTraceSession->UnregisterSource(&m_accelStructTraceSource);
+        pTraceSession->UnregisterSource(&m_rayHistoryTraceSource);
+    }
+#endif
+
     for (const std::pair<InternalPipelineKey, InternalPipelineMemoryPair>& kv : m_pipelineMap)
     {
         m_clientCb.pfnDestroyInternalComputePipeline(m_info, kv.second.pPipeline, kv.second.pMemory);
@@ -673,6 +683,7 @@ ClientPipelineHandle Device::GetInternalPipeline(
                 case InternalRayTracingCsType::BuildBVHTD:
                 case InternalRayTracingCsType::BuildBVHTDTR:
                 case InternalRayTracingCsType::BuildParallel:
+                case InternalRayTracingCsType::Rebraid:
                     newBuildInfo.hashedCompilerOptionCount = 1;
                     newBuildInfo.pHashedCompilerOptions = wave64Option;
                     break;
@@ -829,36 +840,72 @@ void* Device::AllocateTemporaryData(
 }
 
 // =====================================================================================================================
-// Allocates embedded data for a descriptor table using hardware-specific SRD sizes.
-void* Device::AllocateDescriptorTable(
+// Allocates embedded data for a descriptor table using hardware-specific typed SRD sizes.
+void* Device::AllocateTypedDescriptorTable(
     ClientCmdBufferHandle cmdBuffer,
     uint32                count,
     gpusize*              pGpuAddress) const
 {
-    const uint32 srdSizeBytes = m_typedBufferSrdSizeDw * sizeof(uint32);
-    const uint32 srdBufferSizeBytes = srdSizeBytes * count;
+    const uint32 typedsrdSizeBytes = m_typedBufferSrdSizeDw * sizeof(uint32);
+    const uint32 srdBufferSizeBytes = typedsrdSizeBytes * count;
     return AllocateTemporaryData(cmdBuffer, srdBufferSizeBytes, pGpuAddress);
 }
 
 // =====================================================================================================================
-// Setup the SRD tables for the provided buffer views
-uint32 Device::WriteBufferSrdTable(
+// Allocates embedded data for a descriptor table using hardware-specific untyped SRD sizes.
+void* Device::AllocateUntypedDescriptorTable(
+    ClientCmdBufferHandle cmdBuffer,
+    uint32                count,
+    gpusize*              pGpuAddress) const
+{
+    const uint32 untypedSrdSizeBytes = m_untypedBufferSrdSizeDw * sizeof(uint32);
+    const uint32 srdBufferSizeBytes = untypedSrdSizeBytes * count;
+    return AllocateTemporaryData(cmdBuffer, srdBufferSizeBytes, pGpuAddress);
+}
+
+// =====================================================================================================================
+// Setup the Typed SRD tables for the provided buffer views
+uint32 Device::WriteTypedBufferSrdTable(
     ClientCmdBufferHandle cmdBuffer,
     const BufferViewInfo* pBufferViews,
     uint32                count,
-    bool                  typedBuffer,
     uint32                entryOffset) const
 {
     gpusize tableVa;
-    void* pTable = AllocateDescriptorTable(cmdBuffer, count, &tableVa);
-    const uint32 srdSizeBytes = (typedBuffer ? m_typedBufferSrdSizeDw  : m_untypedBufferSrdSizeDw) * sizeof(uint32);
+    void* pTable = AllocateTypedDescriptorTable(cmdBuffer, count, &tableVa);
+    const uint32 typedSrdSizeBytes = m_typedBufferSrdSizeDw * sizeof(uint32);
 
     for (uint32 i = 0; i < count; i++)
     {
         const BufferViewInfo& currentBufInfo = pBufferViews[i];
 
-        m_pBackend->CreateBufferViewSrds(1, currentBufInfo, pTable, typedBuffer);
-        pTable = Util::VoidPtrInc(pTable, srdSizeBytes);
+        m_pBackend->CreateTypedBufferViewSrds(currentBufInfo, pTable);
+        pTable = Util::VoidPtrInc(pTable, typedSrdSizeBytes);
+    }
+
+    entryOffset = WriteUserDataEntries(cmdBuffer, &tableVa, 1, entryOffset);
+
+    return entryOffset;
+}
+
+// =====================================================================================================================
+// Setup the Untyped SRD tables for the provided buffer views
+uint32 Device::WriteUntypedBufferSrdTable(
+    ClientCmdBufferHandle cmdBuffer,
+    const BufferViewInfo* pBufferViews,
+    uint32                count,
+    uint32                entryOffset) const
+{
+    gpusize tableVa;
+    void* pTable = AllocateUntypedDescriptorTable(cmdBuffer, count, &tableVa);
+    const uint32 untypedSrdSizeBytes = m_untypedBufferSrdSizeDw * sizeof(uint32);
+
+    for (uint32 i = 0; i < count; i++)
+    {
+        const BufferViewInfo& currentBufInfo = pBufferViews[i];
+
+        m_pBackend->CreateUntypedBufferViewSrds(currentBufInfo, pTable);
+        pTable = Util::VoidPtrInc(pTable, untypedSrdSizeBytes);
     }
 
     entryOffset = WriteUserDataEntries(cmdBuffer, &tableVa, 1, entryOffset);
@@ -1108,13 +1155,13 @@ void Device::WriteAccelStructChunk(
     Pal::IPlatform* pPlatform = m_info.pPalPlatform;
     GpuUtil::TraceSession* pTraceSession = pPlatform->GetTraceSession();
 #endif
-    const auto* pMetadataHdr = static_cast<const AccelStructMetadataHeader*>(pData);
+    const auto* pMetadataHdr = static_cast<const ToolsMetadataHeader*>(pData);
     const RawAccelStructRdfChunkHeader header =
     {
         .accelStructBaseVaLo = Util::LowPart(gpuVa),
         .accelStructBaseVaHi = Util::HighPart(gpuVa),
         .metaHeaderOffset    = 0,
-        .metaHeaderSize      = sizeof(GpuRt::AccelStructMetadataHeader),
+        .metaHeaderSize      = sizeof(GpuRt::ToolsMetadataHeader),
         .headerOffset        = pMetadataHdr->sizeInBytes,
         .headerSize          = sizeof(GpuRt::AccelStructHeader),
         .flags               = { .blas = isBlas },

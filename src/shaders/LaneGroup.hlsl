@@ -25,7 +25,7 @@
 #ifndef _LANE_GROUP_HLSL
 #define _LANE_GROUP_HLSL
 
-#include "Extensions.hlsl"
+#include "../shadersClean/common/Extensions.hlsli"
 
 //=====================================================================================================================
 // The following is a wrapper structure for wave lanes groups. A lanes group is a set of lanes within a wave that
@@ -44,7 +44,7 @@ struct LaneGroup
         groupSize  = size;
         laneIndex  = (WaveGetLaneIndex() % groupSize);
         groupIndex = (WaveGetLaneIndex() / groupSize);
-        groupMask  = (1u << groupSize) - 1;
+        groupMask  = bits(groupSize);
     }
 
     // Returns the index of the global (wave wide) lane index of the first lane in this group
@@ -101,6 +101,12 @@ struct LaneGroup
     }
 
     template<typename T>
+    T ReadFirstActiveLane(T val)
+    {
+        return Broadcast(val, GetFirstActiveLaneIndex(true));
+    }
+
+    template<typename T>
     T Sum(T val)
     {
         const uint clusterSize = log2(groupSize) + 1;
@@ -138,6 +144,22 @@ struct LaneGroup
         const uint clusterSize = log2(groupSize) + 1;
 
         return AmdExtD3DShaderIntrinsics_WaveClusterBitAnd(val, clusterSize);
+    }
+
+    template<typename T>
+    T PrefixSum(T val)
+    {
+        // Only full wave is supported for now
+        GPU_ASSERT(groupSize == WaveGetLaneCount());
+        return WavePrefixSum(val);
+    }
+
+    template<typename T>
+    T PostfixOr(T val)
+    {
+        // Only full wave is supported for now
+        GPU_ASSERT(groupSize == WaveGetLaneCount());
+        return spirv_OpGroupNonUniformBitwiseOr(/* Subgroup */ 3, /* InclusiveScan */ 1, val);
     }
 
     template<typename T>

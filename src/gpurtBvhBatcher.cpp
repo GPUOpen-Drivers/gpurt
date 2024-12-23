@@ -145,7 +145,7 @@ void BvhBatcher::BuildAccelerationStructureBatch(
     if (emptyBuilders.IsEmpty() == false)
     {
         RGP_PUSH_MARKER("Process Empty BVH builds");
-        DispatchInitAccelerationStructure<false>(emptyBuilders);
+        DispatchInitAccelerationStructure<false, false>(emptyBuilders);
         if (PhaseEnabled(BuildPhaseFlags::SeparateEmitPostBuildInfoPass))
         {
             Barrier();
@@ -193,13 +193,13 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
     if (updaters.IsEmpty() == false)
     {
         RGP_PUSH_MARKER("Updates");
-        DispatchInitAccelerationStructure<true>(updaters);
+        DispatchInitAccelerationStructure<true, IsTlas>(updaters);
         RGP_POP_MARKER();
     }
     if (builders.IsEmpty() == false)
     {
         RGP_PUSH_MARKER("Builds");
-        DispatchInitAccelerationStructure<false>(builders);
+        DispatchInitAccelerationStructure<false, IsTlas>(builders);
         RGP_POP_MARKER();
     }
     if ((updaters.IsEmpty() == false) || (builders.IsEmpty() == false))
@@ -420,7 +420,7 @@ void BvhBatcher::BuildMultiDispatch(Util::Span<BvhBuilder> builders)
 
 // =====================================================================================================================
 // Initialize the builders' acceleration structure data into a valid begin state using a compute shader
-template<bool IsUpdate>
+template<bool IsUpdate, bool IsTlas>
 void BvhBatcher::DispatchInitAccelerationStructure(
     Util::Span<BvhBuilder> builders)
 {
@@ -428,6 +428,7 @@ void BvhBatcher::DispatchInitAccelerationStructure(
 
     const CompileTimeBuildSettings initAsBuildSettings
     {
+        .topLevelBuild               = IsTlas ? 1u : 0u,
         .enableBVHBuildDebugCounters = m_deviceSettings.enableBVHBuildDebugCounters,
     };
 
@@ -473,7 +474,8 @@ void BvhBatcher::DispatchInitAccelerationStructure(
 #endif
 
         Util::Vector<BufferViewInfo, DefaultNumBuildersPerDispatch, Internal::Device> constants(m_pDevice);
-        Util::Vector<BufferViewInfo, DefaultNumBuildersPerDispatch, Internal::Device> headerBuffers(m_pDevice);
+        Util::Vector<BufferViewInfo, DefaultNumBuildersPerDispatch, Internal::Device> dstHeaderBuffers(m_pDevice);
+        Util::Vector<BufferViewInfo, DefaultNumBuildersPerDispatch, Internal::Device> srcHeaderBuffers(m_pDevice);
         Util::Vector<BufferViewInfo, DefaultNumBuildersPerDispatch, Internal::Device> scratchBuffers(m_pDevice);
         Util::Vector<BufferViewInfo, DefaultNumBuildersPerDispatch, Internal::Device> scratchGlobals(m_pDevice);
 
@@ -492,13 +494,14 @@ void BvhBatcher::DispatchInitAccelerationStructure(
                 .range = 0xFFFFFFFF,
             });
 
+            dstHeaderBuffers.EmplaceBack(BufferViewInfo
+            {
+                .gpuAddr = builder.HeaderBufferBaseVa(),
+                .range = 0xFFFFFFFF,
+            });
+
             if constexpr (IsUpdate == false)
             {
-                headerBuffers.EmplaceBack(BufferViewInfo
-                {
-                    .gpuAddr = builder.HeaderBufferBaseVa(),
-                    .range = 0xFFFFFFFF,
-                });
                 // Early triangle pairing, triangle splitting and indirect BLAS builds dynamically increment
                 // primitive reference counter. Initialise counters to 0 when these features are enabled.
                 const bool dynamicallyIncrementsPrimRefCount = builder.m_buildConfig.enableEarlyPairCompression
@@ -538,15 +541,28 @@ void BvhBatcher::DispatchInitAccelerationStructure(
                     .stride  = 16,
                 });
             }
+            else
+            {
+                srcHeaderBuffers.EmplaceBack(BufferViewInfo
+                {
+                    .gpuAddr = builder.SourceHeaderBufferBaseVa(),
+                    .range = 0xFFFFFFFF,
+                });
+            }
         }
         uint32 entryOffset = 0;
 
-        entryOffset = m_pDevice->WriteBufferSrdTable(m_cmdBuffer, scratchGlobals.Data(), numBuildersToDispatch, false, entryOffset);
+        entryOffset = m_pDevice->WriteUntypedBufferSrdTable(m_cmdBuffer, scratchGlobals.Data(), numBuildersToDispatch, entryOffset);
         if constexpr (IsUpdate == false)
         {
-            entryOffset = m_pDevice->WriteBufferSrdTable(m_cmdBuffer, constants.Data(), numBuildersToDispatch, false, entryOffset);
-            entryOffset = m_pDevice->WriteBufferSrdTable(m_cmdBuffer, headerBuffers.Data(), numBuildersToDispatch, false, entryOffset);
-            entryOffset = m_pDevice->WriteBufferSrdTable(m_cmdBuffer, scratchBuffers.Data(), numBuildersToDispatch, false, entryOffset);
+            entryOffset = m_pDevice->WriteUntypedBufferSrdTable(m_cmdBuffer, constants.Data(), numBuildersToDispatch, entryOffset);
+            entryOffset = m_pDevice->WriteUntypedBufferSrdTable(m_cmdBuffer, dstHeaderBuffers.Data(), numBuildersToDispatch, entryOffset);
+            entryOffset = m_pDevice->WriteUntypedBufferSrdTable(m_cmdBuffer, scratchBuffers.Data(), numBuildersToDispatch, entryOffset);
+        }
+        else
+        {
+            entryOffset = m_pDevice->WriteUntypedBufferSrdTable(m_cmdBuffer, srcHeaderBuffers.Data(), numBuildersToDispatch, entryOffset);
+            entryOffset = m_pDevice->WriteUntypedBufferSrdTable(m_cmdBuffer, dstHeaderBuffers.Data(), numBuildersToDispatch, entryOffset);
         }
 
         m_backend.Dispatch(m_cmdBuffer, numBuildersToDispatch, 1, 1);

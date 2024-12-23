@@ -105,7 +105,8 @@ static void TraversalInternal2_0(
 
     _AmdPrimitiveSystemState committed = data.traversal.committed;
     candidate = (_AmdPrimitiveSystemState)0;
-    bool haveCandidate = false;
+    const bool useDeferMode = (Options::getCpsCandidatePrimitiveMode() == CpsCandidatePrimitiveMode::DeferFirst);
+    bool haveDeferredCandidate = false;
     float2 committedBarycentrics = data.traversal.committedBarycentrics;
     candidateBarycentrics = float2(0.0f, 0.0f);
 
@@ -120,7 +121,7 @@ static void TraversalInternal2_0(
 
     instanceFlagsPreserveBits <<= POINTER_FLAGS_HIDWORD_SHIFT;
 
-    uint   nextNodePtr             = data.dispatch.nextNodePtr;
+    uint   nextNodePtr             = data.traversal.nextNodePtr;
     float3 candidateRayOrigin      = topLevelRayOrigin;
     float3 candidateRayDirection   = topLevelRayDirection;
     state                          = TRAVERSAL_STATE_COMMITTED_NOTHING;
@@ -326,18 +327,18 @@ static void TraversalInternal2_0(
                         break;
                     }
 
-                    if (haveCandidate && candidate.rayTCurrent > candidateT)
+                    if (useDeferMode && haveDeferredCandidate && candidate.rayTCurrent > candidateT)
                     {
                         // There is a pending candidate, but the new committed hit is closer, so we can discard it.
                         candidate = (_AmdPrimitiveSystemState)0;
-                        haveCandidate = false;
+                        haveDeferredCandidate = false;
                         candidateBarycentrics = float2(0.0f, 0.0f);
                     }
                 }
                 else
                 {
                     // Need to run AHS on triangle hit
-                    if (haveCandidate)
+                    if (useDeferMode && haveDeferredCandidate)
                     {
                        // There already is a pending candidate. Need to break out of Traversal to process the pending hit,
                        // so we can process this hit here on Traversal resume.
@@ -354,9 +355,9 @@ static void TraversalInternal2_0(
                         TRAVERSAL_STATE_COMMITTED_TRIANGLE_HIT, isOpaque);
                     candidate.SetCurrNodePtr(nodePtr);
 
-                    if (Options::getCpsCandidatePrimitiveMode() == CpsCandidatePrimitiveMode::DeferFirst)
+                    if (useDeferMode)
                     {
-                        haveCandidate = true;
+                        haveDeferredCandidate = true;
                     }
                     else
                     {
@@ -396,7 +397,7 @@ static void TraversalInternal2_0(
             if (isCulled == false)
             {
 
-                if (haveCandidate)
+                if (useDeferMode && haveDeferredCandidate)
                 {
                    // There already is a pending candidate. Need to break out of Traversal to process the pending hit,
                    // so we can process this hit here on Traversal resume.
@@ -510,15 +511,25 @@ static void TraversalInternal2_0(
             // Break out of traversal to run AHS/IS
             break;
         }
+        if (useDeferMode && WaveActiveAllTrue(haveDeferredCandidate))
+        {
+            // All lanes have a pending candidate, so we can uniformly break for candidate processing.
+            // This is a trade-off: Continuing traversal has the potential to find opaque hit that are
+            // closer than the pending candidate, allowing us to prune the candidate.
+            // However, continuing does not have the benefit of improving Traversal coherency,
+            // and risks running into another candidate, at which point we need to abort,
+            // discarding the result of an expensive BVH instruction.
+            break;
+        }
     }
 
-    if (haveCandidate)
+    if (useDeferMode && haveDeferredCandidate)
     {
         state = TRAVERSAL_STATE_CANDIDATE_NON_OPAQUE_TRIANGLE;
     }
 
     // Pack traversal results back into traversal state structure
-    data.dispatch.nextNodePtr              = nextNodePtr;
+    data.traversal.nextNodePtr             = nextNodePtr;
     data.traversal.committed               = committed;
     data.traversal.committedBarycentrics   = committedBarycentrics;
 #if REMAT_INSTANCE_RAY == 0

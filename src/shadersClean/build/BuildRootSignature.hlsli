@@ -22,7 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "../shadersClean/common/ShaderDefs.hlsli"
+#include "../common/ShaderDefs.hlsli"
 
 // DebugBuffer
 #if GPURT_ENABLE_GPU_DEBUG

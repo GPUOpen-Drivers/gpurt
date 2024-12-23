@@ -27,7 +27,7 @@
 #include "../../shadersClean/common/ShaderDefs.hlsli"
 
 #define GC_SCRATCHBUFFER
-#include "../BuildRootSignature.hlsl"
+#include "../../shadersClean/build/BuildRootSignature.hlsli"
 
 #include "ScanCommon.hlsli"
 #include "../BuildCommon.hlsl"
