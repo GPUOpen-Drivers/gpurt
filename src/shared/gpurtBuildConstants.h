@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -44,22 +44,10 @@ typedef uint64_t uint64;
 struct RayTracingScratchDataOffsets
 {
     uint32 bvhNodeData;
-    uint32 triangleSplitBoxes;
-    uint32 triangleSplitRefs0;
-    uint32 triangleSplitRefs1;
-    uint32 splitPriorities;
-    uint32 triangleSplitState;
     uint32 rebraidState;
     uint32 encodeTaskCounter;
-    uint32 triangleSplitTaskQueueCounter;
     uint32 rebraidTaskQueueCounter;
-    uint32 splitAtomicFlags;
-    uint32 tdRefs;
-    uint32 tdNodeList;
-    uint32 tdBins;
-    uint32 tdState;
-    uint32 tdTaskQueueCounter;
-    uint32 refOffsets;
+    uint32 rebraidPrefixSumFlags;
     uint32 bvhLeafNodeData;
     uint32 fastLBVHRootNodeIndex;
     uint32 clusterList0;
@@ -68,14 +56,9 @@ struct RayTracingScratchDataOffsets
     uint32 currentState;        // BVH PLOC build only
     uint32 plocTaskQueueCounter;// BVH PLOC build only
     uint32 atomicFlagsPloc;     // BVH PLOC build only
-    uint32 clusterOffsets;      // BVH PLOC build only
     uint32 reserved0;
     uint32 reserved1;
     uint32 reserved2;
-    uint32 reserved3;
-    uint32 reserved4;
-    uint32 reserved5;
-    uint32 reserved6;
     uint32 sceneBounds;
     uint32 mortonCodes;
     uint32 mortonCodesSorted;
@@ -84,7 +67,6 @@ struct RayTracingScratchDataOffsets
     uint32 propagationFlags;
     uint32 numBatches;
     uint32 batchIndices;
-    uint32 unused0;
     uint32 updateStack;
     uint32 histogram;
     uint32 tempKeys;
@@ -94,15 +76,18 @@ struct RayTracingScratchDataOffsets
     uint32 distributedPartialSums;
     uint32 qbvhGlobalStack;
     uint32 qbvhGlobalStackPtrs;
+    uint32 reserved3;
+    uint32 reserved4;
+    uint32 reserved5;
+    uint32 reserved6;
     uint32 reserved7;
     uint32 reserved8;
-    uint32 reserved9;
-    uint32 reserved10;
-    uint32 reserved11;
-    uint32 reserved12;
     uint32 taskLoopCounters;
     uint32 debugCounters;
     uint32 primRefCount;
+
+    uint32 padding0;
+    uint32 padding1;
 };
 
 struct BuildShaderConstants
@@ -110,7 +95,6 @@ struct BuildShaderConstants
     uint32 resultBufferAddrLo;
     uint32 resultBufferAddrHi;
     uint32 numPrimitives;
-    uint32 tsBudgetPerTriangle;
 
     uint32 maxNumPrimitives;
     uint32 rebraidFactor;
@@ -123,9 +107,6 @@ struct BuildShaderConstants
 
     uint32 reservedUint2;
     uint32 padding0;
-    uint32 padding1;
-    uint32 padding2;
-    uint32 padding3;
 
     // Align the following struct to 4 dwords due to HLSL constant buffer packing rules
     AccelStructHeader header;

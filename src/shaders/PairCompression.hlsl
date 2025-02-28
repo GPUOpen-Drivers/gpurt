@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2021-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2021-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -32,12 +32,20 @@
 #define GC_SCRATCHBUFFER
 #include "../shadersClean/build/BuildRootSignature.hlsli"
 
-#include "Common.hlsl"
+#include "../shadersClean/common/Common.hlsli"
 #include "BuildCommonScratch.hlsl"
 #include "EncodeCommon.hlsl"
 
 #define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
 groupshared uint SharedMem[MAX_LDS_ELEMENTS];
+uint GetSharedMem(uint index)
+{
+    return SharedMem[index];
+}
+void SetSharedMem(uint index, uint value)
+{
+    SharedMem[index] = value;
+}
 
 #endif
 
@@ -536,15 +544,11 @@ void PairCompressionImpl(
             // Fetch bounding children bounding boxes
             BoundingBox bboxRightChild = GetScratchNodeBoundingBox(rightNode,
                                                                    IsLeafNode(rc, numActivePrims),
-                                                                   false,
-                                                                   0,
                                                                    true,
                                                                    scratchNodesScratchOffset);
 
             BoundingBox bboxLeftChild = GetScratchNodeBoundingBox(leftNode,
                                                                   IsLeafNode(lc, numActivePrims),
-                                                                  false,
-                                                                  0,
                                                                   true,
                                                                   scratchNodesScratchOffset);
 

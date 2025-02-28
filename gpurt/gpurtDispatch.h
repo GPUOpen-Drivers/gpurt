@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -61,7 +61,9 @@ struct DispatchRaysTopLevelData
 // -no-legacy-cbuf-layout for cpp style structure alignment to work. But currently that support is incomplete in DXC
 // and until that is resolved we need to use uint32's explicitly.
 //
+#if __cplusplus
 #pragma pack(push, 4)
+#endif
 struct DispatchRaysConstantData
 {
     uint32 rayGenerationTableAddressLo; // Ray generation table base address low 32-bits
@@ -102,7 +104,9 @@ struct DispatchRaysConstantData
     uint32 cpsDispatchIdAddressLo;      // Continuations cpsDispatchId address low 32-bits
     uint32 cpsDispatchIdAddressHi;      // Continuations cpsDispatchId address high 32-bits
 };
+#if __cplusplus
 #pragma pack(pop)
+#endif
 
 // GPU structure containing all data for DXR/VK ray dispatch command
 struct DispatchRaysConstants

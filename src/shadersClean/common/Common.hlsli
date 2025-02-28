@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -34,14 +34,29 @@
 #ifndef _COMMON_HLSL
 #define _COMMON_HLSL
 
-#include "../shadersClean/common/ShaderDefs.hlsli"
-#include "../shadersClean/common/ScratchNode.hlsli"
+#include "ShaderDefs.hlsli"
+#include "ScratchNode.hlsli"
+#include "Bits.hlsli"
+#include "../../shared/assert.h"
+
+// Added as cpp doesn't allow for the `StructType s = (StructType)0;` pattern
+#ifdef __cplusplus
+#define INIT_VAR(type, name) type name = {}
+#else
+#define INIT_VAR(type, name) type name = (type)0
+#endif
 
 typedef AccelStructDataOffsets AccelStructOffsets;
 
 //=====================================================================================================================
 // static definitions
 
+#ifndef UINT32_MAX
+#define UINT32_MAX 0xFFFFFFFFu
+#endif
+#ifndef UINT64_MAX
+#define UINT64_MAX 0xFFFFFFFFFFFFFFFFull
+#endif
 #ifndef INT_MAX
 #define INT_MAX 0x7FFFFFFF
 #endif
@@ -68,10 +83,10 @@ typedef AccelStructDataOffsets AccelStructOffsets;
 #define SKIP_0_7                0xfffffff9
 #define END_SEARCH              0xfffffff8
 
-#include "../shadersClean/common/Extensions.hlsli"
-#include "../shadersClean/common/Math.hlsli"
-#include "../shadersClean/common/BoundingBox.hlsli"
-#include "../shadersClean/common/NodePointers.hlsli"
+#include "Extensions.hlsli"
+#include "Math.hlsli"
+#include "BoundingBox.hlsli"
+#include "NodePointers.hlsli"
 
 #ifdef __cplusplus
 static const float NaN = std::numeric_limits<float>::quiet_NaN();
@@ -101,25 +116,9 @@ static const BoundingBox InvalidBoundingBox =
 #define RAY_FLAG_SKIP_TRIANGLES                  0x100
 #define RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES      0x200
 
-#define PIPELINE_FLAG_UNUSED                         0x80000000
-#define PIPELINE_FLAG_USE_REBRAID                    0x40000000
-#define PIPELINE_FLAG_ENABLE_AS_TRACKING             0x20000000
-#define PIPELINE_FLAG_ENABLE_TRAVERSAL_CTR           0x10000000
-#define PIPELINE_FLAG_RESERVED                       0x08000000
-#define PIPELINE_FLAG_ENABLE_FUSED_INSTANCE          0x04000000
-#define PIPELINE_FLAG_RESERVED1                      0x02000000
-#define PIPELINE_FLAG_RESERVED2                      0x01000000
-#define PIPELINE_FLAG_RESERVED3                      0x00800000
-#define PIPELINE_FLAG_RESERVED5                      0x00400000
-#ifdef GPURT_ENABLE_GPU_DEBUG
-#define PIPELINE_FLAG_DEBUG_ASSERTS_HALT             0x00200000
-#else
-#define PIPELINE_FLAG_RESERVED6                      0x00200000
-#endif
-
 #if !defined(__cplusplus)
-#include "BuildSettings.hlsli"
-#include "Debug.hlsl"
+#include "../build/BuildSettings.hlsli"
+#include "../debug/Debug.hlsli"
 #endif
 
 #define HIT_KIND_TRIANGLE_FRONT_FACE 0xFE
@@ -662,6 +661,43 @@ static float ComputeBoxSurfaceArea(const uint3 aabb)
 }
 
 //=====================================================================================================================
+static bool IsMortonSizeBitsEnabled(uint numSizeBits)
+{
+    return (Settings.sceneBoundsCalculationType == (uint) SceneBoundsCalculation::BasedOnGeometryWithSize) &&
+           (numSizeBits > 0);
+}
+
+//=====================================================================================================================
+static bool IsCentroidMortonBoundsEnabled()
+{
+    return (Settings.mortonFlags & MortonFlags::EnableCentroidBounds) > 0U;
+}
+
+//=====================================================================================================================
+static bool IsConciseMortonBoundsEnabled()
+{
+    return (Settings.mortonFlags & MortonFlags::EnableConciseBounds) > 0U;
+}
+
+//=====================================================================================================================
+static bool IsCubeMortonBoundsEnabled()
+{
+    return (Settings.mortonFlags & MortonFlags::EnableCubeBounds) > 0U;
+}
+
+//=====================================================================================================================
+static bool IsPerfectRectangleMortonBoundsEnabled()
+{
+    return (Settings.mortonFlags & MortonFlags::EnablePerfectRectangleBounds) > 0U;
+}
+
+//=====================================================================================================================
+static bool IsRegularMortonCodeEnabled()
+{
+    return (Settings.mortonFlags & MortonFlags::EnableRegularMortonCodes) > 0U;
+}
+
+//=====================================================================================================================
 // HLSL implementation of OpenCL clz. This function counts the number of leading 0's from MSB
 static int clz(int value)
 {
@@ -686,6 +722,16 @@ static float min3(float3 val)
 static float max3(float3 val)
 {
     return max(max(val.x, val.y), val.z);
+}
+
+//=====================================================================================================================
+// Ballot returning a uint64
+static uint64_t WaveActiveBallot64(
+    bool flag)
+{
+    const uint4 mask4 = WaveActiveBallot(flag);
+
+    return (uint64_t(mask4.y) << 32) | mask4.x;
 }
 
 //=====================================================================================================================
@@ -887,10 +933,12 @@ static void OutOfRangeNodePointerAssert(
     uint nodeOffset = ExtractNodePointerOffset(nodePointer);
 
     GpuVirtualAddress offsetAddress = currBvhAddr + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET;
-    if ((currBvhAddr == tlasAddr)
-        )
+
+    if (currBvhAddr == tlasAddr)
     {
-        offsetAddress += ACCEL_STRUCT_OFFSETS_PRIM_NODE_PTRS_OFFSET;
+        {
+            offsetAddress += ACCEL_STRUCT_OFFSETS_PRIM_NODE_PTRS_OFFSET;
+        }
     }
     else
     {
@@ -924,6 +972,13 @@ static InstanceDesc FetchInstanceDescAddr(in GpuVirtualAddress instanceAddr)
     desc.accelStructureAddressHiAndFlags = d3.w;
 
     return desc;
+}
+
+//=====================================================================================================================
+static bool UsesFastLbvhLayout()
+{
+    return (Settings.buildMode == BUILD_MODE_LINEAR)
+           ;
 }
 
 #endif

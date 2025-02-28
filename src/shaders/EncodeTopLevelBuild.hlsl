@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -140,16 +140,24 @@ void EncodeInstancesBuild(
 
             if (numActivePrims != 0)
             {
+                // Update scene bounding box
+                // Always encode the scene bounds
+                // When rebraid is enabled the scene bounds won't change when nodes are opened
+                UpdateSceneBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
+
+                // Rebraid handles size and centroids, so no need to update them here
                 if (IsRebraidEnabled() == false)
                 {
-                    // Update scene bounding box
-                    if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometryWithSize)
+                    // Only when size bits are enabled, update the scene size
+                    if (IsMortonSizeBitsEnabled(ShaderConstants.numMortonSizeBits))
                     {
-                        UpdateSceneBoundsWithSize(ShaderConstants.offsets.sceneBounds, boundingBox);
+                        UpdateSceneSize(ShaderConstants.offsets.sceneBounds, boundingBox);
                     }
-                    else
+
+                    // Only if the centroid bounds are required, update the centroid bounds
+                    if (IsCentroidMortonBoundsEnabled() || IsConciseMortonBoundsEnabled())
                     {
-                        UpdateSceneBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
+                        UpdateCentroidBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
                     }
                 }
             }

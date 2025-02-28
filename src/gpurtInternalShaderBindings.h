@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2020-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2020-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -177,13 +177,13 @@ namespace InitAccelerationStructure
         uint32 numBatchesScratchOffset;
 
         uint32 rebraidTaskQueueCounterScratchOffset;
-        uint32 tdTaskQueueCounterScratchOffset;
         uint32 plocTaskQueueCounterScratchOffset;
         uint32 encodeTaskCounterScratchOffset;
-
         uint32 taskLoopCountersOffset;
+
         uint32 isIndirectBuild;
         uint32 dynamicallyIncrementsPrimRefCount;
+        uint32 padding0;
         uint32 padding1;
 
         AccelStructHeader header;

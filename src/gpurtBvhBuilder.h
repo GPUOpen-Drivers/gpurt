@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -110,6 +110,8 @@ public:
         uint32 qbvhPhaseSize;
     };
 
+    bool UsePrimIndicesArray() const;
+
     bool AllowRemappingScratchBuffer() const;
 
     gpusize RemappedScratchBufferBaseVa() const;
@@ -200,7 +202,7 @@ private:
 
         // All function calls requiring Geometry/RebraidType should pass it in instead. For now leave this.
         GeometryType                    geometryType;
-        RebraidType                     rebraidType;
+        bool                            enableRebraid;
         TriangleCompressionMode         triangleCompressionMode;      // Triangle compression modes.
         Fp16BoxNodesInBlasMode          fp16BoxNodesInBlasMode;       // Mode for which interior nodes in BLAS are FP16
 
@@ -209,18 +211,13 @@ private:
         uint32                          radixSortScanLevel;
 
         uint32                          numMortonSizeBits;
+        uint32                          mortonFlags;
 
         uint32                          trianglePairBlockCount;       // For early pair compression
         SceneBoundsCalculation          sceneCalcType;
         bool                            topLevelBuild;
-        bool                            triangleSplitting;            // Triangle Splitting Enabled
-        bool                            allowTopDownBuild;            // Is accel structure top level
-                                                                      // and has top down enabled or rebraid
-        // Top down build in TLAS (topDownAllowed && prim count is not larger than max count)
-        bool                            topDownBuild;
         bool                            needEncodeDispatch;
         bool                            enableEarlyPairCompression;
-        bool                            enableFastLBVH;
         bool                            enableMergeSort;
         bool                            enableInstanceRebraid;
         bool                            rebuildAccelStruct;
@@ -338,13 +335,6 @@ private:
 
     void GenerateMortonCodes();
 
-    void DispatchBuildBVHPipeline(
-        InternalRayTracingCsType pipeline);
-
-    void BuildBVH();
-
-    void BuildBVHTD();
-
     void BuildPLOC(uint32 wavesPerSimd);
 
     void BuildFastAgglomerativeLbvh();
@@ -354,8 +344,6 @@ private:
     void UpdateParallel();
 
     void EncodeHwBvh();
-
-    void RefitBounds();
 
     void PairCompression();
 
@@ -451,10 +439,6 @@ private:
 
     uint32 WriteBuildShaderConstantBuffer(uint32 entryOffset);
 
-    uint32 NumPrimitivesAfterSplit(
-        uint32 primitiveCount,
-        float  splitFactor);
-
     gpusize ScratchBufferBaseVa() const
     {
         return m_buildArgs.scratchAddr.gpu;
@@ -463,6 +447,11 @@ private:
     uint32 GetNumThreadGroupsCopy()
     {
         return m_backend.GetOptimalNumThreadGroups(DefaultThreadGroupSize);
+    }
+
+    uint32 GetNumThreadGroupsCopy(const uint32 threadGroupSize)
+    {
+        return m_backend.GetOptimalNumThreadGroups(threadGroupSize);
     }
 
     uint32 GetNumPersistentThreadGroups(
@@ -531,7 +520,6 @@ private:
     void InitCopySettings();
 
     const char* ConvertBuildModeToString();
-    const char* ConvertRebraidTypeToString();
     const char* ConvertTriCompressionTypeToString();
     const char* ConvertFp16ModeToString();
 

@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -57,12 +57,6 @@ void WriteScratchTriangleNode(
 
     // type, flags, splitBox, numPrimitivesAndDoCollapse
     uint flags = CalcTriangleBoxNodeFlags(geometryFlags);
-
-    // Disable triangle splitting if geometry descriptor allows duplicate anyHit invocation
-    if ((geometryFlags & D3D12_RAYTRACING_GEOMETRY_FLAG_NO_DUPLICATE_ANYHIT_INVOCATION) != 0)
-    {
-        flags |= SCRATCH_NODE_FLAGS_DISABLE_TRIANGLE_SPLIT_MASK;
-    }
 
     const uint packedFlags = PackScratchNodeFlags(instanceMask, flags, 0);
 
@@ -317,14 +311,19 @@ void EncodeTriangleNode(
                 }
                 else
                 {
-                    if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometry)
+                    // Always encode the scene bounds
+                    UpdateSceneBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
+
+                    // Only when size bits are enabled, update the scene size
+                    if (IsMortonSizeBitsEnabled(ShaderConstants.numMortonSizeBits))
                     {
-                        UpdateSceneBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
+                        UpdateSceneSize(ShaderConstants.offsets.sceneBounds, boundingBox);
                     }
-                    else if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometryWithSize)
+
+                    // Only if the centroid bounds are required, update the centroid bounds
+                    if (IsCentroidMortonBoundsEnabled() || IsConciseMortonBoundsEnabled())
                     {
-                        // TODO: with tri splitting, need to not update "size" here
-                        UpdateSceneBoundsWithSize(ShaderConstants.offsets.sceneBounds, boundingBox);
+                        UpdateCentroidBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
                     }
                 }
             }
@@ -561,13 +560,19 @@ void EncodeAabbNode(
     }
     else
     {
-        if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometry)
+        // Always encode the scene bounds
+        UpdateSceneBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
+
+        // Only when size bits are enabled, update the scene size
+        if (IsMortonSizeBitsEnabled(ShaderConstants.numMortonSizeBits))
         {
-            UpdateSceneBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
+            UpdateSceneSize(ShaderConstants.offsets.sceneBounds, boundingBox);
         }
-        else if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometryWithSize)
+
+        // Only if the centroid bounds are required, update the centroid bounds
+        if (IsCentroidMortonBoundsEnabled() || IsConciseMortonBoundsEnabled())
         {
-            UpdateSceneBoundsWithSize(ShaderConstants.offsets.sceneBounds, boundingBox);
+            UpdateCentroidBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
         }
 
         WriteScratchProceduralNode(flattenedPrimitiveIndex,

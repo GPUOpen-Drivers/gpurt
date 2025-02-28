@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2021-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2021-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -42,7 +42,7 @@ namespace GpuRt
 // update their definition of GPURT_CLIENT_INTERFACE_MAJOR_VERSION to indicate that they have made the required changes
 // to support a new version. When the client version is updated, the old interface will be compiled out and only the
 // new one will remain.
-#define GPURT_INTERFACE_MAJOR_VERSION 52
+#define GPURT_INTERFACE_MAJOR_VERSION 54
 
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 44
 // Minor interface version. This number is incrememnted when a compatible interface change is made. Compatible changes
@@ -74,7 +74,7 @@ namespace GpuRt
 // data format changes or the associated header changes. This version is used for legacy dump files only. It is not
 // used for RDF.
 constexpr uint16 RayTracingBinaryFileVersionMajor = 8;
-constexpr uint16 RayTracingBinaryFileVersionMinor = 1;
+constexpr uint16 RayTracingBinaryFileVersionMinor = 2;
 constexpr uint32 RayTracingBinaryFileVersion =
     (RayTracingBinaryFileVersionMajor << 16) | RayTracingBinaryFileVersionMinor;
 
@@ -84,6 +84,7 @@ constexpr uint32 RayTracingBinaryFileVersion =
 //
 // | Version | Change Description                                                                                     |
 // | ------- | ------------------------------------------------------------------------------------------------------ |
+// |    8.2  | Add build input header for capturing the calls to BuildRaytracingAccelerationStructure                 |
 // |    8.1  | Move decoded header to the front of the decoded dump.                                                  |
 // |    8.0  | Add decoded header to decoded BVH dumps.                                                               |
 // |    7.2  | BLAS header stores the instance mask as well so that it can be propagated up to TLAS.                  |

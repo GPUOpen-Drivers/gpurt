@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2024-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -204,7 +204,6 @@ static uint ExtractNodePointerOffset(uint nodePointer)
 }
 
 //=====================================================================================================================
-// Removes temp flag (MSB) within node type set by RefitBounds when fp16 nodes mode is LEAF_NODES_IN_BLAS_AS_FP16.
 static uint GetNodePointerExclMsbFlag(uint nodePointer)
 {
     return nodePointer & (~NODE_POINTER_MASK_MSB);
@@ -269,8 +268,23 @@ struct GeometryInfo
 #define GEOMETRY_INFO_GEOM_BUFFER_OFFSET          4
 #define GEOMETRY_INFO_PRIM_NODE_PTRS_OFFSET       8
 
-#define PIPELINE_FLAG_SKIP_TRIANGLES                0x100
-#define PIPELINE_FLAG_SKIP_PROCEDURAL_PRIMITIVES    0x200
+#define PIPELINE_FLAG_UNUSED                         0x80000000
+#define PIPELINE_FLAG_USE_REBRAID                    0x40000000
+#define PIPELINE_FLAG_ENABLE_AS_TRACKING             0x20000000
+#define PIPELINE_FLAG_ENABLE_TRAVERSAL_CTR           0x10000000
+#define PIPELINE_FLAG_RESERVED                       0x08000000
+#define PIPELINE_FLAG_ENABLE_FUSED_INSTANCE          0x04000000
+#define PIPELINE_FLAG_RESERVED1                      0x02000000
+#define PIPELINE_FLAG_RESERVED2                      0x01000000
+#define PIPELINE_FLAG_RESERVED3                      0x00800000
+#define PIPELINE_FLAG_RESERVED5                      0x00400000
+#ifdef GPURT_ENABLE_GPU_DEBUG
+#define PIPELINE_FLAG_DEBUG_ASSERTS_HALT             0x00200000
+#else
+#define PIPELINE_FLAG_RESERVED6                      0x00200000
+#endif
+#define PIPELINE_FLAG_SKIP_PROCEDURAL_PRIMITIVES     0x00000200
+#define PIPELINE_FLAG_SKIP_TRIANGLES                 0x00000100
 
 GPURT_STATIC_ASSERT(GEOMETRY_INFO_SIZE == sizeof(GeometryInfo), "Geometry info structure mismatch");
 
@@ -466,13 +480,6 @@ struct IndexBufferInfo
 };
 
 //=====================================================================================================================
-enum RebraidType : uint
-{
-    Off = 0, // No Rebraid
-    V1  = 1, // First version of Rebraid
-    V2  = 2, // Second version of Rebraid
-};
-
 #define BUILD_MODE_LINEAR   0
 // BUILD_MODE_AC was 1, but it has been removed.
 #define BUILD_MODE_PLOC     2

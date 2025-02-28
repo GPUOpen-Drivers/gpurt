@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2024-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -53,9 +53,6 @@ struct ScratchNode
     uint   packedFlags;                    // flags [0:7], instanceMask [8:15], quadSwizzle [16:23]
 };
 
-#define SCRATCH_NODE_FLAGS_DISABLE_TRIANGLE_SPLIT_SHIFT 31
-#define SCRATCH_NODE_FLAGS_DISABLE_TRIANGLE_SPLIT_MASK (1 << SCRATCH_NODE_FLAGS_DISABLE_TRIANGLE_SPLIT_SHIFT)
-
 #define SCRATCH_NODE_BBOX_MIN_OFFSET                  0
 #define SCRATCH_NODE_V0_OFFSET                        SCRATCH_NODE_BBOX_MIN_OFFSET
 #define SCRATCH_NODE_LEFT_OFFSET                      12
@@ -104,15 +101,14 @@ static uint CalcScratchNodeOffset(
 static uint CalculateScratchBvhNodesOffset(
     in uint numActivePrims,
     in uint numLeafNodes,
-    in uint bvhNodesOffset,
-    in bool topDownBuild)
+    in uint bvhNodesOffset)
 {
     uint offset = 0;
     // In case of a BLAS with 1 primitive, the scratch offset for both, bvhNodeData and
     // bvhLeafNodeData are the same. Hence, offset = 0 for such BLASs.
     if (numLeafNodes > 1)
     {
-        offset = topDownBuild ? 0 : (numLeafNodes - numActivePrims) * SCRATCH_NODE_SIZE;
+        offset = (numLeafNodes - numActivePrims) * SCRATCH_NODE_SIZE;
     }
 
     return bvhNodesOffset + offset;

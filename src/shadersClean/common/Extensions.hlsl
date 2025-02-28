@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -22,6 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
+#include "Common.hlsli"
 #include "Math.hlsli"
 #include "Bits.hlsli"
 
@@ -54,13 +55,19 @@ __decl uint4 AmdExtD3DShaderIntrinsics_IntersectInternal(
     in uint   flags,
     in uint   expansion)
 {
-    uint4 dummy;
+    INIT_VAR(uint4, dummy);
 
     return dummy;
 }
 
 //=====================================================================================================================
 // GpuRt WaveClusterSum Intrinsics
+uint AmdExtD3DShaderIntrinsics_WaveClusterSum(uint x, uint dxClusterSize)
+{
+    const uint clusterSize = (1u << (dxClusterSize - 1));
+    return spirv_OpGroupNonUniformIAdd_clustered(AmdExtClusteredSubgroup, AmdExtClusteredReduce, x, clusterSize);
+}
+
 float AmdExtD3DShaderIntrinsics_WaveClusterSum(float x, uint dxClusterSize)
 {
     const uint clusterSize = (1u << (dxClusterSize - 1));

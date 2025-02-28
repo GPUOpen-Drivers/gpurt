@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -151,17 +151,6 @@ static IntersectionResult TraceRayImpl2_0(
                                           localRay.Direction,
                                           rcp(localRay.Direction));
 
-#if GPURT_ENABLE_GPU_DEBUG
-        // Check if the child pointers returned are valid.
-        if (IsBoxNode1_1(nodePtr))
-        {
-            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.x, currentBvh, topLevelBvh);
-            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.y, currentBvh, topLevelBvh);
-            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.z, currentBvh, topLevelBvh);
-            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.w, currentBvh, topLevelBvh);
-        }
-#endif
-
 #if DEVELOPER
         if (EnableTraversalCounter() && IsBoxNode1_1(prevNodePtr))
         {
@@ -233,6 +222,17 @@ static IntersectionResult TraceRayImpl2_0(
             }
 #endif
         }
+
+#if GPURT_ENABLE_GPU_DEBUG
+        // Check if the child pointers returned are valid.
+        if (IsBoxNode1_1(nodePtr))
+        {
+            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.x, currentBvh, topLevelBvh);
+            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.y, currentBvh, topLevelBvh);
+            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.z, currentBvh, topLevelBvh);
+            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.w, currentBvh, topLevelBvh);
+        }
+#endif
 
         if (CheckHandleTriangleNode(prevNodePtr))
         {

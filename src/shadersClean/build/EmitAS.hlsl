@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -48,15 +48,10 @@ struct InputArgs
 [[vk::binding(3, 0)]] RWByteAddressBuffer ScratchBuffer  : register(u3);
 [[vk::binding(4, 0)]] RWByteAddressBuffer DstMetadata    : register(u4);
 
-// The emit path uses DstBuffer as the true acceleration structure base (same as DstMetdata).
-#define DstMetadata DstBuffer
-#include "BuildCommon.hlsl"
-#undef DstMetadata
-
-#include "Common.hlsl"
-#include "CompactCommon.hlsl"
-#include "DecodeCommon.hlsl"
-#include "SerializeCommon.hlsl"
+#include "../common/InstanceDesc.hlsli"
+#include "../common/SerializeDefs.hlsli"
+#include "../common/ShaderDefs.hlsli"
+#include "../../../gpurt/gpurtAccelStruct.h"
 
 //=====================================================================================================================
 AccelStructHeader FetchAccelStructHeader()
@@ -158,7 +153,7 @@ void EmitToolVisDesc(in uint3 globalThreadId : SV_DispatchThreadID)
 
     // Additional logging for driver decode operations. Note, in order to avoid adding a additional Emit flag, we're
     // simply padding the decoded size since it is a driver defined size.
-    decodedSizeInBytes += GetDriverDecodeHeaderSize();
+    decodedSizeInBytes += sizeof(DriverDecodeHeader);
 
     // DecodedSizeInBytes
     DstBuffer.Store2(ShaderConstants.offset, uint2(decodedSizeInBytes, 0));

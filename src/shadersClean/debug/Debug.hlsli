@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -25,9 +25,9 @@
 #ifndef _DEBUG_HLSL
 #define _DEBUG_HLSL
 
-#include "../shared/debugBuffer.h"
-#include "Common.hlsl"
-#include "../shadersClean/common/Extensions.hlsli"
+#include "../../shared/debugBuffer.h"
+#include "../common/Extensions.hlsli"
+#include "../common/ShaderDefs.hlsli"
 
 #define GPURT_DEBUG_BUFFER_AVAILABLE (GPURT_ENABLE_GPU_DEBUG && GPURT_BVH_BUILD_SHADER && defined(DEBUG_BUFFER_SLOT))
 

@@ -1,7 +1,7 @@
 ##
  #######################################################################################################################
  #
- #  Copyright (c) 2022-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ #  Copyright (c) 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  #
  #  Permission is hereby granted, free of charge, to any person obtaining a copy
  #  of this software and associated documentation files (the "Software"), to deal
@@ -38,24 +38,22 @@ set(gpurtHlsl
     IndirectArgBufferUtils.hlsl
     AccelStructTracker.hlsl
     ../shadersClean/build/BuildRootSignature.hlsli
-    BuildBVH.hlsl
     BuildPLOC.hlsl
-    BuildBVHTDTR.hlsl
     BuildCommon.hlsl
     BuildCommonScratch.hlsl
     BuildCommonScratchGlobal.hlsl
     BuildFastAgglomerativeLbvh.hlsl
-    Debug.hlsl
+    ../shadersClean/debug/Debug.hlsli
     TaskCounter.hlsl
     TaskMacros.hlsl
     TaskQueueCounter.hlsl
     EncodeHwBvhCommon.hlsl
-    BuildSettings.hlsli
+    ../shadersClean/build/BuildSettings.hlsli
     BuildParallel.hlsl
     BuildQBVH.hlsl
     bvh_stack_dxr_prototype.hlsl
-    ClearBuffer.hlsl
-    Common.hlsl
+    ../shadersClean/debug/ClearBuffer.hlsl
+    ../shadersClean/common/Common.hlsli
     CompactAS.hlsl
     CompactAS1_1.hlsl
     CompactCommon.hlsl
@@ -64,7 +62,7 @@ set(gpurtHlsl
     DecodeAS.hlsl
     DecodeCommon.hlsl
     DeserializeAS.hlsl
-    EmitAS.hlsl
+    ../shadersClean/build/EmitAS.hlsl
     EncodeCommon.hlsl
     EncodeNodes.hlsl
     EncodePairedTriangleImpl.hlsl
@@ -84,15 +82,12 @@ set(gpurtHlsl
     RayQuery1_1.hlsl
     RayQuery2_0.hlsl
     Rebraid.hlsl
-    RefitBounds.hlsl
-    RefitBoundsImpl.hlsl
     SerializeAS.hlsl
-    SerializeCommon.hlsl
+    ../shadersClean/common/SerializeDefs.hlsli
     TraceRay.hlsl
     TraceRay1_1.hlsl
     TraceRay2_0.hlsl
     TraceRayCommon.hlsl
-    TriangleSplitting.hlsl
     TrianglePrimitive.hlsl
     UpdateCommon.hlsl
     Update.hlsl
@@ -104,6 +99,7 @@ set(gpurtHlsl
     GpuRtLibraryCont.hlsl
     Continuations1_1.hlsl
     Continuations2_0.hlsl
+    ../shadersClean/traversal/StackCommon.hlsli
 #endif
 )
 set(otherDeps

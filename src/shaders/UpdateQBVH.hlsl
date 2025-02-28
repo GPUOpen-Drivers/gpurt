@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -36,6 +36,14 @@
 #define TASK_COUNTER_OFFSET   UPDATE_SCRATCH_TASK_COUNT_OFFSET
 #define NUM_TASKS_DONE_OFFSET UPDATE_SCRATCH_TASKS_DONE_OFFSET
 groupshared uint SharedMem[1];
+uint GetSharedMem(uint index)
+{
+    return SharedMem[index];
+}
+void SetSharedMem(uint index, uint value)
+{
+    SharedMem[index] = value;
+}
 #include "TaskMacros.hlsl"
 
 //======================================================================================================================

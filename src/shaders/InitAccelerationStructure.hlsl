@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -36,7 +36,7 @@
                 "CBV(b255)"
 #endif
 
-#include "Common.hlsl"
+#include "../shadersClean/common/Common.hlsli"
 
 [[vk::binding(0, 3)]] RWByteAddressBuffer       BatchScratchGlobals[]   : register(u0, space1);
 #ifdef IS_UPDATE
@@ -51,13 +51,13 @@ struct Constants
     uint numBatchesScratchOffset;
 
     uint rebraidTaskQueueCounterScratchOffset;
-    uint tdTaskQueueCounterScratchOffset;
     uint plocTaskQueueCounterScratchOffset;
     uint encodeTaskCounterScratchOffset;
-
     uint taskLoopCountersOffset;
+
     uint isIndirectBuild;
     uint dynamicallyIncrementsPrimRefCount;
+    uint padding0;
     uint padding1;
 
     AccelStructHeader header;
@@ -122,28 +122,29 @@ void InitAccelerationStructure(
         const bool isRebraidEnabled = BuilderConstants.rebraidTaskQueueCounterScratchOffset != INVALID_SCRATCH_OFFSET;
         if (isRebraidEnabled)
         {
+            ResetCounters(ScratchGlobal, BuilderConstants.rebraidTaskQueueCounterScratchOffset, RayTracingTaskQueueCounters);
+        }
+
+        if (IsCentroidMortonBoundsEnabled() || IsConciseMortonBoundsEnabled())
+        {
             const uint sceneBounds[] =
             {
-                InitialMin, InitialMin, InitialMin,
+                InitialMin, InitialMin, InitialMin, // scene bounds
                 InitialMax, InitialMax, InitialMax,
-                InitialMin, InitialMax, // size
-
-                InitialMin, InitialMin, InitialMin, //used for rebraid
+                InitialMin, InitialMax,             // min/max primitive size
+                InitialMin, InitialMin, InitialMin, // centroid bounds
                 InitialMax, InitialMax, InitialMax,
             };
             ScratchBuffer.Store(BuilderConstants.sceneBoundsScratchOffset, sceneBounds);
-
-            ResetCounters(ScratchGlobal, BuilderConstants.rebraidTaskQueueCounterScratchOffset, RayTracingTaskQueueCounters);
         }
         else
         {
             const uint sceneBounds[] =
             {
-                InitialMin, InitialMin, InitialMin,
+                InitialMin, InitialMin, InitialMin, // scene bounds
                 InitialMax, InitialMax, InitialMax,
-                InitialMin, InitialMax, // size
+                InitialMin, InitialMax,             // min/max primitive size
             };
-
             ScratchBuffer.Store(BuilderConstants.sceneBoundsScratchOffset, sceneBounds);
         }
 
@@ -153,17 +154,16 @@ void InitAccelerationStructure(
             ScratchGlobal.Store(BuilderConstants.numBatchesScratchOffset, 0);
         }
 
-        ResetCounters(ScratchGlobal, BuilderConstants.tdTaskQueueCounterScratchOffset, RayTracingTaskQueueCounters);
         ResetCounters(ScratchGlobal, BuilderConstants.plocTaskQueueCounterScratchOffset, RayTracingTaskQueueCounters);
 
         // Initialise encode counters
         ScratchGlobal.Store(
             BuilderConstants.encodeTaskCounterScratchOffset + ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET, 0);
 
-        // Early triangle pairing, triangle splitting and indirect BLAS builds dynamically increment
+        // Early triangle pairing and indirect BLAS builds dynamically increment
         // primitive reference counter. Initialise counters to 0 when these features are enabled.
-        const uint primRefInitCount = (BuilderConstants.dynamicallyIncrementsPrimRefCount == 0) ?
-            BuilderConstants.header.numPrimitives : 0;
+        const uint primRefInitCount =
+            (BuilderConstants.dynamicallyIncrementsPrimRefCount == 0) ? BuilderConstants.header.numPrimitives : 0;
 
         ScratchGlobal.Store(
             BuilderConstants.encodeTaskCounterScratchOffset + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET, primRefInitCount);

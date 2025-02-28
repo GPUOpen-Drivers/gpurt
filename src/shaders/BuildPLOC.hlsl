@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -61,7 +61,6 @@ struct BuildPlocArgs
     uint  baseBatchIndicesScratchOffset;
     uint  fp16BoxNodesInBlasMode;                   // Mode used for which BLAS interior nodes are FP16
     float fp16BoxModeMixedSaThresh;                 // For fp16 mode "mixed", surface area threshold
-    uint  splitBoxesByteOffset;
     uint  plocRadius;
     uint  primIndicesSortedScratchOffset;
     uint  unsortedBvhLeafNodesOffset;
@@ -85,7 +84,7 @@ struct BuildPlocArgs
 #define INIT_CLUSTER_LIST_LDS    0xfffffffe
 
 #if NO_SHADER_ENTRYPOINT == 0
-#include "Common.hlsl"
+#include "../shadersClean/common/Common.hlsli"
 
 //=====================================================================================================================
 #include "../shadersClean/common/ShaderDefs.hlsli"
@@ -344,8 +343,6 @@ void FindNearestNeighbour(
             // Would need to fetch paired triangle BBox here, if "enableEarlyPairCompression" is ON
             BoundingBox aabb = GetScratchNodeBoundingBox(scratchNode,
                                                          IsLeafNode(nodeIndex, numActivePrims),
-                                                         Settings.doTriangleSplitting,
-                                                         args.splitBoxesByteOffset,
                                                          Settings.enableEarlyPairCompression,
                                                          args.unsortedBvhLeafNodesOffset);
 
@@ -883,7 +880,6 @@ void BuildPLOC(
     plocArgs.fp16BoxNodesInBlasMode         = Settings.fp16BoxNodesMode;
     plocArgs.fp16BoxModeMixedSaThresh       = Settings.fp16BoxModeMixedSaThreshold;
     plocArgs.plocRadius                     = Settings.nnSearchRadius;
-    plocArgs.splitBoxesByteOffset           = ShaderConstants.offsets.triangleSplitBoxes;
     plocArgs.primIndicesSortedScratchOffset = ShaderConstants.offsets.primIndicesSorted;
     plocArgs.unsortedBvhLeafNodesOffset     = ShaderConstants.offsets.bvhLeafNodeData;
     plocArgs.scratchNodesScratchOffset = CalculateBvhNodesOffset(ShaderConstants, numActivePrims);

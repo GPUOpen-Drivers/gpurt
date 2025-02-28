@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -46,6 +46,8 @@
 
 #ifndef _MORTONCODES_HLSL
 #define _MORTONCODES_HLSL
+
+#include "../shadersClean/common/Common.hlsli"
 
 //=====================================================================================================================
 // Expands 10 bits unsigned into into 30 bits unsigned int
@@ -136,20 +138,6 @@ static uint64_t ExpandBits4D(uint a)
 }
 
 //=====================================================================================================================
-// Calculates a 30-bit Morton code for the
-// given 3D point located within the unit cube [0,1].
-static uint CalculateMortonCode(in float3 p)
-{
-    const float x = min(max(p.x * 1024.0, 0.0), 1023.0);
-    const float y = min(max(p.y * 1024.0, 0.0), 1023.0);
-    const float z = min(max(p.z * 1024.0, 0.0), 1023.0);
-    const uint xx = ExpandBits(uint(x));
-    const uint yy = ExpandBits(uint(y));
-    const uint zz = ExpandBits(uint(z));
-    return xx * 4 + yy * 2 + zz;
-}
-
-//=====================================================================================================================
 // Expands 21 bits into 63 bits
 // The following two functions are based on functions from
 // https://github.com/Forceflow/libmorton/blob/main/libmorton/morton3D.h
@@ -197,6 +185,20 @@ static uint64_t ExpandBits64(in uint64_t a)
 }
 
 //=====================================================================================================================
+// Calculates a 30-bit Morton code for the
+// given 3D point located within the unit cube [0,1].
+static uint CalculateRegularMortonCode32(in float3 p)
+{
+    const float x = min(max(p.x * 1024.0, 0.0), 1023.0);
+    const float y = min(max(p.y * 1024.0, 0.0), 1023.0);
+    const float z = min(max(p.z * 1024.0, 0.0), 1023.0);
+    const uint xx = ExpandBits(uint(x));
+    const uint yy = ExpandBits(uint(y));
+    const uint zz = ExpandBits(uint(z));
+    return xx * 4 + yy * 2 + zz;
+}
+
+//=====================================================================================================================
 static uint64_t ExpandBits2D64(uint64_t w)
 {
     w &= 0x00000000ffffffff;
@@ -209,22 +211,9 @@ static uint64_t ExpandBits2D64(uint64_t w)
 }
 
 //=====================================================================================================================
-// Calculates a 63-bit Morton code for the
-// given 3D point located within the unit cube [0,1].
-static uint64_t CalculateMortonCode64(in float3 p)
-{
-    const float x = min(max(p.x * 2097152.0, 0.0), 2097151.0);
-    const float y = min(max(p.y * 2097152.0, 0.0), 2097151.0);
-    const float z = min(max(p.z * 2097152.0, 0.0), 2097151.0);
-    const uint64_t xx = ExpandBits64(uint(x));
-    const uint64_t yy = ExpandBits64(uint(y));
-    const uint64_t zz = ExpandBits64(uint(z));
-
-    return  xx * 4 + yy * 2 + zz;
-}
-
-//=====================================================================================================================
-uint CalculateVariableBitsMortonCode(float3 sceneExtent, float3 normalizedPos)
+uint CalculateVariableBitsMortonCode32(
+    float3 sceneExtent,
+    float3 normalizedPos)
 {
     const uint numMortonBits = 30;
     int3 numBits = uint3(0, 0, 0);
@@ -466,14 +455,44 @@ uint CalculateVariableBitsMortonCode(float3 sceneExtent, float3 normalizedPos)
 }
 
 //=====================================================================================================================
+uint ExpandForSizeBits(uint value)
+{
+    // input is 24 bits
+    value &= ((1U << 24) - 1);
+
+    uint mask = ((1U << 12) - 1);
+
+    // 12[4]12
+    value = ((value & ~mask) << 4) | (value & mask);
+
+    mask = (((1U << 6) - 1) << 6) | (((1U << 6) - 1) << 22);
+
+    // 6[2]6[2]6[2]6
+    value = (value & ~mask) | ((value & mask) << 2);
+
+    mask = (((1U << 3) - 1) << 3) +
+           (((1U << 3) - 1) << 11) +
+           (((1U << 3) - 1) << 19) +
+           (((1U << 3) - 1) << 27);
+
+    // 3[1]3 [1] 3[1]3 [1] 3[1]3 [1] 3[1]3
+    value = ((value & mask) << 1) | (value & ~mask);
+
+    return value;
+}
+
+//=====================================================================================================================
 static uint64_t CalculateVariableBitsMortonCode64(
     float3 sceneExtent,
-    float3 normalizedPos,
+    uint3 axisCodes,
+    float surfaceArea,
     uint numSizeBits,
-    out_param(uint3) values,
-    out_param(uint) numAxisBits,
-    out_param(uint4) numMortonBitsPerAxis)
+    float2 sizeMinMax,
+    out uint numAxisBits)
 {
+    uint3 values;
+    uint4 numMortonBitsPerAxis;
+
     int numMortonBits = 62;
 
     if (numSizeBits > 0)
@@ -641,13 +660,13 @@ static uint64_t CalculateVariableBitsMortonCode64(
     uint64_t mortonCode = 0;
     uint64_t3 axisCode;
 
-    // based on the number of bits, calculate each code per axis
+    // based on the number of bits, shift out each code per axis
 #if !__cplusplus
     [unroll]
 #endif
     for (uint a = 0; a < 3; a++)
     {
-        axisCode[a] = min(max(uint(normalizedPos[startAxis[a]] * (1UL << numBits[a])), 0u), uint(1UL << numBits[a]) - 1u);
+        axisCode[a] = axisCodes[startAxis[a]] >> (32U - numBits[a]);
         numMortonBitsPerAxis[startAxis[a]] = numBits[a];
     }
 
@@ -744,79 +763,108 @@ static uint64_t CalculateVariableBitsMortonCode64(
 }
 
 //=====================================================================================================================
+uint64_t Expand2D64(uint code)
+{
+    uint64_t x = (uint64_t) code;
+
+    x = (x | (x << 16ULL)) & 0x0000FFFF0000FFFFULL;
+    x = (x | (x << 8ULL)) & 0x00FF00FF00FF00FFULL;
+    x = (x | (x << 4ULL)) & 0x0F0F0F0F0F0F0F0FULL;
+    x = (x | (x << 2ULL)) & 0x3333333333333333ULL;
+    x = (x | (x << 1ULL)) & 0x5555555555555555ULL;
+    return x;
+}
+
+//=====================================================================================================================
+uint64_t MortonCode2D64(uint2 codes)
+{
+    // Creates a 63-bit 2D code
+    uint64_t c1 = Expand2D64(codes.x);
+    uint64_t c2 = Expand2D64(codes.y);
+    return (c1) | (c2 >> 1ULL);
+}
+
+//=====================================================================================================================
+uint64_t Expand3D64(uint code)
+{
+    // we only look at the first 21 bits
+    uint64_t x = (uint64_t) (code >> 11ULL);
+
+    x = (x | x << 32) & 0x1f00000000ffffull;
+    x = (x | x << 16) & 0x1f0000ff0000ffull;
+    x = (x | x << 8) & 0x100f00f00f00f00full;
+    x = (x | x << 4) & 0x10c30c30c30c30c3ull;
+    x = (x | x << 2) & 0x1249249249249249ull;
+    return x;
+}
+
+//=====================================================================================================================
+// Calculates a 63-bit Morton code for the
+// given 3D point located within the unit cube [0,1].
+static uint64_t MortonCode3D64(in uint3 axisCodes)
+{
+    const uint64_t xx = Expand3D64(axisCodes.x);
+    const uint64_t yy = Expand3D64(axisCodes.y);
+    const uint64_t zz = Expand3D64(axisCodes.z);
+
+    return (xx << 2U) | (yy << 1U) | zz;
+}
+
+//=====================================================================================================================
 uint32_t CalculateMortonCode32(
     float3 normalizedPos,
-    float3 sceneExents,
-    in bool enableVariableBits)
+    float3 sceneExtents)
 {
-    const uint32_t mortonCode = (enableVariableBits) ? CalculateVariableBitsMortonCode(sceneExents, normalizedPos) :
-                                                       CalculateMortonCode(normalizedPos);
+    const bool regularCodes = IsRegularMortonCodeEnabled();
+
+    const uint32_t mortonCode = regularCodes ? CalculateRegularMortonCode32(normalizedPos) :
+                                               CalculateVariableBitsMortonCode32(sceneExtents, normalizedPos);
 
     return mortonCode;
 }
 
 //=====================================================================================================================
-uint ExpandForSizeBits(uint value)
+uint3 CalculateAxisCodes(
+    float3 boundsMin,
+    float3 boundsExtent,
+    float3 position,
+    uint isDegenerate
+)
 {
-    // input is 24 bits
-    value &= ((1U << 24) - 1);
+    float3 normalizedPos = isDegenerate ? float3(0.5f, 0.5f, 0.5f) : clamp((position - boundsMin) / boundsExtent, 0.0f, 0.99999994f);
 
-    uint mask = ((1U << 12) - 1);
-
-    // 12[4]12
-    value = ((value & ~mask) << 4) | (value & mask);
-
-    mask = (((1U << 6) - 1) << 6) | (((1U << 6) - 1) << 22);
-
-    // 6[2]6[2]6[2]6
-    value = (value & ~mask) | ((value & mask) << 2);
-
-    mask = (((1U << 3) - 1) << 3) +
-           (((1U << 3) - 1) << 11) +
-           (((1U << 3) - 1) << 19) +
-           (((1U << 3) - 1) << 27);
-
-    // 3[1]3 [1] 3[1]3 [1] 3[1]3 [1] 3[1]3
-    value = ((value & mask) << 1) | (value & ~mask);
-
-    return value;
+    return uint3(normalizedPos * float(0xFFFFFFFFU));
 }
 
 //=====================================================================================================================
 uint64_t CalculateMortonCode64(
-    float3 normalizedPos,
-    float3 sceneExtents,
-    float  surfaceArea,
-    uint2  sizeMinMax,
-    uint   numSizeBits,
-    in bool enableVariableBits)
+    float3 boundsMin,
+    float3 boundsExtent,
+    float2 sizeMinMax,
+    float3 position,
+    float surfaceArea,
+    uint isDegenerate,
+    uint numSizeBits
+)
 {
-    if (sizeMinMax.x >= sizeMinMax.y)
-    {
-        numSizeBits = 0;
-    }
-
-    uint numAxisBits;
-    uint3 valuesWithNoSize;
-    uint4 numBits;
+    const uint3 axisCodes = CalculateAxisCodes(
+        boundsMin,
+        boundsExtent,
+        position,
+        isDegenerate
+    );
 
     uint64_t mortonCode = 0;
+    uint numAxisBits = 64U;
 
-    if (enableVariableBits)
+    if (IsRegularMortonCodeEnabled())
     {
-        mortonCode = CalculateVariableBitsMortonCode64(sceneExtents,
-                                                       normalizedPos,
-                                                       numSizeBits,
-                                                       valuesWithNoSize,
-                                                       numAxisBits,
-                                                       numBits);
+        mortonCode = MortonCode3D64(axisCodes);
     }
     else
     {
-        mortonCode = CalculateMortonCode64(normalizedPos);
+        mortonCode = CalculateVariableBitsMortonCode64(boundsExtent, axisCodes, surfaceArea, numSizeBits, sizeMinMax, numAxisBits);
     }
-
-    uint w = 0;
 
     if (numSizeBits > 0)
     {
@@ -824,7 +872,7 @@ uint64_t CalculateMortonCode64(
 
         const float size = (surfaceArea - sizeMinMax.x) / (sizeMinMax.y - sizeMinMax.x);
 
-        w = min(max(size * (1UL << numSizeBits), 0.0), (1UL << numSizeBits) - 1);
+        uint w = min(max(size * (1UL << numSizeBits), 0.0), (1UL << numSizeBits) - 1);
 
         const uint64_t sizeValue = ExpandBits4D(w);
 
@@ -836,7 +884,7 @@ uint64_t CalculateMortonCode64(
 
         mortonCode = (ExpandForSizeBits(bitsToExpand) << 1) | sizeValue;
 
-        mortonCode = (mortonCode << numAxisBitsWithNoSize) | (mortonCodeTemp & ((1ULL << numAxisBitsWithNoSize) - 1));
+        mortonCode = (mortonCode << numAxisBitsWithNoSize) | (mortonCodeTemp & ((1ULL << numAxisBitsWithNoSize) - 1ULL));
     }
 
     return mortonCode;

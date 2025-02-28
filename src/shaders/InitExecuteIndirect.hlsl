@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -22,7 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "Common.hlsl"
+#include "../shadersClean/common/Common.hlsli"
 #include "../../gpurt/gpurtDispatch.h"
 
 #define RootSig "CBV(b0, visibility=SHADER_VISIBILITY_ALL),"\

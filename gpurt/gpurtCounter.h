@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2021-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2021-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -50,6 +50,9 @@ typedef uint8_t  uint8;
 typedef uint16_t uint16;
 typedef uint32_t uint32;
 typedef uint64_t uint64;
+
+enum class IndexFormat : uint32;
+enum class VertexFormat : uint32;
 
 #endif
 
@@ -280,6 +283,7 @@ enum class RayTracingBinaryFileType : uint32
     TraversalCounter,
     BvhRaw,
     BvhDecoded,
+    BuildInput,
 };
 
 // ====================================================================================================================
@@ -323,6 +327,25 @@ struct RayTracingBinaryHeaderRaw : RayTracingBinaryHeader
 };
 
 // ====================================================================================================================
+enum class CmdQueueType : uint32
+{
+    Graphics = 0,
+    AsyncCompute,
+    Count
+};
+
+// ====================================================================================================================
+// Header for build acceleration structure input binary files
+struct RayTracingBinaryHeaderBuild : RayTracingBinaryHeader
+{
+    CmdQueueType queueType;      // Queue Type (async compute, graphics)
+    uint32       commandListId;  // Command list ID
+    uint32       frameNumber;    // Frame ID
+    uint64       accelAddr;      // Acceleration structure address
+    uint32       updateCount;    // Number of updates
+};
+
+// ====================================================================================================================
 // Header for ray history binary files
 struct RayTracingBinaryHeaderRayHistory : RayTracingBinaryHeader
 {
@@ -336,6 +359,78 @@ struct RayTracingBinaryHeaderTraversalCounter : RayTracingBinaryHeader
 {
     CounterInfo counterInfo;
 };
+
+// ====================================================================================================================
+struct TriangleInputHeader
+{
+    gpusize      transform3x4; // Offset to transform data in the chunk (can be 0)
+                               // Count: 1, Stride: 36 bytes
+    IndexFormat  indexFormat;  // Index format (unknown when non-indexed)
+    VertexFormat vertexFormat; // Vertex position format
+    uint32       indexCount;   // Number of vertex indices
+    uint32       vertexCount;  // Number of vertex in the vertex buffer
+    gpusize      indexBuffer;  // Offset to index buffer data in the chunk (can be 0)
+                               // Count: indexCount, Stride: based on indexFormat
+    gpusize      vertexBuffer; // Offset to vertex buffer data in the chunk
+                               // Count: vertexCount, Stride: vertexStride
+    uint32       vertexStride; // Stride in bytes between vertex indices
+    uint32       reserved;
+};
+
+#define TRIANGLE_INPUTS_TRANSFORM_OFFSET                0
+#define TRIANGLE_INPUTS_INDEX_FORMAT_OFFSET             8
+#define TRIANGLE_INPUTS_VERTEX_FORMAT_OFFSET           12
+#define TRIANGLE_INPUTS_INDEX_COUNT_OFFSET             16
+#define TRIANGLE_INPUTS_VERTEX_COUNT_OFFSET            20
+#define TRIANGLE_INPUTS_INDEX_DATA_OFFSET              24
+#define TRIANGLE_INPUTS_VERTEX_DATA_OFFSET             32
+#define TRIANGLE_INPUTS_VERTEX_STRIDE_OFFSET           40
+#define TRIANGLE_INPUTS_HEADER_SIZE                    48
+
+GPURT_STATIC_ASSERT(TRIANGLE_INPUTS_TRANSFORM_OFFSET == offsetof(TriangleInputHeader, transform3x4), "");
+GPURT_STATIC_ASSERT(TRIANGLE_INPUTS_INDEX_FORMAT_OFFSET == offsetof(TriangleInputHeader, indexFormat), "");
+GPURT_STATIC_ASSERT(TRIANGLE_INPUTS_VERTEX_FORMAT_OFFSET == offsetof(TriangleInputHeader, vertexFormat), "");
+GPURT_STATIC_ASSERT(TRIANGLE_INPUTS_INDEX_COUNT_OFFSET == offsetof(TriangleInputHeader, indexCount), "");
+GPURT_STATIC_ASSERT(TRIANGLE_INPUTS_VERTEX_COUNT_OFFSET == offsetof(TriangleInputHeader, vertexCount), "");
+GPURT_STATIC_ASSERT(TRIANGLE_INPUTS_VERTEX_DATA_OFFSET == offsetof(TriangleInputHeader, vertexBuffer), "");
+GPURT_STATIC_ASSERT(TRIANGLE_INPUTS_VERTEX_STRIDE_OFFSET == offsetof(TriangleInputHeader, vertexStride), "");
+GPURT_STATIC_ASSERT(sizeof(TriangleInputHeader) == TRIANGLE_INPUTS_HEADER_SIZE, "Triangle inputs header mismatch.");
+
+// ====================================================================================================================
+struct AABBInputHeader
+{
+    uint32  aabbCount;          // Number of bounding boxes
+    uint32  aabbStride;         // Stride in bytes between consecutive bounding boxes
+    gpusize aabbBuffer;         // Offset to AABB data in AabbBuffer chunk
+};
+
+#define AABB_INPUTS_COUNT_OFFSET                0
+#define AABB_INPUTS_STRIDE_OFFSET               4
+#define AABB_INPUTS_BUFFER_OFFSET               8
+#define AABB_INPUTS_HEADER_SIZE                16
+
+GPURT_STATIC_ASSERT(AABB_INPUTS_COUNT_OFFSET == offsetof(AABBInputHeader, aabbCount), "");
+GPURT_STATIC_ASSERT(AABB_INPUTS_STRIDE_OFFSET == offsetof(AABBInputHeader, aabbStride), "");
+GPURT_STATIC_ASSERT(AABB_INPUTS_BUFFER_OFFSET == offsetof(AABBInputHeader, aabbBuffer), "");
+GPURT_STATIC_ASSERT(sizeof(AABBInputHeader) == AABB_INPUTS_HEADER_SIZE, "AABB inputs header mismatch.");
+
+// ====================================================================================================================
+struct InstanceInputHeader
+{
+    uint32  instanceCount;         // Number of instance nodes
+    uint32  instanceStride;        // Stride in bytes between instances
+    gpusize instances;             // Offset to instance desc data in the chunk
+};
+
+#define INSTANCE_INPUTS_COUNT_OFFSET                0
+#define INSTANCE_INPUTS_STRIDE_OFFSET               4
+#define INSTANCE_INPUTS_INSTANCES_OFFSET            8
+#define INSTANCE_INPUTS_HEADER_SIZE                16
+
+GPURT_STATIC_ASSERT(INSTANCE_INPUTS_COUNT_OFFSET == offsetof(InstanceInputHeader, instanceCount), "");
+GPURT_STATIC_ASSERT(INSTANCE_INPUTS_STRIDE_OFFSET == offsetof(InstanceInputHeader, instanceStride), "");
+GPURT_STATIC_ASSERT(INSTANCE_INPUTS_INSTANCES_OFFSET == offsetof(InstanceInputHeader, instances), "");
+GPURT_STATIC_ASSERT(sizeof(InstanceInputHeader) == INSTANCE_INPUTS_HEADER_SIZE, "Instance inputs header mismatch.");
 
 // ====================================================================================================================
 // 32-bit unique ray identifier calculated as below.

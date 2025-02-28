@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2022-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -74,8 +74,6 @@ static bool IsTrianglePrimitiveBuild()
 static BoundingBox GetScratchNodeBoundingBox(
     in ScratchNode node,
     in bool        isLeafNode,
-    in bool        triangleSplittingEnabled,
-    in uint        splitBoxesByteOffset,
     in bool        trianglePairingEnabled,
     in uint        baseScratchNodesOffset)
 {
@@ -83,46 +81,38 @@ static BoundingBox GetScratchNodeBoundingBox(
 
     if (isLeafNode && IsTrianglePrimitiveBuild())
     {
-        // For triangle geometry we need to generate bounding box from split boxes
-        if (triangleSplittingEnabled && (node.splitBox_or_nodePointer != INVALID_IDX))
-        {
-            bbox = FetchSplitBoxAtIndex(splitBoxesByteOffset, node.splitBox_or_nodePointer);
-        }
-        else
-        {
-            // Generate the BoundingBox of given triangle node
-            bbox = GenerateTriangleBoundingBox(node.bbox_min_or_v0,
-                                               node.bbox_max_or_v1,
-                                               node.sah_or_v2_or_instBasePtr);
+        // Generate the BoundingBox of given triangle node
+        bbox = GenerateTriangleBoundingBox(node.bbox_min_or_v0,
+                                           node.bbox_max_or_v1,
+                                           node.sah_or_v2_or_instBasePtr);
 
-            if (trianglePairingEnabled)
+        if (trianglePairingEnabled)
+        {
+            if (Settings.enableEarlyPairCompression)
             {
-                if (Settings.enableEarlyPairCompression)
+                // Early triangle pairing encodes the quad in a single scratch node
+                if (IsScratchNodeQuadPrimitive(node))
                 {
-                    // Early triangle pairing encodes the quad in a single scratch node
-                    if (IsScratchNodeQuadPrimitive(node))
-                    {
-                        const float3 v3 = float3(asfloat(node.splitBox_or_nodePointer),
-                                                 asfloat(node.numPrimitivesAndDoCollapse),
-                                                 asfloat(node.sortedPrimIndex));
+                    const float3 v3 = float3(asfloat(node.splitBox_or_nodePointer),
+                                             asfloat(node.numPrimitivesAndDoCollapse),
+                                             asfloat(node.sortedPrimIndex));
 
-                        bbox.min = min(v3, bbox.min);
-                        bbox.max = max(v3, bbox.max);
-                    }
+                    bbox.min = min(v3, bbox.min);
+                    bbox.max = max(v3, bbox.max);
                 }
-                else if (node.splitBox_or_nodePointer != INVALID_IDX)
-                {
-                    // Late triangle pairing uses multiple scratch nodes to encode paired triangle data
-                    BoundingBox nodeBbox = bbox;
-                    ScratchNode pairedNode = FetchScratchNode(baseScratchNodesOffset, node.splitBox_or_nodePointer);
+            }
+            else if (node.splitBox_or_nodePointer != INVALID_IDX)
+            {
+                // Late triangle pairing uses multiple scratch nodes to encode paired triangle data
+                BoundingBox nodeBbox = bbox;
+                ScratchNode pairedNode = FetchScratchNode(baseScratchNodesOffset, node.splitBox_or_nodePointer);
 
-                    BoundingBox pairedNodeBbox = GenerateTriangleBoundingBox(pairedNode.bbox_min_or_v0,
-                                                                             pairedNode.bbox_max_or_v1,
-                                                                             pairedNode.sah_or_v2_or_instBasePtr);
+                BoundingBox pairedNodeBbox = GenerateTriangleBoundingBox(pairedNode.bbox_min_or_v0,
+                                                                         pairedNode.bbox_max_or_v1,
+                                                                         pairedNode.sah_or_v2_or_instBasePtr);
 
-                    bbox.min = min(nodeBbox.min, pairedNodeBbox.min);
-                    bbox.max = max(nodeBbox.max, pairedNodeBbox.max);
-                }
+                bbox.min = min(nodeBbox.min, pairedNodeBbox.min);
+                bbox.max = max(nodeBbox.max, pairedNodeBbox.max);
             }
         }
     }
@@ -496,11 +486,18 @@ void UpdateSceneSize(uint byteOffset, float size)
 }
 
 //=====================================================================================================================
-void UpdateSceneBounds(uint byteOffset, BoundingBox boundingBox)
+void UpdateSceneSize(uint byteOffset, BoundingBox boundingBox)
+{
+    // Offset Size Bounds after scene bounds (scene bounds = 24 bytes)
+    UpdateSceneSize(byteOffset + 24, ComputeBoxSurfaceArea(boundingBox));
+}
+
+//=====================================================================================================================
+void UpdateCentroidBounds(uint byteOffset, float3 centroidPoint)
 {
     // Calculate the combined AABB for the entire wave.
-    const float3 waveBoundsMin = WaveActiveMin(boundingBox.min);
-    const float3 waveBoundsMax = WaveActiveMax(boundingBox.max);
+    const float3 waveBoundsMin = WaveActiveMin(centroidPoint);
+    const float3 waveBoundsMax = WaveActiveMax(centroidPoint);
 
     //TODO: can just use centroids rather than boxes
 
@@ -513,7 +510,7 @@ void UpdateSceneBounds(uint byteOffset, BoundingBox boundingBox)
         const uint3 waveMaxUint = Float3ToUint3(waveBoundsMax);
 
         uint outValue;
-        ScratchBuffer.InterlockedMin(byteOffset,     waveMinUint.x, outValue);
+        ScratchBuffer.InterlockedMin(byteOffset, waveMinUint.x, outValue);
         ScratchBuffer.InterlockedMin(byteOffset + 4, waveMinUint.y, outValue);
         ScratchBuffer.InterlockedMin(byteOffset + 8, waveMinUint.z, outValue);
 
@@ -524,13 +521,21 @@ void UpdateSceneBounds(uint byteOffset, BoundingBox boundingBox)
 }
 
 //=====================================================================================================================
-void UpdateSceneBoundsUsingCentroid(uint byteOffset, float3 centroidPoint)
+void UpdateCentroidBounds(uint byteOffset, BoundingBox boundingBox)
+{
+    const float3 center = 0.5f * (boundingBox.max + boundingBox.min);
+
+    // Offset centroid bounds after scene bounds and min/max primtive size
+    // (scene bounds = 24 bytes, min/max primitive size = 8 bytes)
+    UpdateCentroidBounds(byteOffset + 32U, center);
+}
+
+//=====================================================================================================================
+void UpdateSceneBounds(uint byteOffset, BoundingBox boundingBox)
 {
     // Calculate the combined AABB for the entire wave.
-    const float3 waveBoundsMin = WaveActiveMin(centroidPoint);
-    const float3 waveBoundsMax = WaveActiveMax(centroidPoint);
-
-    //TODO: can just use centroids rather than boxes
+    const float3 waveBoundsMin = WaveActiveMin(boundingBox.min);
+    const float3 waveBoundsMax = WaveActiveMax(boundingBox.max);
 
     // Calculate the AABB for the entire scene using memory atomics.
     // Scalarize the atomic min/max writes by only using the first lane.
@@ -556,6 +561,7 @@ void UpdateSceneBoundsWithSize(uint byteOffset, BoundingBox boundingBox)
 {
     UpdateSceneBounds(byteOffset, boundingBox);
 
+    // Offset Size Bounds after scene bounds (scene bounds = 24 bytes)
     UpdateSceneSize(byteOffset + 24, ComputeBoxSurfaceArea(boundingBox));
 }
 
@@ -578,17 +584,94 @@ BoundingBox FetchSceneBounds(uint sceneBoundsOffset)
 }
 
 //=====================================================================================================================
+BoundingBox FetchCentroidBounds(uint sceneBoundsOffset)
+{
+    // Offset centroid bounds after scene bounds and min/max primtive size
+    // (scene bounds = 24 bytes, min/max primitive size = 8 bytes)
+    return FetchSceneBounds(sceneBoundsOffset + 32U);
+}
+
+//=====================================================================================================================
 float2 FetchSceneSize(uint sceneBoundsOffset)
 {
     uint2 data;
-    data.x          = ScratchBuffer.Load(sceneBoundsOffset + 24);
-    data.y          = ScratchBuffer.Load(sceneBoundsOffset + 28);
+    data.x = ScratchBuffer.Load(sceneBoundsOffset + 24);
+    data.y = ScratchBuffer.Load(sceneBoundsOffset + 28);
 
     float2 minMax;
     minMax.x = UintToFloat(data.x);
     minMax.y = UintToFloat(data.y);
 
     return minMax;
+}
+
+//=====================================================================================================================
+MortonBoundingBox FetchMortonBounds(uint sceneBoundsOffset, uint numMortonSizeBits)
+{
+    BoundingBox bounds;
+
+    if (IsCentroidMortonBoundsEnabled())
+    {
+        // If we only need the centroid bounds then do not fetch the scene bounds
+        bounds = FetchCentroidBounds(sceneBoundsOffset);
+    }
+    else
+    {
+        // If we are not only using centroid, we need the scene bounds
+        bounds = FetchSceneBounds(sceneBoundsOffset);
+
+        if (IsConciseMortonBoundsEnabled())
+        {
+            // Mixing Centroid and scene bounds to create a more concise bound
+            BoundingBox centroidBounds = FetchCentroidBounds(sceneBoundsOffset);
+
+            const float3 minDiff = centroidBounds.min - bounds.min;
+            const float3 maxDiff = bounds.max - centroidBounds.max;
+            const float3 boundsOffset = min(minDiff, maxDiff) * 0.99f;
+
+            bounds.min += boundsOffset;
+            bounds.max -= boundsOffset;
+        }
+    }
+
+    MortonBoundingBox mortonBounds =
+    {
+        bounds.min,
+        bounds.max - bounds.min,
+        float2(0.0f, 0.0f),
+        0U
+    };
+
+    // If we do not have size bits then do not fetch the primitive size
+    if (IsMortonSizeBitsEnabled(numMortonSizeBits))
+    {
+        mortonBounds.sizeMinMax = FetchSceneSize(sceneBoundsOffset);
+
+        if (mortonBounds.sizeMinMax.x < mortonBounds.sizeMinMax.y)
+        {
+            mortonBounds.numSizeBits = numMortonSizeBits;
+        }
+    }
+
+    if (IsCubeMortonBoundsEnabled())
+    {
+        // Purple codes 'cube' bounds
+        const float largestAxis = max(mortonBounds.extent.x, max(mortonBounds.extent.y, mortonBounds.extent.z));
+        mortonBounds.extent = largestAxis;
+    }
+    else if (IsPerfectRectangleMortonBoundsEnabled())
+    {
+        const float3 oldExtent = mortonBounds.extent;
+        const float largestAxis = max(mortonBounds.extent.x, max(mortonBounds.extent.y, mortonBounds.extent.z));
+        const float3 additionalBits_f = log2(largestAxis / mortonBounds.extent);
+        const uint3 additionalBits = select(or(additionalBits_f == -1.0f, additionalBits_f >= 64.0f), 64U, uint3(additionalBits_f));
+        const float3 divisor = asfloat((additionalBits + 127U) << 23U);
+        mortonBounds.extent = largestAxis / divisor;
+        const float3 difference = 0.5f * (mortonBounds.extent - oldExtent);
+        mortonBounds.min -= difference;
+    }
+
+    return mortonBounds;
 }
 
 //=====================================================================================================================
@@ -605,7 +688,7 @@ void InitSceneBounds(uint sceneBoundsOffset)
     ScratchBuffer.Store2(sceneBoundsOffset, uint2(maxVal, minVal));
     sceneBoundsOffset += sizeof(uint2);
 
-    if (Settings.rebraidType == RebraidType::V2)
+    if (IsCentroidMortonBoundsEnabled() || IsConciseMortonBoundsEnabled())
     {
         ScratchBuffer.Store3(sceneBoundsOffset, maxVal.xxx);
         sceneBoundsOffset += sizeof(uint3);
@@ -621,15 +704,11 @@ uint GetBvhNodesOffset(
     uint bvhLeafNodeDataOffset,
     uint primIndicesSortedOffset)
 {
-    if ((Settings.enableTopDownBuild == false) &&
-        (Settings.enableFastLBVH == false) &&
-        (numActivePrims == 1) &&
-        (maxNumPrimitives > 1))
+    if ((UsesFastLbvhLayout() == false) && (numActivePrims == 1) && (maxNumPrimitives > 1))
     {
-        // If there is one active primitive among a number of inactive primitives and
-        // the top down builder is disabled, then we need to move the root to match the
-        // offset of the single active primitive.
-        // The FastLBVH does not need to do this, because it provides the root's index
+        // If there is one active primitive among a number of inactive primitives then we need to move
+        // the root to match the offset of the single active primitive.
+        // The FastLBVH layout does not need to do this, because it provides the root's index
         // in ShaderConstants.offsets.fastLBVHRootNodeIndex.
         const uint nodeIndex = FetchSortedPrimIndex(primIndicesSortedOffset, 0);
         return CalcScratchNodeOffset(bvhLeafNodeDataOffset, nodeIndex);
@@ -639,8 +718,7 @@ uint GetBvhNodesOffset(
         return CalculateScratchBvhNodesOffset(
                    numActivePrims,
                    maxNumPrimitives,
-                   bvhNodeDataOffset,
-                   Settings.enableTopDownBuild);
+                   bvhNodeDataOffset);
     }
 }
 
@@ -851,8 +929,6 @@ void RefitNode(
         const bool isLeafNode = IsLeafNode(rc, args.numActivePrims);
         bboxRightChild = GetScratchNodeBoundingBox(rightNode,
                                                    isLeafNode,
-                                                   args.doTriangleSplitting,
-                                                   args.splitBoxesOffset,
                                                    args.enableEarlyPairCompression,
                                                    args.unsortedNodesBaseOffset);
     }
@@ -863,8 +939,6 @@ void RefitNode(
         const bool isLeafNode = IsLeafNode(lc, args.numActivePrims);
         bboxLeftChild = GetScratchNodeBoundingBox(leftNode,
                                                   isLeafNode,
-                                                  args.doTriangleSplitting,
-                                                  args.splitBoxesOffset,
                                                   args.enableEarlyPairCompression,
                                                   args.unsortedNodesBaseOffset);
     }
@@ -907,6 +981,19 @@ static TriangleData GetScratchNodeQuadVertices(
         float3, scratchNodesOffset, nodeIndex, SCRATCH_NODE_V0_OFFSET + (indices.z * SCRATCH_NODE_TRIANGLE_VERTEX_STRIDE));
 
     return tri;
+}
+
+//=====================================================================================================================
+uint GetBvh2RootNodeIndex()
+{
+    uint rootNodeIndex = 0;
+
+    if (UsesFastLbvhLayout())
+    {
+        rootNodeIndex = FetchRootNodeIndex(ShaderConstants.offsets.fastLBVHRootNodeIndex);
+    }
+
+    return rootNodeIndex;
 }
 
 #endif

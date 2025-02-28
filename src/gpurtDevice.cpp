@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2019-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2019-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -319,7 +319,7 @@ uint32 Device::GetStaticPipelineFlags(
         pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::SkipProceduralPrims);
     }
 
-    if (m_info.deviceSettings.rebraidType != RebraidType::Off)
+    if (m_info.deviceSettings.enableRebraid)
     {
         pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::UseTreeRebraid);
     }
@@ -450,6 +450,10 @@ Pal::Result Device::Init()
     GpuUtil::TraceSession* pTraceSession = pPlatform->GetTraceSession();
     pTraceSession->RegisterSource(&m_accelStructTraceSource);
     pTraceSession->RegisterSource(&m_rayHistoryTraceSource);
+#endif
+
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 54
+    m_info.deviceSettings.enableRebraid = (m_info.deviceSettings.rebraidType == RebraidType::V2);
 #endif
 
     // Merged encode/build only works with parallel build
@@ -680,12 +684,19 @@ ClientPipelineHandle Device::GetInternalPipeline(
 
             switch (pipelineBuildInfo.shaderType)
             {
-                case InternalRayTracingCsType::BuildBVHTD:
-                case InternalRayTracingCsType::BuildBVHTDTR:
                 case InternalRayTracingCsType::BuildParallel:
                 case InternalRayTracingCsType::Rebraid:
                     newBuildInfo.hashedCompilerOptionCount = 1;
                     newBuildInfo.pHashedCompilerOptions = wave64Option;
+                    break;
+                case InternalRayTracingCsType::EmitCurrentSize:
+                case InternalRayTracingCsType::EmitCompactSize:
+                case InternalRayTracingCsType::EmitSerializeDesc:
+                case InternalRayTracingCsType::EmitToolVisDesc:
+                case InternalRayTracingCsType::InitAccelerationStructure:
+                case InternalRayTracingCsType::InitExecuteIndirect:
+                    newBuildInfo.hashedCompilerOptionCount = 1;
+                    newBuildInfo.pHashedCompilerOptions = wave32Option;
                     break;
                 default:
                     newBuildInfo.hashedCompilerOptionCount = 0;
@@ -752,13 +763,6 @@ ClientPipelineHandle Device::GetInternalPipeline(
                     "Auto",     // BvhBuildMode::Auto,
                 };
 
-                constexpr const char* RebraidTypeStr[] =
-                {
-                    "",           // GpuRt::RebraidType::Off,
-                    "_RebraidV1", // GpuRt::RebraidType::V1,
-                    "_RebraidV2", // GpuRt::RebraidType::V2,
-                };
-
                 constexpr const char* GeometryTypeStr[] =
                 {
                     "_Tri",  // GpuRt::GeometryType::Triangles,
@@ -771,15 +775,13 @@ ClientPipelineHandle Device::GetInternalPipeline(
                                "_RadixSortLevel_%d",
                                buildSettings.radixSortScanLevel);
 
-                Util::Snprintf(pipelineName, MaxStrLength, "%s%s%s_%s%s%s%s%s",
+                Util::Snprintf(pipelineName, MaxStrLength, "%s%s%s_%s%s%s%s",
                                newBuildInfo.pPipelineName,
                                buildSettings.topLevelBuild ? "_TLAS" : "_BLAS",
                                buildSettings.topLevelBuild ? "" : GeometryTypeStr[buildSettings.geometryType],
-                               buildSettings.enableTopDownBuild ?
-                                   "TopDown" : BuildModeStr[buildSettings.buildMode],
-                               buildSettings.doTriangleSplitting ? "_TriSplit" : "",
+                               BuildModeStr[buildSettings.buildMode],
                                buildSettings.triangleCompressionMode ? "_TriCompr" : "",
-                               RebraidTypeStr[buildSettings.rebraidType],
+                               buildSettings.enableRebraid ? "_RebraidOn" : "",
                                buildSettings.enableMergeSort ? "_MergeSort" : radixSortLevelStr);
 
                 newBuildInfo.pPipelineName = &pipelineName[0];
@@ -1175,7 +1177,7 @@ void Device::WriteAccelStructChunk(
         .headerSize        = sizeof(GpuRt::RawAccelStructRdfChunkHeader),
         .pData             = pData,
         .dataSize          = static_cast<Pal::int64>(dataSize),
-        .enableCompression = true,
+        .enableCompression = (m_info.deviceSettings.disableRdfCompression == false),
     };
     const char chunkId[] = "RawAccelStruct";
     memcpy(info.id, chunkId, strlen(chunkId));
@@ -1566,7 +1568,7 @@ void Device::WriteRayHistoryChunks(
 
     info.version           = GPURT_COUNTER_VERSION;
     info.headerSize        = sizeof(GpuRt::RayHistoryRdfChunkHeader);
-    info.enableCompression = true;
+    info.enableCompression = (m_info.deviceSettings.disableRdfCompression == false);
 
     uint32 traceBufferCount = m_rayHistoryTraceList.NumElements();
     for (uint32 i = 0; i < traceBufferCount; ++i)
@@ -1703,7 +1705,7 @@ void Device::WriteRayHistoryMetaDataChunks(
         .headerSize        = sizeof(GpuRt::RayHistoryRdfChunkHeader),
         .pData             = &rayHistoryMetadata,
         .dataSize          = sizeof(RayHistoryMetadata),
-        .enableCompression = true,
+        .enableCompression = (m_info.deviceSettings.disableRdfCompression == false),
     };
     const char chunkId[] = "HistoryMetadata";
     memcpy(info.id, chunkId, strlen(chunkId));
@@ -1732,7 +1734,7 @@ void Device::WriteShaderTableChunks(
     info.version           = GPURT_COUNTER_VERSION;
     info.headerSize        = sizeof(RayHistoryRdfChunkHeader);
     info.pHeader           = &pRayHistoryRdfChunkHeader;
-    info.enableCompression = true;
+    info.enableCompression = (m_info.deviceSettings.disableRdfCompression == false);
 
     // Point to the first shader table info (RayGen)
     auto* pShaderTableInfo = static_cast<ShaderTableInfo*>(Util::VoidPtrInc(traceListInfo.pRayHistoryTraceBuffer,
@@ -2100,6 +2102,9 @@ void Device::CopyBufferRaw(
     gpusize                     srcBufferVa,    // Source buffer GPU VA
     uint32                      numDwords)      // Number of Dwords to copy
 {
+    PAL_ASSERT(Util::IsPow2Aligned(dstBufferVa, 4));
+    PAL_ASSERT(Util::IsPow2Aligned(srcBufferVa, 4));
+
 #if GPURT_DEVELOPER
     OutputPipelineName(cmdBuffer, InternalRayTracingCsType::CopyBufferRaw);
 #endif
@@ -2138,11 +2143,14 @@ void Device::UploadCpuMemory(
     const void*           pSrcData,
     uint32                sizeInBytes)
 {
+    PAL_ASSERT(Util::IsPow2Aligned(dstBufferVa, 4));
+    PAL_ASSERT(Util::IsPow2Aligned(sizeInBytes, 4));
+
     gpusize srcGpuVa = 0;
     void* pMappedData = AllocateTemporaryData(cmdBuffer, sizeInBytes, &srcGpuVa);
     std::memcpy(pMappedData, pSrcData, sizeInBytes);
 
-    m_pBackend->CopyGpuMemoryRegion(cmdBuffer, srcGpuVa, 0, dstBufferVa, 0, sizeInBytes);
+    CopyBufferRaw(cmdBuffer, dstBufferVa, srcGpuVa, sizeInBytes >> 2);
 }
 
 // =====================================================================================================================

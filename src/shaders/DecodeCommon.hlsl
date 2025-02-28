@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -25,19 +25,7 @@
 #ifndef _DECODECOMMON_HLSL
 #define _DECODECOMMON_HLSL
 
-#include "Common.hlsl"
-
-// D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_TOOLS_VISUALIZATION_HEADER
-#define VISUALIZATION_HEADER_SIZE 8
-
-#define VISUALIZATION_HEADER_TYPE_OFFSET      0
-#define VISUALIZATION_HEADER_NUM_DESCS_OFFSET 4
-
-// D3D12_RAYTRACING_GEOMETRY_DESC
-#define GEOMETRY_DESC_SIZE 56
-
-#define GEOMETRY_DESC_TYPE_OFFSET  0 // D3D12_RAYTRACING_GEOMETRY_TYPE
-#define GEOMETRY_DESC_FLAGS_OFFSET 4 // D3D12_RAYTRACING_GEOMETRY_FLAGS
+#include "../shadersClean/common/Common.hlsli"
 
 // The following defines match this D3D12 structure
 //
@@ -124,13 +112,6 @@ static InstanceDesc DecodeApiInstanceDesc(
     apiInstanceDesc.accelStructureAddressHiAndFlags = HighPart(gpuVa);
 
     return apiInstanceDesc;
-}
-
-//=====================================================================================================================
-// Additional driver decode header data
-static uint GetDriverDecodeHeaderSize()
-{
-    return sizeof(DriverDecodeHeader);
 }
 
 //=====================================================================================================================

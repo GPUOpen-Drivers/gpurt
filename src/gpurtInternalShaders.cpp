@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2019-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2019-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -67,13 +67,9 @@ const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsTyp
     PIPELINE_BUILD_BVH_INFO(EncodeInstances),
     PIPELINE_BUILD_BVH_INFO(Rebraid),
     PIPELINE_BUILD_BVH_INFO(GenerateMortonCodes),
-    PIPELINE_BUILD_BVH_INFO(BuildBVH),
-    PIPELINE_BUILD_BVH_INFO(BuildBVHTD),
-    PIPELINE_BUILD_BVH_INFO(BuildBVHTDTR),
     PIPELINE_BUILD_BVH_INFO(BuildPLOC),
     PIPELINE_BUILD_INFO(UpdateQBVH),
     PIPELINE_BUILD_INFO(UpdateParallel),
-    PIPELINE_BUILD_BVH_INFO(RefitBounds),
     PIPELINE_BUILD_INFO(ClearBuffer),
     PIPELINE_BUILD_INFO(CopyBufferRaw),
     PIPELINE_BUILD_BVH_INFO(BuildQBVH),

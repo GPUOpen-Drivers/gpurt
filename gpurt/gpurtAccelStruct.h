@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2022-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -45,7 +45,7 @@
 // Note this file is designed to be compilable as HLSL.
 
 #define GPURT_ACCEL_STRUCT_MAJOR_VERSION 16
-#define GPURT_ACCEL_STRUCT_MINOR_VERSION 4
+#define GPURT_ACCEL_STRUCT_MINOR_VERSION 5
 #define GPURT_ACCEL_STRUCT_VERSION       ((GPURT_ACCEL_STRUCT_MAJOR_VERSION << 16) | GPURT_ACCEL_STRUCT_MINOR_VERSION)
 
 #include "../src/shared/assert.h"
@@ -150,7 +150,7 @@ union AccelStructHeaderInfo
                                             // BvhCpuBuildMode: RecursiveSAH=0, RecursiveLargestExtent=1
         uint32 triCompression         : 3;  // BLAS TriangleCompressionMode: None=0, Two=1, Pair=2
         uint32 fp16BoxNodesInBlasMode : 2;  // BLAS FP16 box mode: None=0, Leaf=1, Mixed=2, All=3
-        uint32 triangleSplitting      : 1;  // Enable TriangleSplitting
+        uint32 unused0                : 1;  // Unused bits
         uint32 rebraid                : 1;  // Enable Rebraid for TLAS
         uint32 fusedInstanceNode      : 1;  // Enable fused instance nodes
         uint32 reserved               : 2;  // Unused bits
@@ -192,8 +192,6 @@ typedef uint32 AccelStructHeaderInfo2;
 #define ACCEL_STRUCT_HEADER_INFO_TRI_COMPRESS_MASK                      0x7
 #define ACCEL_STRUCT_HEADER_INFO_FP16_BOXNODE_IN_BLAS_MODE_SHIFT        9
 #define ACCEL_STRUCT_HEADER_INFO_FP16_BOXNODE_IN_BLAS_MODE_MASK         0x3
-#define ACCEL_STRUCT_HEADER_INFO_TRIANGLE_SPLITTING_FLAGS_SHIFT         11
-#define ACCEL_STRUCT_HEADER_INFO_TRIANGLE_SPLITTING_FLAGS_MASK          0x1
 #define ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_SHIFT                    12
 #define ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_MASK                     0x1
 #define ACCEL_STRUCT_HEADER_INFO_FUSED_INSTANCE_NODE_FLAGS_SHIFT        13

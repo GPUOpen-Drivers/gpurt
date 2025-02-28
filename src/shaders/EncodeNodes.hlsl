@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -35,7 +35,7 @@ T LoadInstanceDescBuffer(uint offset)
     return InstanceDescBuffer.Load<T>(offset);
 }
 #include "IndirectArgBufferUtils.hlsl"
-#include "Common.hlsl"
+#include "../shadersClean/common/Common.hlsli"
 #include "BuildCommon.hlsl"
 #include "BuildCommonScratch.hlsl"
 #include "EncodeCommon.hlsl"
@@ -114,6 +114,14 @@ static const uint COUNTS_MASK = (~(LOCAL_COUNTS_READY | LOCAL_PREFIX_SUM_READY))
 
 // Group shared memory for task counters used for InitBlockPrefixSum
 groupshared uint SharedMem[1];
+uint GetSharedMem(uint index)
+{
+    return SharedMem[index];
+}
+void SetSharedMem(uint index, uint value)
+{
+    SharedMem[index] = value;
+}
 
 //=====================================================================================================================
 void WritePrimRefCount(uint id, uint data)
@@ -255,14 +263,21 @@ void EncodeQuadNodes(
             }
             else
             {
-                if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometry)
-                {
-                    UpdateSceneBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
-                }
-                else if (Settings.sceneBoundsCalculationType == (uint)SceneBoundsCalculation::BasedOnGeometryWithSize)
+                // Always encode the scene bounds
+                UpdateSceneBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
+
+                // Only when size bits are enabled, update the scene size
+                if (IsMortonSizeBitsEnabled(ShaderConstants.numMortonSizeBits))
                 {
                     // TODO: with tri splitting, need to not update "size" here
-                    UpdateSceneBoundsWithSize(ShaderConstants.offsets.sceneBounds, boundingBox);
+                    UpdateSceneSize(ShaderConstants.offsets.sceneBounds, boundingBox);
+                }
+
+                // Only if the centroid bounds are required, update the centroid bounds
+                if (IsCentroidMortonBoundsEnabled() || IsConciseMortonBoundsEnabled())
+                {
+                    // TODO: with tri splitting, need to not update "centroids" here
+                    UpdateCentroidBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
                 }
             }
         }
@@ -386,8 +401,10 @@ void EncodeQuadNodes(
                                  ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET,
                                  ShaderConstants.numPrimitives);
 
+            uint buildBlockCount;
+
             const uint threadGroupSize = 64u;
-            const uint buildBlockCount = Pow2Align(globalCount, threadGroupSize) / threadGroupSize;
+            buildBlockCount = Pow2Align(globalCount, threadGroupSize) / threadGroupSize;
 
             WriteTaskCounterData(ShaderConstants.offsets.encodeTaskCounter,
                                  ENCODE_TASK_COUNTER_INDIRECT_ARGS,

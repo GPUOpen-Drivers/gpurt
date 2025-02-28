@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -47,8 +47,10 @@ struct InputArgs
 // unused buffer
 [[vk::binding(2, 0)]] RWByteAddressBuffer                       DstMetadata   : register(u2);
 
-#include "Common.hlsl"
+#include "../shadersClean/common/Common.hlsli"
 #include "DecodeCommon.hlsl"
+#include "../shadersClean/common/SerializeDefs.hlsli"
+#include "../../gpurt/gpurtAccelStruct.h"
 
 //=====================================================================================================================
 // DecodeAS
@@ -85,7 +87,7 @@ void DecodeAS(in uint3 globalThreadId : SV_DispatchThreadID)
         if (ShaderConstants.isDriverDecode)
         {
             WriteDriverDecodeHeader(header, 0);
-            apiHeaderOffset += GetDriverDecodeHeaderSize();
+            apiHeaderOffset += sizeof(DriverDecodeHeader);
         }
 
         // D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_TOOLS_VISUALIZATION_HEADER
@@ -96,7 +98,7 @@ void DecodeAS(in uint3 globalThreadId : SV_DispatchThreadID)
     uint headerSize = VISUALIZATION_HEADER_SIZE;
     if (ShaderConstants.isDriverDecode)
     {
-        headerSize += GetDriverDecodeHeaderSize();
+        headerSize += sizeof(DriverDecodeHeader);
     }
 
     if (type == TOP_LEVEL)

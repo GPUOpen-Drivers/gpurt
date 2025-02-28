@@ -1,7 +1,7 @@
 ##
  #######################################################################################################################
  #
- #  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ #  Copyright (c) 2024-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  #
  #  Permission is hereby granted, free of charge, to any person obtaining a copy
  #  of this software and associated documentation files (the "Software"), to deal
@@ -22,7 +22,6 @@
  #  SOFTWARE.
  #
  #######################################################################################################################
-
 
 import cmd
 import sys
@@ -114,15 +113,11 @@ bvhShaderConfigs = [
     ShaderConfig(path="EncodeTopLevel.hlsl", entryPoint="EncodeInstances"),
     ShaderConfig(path="BuildParallel.hlsl", entryPoint="BuildBvh", outputName="BuildParallel"),
     ShaderConfig(path="UpdateParallel.hlsl", entryPoint="UpdateParallel"),
-    ShaderConfig(path="BuildBVHTDTR.hlsl", entryPoint="BuildBVHTD"),
-    ShaderConfig(path="BuildBVHTDTR.hlsl", entryPoint="BuildBVHTD", outputName="BuildBVHTDTR", defines="USE_BVH_REBRAID=1"),
     ShaderConfig(path="GenerateMortonCodes.hlsl", entryPoint="GenerateMortonCodes"),
     ShaderConfig(path="Rebraid.hlsl", entryPoint="Rebraid"),
-    ShaderConfig(path="BuildBVH.hlsl", entryPoint="BuildBVH", defines="USE_BUILD_LBVH=1"),
     ShaderConfig(path="BuildPLOC.hlsl", entryPoint="BuildPLOC"),
     ShaderConfig(path="UpdateQBVH.hlsl", entryPoint="UpdateQBVH"),
-    ShaderConfig(path="RefitBounds.hlsl", entryPoint="RefitBounds"),
-    ShaderConfig(path="ClearBuffer.hlsl", entryPoint="ClearBuffer"),
+    ShaderConfig(path="../shadersClean/debug/ClearBuffer.hlsl", entryPoint="ClearBuffer"),
     ShaderConfig(path="../shadersClean/build/CopyBufferRaw.hlsl", entryPoint="CopyBufferRaw"),
     ShaderConfig(path="BuildQBVH.hlsl", entryPoint="BuildQBVH"),
     ShaderConfig(path="RadixSort/BitHistogram.hlsl", entryPoint="BitHistogram"),
@@ -132,10 +127,10 @@ bvhShaderConfigs = [
     ShaderConfig(path="RadixSort/ScanExclusiveInt4DLB.hlsl", entryPoint="ScanExclusiveInt4DLB"),
     ShaderConfig(path="RadixSort/ScanExclusiveInt4DLB.hlsl", entryPoint="InitScanExclusiveInt4DLB"),
     ShaderConfig(path="RadixSort/DistributePartSumInt4.hlsl", entryPoint="DistributePartSumInt4"),
-    ShaderConfig(path="EmitAS.hlsl", entryPoint="EmitCurrentSize"),
-    ShaderConfig(path="EmitAS.hlsl", entryPoint="EmitCompactSize"),
-    ShaderConfig(path="EmitAS.hlsl", entryPoint="EmitSerializeDesc"),
-    ShaderConfig(path="EmitAS.hlsl", entryPoint="EmitToolVisDesc"),
+    ShaderConfig(path="../shadersClean/build/EmitAS.hlsl", entryPoint="EmitCurrentSize"),
+    ShaderConfig(path="../shadersClean/build/EmitAS.hlsl", entryPoint="EmitCompactSize"),
+    ShaderConfig(path="../shadersClean/build/EmitAS.hlsl", entryPoint="EmitSerializeDesc"),
+    ShaderConfig(path="../shadersClean/build/EmitAS.hlsl", entryPoint="EmitToolVisDesc"),
     ShaderConfig(path="../shadersClean/build/CopyAS.hlsl", entryPoint="CopyAS"),
     ShaderConfig(path="CompactAS.hlsl", entryPoint="CompactAS"),
     ShaderConfig(path="DecodeAS.hlsl", entryPoint="DecodeAS"),
@@ -165,14 +160,11 @@ def getBaseDxcCommandArgs(isBvh:bool, isLibrary:bool, isSpirv:bool):
     dxcOptions += ["-Wall", "-Wextra"]
 
     dxcOptions +=  ["-Wno-ignored-attributes",
-                    "-Wno-parentheses-equality",
                     "-Wno-parameter-usage",
                     "-Wno-unused-variable",
                     "-Wno-unused-function",
                     "-Wno-unused-parameter",
-                    "-Wno-unknown-pragmas",
                     "-Wno-sometimes-uninitialized",
-                    "-Wno-uninitialized",
                     "-Wno-conversion",
                     "-Wno-parameter-usage",
                     ]
@@ -276,7 +268,9 @@ def validateIncludes(cmd: [str], path: pathlib.Path, implSuffix: str, interfaceS
     listIncludesCmd = cmd + ["-M"]
     threadOutput = []
     retVal = InvokeSubprocess(listIncludesCmd, None, threadOutput, linuxLibraryPath=listIncludesCmd[0], expectNoOutput=False)
-    assert retVal == 0, "Could not list includes of {0} with cmd {1} because:\n {2}".format(path, listIncludesCmd, "\n".join(threadOutput))
+    if retVal != 0:
+        print("Could not list includes of {0} with cmd {1} because:\n {2}".format(path, listIncludesCmd, "\n".join(threadOutput)))
+        return False
 
     includedFilesStr = set()
     for line in threadOutput[0].split("\n")[1:]:
@@ -320,24 +314,35 @@ This helps keep the shader library untangled and easier to maintain.
 """
 def validateShared(args) -> bool:
     cmdBase = getValidationCmdArgs(args)
-    # use resolve() + as_posix() to avoid path mismatches when using drive mapping
-    srcPath = pathlib.Path(FixInputPath(args.basepath)).parent.resolve()
 
-    gpurtInterfacePath = (srcPath / "../gpurt").resolve()
+    # args.basepath is assumed to point to {gpurt-repo}/src/shaders
+    # use resolve() + as_posix() to avoid path mismatches when using drive mapping
+    gpurtRootPath = pathlib.Path(FixInputPath(args.basepath)).parent.parent.resolve()
+
+    srcPath = gpurtRootPath / "src"
     sharedPath = srcPath / "shared"
-    generatedFilepath = pathlib.Path(args.g_FilePath)
+    generatedFilesPath = pathlib.Path(args.g_FilePath).resolve()
     implExt = "._unused_"
     headerExt = ".h"
 
+    allowedDirs = []
+    # gpurt interface files
     # shared files need to be able to include the gpurt interface files due to the requirements of the interface
     # we treat this as an exception for rules about what files can be included
+    allowedDirs += [(gpurtRootPath / "gpurt", ".h")]
+    # shared headers
+    allowedDirs += [(sharedPath, ".h")]
+    # generated files
+    allowedDirs += [(generatedFilesPath / "g_gpurtOptions", ".h")]
 
     for path, (hasImpl, hasHeader) in getImplInterfacePairs(sharedPath, implExt, headerExt).items():
-        assert (hasHeader and not hasImpl), "Shared files should be header only."
+        if (hasHeader and not hasImpl) == False:
+            print("Shared files should be header only.", path.name, "has an implementation file.")
+            return False
         fullPath = path.with_suffix(path.suffix + (implExt if hasImpl else headerExt))
         for defines in getDefineCombos(fullPath):
             compileCmd = cmdBase + defines + [fullPath.as_posix()]
-            if not validateIncludes(compileCmd, path, implExt, headerExt, [(sharedPath, headerExt), (gpurtInterfacePath, ".h"), (generatedFilepath, ".h")]):
+            if not validateIncludes(compileCmd, path, implExt, headerExt, allowedDirs):
                 return False
             if not validateCompilation(compileCmd, fullPath):
                 return False
@@ -351,23 +356,40 @@ This helps keep the shader library untangled and easier to maintain.
 """
 def validateShadersClean(args) -> bool:
     cmdBase = getValidationCmdArgs(args)
+
+    # args.basepath is assumed to point to {gpurt-repo}/src/shaders
     # use resolve() + as_posix() to avoid path mismatches when using drive mapping
-    srcPath = pathlib.Path(FixInputPath(args.basepath)).parent.resolve()
+    gpurtRootPath = pathlib.Path(FixInputPath(args.basepath)).parent.parent.resolve()
 
-    gpurtInterfacePath = (srcPath / "../gpurt").resolve()
-    sharedPath = srcPath / "shared"
-    generatedFilepath = pathlib.Path(args.g_FilePath)
-# Validation of the shadersClean folder
+    srcPath = gpurtRootPath / "src"
     shadersCleanPath = srcPath / "shadersClean"
-
+    generatedFilesPath = pathlib.Path(args.g_FilePath).resolve()
     implExt = ".hlsl"
     headerExt = ".hlsli"
+
+    allowedDirs = []
+    # gpurt interface files
+    allowedDirs += [(gpurtRootPath / "gpurt", ".h")]
+    # shared headers
+    allowedDirs += [(srcPath / "shared", ".h")]
+    # generated files
+    allowedDirs += [(generatedFilesPath / "g_gpurtOptions", ".h")]
+    # clean shaders
+    allowedDirs += [(shadersCleanPath, headerExt)]
+    # llpc version headers
+    for llpcVersionPath in args.llpcVersionIncludeDirs:
+        allowedDirs += [(pathlib.Path(llpcVersionPath), ".h")]
+        allowedDirs += [(pathlib.Path(llpcVersionPath), headerExt)]
+
+    # Validation of the shadersClean folder
     for path, (hasImpl, hasHeader) in getImplInterfacePairs(shadersCleanPath, implExt, headerExt).items():
-        assert (hasImpl or hasHeader), "There should not be files without impl nor header."
+        if (hasImpl or hasHeader) == False:
+            print("There should not be files without impl nor header. Check the file type of", path.name)
+            return False
         fullPath = path.with_suffix(path.suffix + (implExt if hasImpl else headerExt))
         for defines in getDefineCombos(fullPath):
             compileCmd = cmdBase + defines + [fullPath.as_posix()]
-            if not validateIncludes(compileCmd, path, implExt, headerExt, [(shadersCleanPath, headerExt), (sharedPath, ".hlsli"), (gpurtInterfacePath, ".h"), (generatedFilepath, ".h")]):
+            if not validateIncludes(compileCmd, path, implExt, headerExt, allowedDirs):
                 return False
             if not validateCompilation(compileCmd, fullPath):
                 return False
@@ -544,7 +566,7 @@ def ConvertDxilFile(inDxilFilename, inOutputName, threadOutput, addDxilPostfix):
         threadOutput.append(f"Error: {e}")
         return False
 
-def RunCompiler(outputDir, compilerPath, inShaderConfig, inShaderBasePath, inVerbose, threadOutput, spirv, dxilPostfix):
+def RunCompiler(outputDir, compilerPath, inShaderConfig, inShaderBasePath, inVerbose, threadOutput, spirv, dxilPostfix, strict):
     shaderPath = os.path.join(inShaderBasePath, inShaderConfig.path).replace('\\', '/')
     shaderFilename = os.path.basename(inShaderConfig.path)
 
@@ -586,7 +608,7 @@ def RunCompiler(outputDir, compilerPath, inShaderConfig, inShaderBasePath, inVer
     if entryPoint:
         commandArgs += ['-E', entryPoint]
 
-    compileResult = InvokeSubprocess(commandArgs, outputDir, threadOutput, linuxLibraryPath=compilerPath)
+    compileResult = InvokeSubprocess(commandArgs, outputDir, threadOutput, linuxLibraryPath=compilerPath, expectNoOutput=strict)
 
     compilationString += "Success" if (compileResult == 0) else "Failure"
     threadOutput.append(compilationString)
@@ -643,7 +665,7 @@ def CompileShaderConfig(shaderConfig, args, shadersOutputDir,
             pass
         else:
             addDxilPostfix = True
-            if not RunCompiler(tempDirPath, compilerPath, shaderConfig, shadersBasePath, args.verbose, threadOutput, args.spirv, addDxilPostfix):
+            if not RunCompiler(tempDirPath, compilerPath, shaderConfig, shadersBasePath, args.verbose, threadOutput, args.spirv, addDxilPostfix, True):
                 threadOutput.append("Failed to compile Vulkan shader config %s" % shaderConfig)
                 return (False, os.linesep.join(threadOutput))
 
@@ -699,7 +721,7 @@ def CompileShaderConfig(shaderConfig, args, shadersOutputDir,
 def FixInputPath(path) -> str:
     return os.path.abspath(path).replace('\\\\', '\\').replace('\\', '/')
 
-def CompileShaders(args, internalShadersHeader, compileType) -> int:
+def CompileShaders(args, internalShadersHeader) -> int:
     shadersBasePath = FixInputPath(args.basepath)
     shadersOutputDir = FixInputPath(args.outputDir)
 
@@ -755,17 +777,8 @@ def CompileShaders(args, internalShadersHeader, compileType) -> int:
         if isSpirvShader(shaderConfig, args):
             shaderName = shaderName if not shaderConfig.isBVH() else shaderName + '_spv'
 
-        dir = ""
-        if compileType == CompilationType.VulkanRtSpirv:
-            dir = "spv/"
-        elif compileType == CompilationType.Dxil:
-            # empty dir
-            pass
-        else:
-            print(f"Unhandled compilation type: {compileType}")
-            return 1
         if internalShadersHeader:
-            internalShadersHeader.write(f"#include \"{dir}g_{shaderName}.h\"\n")
+            internalShadersHeader.write(f"#include \"g_{shaderName}.h\"\n")
 
     if successfulCompilation:
         print("Raytracing shader compilation completed with no errors.")
@@ -786,6 +799,7 @@ def main() -> int:
     parser.add_argument('--verbose', action='store_true', help='Output verbose inforation', default=False)
     parser.add_argument('--defines', help='Defines for the shader compiler, separated by ; or ,.', default="")
     parser.add_argument('--includePaths', help='Include paths for the shader compiler, separated by ; or ,.', default="")
+    parser.add_argument('--llpcVersionIncludeDirs', help='Include paths to llpc/version. Does NOT get appended to --includePaths', default="")
     parser.add_argument('--g_FilePath', help='Path to the build destination where generated headers are written', default="")
     parser.add_argument('--compilerPath', help='Path to standalone compiler.', default='./dxc.exe')
     parser.add_argument('--dxcompilerLibPath', help='Path to dxcompiler.dll/libdxcompiler.so', default='./dxcompiler.dll')
@@ -799,6 +813,8 @@ def main() -> int:
     originalPath = os.getcwd()
 
     args = parser.parse_args()
+
+    args.llpcVersionIncludeDirs = args.llpcVersionIncludeDirs.split(" ")
 
     if args.validateShadersClean:
         print("Validating shadersClean directory.")
@@ -834,23 +850,7 @@ def main() -> int:
         internalShadersHeader = open(outputDir + '/' + DEFAULT_INTERNAL_SHADERS_HEADER_NAME + ".h", "w")
         internalShadersHeader.write(FILE_STANDARD_HEADER)
 
-    compileType = CompilationType.Dxil
-
-    if args.vulkan and not args.skip_bvh:
-        # Compile traversal shaders first
-        args.skip_bvh = True
-        args.outputDir = outputDir # vk root dir
-        result |= CompileShaders(args, internalShadersHeader, CompilationType.Dxil)
-        # Compile BVH shaders later
-        args.skip_bvh = False
-        args.skip_trace = True
-        if args.spirv:
-            # For option --vulkan --spirv, only compile spv format
-            args.outputDir = os.path.join(outputDir,"spv") # vk spv dir
-            compileType = CompilationType.VulkanRtSpirv
-        os.chdir(originalPath)
-
-    result |= CompileShaders(args, internalShadersHeader, compileType)
+    result |= CompileShaders(args, internalShadersHeader)
 
     if internalShadersHeader:
         internalShadersHeader.flush()

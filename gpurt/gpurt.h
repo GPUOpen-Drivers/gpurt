@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2019-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2019-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -282,16 +282,20 @@ enum class InternalRayTracingCsType : uint32
     EncodeInstances,
     Rebraid,
     GenerateMortonCodes,
-    BuildBVH,
-    BuildBVHTD,
-    BuildBVHTDTR,
     BuildPLOC,
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 54
+    // LBVH and TopDown build shaders have been removed as they have been unused for some time.
+    // For clients that still reference these shaders, we fallback to PLOC.
+    BuildBVH = BuildPLOC,
+    BuildBVHTD = BuildPLOC,
+    BuildBVHTDTR = BuildPLOC,
+    RefitBounds = BuildPLOC,
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 52
     BuildBVHPLOC = BuildPLOC,
 #endif
+#endif
     UpdateQBVH,
     UpdateParallel,
-    RefitBounds,
     ClearBuffer,
     CopyBufferRaw,
     BuildQBVH,
@@ -403,6 +407,7 @@ static_assert(uint32(Fp16BoxNodesInBlasMode::LeafNodes)  == 1, "Enums encoded in
 static_assert(uint32(Fp16BoxNodesInBlasMode::MixedNodes) == 2, "Enums encoded in the acceleration structure must not change.");
 static_assert(uint32(Fp16BoxNodesInBlasMode::AllNodes)   == 3, "Enums encoded in the acceleration structure must not change.");
 
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 54
 enum class RebraidType : uint32
 {
     Off = 0, // No Rebraid
@@ -410,6 +415,7 @@ enum class RebraidType : uint32
     V2  = 2, // Second version of Rebraid
     Count
 };
+#endif
 
 // Modes for which indirect arguments
 enum class ExecuteIndirectArgType : uint32
@@ -727,21 +733,27 @@ struct DeviceSettings
     BvhBuildMode                bvhBuildModeOverrideTLAS;             // Bvh build mode for TLAS if override is enabled.
 
     TriangleCompressionAutoMode triangleCompressionAutoMode;
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 54
     float                       triangleSplittingFactor;
     uint32                      tsBudgetPerTriangle;
     float                       tsPriority;
 
     RebraidType                 rebraidType;                          // Tree rebraid in TLAS
-    uint32                      rebraidFactor;                        // Rebraid factor
     float                       rebraidLengthPercentage;              // Rebraid length percentage
+#endif
+    uint32                      rebraidFactor;                        // Rebraid factor
     uint32                      numRebraidIterations;
     uint32                      rebraidQualityHeuristic;
 
     uint32                      plocRadius;                           // PLOC nearest neighbor search adius
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 54
     uint32                      maxTopDownBuildInstances;             // Max instances allowed for top down build
+#endif
     uint32                      parallelBuildWavesPerSimd;            // Waves per SIMD to launch for parallel build
 
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 54
     uint32                      fastBuildThreshold;                   // Apply Fast Build for BVHs with primitives <= Threshold.
+#endif
     uint32                      lbvhBuildThreshold;                   // Apply LBVH for BVHs with primitives <= Threshold.
 
     Fp16BoxNodesInBlasMode      fp16BoxNodesInBlasMode;               // Mode for which interior nodes in BLAS are FP16
@@ -755,7 +767,9 @@ struct DeviceSettings
     {
         uint32 enableFusedInstanceNode : 1;
         uint32 enableMortonCode30 : 1;
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 53
         uint32 enableVariableBitsMortonCodes : 1;
+#endif
         uint32 enableParallelUpdate : 1;
         uint32 enableParallelBuild : 1;
         uint32 enablePrefixScanDLB : 1;
@@ -765,7 +779,9 @@ struct DeviceSettings
         uint32 enableBuildAccelStructDumping : 1;
         uint32 enableBuildAccelStructScratchDumping : 1;
         uint32 enableBuildAccelStructStats : 1;
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 54
         uint32 enableTriangleSplitting : 1;
+#endif
         uint32 enableBVHBuildDebugCounters : 1;
         uint32 enableInsertBarriersInBuildAS : 1;
         uint32 enablePairCompressionCostCheck : 1;
@@ -773,7 +789,9 @@ struct DeviceSettings
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 45
         uint32 bvhCollapse : 1;                             // Collapse individual geometry leaf nodes into multi-geometry leaves
 #endif
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 54
         uint32 topDownBuild : 1;                            // Top down build in TLAS
+#endif
         uint32 allowFp16BoxNodesInUpdatableBvh : 1;         // Allow box node in updatable bvh.
         uint32 fp16BoxNodesRequireCompaction : 1;           // Compaction is set or not.
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 43
@@ -783,17 +801,27 @@ struct DeviceSettings
         uint32 enableMergedEncodeBuild : 1;                 // Combine encode and build in one dispatch
         uint32 enableEarlyPairCompression : 1;              // Enable pair triangle compression in early (Encode) phase
 
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 54
         uint32 enableFastLBVH : 1;                          // Enable the Fast LBVH path
+#endif
 
         uint32 enableRemapScratchBuffer : 1;                // Enable remapping bvh2 data from ScratchBuffer to ResultBuffer
         uint32 checkBufferOverlapsInBatch : 1;
         uint32 disableCompaction : 1;                       // Reports and perform copy instead of compaction
         uint32 disableDegenPrims : 1;                       // Disable degenerate primitives, ie: set their vertex.x = NaN
+        uint32 disableRdfCompression : 1;                   // Disable compression in RDF chunks
+        uint32 enableRebraid : 1;                           // Enable tree rebraid in TLAS
+        uint32 cullIllegalInstances : 1;
     };
 
     uint64                      accelerationStructureUUID;  // Acceleration Structure UUID
 
     uint32                      numMortonSizeBits;
+
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 53
+    uint32                      mortonFlags;
+#endif
+
     uint32                      trianglePairingSearchRadius; // The search radius for paired triangle, used by EarlyCompression
 
     uint32                      gpuDebugFlags;

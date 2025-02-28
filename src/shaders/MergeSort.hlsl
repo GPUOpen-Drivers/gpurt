@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -46,7 +46,15 @@
 #define VALUES_SIZE            GROUP_CAPACITY
 #define NUM_LDS_ELEMENTS       (KEYS_SIZE + VALUES_SIZE)
 
-groupshared int SharedMem[NUM_LDS_ELEMENTS];
+groupshared uint SharedMem[NUM_LDS_ELEMENTS];
+uint GetSharedMem(uint index)
+{
+    return SharedMem[index];
+}
+void SetSharedMem(uint index, uint value)
+{
+    SharedMem[index] = value;
+}
 #endif
 
 //=====================================================================================================================
@@ -298,8 +306,7 @@ void WriteMortonCode64LDS(uint i, uint64_t mortonCode)
 //=====================================================================================================================
 uint2 Fetch2MortonCodes(uint mortonCodesOffset, uint2 span, uint gId, uint numPrimitives)
 {
-    // Morton Codes can be 0x3fffffff maximum in 32-bit so INT_MAX is safe.
-    uint2 res = uint2(INT_MAX, INT_MAX);
+    uint2 res = uint2(UINT32_MAX, UINT32_MAX);
 
     if (span.y <= numPrimitives)
     {
@@ -315,9 +322,9 @@ uint2 Fetch2MortonCodes(uint mortonCodesOffset, uint2 span, uint gId, uint numPr
 //=====================================================================================================================
 uint64_t2 Fetch2MortonCodes64(uint mortonCodesOffset, uint2 span, uint gId, uint numPrimitives)
 {
-    // Morton Codes can be 0x7fffffffffffffff maximum in 64-bit.
+    // Morton Codes can be 0xffffffffffffffff maximum in 64-bit.
     // Bug if that is the case. We handle that in GenerateMortonCodesImpl()
-    uint64_t2 res = uint64_t2(0x7FFFFFFFFFFFFFFF, 0x7FFFFFFFFFFFFFFF);
+    uint64_t2 res = uint64_t2(UINT64_MAX, UINT64_MAX);
 
     if (span.y <= numPrimitives)
     {
@@ -335,13 +342,13 @@ void Store2MortonCodes(uint mortonCodesOffset, uint2 span, uint2 mortonCodeIndex
 {
     if (span.y <= numPrimitives)
     {
-        const int2 val = int2(SharedMem[ldsOffset + mortonCodeIndex.x], SharedMem[ldsOffset + mortonCodeIndex.y]);
-        ScratchBuffer.Store<int2>(mortonCodesOffset + gId * sizeof(int2), val);
+        const uint2 val = uint2(SharedMem[ldsOffset + mortonCodeIndex.x], SharedMem[ldsOffset + mortonCodeIndex.y]);
+        ScratchBuffer.Store<uint2>(mortonCodesOffset + gId * sizeof(uint2), val);
     }
     else if (span.x < numPrimitives)
     {
-        const int val = SharedMem[ldsOffset + mortonCodeIndex.x];
-        ScratchBuffer.Store(mortonCodesOffset + gId * sizeof(int2), val);
+        const uint val = SharedMem[ldsOffset + mortonCodeIndex.x];
+        ScratchBuffer.Store(mortonCodesOffset + gId * sizeof(uint2), val);
     }
 }
 
@@ -464,8 +471,6 @@ void FetchAndLocalSortAndWriteBack(
 
     if (useMortonCode30)
     {
-        // Assign uint to int. Might break if a Morton Codes's MSB is 1.
-        // But it is okay because Morton Codes' MSB is always 0: 00XYZXYZ.. in 32-bit and 0XYZXYZ.. in 64-bit.
         const uint2 res = Fetch2MortonCodes(inputKeysOffset, globalFetchSpan, globalId, numPrimitives);
         SharedMem[mortonCodeIndex.x] = res.x;
         SharedMem[mortonCodeIndex.y] = res.y;

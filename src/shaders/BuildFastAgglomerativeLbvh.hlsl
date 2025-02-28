@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2022-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -29,7 +29,7 @@
 #define GC_SCRATCHBUFFER
 #include "../shadersClean/build/BuildRootSignature.hlsli"
 
-#include "Common.hlsl"
+#include "../shadersClean/common/Common.hlsli"
 #include "BuildCommonScratch.hlsl"
 #endif
 
@@ -42,8 +42,6 @@ struct FastLBVHArgs
     uint baseScratchNodesOffset;
     uint sortedMortonCodesOffset;
     uint useMortonCode30;
-    uint doTriangleSplitting;
-    uint splitBoxesOffset;
     uint numBatchesOffset;
     uint baseBatchIndicesOffset;
     uint fp16BoxNodesMode;
@@ -51,10 +49,6 @@ struct FastLBVHArgs
     uint sortedPrimIndicesOffset;
     uint enablePairCompression;
     uint enablePairCostCheck;
-    uint centroidBoxesOffset;
-    uint enableCentroidBoxes;
-    bool ltdPackCentroids;
-    int4 numMortonBits;
     uint enableEarlyPairCompression;
     uint unsortedNodesBaseOffset;
 };
@@ -70,8 +64,6 @@ FastLBVHArgs GetFastLbvhArgs(uint numActivePrims)
     args.baseScratchNodesOffset      = CalculateBvhNodesOffset(ShaderConstants, numActivePrims);
     args.sortedMortonCodesOffset     = ShaderConstants.offsets.mortonCodesSorted;
     args.useMortonCode30             = Settings.useMortonCode30;
-    args.doTriangleSplitting         = Settings.doTriangleSplitting;
-    args.splitBoxesOffset            = ShaderConstants.offsets.triangleSplitBoxes;
     args.numBatchesOffset            = ShaderConstants.offsets.numBatches;
     args.baseBatchIndicesOffset      = ShaderConstants.offsets.batchIndices;
     args.fp16BoxNodesMode            = Settings.fp16BoxNodesMode;
@@ -82,10 +74,6 @@ FastLBVHArgs GetFastLbvhArgs(uint numActivePrims)
 
     args.enablePairCompression       = EnableLatePairCompression();
     args.enablePairCostCheck         = Settings.enablePairCostCheck;
-    args.centroidBoxesOffset         = 0;
-    args.enableCentroidBoxes         = false;
-    args.ltdPackCentroids            = false;
-    args.numMortonBits               = 0;
 
     return args;
 }
@@ -153,18 +141,12 @@ void FastAgglomerativeLbvhImpl(
     refitArgs.topLevelBuild               = args.topLevelBuild;
     refitArgs.numActivePrims              = args.numActivePrims;
     refitArgs.baseScratchNodesOffset      = args.baseScratchNodesOffset;
-    refitArgs.doTriangleSplitting         = args.doTriangleSplitting;
     refitArgs.enablePairCompression       = args.enablePairCompression;
     refitArgs.enablePairCostCheck         = args.enablePairCostCheck;
-    refitArgs.splitBoxesOffset            = args.splitBoxesOffset;
     refitArgs.numBatchesOffset            = args.numBatchesOffset;
     refitArgs.baseBatchIndicesOffset      = args.baseBatchIndicesOffset;
     refitArgs.fp16BoxNodesMode            = args.fp16BoxNodesMode;
     refitArgs.fp16BoxModeMixedSaThreshold = args.fp16BoxModeMixedSaThreshold;
-    refitArgs.centroidBoxesOffset         = args.centroidBoxesOffset;
-    refitArgs.enableCentroidBoxes         = args.enableCentroidBoxes;
-    refitArgs.ltdPackCentroids            = args.ltdPackCentroids;
-    refitArgs.numMortonBits               = args.numMortonBits;
     refitArgs.unsortedNodesBaseOffset     = args.unsortedNodesBaseOffset;
     refitArgs.enableEarlyPairCompression  = args.enableEarlyPairCompression;
 
@@ -179,6 +161,11 @@ void FastAgglomerativeLbvhImpl(
             {
                 // Store invalid index as parent of root
                 WriteScratchNodeData(args.baseScratchNodesOffset, rootIndex, SCRATCH_NODE_PARENT_OFFSET, 0xffffffff);
+            }
+            if (args.enablePairCompression)
+            {
+                // Ensure that a batch index is written out for single-primitive acceleration structures.
+                WriteScratchBatchIndex(args.numBatchesOffset, args.baseBatchIndicesOffset, 0);
             }
 
             WriteRootNodeIndex(args.rootNodeIndexOffset, rootIndex);

@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -248,7 +248,16 @@ int PairTrianglesOptimal(
             valid = false;
         }
 
-        const T broadcastTriangle = WaveReadLaneFirst(tri);
+        // Note that this code is favored over e.g.
+        // const T broadcastTriangle = = WaveReadLaneFirst(tri)
+        // because DXC generates invalid SPIR-V code for certain subgroup ops that accept
+        // only a scalar or a vector type, e.g. OpGroupNonUniformBroadcastFirst.
+        const T broadcastTriangle =
+        {
+            WaveReadLaneFirst(tri[0]),
+            WaveReadLaneFirst(tri[1]),
+            WaveReadLaneFirst(tri[2])
+        };
 
         uint packedOffset = -1;
         if (valid)
@@ -319,7 +328,16 @@ int PairTrianglesImpl(
             valid = false;
         }
 
-        const T broadcastTriangle = WaveReadLaneFirst(tri);
+        // Note that this code is favored over e.g.
+        // const T broadcastTriangle = = WaveReadLaneFirst(tri)
+        // because DXC generates invalid SPIR-V code for certain subgroup ops that accept
+        // only a scalar or a vector type, e.g. OpGroupNonUniformBroadcastFirst.
+        const T broadcastTriangle =
+        {
+            WaveReadLaneFirst(tri[0]),
+            WaveReadLaneFirst(tri[1]),
+            WaveReadLaneFirst(tri[2])
+        };
 
         uint packedOffset = -1;
         if (valid)

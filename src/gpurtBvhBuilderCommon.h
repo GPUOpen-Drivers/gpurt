@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -43,14 +43,14 @@ namespace GpuRt
 enum class BuildPhaseFlags : uint32_t
 {
     Rebraid                       = 1 << 0,
-    BuildBVHTD                    = 1 << 1,
+    // Unused1                    = 1 << 1,
     EncodeHwBvh                   = 1 << 2,
     GenerateMortonCodes           = 1 << 3,
     MergeSort                     = 1 << 4,
     RadixSort                     = 1 << 5,
-    BuildBVH                      = 1 << 6,
+    // Unused6                    = 1 << 6,
     BuildPLOC                     = 1 << 7,
-    RefitBounds                   = 1 << 8,
+    // Unused8                    = 1 << 8,
     PairCompression               = 1 << 9,
     SeparateEmitPostBuildInfoPass = 1 << 12,
     BuildParallel                 = 1 << 13,
@@ -66,8 +66,6 @@ static const char* BuildPhaseName(BuildPhaseFlags phase)
     {
     case GpuRt::BuildPhaseFlags::Rebraid:
         return "Rebraid";
-    case GpuRt::BuildPhaseFlags::BuildBVHTD:
-        return "BuildBVHTD";
     case GpuRt::BuildPhaseFlags::EncodeHwBvh:
         return "EncodeHwBvh";
     case GpuRt::BuildPhaseFlags::GenerateMortonCodes:
@@ -76,12 +74,8 @@ static const char* BuildPhaseName(BuildPhaseFlags phase)
         return "MergeSort";
     case GpuRt::BuildPhaseFlags::RadixSort:
         return "RadixSort";
-    case GpuRt::BuildPhaseFlags::BuildBVH:
-        return "BuildBVH";
     case GpuRt::BuildPhaseFlags::BuildPLOC:
         return "BuildPLOC";
-    case GpuRt::BuildPhaseFlags::RefitBounds:
-        return "RefitBounds";
     case GpuRt::BuildPhaseFlags::PairCompression:
         return "PairCompression";
     case GpuRt::BuildPhaseFlags::SeparateEmitPostBuildInfoPass:
@@ -102,7 +96,7 @@ static const char* BuildPhaseName(BuildPhaseFlags phase)
 
 constexpr BuildPhaseFlags& operator|=(BuildPhaseFlags& a, BuildPhaseFlags b) noexcept
 {
-    a = static_cast<BuildPhaseFlags>(static_cast<uint32>(a) | static_cast<uint32>(b));
+    a = static_cast<BuildPhaseFlags>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
     return a;
 }
 

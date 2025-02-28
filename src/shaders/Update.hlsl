@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2022-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -73,13 +73,21 @@ struct RootConstants
 #include "UpdateCommon.hlsl"
 
 groupshared uint SharedMem[1];
+uint GetSharedMem(uint index)
+{
+    return SharedMem[index];
+}
+void SetSharedMem(uint index, uint value)
+{
+    SharedMem[index] = value;
+}
 
 //======================================================================================================================
 // Note, these headers must be included after all resource bindings have been defined. Also, there is a strict naming
 // requirement for resources and variables. See BuildCommon.hlsl for details.
 #include "IntersectCommon.hlsl"
 #include "UpdateQBVHImpl.hlsl"
-#include "LaneGroup.hlsl"
+#include "../shadersClean/common/LaneGroup.hlsli"
 #include "IndirectArgBufferUtils.hlsl"
 
 //======================================================================================================================

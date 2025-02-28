@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -26,12 +26,12 @@
 #ifndef _BUILDSETTINGS_HLSLI
 #define _BUILDSETTINGS_HLSLI
 
-#include "../shadersClean/common/ShaderDefs.hlsli"
+#include "../common/ShaderDefs.hlsli"
 
 [[vk::constant_id(BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_ID)]]                        uint topLevelBuild                 = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_BUILD_MODE_ID)]]                             uint buildMode                     = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_TRIANGLE_COMPRESSION_MODE_ID)]]              uint triangleCompressionMode       = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_DO_TRIANGLE_SPLITTING_ID)]]                  uint doTriangleSplitting           = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_CULL_ILLEGAL_INSTANCES_ID)]]                 uint cullIllegalInstances          = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_IS_INDIRECT_BUILD_ID)]]                      uint isIndirectBuild               = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_FP16_BOX_NODES_MODE_ID)]]                    uint fp16BoxNodesMode              = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_FP16_BOX_MODE_MIXED_SA_THRESHOLD_ID)]]       float fp16BoxModeMixedSaThreshold  = 0;
@@ -40,17 +40,14 @@
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_BVH_BUILD_DEBUG_COUNTERS_ID)]]        uint enableBVHBuildDebugCounters   = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_NN_SEARCH_RADIUS_ID)]]                       uint nnSearchRadius                = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_PAIR_COST_CHECK_ID)]]                 uint enablePairCostCheck           = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_VARIABLE_BITS_MC_ID)]]                uint enableVariableBitsMortonCode  = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_REBRAID_TYPE_ID)]]                           uint rebraidType                   = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_TOP_DOWN_BUILD_ID)]]                  uint enableTopDownBuild            = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_MORTON_FLAGS_ID)]]                           uint mortonFlags                   = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_REBRAID_ID)]]                         uint enableRebraid                 = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_USE_MORTON_CODE_30_ID)]]                     uint useMortonCode30               = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_MERGE_SORT_ID)]]                      uint enableMergeSort               = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_FUSED_INSTANCE_NODE_ID)]]             uint enableFusedInstanceNode       = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_TS_PRIORITY_ID)]]                            float tsPriority                   = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_NUM_REBRAID_ITERATIONS_ID)]]                 uint numRebraidIterations          = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_DO_ENCODE_ID)]]                              uint doEncode                      = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_ID)]]          uint enableEarlyPairCompression    = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_FAST_LBVH_ID)]]                       uint enableFastLBVH                = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_RTIP_LEVEL_ID)]]                             uint rtIpLevel                     = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_GEOMETRY_TYPE_ID)]]                          uint geometryType                  = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_INSTANCE_REBRAID_ID)]]                uint enableInstanceRebraid         = 0;
@@ -60,14 +57,14 @@
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENCODE_ARRAY_OF_POINTERS_ID)]]               uint encodeArrayOfPointers         = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_SCENE_BOUNDS_CALCULATION_TYPE_ID)]]          uint sceneBoundsCalculationType    = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_REBRAID_QUALITY_HEURISTIC_ID)]]              uint rebraidQualityHeuristic       = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_DISABLE_COMPACTION_ID)]]                     uint disableCompaction            = 0;
-[[vk::constant_id(BUILD_SETTINGS_DATA_DISABLE_DEGEN_PRIMS_ID)]]                    uint disableDegenPrims            = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_DISABLE_COMPACTION_ID)]]                     uint disableCompaction             = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_DISABLE_DEGEN_PRIMS_ID)]]                    uint disableDegenPrims             = 0;
 
 static const CompileTimeBuildSettings Settings = {
     topLevelBuild,
     buildMode,
     triangleCompressionMode,
-    doTriangleSplitting,
+    cullIllegalInstances,
     isIndirectBuild,
     fp16BoxNodesMode,
     fp16BoxModeMixedSaThreshold,
@@ -76,20 +73,20 @@ static const CompileTimeBuildSettings Settings = {
     enableBVHBuildDebugCounters,
     nnSearchRadius,
     enablePairCostCheck,
-    enableVariableBitsMortonCode,
-    rebraidType,
-    enableTopDownBuild,
+    mortonFlags,
+    enableRebraid,
+    0,
     useMortonCode30,
     enableMergeSort,
     0,
     enableFusedInstanceNode,
-    tsPriority,
+    0,
     numRebraidIterations,
     0,
     doEncode,
     0,
     enableEarlyPairCompression,
-    enableFastLBVH,
+    0,
     rtIpLevel,
     geometryType,
     0,
@@ -113,6 +110,8 @@ static const CompileTimeBuildSettings Settings = {
     0,
     disableCompaction,
     disableDegenPrims,
+    0,
+    0,
 };
 
 #endif

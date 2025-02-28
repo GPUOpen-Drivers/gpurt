@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2020-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2020-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -188,7 +188,7 @@ static void TraversalInternal1_1(
     inout_param(float2) candidateBarycentrics
 )
 {
-    uint rayFlags = data.ray.Flags();
+    uint rayFlags = data.hitObject.ray.Flags();
 
     // Initialise box sort mode based on ray flags and compile time constant flags (constRayFlags)
     uint boxSortMode = AmdTraceRayGetBoxSortHeuristicMode();
@@ -202,7 +202,7 @@ static void TraversalInternal1_1(
     }
 
     // Root bvh address for reuse
-    const GpuVirtualAddress topBvhAddress = data.ray.AccelStruct();
+    const GpuVirtualAddress topBvhAddress = data.hitObject.ray.AccelStruct();
     // Updateable bottom level bvh for reuse
     GpuVirtualAddress bvhAddress;
 
@@ -218,8 +218,8 @@ static void TraversalInternal1_1(
     const bool triangleCullEnable    = triangleCullFrontFace || triangleCullBackFace;
 
     // Regenerate top-level ray for traversal from ray system state
-    float3 topLevelRayOrigin = data.ray.origin + (data.ray.tMin * data.ray.direction);
-    float3 topLevelRayDirection = data.ray.direction;
+    float3 topLevelRayOrigin = data.hitObject.ray.origin + (data.hitObject.ray.tMin * data.hitObject.ray.direction);
+    float3 topLevelRayDirection = data.hitObject.ray.direction;
 
     // Initialise transient traversal state
     uint lastNodePtr   = INVALID_NODE;
@@ -249,7 +249,7 @@ static void TraversalInternal1_1(
     {
         candidate.instNodePtr = data.traversal.instNodePtr;
         // Restore after AnyHit or Intersection was called
-        const GpuVirtualAddress nodeAddr64  = data.ray.AccelStruct() + ExtractNodePointerOffset(data.traversal.instNodePtr);
+        const GpuVirtualAddress nodeAddr64  = data.hitObject.ray.AccelStruct() + ExtractNodePointerOffset(data.traversal.instNodePtr);
         InstanceDesc desc                   = FetchInstanceDescAddr(nodeAddr64);
         bvhAddress                          = GetInstanceAddr(desc);
         instanceFlags                       = desc.InstanceContributionToHitGroupIndex_and_Flags >> 24;
@@ -268,7 +268,7 @@ static void TraversalInternal1_1(
     }
     else
     {
-        bvhAddress = data.ray.AccelStruct();
+        bvhAddress = data.hitObject.ray.AccelStruct();
     }
 
     // Traverse acceleration structure while we have valid nodes to intersect. Note, the traversal routine is
@@ -359,7 +359,7 @@ static void TraversalInternal1_1(
                         bool hasAnyHit = false;
                         if ((rayForceOpaque == false) && (isOpaque == false))
                         {
-                            hasAnyHit = AnyHitIsNonNull(data.ray.traceParameters,
+                            hasAnyHit = AnyHitIsNonNull(data.hitObject.ray.traceParameters,
                                                         primitiveData.geometryIndex,
                                                         instanceContributionToHitGroupIndex);
                         }
@@ -458,7 +458,7 @@ static void TraversalInternal1_1(
             bool isInstanceCulled = true;
 
             /// @note: Instance mask is 0 for null BLAS and it would be ignored
-            const uint instanceInclusionMask = ExtractInstanceInclusionMask(data.ray.traceParameters);
+            const uint instanceInclusionMask = ExtractInstanceInclusionMask(data.hitObject.ray.traceParameters);
             if ((desc.InstanceID_and_Mask >> 24) & instanceInclusionMask)
             {
                 isInstanceCulled = CheckInstanceCulling(desc, rayFlags, AmdTraceRayGetStaticFlags());

@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2020-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2020-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -59,6 +59,7 @@ static bool RtIpIsAtLeast(RayTracingIpLevel level)
 }
 
 #ifndef __cplusplus
+#include "../shadersClean/traversal/StackCommon.hlsli"
 #endif
 
 #define REMAT_INSTANCE_RAY 1
@@ -91,6 +92,14 @@ static bool RtIpIsAtLeast(RayTracingIpLevel level)
 #define TRAVERSAL_STATE_COMMITTED_NOTHING 4
 #define TRAVERSAL_STATE_COMMITTED_TRIANGLE_HIT 5
 #define TRAVERSAL_STATE_COMMITTED_PROCEDURAL_PRIMITIVE_HIT 6
+
+#if PASS_HIT_OBJECT_ARG
+#define GET_HIT_OBJECT(data)
+#define HIT_OBJECT_ARG inout_param(_AmdDispatchSystemData) data, inout_param(_AmdHitObject) hitObject
+#else
+#define GET_HIT_OBJECT(data) _AmdHitObject hitObject = data.hitObject
+#define HIT_OBJECT_ARG inout_param(_AmdSystemData) data
+#endif
 
 // Forward declaration for _AmdDispatchSystemData.PackDispatchId() and _AmdDispatchSystemData.DispatchId()
 static uint3 GetDispatchRaysDimensions();
@@ -647,10 +656,22 @@ struct _AmdRayHistoryCounter
 #endif
 
 //=====================================================================================================================
+struct _AmdHitObject
+{
+#if defined(__cplusplus)
+    _AmdHitObject() : ray(val)
+    {
+    }
+#endif
+
+    _AmdRaySystemState ray;
+};
+
+//=====================================================================================================================
 struct _AmdSystemData
 {
 #if defined(__cplusplus)
-    _AmdSystemData(int val) : dispatch(val), ray(val), traversal(val)
+    _AmdSystemData(int val) : dispatch(val), hitObject(val), traversal(val)
     {
     }
 #endif
@@ -695,8 +716,7 @@ struct _AmdSystemData
     // Note: _AmdDispatchSystemData must be the first member of _AmdSystemData. This allows us to save some VGPRs if
     //       we need to call a function that takes _AmdSystemData but doesn't actually need ray or traversal data.
     _AmdDispatchSystemData dispatch;
-
-    _AmdRaySystemState     ray;
+    _AmdHitObject          hitObject;
     _AmdTraversalState     traversal;
 #if DEVELOPER
     _AmdRayHistoryCounter  counter;
@@ -766,10 +786,6 @@ DECLARE_GET_UNINITIALIZED(I64, uint64_t)
 DECLARE_GET_UNINITIALIZED(SystemData, _AmdSystemData)
 DECLARE_GET_UNINITIALIZED(DispatchSystemData, _AmdDispatchSystemData)
 
-DECLARE_CONT_STACK_LOAD_LAST_USE(U32, uint32_t)
-DECLARE_CONT_STACK_STORE(U32, uint32_t value)
-DECLARE_CONT_STACK_LOAD_LAST_USE(U64, uint64_t)
-DECLARE_CONT_STACK_STORE(U64, uint64_t value)
 #else // ((GPURT_DEBUG_CONTINUATION_TRAVERSAL == 0) && (!defined(__cplusplus)))
 //=====================================================================================================================
 inline _AmdDispatchSystemData _AmdGetUninitializedDispatchSystemData()
@@ -909,6 +925,55 @@ static uint GetPersistentDispatchSize()
     return min(DispatchRaysConstBuf.rayDispatchMaxGroups, groupsNeeded);
 }
 
+// Split the 2D plane into 8 x 4 tiles
+#define DISPATCH_RAYS_TILE_WIDTH 8
+#define DISPATCH_RAYS_TILE_HEIGHT 4
+
+//=====================================================================================================================
+// Map a linear id (within a plane, including 1D plane) to a ray located at (x, y).
+static uint2 LinearTo2D(uint width, uint height, uint linearId)
+{
+    uint2 coord;
+    if (height == 1)
+    {
+        coord.x = linearId;
+        coord.y = 0;
+    }
+    else if (width == 1)
+    {
+        coord.x = 0;
+        coord.y = linearId;
+    }
+    else
+    {
+        /*
+        Sample: D3D12_DISPATCH_RAYS_DESC::(w x h x d) = (18, 6, 1). Divided into 8x4 tiles(boxes).
+        A number in a box is the tileId.
+        ___________________________
+        |   0    |   1    |   2    |
+        |________|________|________|
+        |   3    |   4    |   5    |
+        |________|________|________|
+        */
+
+        const uint tileId = linearId / (DISPATCH_RAYS_TILE_WIDTH * DISPATCH_RAYS_TILE_HEIGHT);
+
+        //id inside the tailing tile = linearId % (DISPATCH_RAYS_TILE_WIDTH * DISPATCH_RAYS_TILE_HEIGHT);
+        const uint remainder = linearId & ((DISPATCH_RAYS_TILE_WIDTH * DISPATCH_RAYS_TILE_HEIGHT) - 1);
+
+        // in unit of DISPATCH_RAYS_TILE_WIDTH
+        const uint alignedWidthInTile = Pow2Align(width, DISPATCH_RAYS_TILE_WIDTH) / DISPATCH_RAYS_TILE_WIDTH;
+        const uint xTile = tileId % alignedWidthInTile;
+        const uint yTile = tileId / alignedWidthInTile;
+
+         //                                          (remainder % DISPATCH_RAYS_TILE_WIDTH)
+        coord.x = xTile * DISPATCH_RAYS_TILE_WIDTH + (remainder & (DISPATCH_RAYS_TILE_WIDTH - 1));
+        coord.y = yTile * DISPATCH_RAYS_TILE_HEIGHT + remainder / DISPATCH_RAYS_TILE_WIDTH;
+    }
+
+    return coord;
+}
+
 //=====================================================================================================================
 // Map a thread to a ray, some threads could end up with non-existent (invalid) rays.
 // Note D3D12_DISPATCH_RAYS_DESC::(w x h x d) are organized to DispatchDims = (?, d, 1).
@@ -917,79 +982,37 @@ static uint3 GetDispatchId()
     const uint3 threadIdInGroup = AmdExtThreadIdInGroupCompute();
     const uint3 groupId         = AmdExtGroupIdCompute();
     const uint3 dims            = GetDispatchRaysDimensions();
-    const uint  threadGroupSize = AmdExtGroupDimCompute().x * AmdExtGroupDimCompute().y * AmdExtGroupDimCompute().z;
+    const uint  threadGroupSize = AmdExtGroupDimCompute().x* AmdExtGroupDimCompute().y* AmdExtGroupDimCompute().z;
 
     uint3 dispatchId;
     dispatchId.z = groupId.y;
-    if ((dims.x > 1) && (dims.y > 1))
-    {
-        // Use 8 x (threadGroupSize / 8) tiles.
-        /*
-        Sample: D3D12_DISPATCH_RAYS_DESC::(w x h x d) = (18, 6, 1). Divided into 8x4 tiles(boxes).
-        A number in a box is the group id.
-        ___________________________
-        |   0    |   1    |   2    |
-        |________|________|________|
-        |   3    |   4    |   5    |
-        |________|________|________|
-        */
 
-        const uint wTile = (dims.x + 7) / 8;
-        const uint xTile = groupId.x % wTile;
-        const uint yTile = groupId.x / wTile;
-
-        dispatchId.x = xTile * 8 + (threadIdInGroup.x % 8);
-        dispatchId.y = yTile * (threadGroupSize / 8) + (threadIdInGroup.x / 8);
-    }
-    else
-    {
-        // Do a naive 1:1 simple map.
-        const uint id = threadIdInGroup.x + threadGroupSize * groupId.x;
-        const uint gridSize = dims.x * dims.y; // width x height
-        dispatchId.y = id / dims.x;
-        dispatchId.x = id - (dispatchId.y * dims.x);
-    }
+    const uint linearId = threadIdInGroup.x + threadGroupSize * groupId.x;
+    dispatchId.xy = LinearTo2D(dims.x, dims.y, linearId);
 
     return dispatchId;
 }
 
 //=====================================================================================================================
-// Compute the X/Y/Z ray index based on the dispatch dimensions and a 32-bit dispatch ID
-static uint3 GetDispatchId(uint width, uint height, uint dispatchId)
+// Compute the X/Y/Z ray index based on the dispatch dimensions and a 32-bit flat linear ID
+static uint3 GetDispatchId(uint width, uint height, uint depth, uint linearId)
 {
-    // Progressively work from Z to Y to X, subtracting as we go along
+    uint z = 0;
+    if (depth > 1)
+    {
+        // Determine the Z index - divide by size of the 2D plane
+        uint alignedWidth = Pow2Align(width, DISPATCH_RAYS_TILE_WIDTH);
+        uint alignedHeight = Pow2Align(height, DISPATCH_RAYS_TILE_HEIGHT);
+        const uint planeSize = alignedWidth * alignedHeight;
+        z = linearId / planeSize;
+        linearId -= z * planeSize; // get the id within a 2D plane
+    }
 
-    // Determine the Z index - divide by size of the 2D plane
-    const uint planeSize = width * height;
-    const uint z = dispatchId / planeSize;
-    dispatchId -= z * planeSize;
+    uint3 rayCoord;
+    rayCoord.z = z;
+    rayCoord.xy = LinearTo2D(width, height, linearId);
 
-    // Split the 2D plane into 8 x 64 tiles
-    const uint TileWidth  = 8;
-    const uint TileHeight = 64;
-
-    // Determine which tile along the Y axis - divide by size of the 2D strip
-    const uint yTile = dispatchId / TileHeight / width;
-    dispatchId      -= yTile * TileHeight * width;
-
-    // Determine which tile along the X axis - divide by size of the 2D strip
-    // Take care in case the dispatch height is not a multiple of TileHeight
-    const uint xStripHeight = min(TileHeight, height - (yTile * TileHeight));
-    const uint xStripSize   = TileWidth * xStripHeight;
-    const uint xTile        = dispatchId / xStripSize;
-    dispatchId             -= xTile * xStripSize;
-
-    // Determine Y position within the tile - divide by width of the 2D strip
-    // Take care in case the dispatch width is not a multiple of TileWidth
-    const uint xStripWidth = min(TileWidth, width - xTile * TileWidth);
-    const uint y           = dispatchId / xStripWidth;
-    dispatchId            -= y * xStripWidth;
-
-    // Remainder is the X position within the tile
-    const uint x = dispatchId;
-
-    // Return ray index - X/Y based on their respective tiles and position within
-    return uint3(xTile * TileWidth + x, yTile * TileHeight + y, z);
+    return rayCoord;
 }
 
 #ifdef __cplusplus
@@ -1035,39 +1058,46 @@ export _AmdPrimitiveSystemState _cont_GetCommittedState(in _AmdSystemData data)
 }
 
 //=====================================================================================================================
-export float3 _cont_WorldRayOrigin3(in _AmdSystemData state)
+export float3 _cont_WorldRayOrigin3(HIT_OBJECT_ARG)
 {
-    return state.ray.origin;
+    GET_HIT_OBJECT(data);
+    return hitObject.ray.origin;
 }
 
 //=====================================================================================================================
-export float3 _cont_WorldRayDirection3(in _AmdSystemData state)
+export float3 _cont_WorldRayDirection3(HIT_OBJECT_ARG)
 {
-    return state.ray.direction;
+    GET_HIT_OBJECT(data);
+    return hitObject.ray.direction;
 }
 
 //=====================================================================================================================
-export float _cont_RayTMin(in _AmdSystemData state)
+export float _cont_RayTMin(HIT_OBJECT_ARG)
 {
-    return state.ray.tMin;
+    GET_HIT_OBJECT(data);
+    return hitObject.ray.tMin;
 }
 
 //=====================================================================================================================
-export uint _cont_RayFlags(in _AmdSystemData state)
+export uint _cont_RayFlags(HIT_OBJECT_ARG)
 {
     // Get the flags passed by TraceRay call and apply the known set/unset bits.
-    return ApplyKnownFlags(state.ray.IncomingFlags());
+    GET_HIT_OBJECT(data);
+    return ApplyKnownFlags(hitObject.ray.IncomingFlags());
 }
 
 //=====================================================================================================================
-export uint _cont_InstanceInclusionMask(in _AmdSystemData data)
+export uint _cont_InstanceInclusionMask(HIT_OBJECT_ARG)
 {
-    return ExtractInstanceInclusionMask(data.ray.traceParameters);
+    GET_HIT_OBJECT(data);
+    return ExtractInstanceInclusionMask(hitObject.ray.traceParameters);
 }
 
 //=====================================================================================================================
-export float _cont_RayTCurrent(in _AmdSystemData data, in _AmdPrimitiveSystemState primitive)
+export float _cont_RayTCurrent(HIT_OBJECT_ARG, in _AmdPrimitiveSystemState primitive)
 {
+    GET_HIT_OBJECT(data);
+
     if (_AmdGetShaderKind() == DXILShaderKind::Intersection)
     {
         // The intersection shader is an exception. While the system data is usually about the candidate hit, the
@@ -1078,24 +1108,29 @@ export float _cont_RayTCurrent(in _AmdSystemData data, in _AmdPrimitiveSystemSta
     float tCurrentHw = primitive.rayTCurrent;
 
     // AMD Gpu shifts the origin, so rayTCurrent is between 0 and (tMaxApp - tMinApp). Add tMinApp back for App's use.
-    return tCurrentHw + data.ray.tMin;
+    return tCurrentHw + hitObject.ray.tMin;
 }
 
 //=====================================================================================================================
-export uint _cont_InstanceIndex(in _AmdSystemData data, in _AmdPrimitiveSystemState primitive)
+export uint _cont_InstanceIndex(HIT_OBJECT_ARG, in _AmdPrimitiveSystemState primitive)
 {
+    GET_HIT_OBJECT(data);
 
     return ConstantLoadDwordAtAddr(
-        GetInstanceNodeAddr(data.ray.AccelStruct(), primitive.instNodePtr) +
-        INSTANCE_NODE_EXTRA_OFFSET + RTIP1_1_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET);
+        GetInstanceNodeAddr(
+            hitObject.ray.AccelStruct(),
+            primitive.instNodePtr) + INSTANCE_NODE_EXTRA_OFFSET + RTIP1_1_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET);
 }
 
 //=====================================================================================================================
-export uint _cont_InstanceID(in _AmdSystemData data, in _AmdPrimitiveSystemState primitive)
+export uint _cont_InstanceID(HIT_OBJECT_ARG, in _AmdPrimitiveSystemState primitive)
 {
+    GET_HIT_OBJECT(data);
 
     return ConstantLoadDwordAtAddr(
-        GetInstanceNodeAddr(data.ray.AccelStruct(), primitive.instNodePtr) + INSTANCE_DESC_ID_AND_MASK_OFFSET) & 0x00ffffff;
+        GetInstanceNodeAddr(
+            hitObject.ray.AccelStruct(),
+            primitive.instNodePtr) + INSTANCE_DESC_ID_AND_MASK_OFFSET) & 0x00ffffff;
 }
 
 //=====================================================================================================================
@@ -1111,36 +1146,46 @@ export uint _cont_PrimitiveIndex(in _AmdSystemData data, in _AmdPrimitiveSystemS
 }
 
 //=====================================================================================================================
-export float4x3 _cont_ObjectToWorld4x3(in _AmdSystemData data, in _AmdPrimitiveSystemState primitive)
+export float4x3 _cont_ObjectToWorld4x3(HIT_OBJECT_ARG, in _AmdPrimitiveSystemState primitive)
 {
-    return ObjectToWorld4x3(data.ray.AccelStruct(), primitive.instNodePtr);
+    GET_HIT_OBJECT(data);
+
+    return ObjectToWorld4x3(
+        hitObject.ray.AccelStruct(),
+        primitive.instNodePtr);
 }
 
 //=====================================================================================================================
-export float4x3 _cont_WorldToObject4x3(in _AmdSystemData data, in _AmdPrimitiveSystemState primitive)
+export float4x3 _cont_WorldToObject4x3(HIT_OBJECT_ARG, in _AmdPrimitiveSystemState primitive)
 {
-    return WorldToObject4x3(data.ray.AccelStruct(), primitive.instNodePtr);
+    GET_HIT_OBJECT(data);
+
+    return WorldToObject4x3(hitObject.ray.AccelStruct(), primitive.instNodePtr);
 }
 
 //=====================================================================================================================
 export TriangleData _cont_TriangleVertexPositions(in _AmdSystemData data, in _AmdPrimitiveSystemState primitive)
 {
-    const GpuVirtualAddress instanceAddr = GetInstanceNodeAddr(data.ray.AccelStruct(), primitive.instNodePtr);
+    const GpuVirtualAddress instanceAddr = GetInstanceNodeAddr(data.hitObject.ray.AccelStruct(), primitive.instNodePtr);
     {
         return FetchTriangleFromNode(GetInstanceAddr(FetchInstanceDescAddr(instanceAddr)), primitive.currNodePtr);
     }
 }
 
 //=====================================================================================================================
-export float3 _cont_ObjectRayOrigin3(in _AmdSystemData data, in _AmdPrimitiveSystemState primitive)
+export float3 _cont_ObjectRayOrigin3(HIT_OBJECT_ARG, in _AmdPrimitiveSystemState primitive)
 {
-    return mul(float4(data.ray.origin, 1.0), WorldToObject4x3(data.ray.AccelStruct(), primitive.instNodePtr));
+    GET_HIT_OBJECT(data);
+
+    return mul(float4(hitObject.ray.origin, 1.0), WorldToObject4x3(hitObject.ray.AccelStruct(), primitive.instNodePtr));
 }
 
 //=====================================================================================================================
-export float3 _cont_ObjectRayDirection3(in _AmdSystemData data, in _AmdPrimitiveSystemState primitive)
+export float3 _cont_ObjectRayDirection3(HIT_OBJECT_ARG, in _AmdPrimitiveSystemState primitive)
 {
-    return mul(float4(data.ray.direction, 0.0), WorldToObject4x3(data.ray.AccelStruct(), primitive.instNodePtr));
+    GET_HIT_OBJECT(data);
+
+    return mul(float4(hitObject.ray.direction, 0.0), WorldToObject4x3(hitObject.ray.AccelStruct(), primitive.instNodePtr));
 }
 
 //=====================================================================================================================
@@ -1174,7 +1219,7 @@ export void _cont_SetTriangleHitAttributes(inout_param(_AmdSystemData) data, Bui
 static void AcceptHit(inout_param(_AmdAnyHitSystemData) data, bool endSearch)
 {
     {
-        data.base.ray.SetAnyHitDidAccept(true);
+        data.base.hitObject.ray.SetAnyHitDidAccept(true);
         data.base.traversal.committed = data.candidate;
         if (endSearch)
         {
@@ -1187,7 +1232,7 @@ static void AcceptHit(inout_param(_AmdAnyHitSystemData) data, bool endSearch)
 // AcceptFirstHitAndSearch call from an AnyHit shader
 export void _cont_AcceptHit(inout_param(_AmdAnyHitSystemData) data)
 {
-    AcceptHit(data, (data.base.ray.Flags() & RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH) != 0);
+    AcceptHit(data, (data.base.hitObject.ray.Flags() & RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH) != 0);
 }
 
 //=====================================================================================================================
@@ -1203,7 +1248,7 @@ export void _cont_IgnoreHit(inout_param(_AmdAnyHitSystemData) data)
 {
     {
         // Do nothing means we ignore the hit
-        data.base.ray.SetAnyHitDidAccept(false);
+        data.base.hitObject.ray.SetAnyHitDidAccept(false);
     }
 }
 
@@ -1328,7 +1373,7 @@ export bool _cont_ReportHit(inout_param(_AmdAnyHitSystemData) data, float THit, 
     // TODO Reuse shader record index computed in Traversal
     // TODO Check for closest hit and duplicate anyHit calling
 
-    THit -= data.base.ray.tMin;
+    THit -= data.base.hitObject.ray.tMin;
     float tCurrentCommitted = 0.f;
     {
         tCurrentCommitted = data.base.traversal.committed.rayTCurrent;
@@ -1355,7 +1400,7 @@ export bool _cont_ReportHit(inout_param(_AmdAnyHitSystemData) data, float THit, 
             // Get primitive nodes to process based on candidate or committed hit
             const uint tlasNodePtr = data.candidate.instNodePtr;
 
-            const GpuVirtualAddress tlasAddr = data.base.ray.AccelStruct() + ExtractNodePointerOffset(tlasNodePtr);
+            const GpuVirtualAddress tlasAddr = data.base.hitObject.ray.AccelStruct() + ExtractNodePointerOffset(tlasNodePtr);
             desc = FetchInstanceDescAddr(tlasAddr);
             isOpaque = data.candidate.IsOpaque();
         }
@@ -1375,7 +1420,7 @@ export bool _cont_ReportHit(inout_param(_AmdAnyHitSystemData) data, float THit, 
             // Call AnyHit
             // Hit attributes are added as an additional argument by the compiler
             data = _AmdAwaitAnyHit(anyHitAddr.GetU32(), hitGroupRecordIndex, _AmdGetResumePointAddr(), data);
-            return data.base.ray.AnyHitDidAccept();
+            return data.base.hitObject.ray.AnyHitDidAccept();
         }
         else
         {
@@ -1437,7 +1482,7 @@ static Vpc32 SetupMissShader(inout_param(_AmdSystemData) data, out_param(uint) s
         return Vpc32(0);
     }
 
-    shaderRecIdx = ExtractMissShaderIndex(data.ray.traceParameters);
+    shaderRecIdx = ExtractMissShaderIndex(data.hitObject.ray.traceParameters);
 
     // Calculate miss shader record address
     return GetVpcFromShaderIdTable(missTableBaseAddress,
@@ -1456,8 +1501,8 @@ static HitGroupInfo GetHitGroupInfo(
     uint instanceContribution = (state < TRAVERSAL_STATE_COMMITTED_NOTHING) ?
             candidate.InstanceContribution() : data.traversal.committed.InstanceContribution();
 
-    return GetHitGroupInfo(ExtractRayContributionToHitIndex(data.ray.traceParameters),
-                           ExtractMultiplierForGeometryContributionToHitIndex(data.ray.traceParameters),
+    return GetHitGroupInfo(ExtractRayContributionToHitIndex(data.hitObject.ray.traceParameters),
+                           ExtractMultiplierForGeometryContributionToHitIndex(data.hitObject.ray.traceParameters),
                            geometryIndex,
                            instanceContribution);
 }
@@ -1526,7 +1571,8 @@ static void RayHistoryWriteTopLevel(inout_param(_AmdSystemData) data)
 #if DEVELOPER
     if (EnableTraversalCounter() && data.counter.WriteTokenTopLevel())
     {
-        WriteRayHistoryTokenTopLevel(GetRayId(data.dispatch.DispatchId()), data.ray.AccelStruct());
+        WriteRayHistoryTokenTopLevel(GetRayId(data.dispatch.DispatchId()), data.hitObject.ray.AccelStruct());
+
         data.counter.SetWriteTokenTopLevel(false);
     }
 #endif
@@ -1593,10 +1639,10 @@ static void RayHistoryWriteBegin(inout_param(_AmdSystemData) data)
     {
         const uint rayId  = GetRayId(data.dispatch.DispatchId());
         RayDesc rayDesc   = (RayDesc)0;
-        rayDesc.Origin    = data.ray.origin;
-        rayDesc.Direction = data.ray.direction;
-        rayDesc.TMin      = data.ray.tMin;
-        rayDesc.TMax      = data.ray.tMax;
+        rayDesc.Origin    = data.hitObject.ray.origin;
+        rayDesc.Direction = data.hitObject.ray.direction;
+        rayDesc.TMin      = data.hitObject.ray.tMin;
+        rayDesc.TMax      = data.hitObject.ray.tMax;
 
         data.counter.timerBegin = AmdTraceRaySampleGpuTimer();
         data.counter.dynamicId  = AllocateRayHistoryDynamicId();
@@ -1604,9 +1650,9 @@ static void RayHistoryWriteBegin(inout_param(_AmdSystemData) data)
 
         WriteRayHistoryTokenBegin(rayId,
                                   data.dispatch.DispatchId(),
-                                  data.ray.AccelStruct(),
-                                  data.ray.Flags(),
-                                  data.ray.traceParameters,
+                                  data.hitObject.ray.AccelStruct(),
+                                  data.hitObject.ray.Flags(),
+                                  data.hitObject.ray.traceParameters,
                                   rayDesc,
                                   data.dispatch.staticId,
                                   data.counter.dynamicId,
@@ -1639,7 +1685,7 @@ static void RayHistoryWriteEnd(inout_param(_AmdSystemData) data, uint state)
     {
         // For CHS, get candidate and barycentrics from traversal.
         const uint instNodeIndex = FetchInstanceIdx(ConvertRtIpLevel(GetRtIpLevel()),
-                                                    data.ray.AccelStruct(),
+                                                    data.hitObject.ray.AccelStruct(),
                                                     data.traversal.committed.instNodePtr);
         WriteRayHistoryTokenEnd(rayId,
                                 uint2(data.traversal.committed.primitiveIndex,
@@ -1658,7 +1704,7 @@ static void RayHistoryWriteEnd(inout_param(_AmdSystemData) data, uint state)
                                 data.counter.numIterations,
                                 data.counter.instanceIntersections,
                                 uint(~0),
-                                (data.ray.tMax - data.ray.tMin));
+                                (data.hitObject.ray.tMax - data.hitObject.ray.tMin));
     }
 #endif
 }
@@ -1749,7 +1795,7 @@ static void RayHistoryWriteAnyHitOrProceduralStatus(inout_param(_AmdSystemData) 
         const uint rayId  = GetRayId(data.dispatch.DispatchId());
         const uint status = (data.traversal.nextNodePtr == END_SEARCH)
                             ? HIT_STATUS_ACCEPT_AND_END_SEARCH
-                            : (data.ray.AnyHitDidAccept() ? HIT_STATUS_ACCEPT : HIT_STATUS_IGNORE);
+                            : (data.hitObject.ray.AnyHitDidAccept() ? HIT_STATUS_ACCEPT : HIT_STATUS_IGNORE);
 
         switch (data.counter.CallerShaderType())
         {
@@ -1900,8 +1946,8 @@ static void LaunchRayGen(bool setupStack)
 
         const uint3 rayDims = GetDispatchRaysDimensions();
 
-        dispatchId = GetDispatchId(rayDims.x, rayDims.y, flatDispatchId);
-        valid      = flatDispatchId < (rayDims.x * rayDims.y * rayDims.z);
+        dispatchId = GetDispatchId(rayDims.x, rayDims.y, rayDims.z, flatDispatchId);
+        valid      = (dispatchId.x < rayDims.x) && (dispatchId.y < rayDims.y) && (dispatchId.z < rayDims.z);
     }
 
     // With persistent launch every lane gets a stack
@@ -2026,14 +2072,14 @@ export void _cont_TraceRay(
     }
 
     _AmdSystemData data = (_AmdSystemData) 0;
-    data.dispatch  = dispatch;
-    data.ray       = ray;
-    data.traversal = traversal;
+    data.dispatch      = dispatch;
+    data.hitObject.ray = ray;
+    data.traversal     = traversal;
 
     RayHistoryInitStaticId(data);
     RayHistoryWriteBegin(data);
 
-    const uint     parentId              = RayHistoryGetParentId(dispatch);
+    const uint parentId = RayHistoryGetParentId(dispatch);
 
     // NO control flow is allowed between _AmdGetResumePointAddr() and _AmdAwaitTraversal().
     data.traversal.SetReturnAddress(Vpc32(_AmdGetResumePointAddr()));
@@ -2071,14 +2117,10 @@ static Vpc32 GetNextHitMissPc(
     // CHS
     else if (data.IsChs(state))
     {
-        HitGroupInfo hitInfo = (HitGroupInfo)0;
-        {
-            hitInfo = GetHitGroupInfo(data, state, candidate);
-        }
-
+        const HitGroupInfo hitInfo = GetHitGroupInfo(data, state, candidate);
         nextShaderRecIdx = hitInfo.tableIndex;
 
-        if ((data.ray.Flags() & RAY_FLAG_SKIP_CLOSEST_HIT_SHADER) == 0)
+        if ((data.hitObject.ray.Flags() & RAY_FLAG_SKIP_CLOSEST_HIT_SHADER) == 0)
         {
             Vpc32 closestHitId = Vpc32(hitInfo.closestHitId.x);
             if (closestHitId.IsValid())
@@ -2268,10 +2310,7 @@ export void _cont_Traversal(
     {
         if (IsAhsOrIs)
         {
-            HitGroupInfo hitInfo = (HitGroupInfo)0;
-            {
-                hitInfo = GetHitGroupInfo(data, state, candidate);
-            }
+            const HitGroupInfo hitInfo = GetHitGroupInfo(data, state, candidate);
 
             _AmdAnyHitSystemData anyHitData = (_AmdAnyHitSystemData)0;
             anyHitData.base = data;
@@ -2407,9 +2446,9 @@ static IntersectionResult TraceRayInternalCPSDebug(
     }
 
     _AmdSystemData sysData = (_AmdSystemData)0;
-    sysData.dispatch  = dispatch;
-    sysData.ray       = ray;
-    sysData.traversal = traversal;
+    sysData.dispatch      = dispatch;
+    sysData.hitObject.ray = ray;
+    sysData.traversal     = traversal;
 
 #if DEVELOPER
     sysData.counter.dynamicId = dynamicId;
@@ -2612,3 +2651,10 @@ static IntersectionResult TraceRayInternalCPSDebug(
     return result;
 }
 #endif
+
+//=====================================================================================================================
+export _AmdHitObject _cont_GlobalHitObject(
+    inout_param(_AmdSystemData) data)
+{
+    return data.hitObject;
+}

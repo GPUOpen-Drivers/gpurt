@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -48,11 +48,19 @@ struct InputArgs
 [[vk::binding(3, 0)]] globallycoherent RWByteAddressBuffer ScratchBuffer : register(u3);
 [[vk::binding(4, 0)]] RWByteAddressBuffer                  EmitBuffer    : register(u4);
 
-#include "SerializeCommon.hlsl"
+#include "../shadersClean/common/SerializeDefs.hlsli"
 #include "TaskMacros.hlsl"
 #include "DecodeCommon.hlsl"
 
 groupshared uint SharedMem[1];
+uint GetSharedMem(uint index)
+{
+    return SharedMem[index];
+}
+void SetSharedMem(uint index, uint value)
+{
+    SharedMem[index] = value;
+}
 
 //=====================================================================================================================
 // DeserializeAS

@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -48,6 +48,14 @@ T LoadInstanceDescBuffer(uint offset)
 
 #define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
 groupshared uint SharedMem[MAX_LDS_ELEMENTS];
+uint GetSharedMem(uint index)
+{
+    return SharedMem[index];
+}
+void SetSharedMem(uint index, uint value)
+{
+    SharedMem[index] = value;
+}
 
 #include "TaskQueueCounter.hlsl"
 
@@ -70,6 +78,7 @@ struct RebraidArgs
     uint taskQueueCounterScratchOffset;
     uint atomicFlagsScratchOffset;
     uint enableMortonSize;
+    uint enableMortonCentroids;
     uint numIterations;
     uint qualityHeuristic;
 };
@@ -510,13 +519,15 @@ void RebraidImpl(
                                     {
                                         if (iterationCount == (args.numIterations - 1))
                                         {
+                                            // We have to update the scene size and centroid bounds during opening
+                                            // as primitives could get smaller and centroid bounds could get larger
                                             if (args.enableMortonSize)
                                             {
-                                                UpdateSceneBoundsWithSize(args.sceneBoundsOffset, temp);
+                                                UpdateSceneSize(args.sceneBoundsOffset, temp);
                                             }
-                                            else
+                                            if (args.enableMortonCentroids)
                                             {
-                                                UpdateSceneBounds(args.sceneBoundsOffset, temp);
+                                                UpdateCentroidBounds(args.sceneBoundsOffset, temp);
                                             }
                                         }
                                         else
@@ -565,13 +576,15 @@ void RebraidImpl(
 
                                     const BoundingBox aabb = GetScratchNodeInstanceBounds(leaf);
 
+                                    // We have to update the scene size and centroid bounds during opening
+                                    // as primitives could get smaller and centroid bounds could get larger
                                     if (args.enableMortonSize)
                                     {
-                                        UpdateSceneBoundsWithSize(args.sceneBoundsOffset, aabb);
+                                        UpdateSceneSize(args.sceneBoundsOffset, aabb);
                                     }
-                                    else
+                                    if (args.enableMortonCentroids)
                                     {
-                                        UpdateSceneBounds(args.sceneBoundsOffset, aabb);
+                                        UpdateCentroidBounds(args.sceneBoundsOffset, aabb);
                                     }
                                 }
                                 else
@@ -600,7 +613,7 @@ void RebraidImpl(
                                     }
                                 }
                             }
-                        }
+                            }
                     }
 
                     keyIndex++;
@@ -696,7 +709,8 @@ void Rebraid(
     args.sceneBoundsOffset                  = ShaderConstants.offsets.sceneBounds;
     args.stateScratchOffset                 = ShaderConstants.offsets.rebraidState;
     args.taskQueueCounterScratchOffset      = ShaderConstants.offsets.rebraidTaskQueueCounter;
-    args.atomicFlagsScratchOffset           = ShaderConstants.offsets.splitAtomicFlags;
+    args.atomicFlagsScratchOffset           = ShaderConstants.offsets.rebraidPrefixSumFlags;
+    args.enableMortonCentroids              = IsCentroidMortonBoundsEnabled() || IsConciseMortonBoundsEnabled();
 
     args.numIterations                      = Settings.numRebraidIterations;
     args.qualityHeuristic                   = Settings.rebraidQualityHeuristic;

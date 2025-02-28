@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2024-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -139,6 +139,12 @@ __decl float3 AmdExtD3DShaderIntrinsics_FloatOpWithRoundMode(
 //=====================================================================================================================
 // Sub-group wave reductions spirv ops
 // Ref: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html#_instructions
+
+[[vk::ext_capability(/* GroupNonUniform */ 61)]]
+[[vk::ext_capability(/* GroupNonUniformArithmetic */ 63)]]
+[[vk::ext_capability(/* GroupNonUniformClustered */ 67)]]
+[[vk::ext_instruction(349)]]
+uint spirv_OpGroupNonUniformIAdd_clustered(uint scope, [[vk::ext_literal]] uint op, uint value, uint clusterSize);
 
 [[vk::ext_capability(/* GroupNonUniform */ 61)]]
 [[vk::ext_capability(/* GroupNonUniformArithmetic */ 63)]]
@@ -282,13 +288,14 @@ __decl void     AmdTraceRaySampleGpuTimer(out_param(uint) timerHi, out_param(uin
 __decl uint64_t AmdTraceRaySampleGpuTimer() DUMMY_UINT_FUNC
 #pragma dxc diagnostic pop
 __decl uint AmdExtLaneIndex() DUMMY_UINT_FUNC
+__decl uint AmdExtWaveIndexCompute() DUMMY_UINT_FUNC
 __decl uint AmdTraceRayGetHwCuId() DUMMY_UINT_FUNC
 __decl uint AmdTraceRayGetHwWaveId() DUMMY_UINT_FUNC
 __decl uint AmdTraceRayGetHwSimdId() DUMMY_UINT_FUNC
 __decl uint AmdTraceRayGetHwSeId() DUMMY_UINT_FUNC
 __decl uint AmdTraceRayGetTriangleCompressionMode() DUMMY_UINT_FUNC
 __decl uint AmdTraceRayGetBoxSortHeuristicMode() DUMMY_UINT_FUNC
-__decl uint2 AmdTraceRayMakePC(uint pcVaLow) DUMMY_UINT2_FUNC
+__decl uint64_t AmdTraceRayMakePC(uint pcVaLow) DUMMY_UINT_FUNC
 __decl uint AmdTraceRayGetKnownSetRayFlags() DUMMY_UINT_FUNC
 __decl uint AmdTraceRayGetKnownUnsetRayFlags() DUMMY_UINT_FUNC
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 50
@@ -334,6 +341,9 @@ __decl uint AmdExtDispatchThreadIdFlat() DUMMY_UINT_FUNC;
 
 //=====================================================================================================================
 __decl uint AmdExtAtomicAddAtAddr(uint64_t gpuVa, uint offset, uint value) DUMMY_UINT_FUNC;
+__decl uint AmdExtAtomicCmpXchgAtAddr(uint64_t gpuVa, uint offset, uint compare_value, uint value) DUMMY_UINT_FUNC
+__decl uint AmdExtAtomicSubClampAtAddr(uint64_t gpuVa, uint offset, uint value) DUMMY_UINT_FUNC
+__decl uint AmdExtAtomicXchgAtAddr(uint64_t gpuVa, uint offset, uint value) DUMMY_UINT_FUNC
 __decl uint64_t AmdExtAtomic64AddAtAddr(uint64_t gpuVa, uint offset, uint64_t value) DUMMY_UINT_FUNC
 __decl uint64_t AmdExtAtomic64CmpXchgAtAddr(uint64_t gpuVa, uint offset, uint64_t compare_value, uint64_t value) DUMMY_UINT_FUNC
 __decl uint64_t AmdExtLoad64AtAddrUncached(uint64_t gpuVa, uint offset) DUMMY_UINT_FUNC
@@ -399,6 +409,8 @@ static uint ConstantLoadDwordAtAddr(GpuVirtualAddress addr);
 static uint64_t ConstantLoadDwordAtAddrx2(GpuVirtualAddress addr);
 
 static uint4 ConstantLoadDwordAtAddrx4(GpuVirtualAddress addr);
+
+//=====================================================================================================================
 
 #ifndef LIBRARY_COMPILATION
 #include "Extensions.hlsl"

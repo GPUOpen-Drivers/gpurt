@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -23,7 +23,7 @@
  *
  **********************************************************************************************************************/
 #if !defined(__cplusplus)
-#include "BuildSettings.hlsli"
+#include "../shadersClean/build/BuildSettings.hlsli"
 #endif
 
 //======================================================================================================================
@@ -84,9 +84,9 @@ void IncrementPrimitiveTaskCounters(
     const uint dispatchedPrimCount = WaveActiveCountBits(primitiveIndex < maxNumPrimitives);
     if (WaveIsFirstLane())
     {
-        // compression and splitting update primRefCounter on their own,
+        // compression and indirect builds update primRefCounter on their own,
         // direct builds set ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET to correct value during cmd recording
-        if (Settings.isIndirectBuild && !Settings.enableEarlyPairCompression && !Settings.doTriangleSplitting)
+        if (Settings.isIndirectBuild && !Settings.enableEarlyPairCompression)
         {
             IncrementTaskCounter(ShaderConstants.offsets.encodeTaskCounter + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET,
                                  encodedPrimCount);

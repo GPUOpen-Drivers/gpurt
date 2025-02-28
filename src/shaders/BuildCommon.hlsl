@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -47,18 +47,12 @@ struct RefitArgs
     uint topLevelBuild;
     uint numActivePrims;
     uint baseScratchNodesOffset;
-    uint doTriangleSplitting;
     uint enablePairCompression;
     uint enablePairCostCheck;
-    uint splitBoxesOffset;
     uint numBatchesOffset;
     uint baseBatchIndicesOffset;
     uint fp16BoxNodesMode;
     float fp16BoxModeMixedSaThreshold;
-    uint centroidBoxesOffset;
-    uint enableCentroidBoxes;
-    bool ltdPackCentroids;
-    int4 numMortonBits;
     uint unsortedNodesBaseOffset;
     uint enableEarlyPairCompression;
 };
@@ -338,16 +332,6 @@ static uint32_t GetNumInternalNodeCount(
     }
 
     return CalcAccelStructInternalNodeCount(primitiveCount, maxNumChildren, minPrimsPerLastInternalNode);
-}
-
-//=====================================================================================================================
-// Ballot returning a uint64
-uint64_t WaveActiveBallot64(
-    bool flag)
-{
-    const uint4 mask4 = WaveActiveBallot(flag);
-
-    return (uint64_t(mask4.y) << 32) | mask4.x;
 }
 
 //=====================================================================================================================
@@ -756,6 +740,16 @@ InstanceDesc LoadInstanceDesc(
     {
         return LoadInstanceDescBuffer<InstanceDesc>(instanceId * INSTANCE_DESC_SIZE + offsetInBytes);
     }
+}
+
+//=====================================================================================================================
+uint GetNumPersistentThreadGroups(
+    uint numWorkItems,
+    uint threadGroupSize,
+    uint wavesPerSimd,
+    uint optimalNumThreadGroups)
+{
+    return min(optimalNumThreadGroups * wavesPerSimd, RoundUpQuotient(numWorkItems, threadGroupSize));
 }
 
 #endif

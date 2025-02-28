@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2019-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2019-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -554,11 +554,18 @@ BvhBuildMode BvhBuilder::OverrideBuildMode(
     return mode;
 }
 
+//=====================================================================================================================
+bool BvhBuilder::UsePrimIndicesArray() const
+{
+
+    return false;
+}
+
 // =====================================================================================================================
 // Remapped scratch buffer base address
 bool BvhBuilder::AllowRemappingScratchBuffer() const
 {
-    bool usePrimIndicesArray = false;
+    const bool usePrimIndicesArray = UsePrimIndicesArray();
 
     return
         (m_deviceSettings.enableRemapScratchBuffer == true) &&
@@ -761,7 +768,6 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
     // BVH2 & QBVH
     uint32 bvhNodeData = 0xFFFFFFFF;
     uint32 bvhLeafNodeData = 0xFFFFFFFF;
-    uint32 triangleSplitBoxes = 0xFFFFFFFF;
     uint32 fastLBVHRootNodeIndex = 0xFFFFFFFF;
     uint32 numBatches = 0xFFFFFFFF;
 
@@ -772,9 +778,7 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
 
     //--------------------------------------------
     // TaskQueueCounter
-    uint32 triangleSplitTaskQueueCounter = 0xFFFFFFFF;
     uint32 rebraidTaskQueueCounter = 0xFFFFFFFF;
-    uint32 tdTaskQueueCounter = 0xFFFFFFFF;
     uint32 plocTaskQueueCounter = 0xFFFFFFFF;
     uint32 debugCounters = 0;
 
@@ -786,10 +790,8 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
     // State
     uint32 propagationFlags = 0xFFFFFFFF;
     uint32 batchIndices = 0xFFFFFFFF;
-    uint32 triangleSplitState = 0xFFFFFFFF;
     uint32 rebraidState = 0xFFFFFFFF;
     uint32 currentState = 0xFFFFFFFF;
-    uint32 tdState = 0xFFFFFFFF;
     uint32 dynamicBlockIndex = 0xFFFFFFFF;
     uint32 sceneBounds = 0xFFFFFFFF;
 
@@ -797,19 +799,8 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
     // BVH2
     uint32 primIndicesSorted = 0xFFFFFFFF;
 
-    //--------------------------------------------
-    // TS / Rebraid
-    uint32 triangleSplitRefs0 = 0xFFFFFFFF;
-    uint32 triangleSplitRefs1 = 0xFFFFFFFF;
-    uint32 splitPriorities = 0xFFFFFFFF;
-    uint32 atomicFlagsTS = 0xFFFFFFFF;
-
-    //--------------------------------------------
-    // TD
-    uint32 refList = 0xFFFFFFFF;
-    uint32 refOffsets = 0xFFFFFFFF; // not used
-    uint32 tdBins = 0xFFFFFFFF;
-    uint32 tdNodeList = 0xFFFFFFFF;
+    // Rebraid
+    uint32 rebraidPrefixSumFlags = 0xFFFFFFFF;
 
     //--------------------------------------------
     // Sort + Linear/LBvh
@@ -828,7 +819,6 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
     uint32 clustersList1 = 0xFFFFFFFF;
     uint32 neighbourIndices = 0xFFFFFFFF;
     uint32 atomicFlagsPloc = 0xFFFFFFFF;
-    uint32 clusterOffsets = 0xFFFFFFFF;
 
     //--------------------------------------------
     // QBVH
@@ -843,26 +833,13 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
 
     // ============ TaskQueueCounter ============
     {
-        if (m_buildConfig.triangleSplitting)
-        {
-            triangleSplitTaskQueueCounter = ReserveBytes(RayTracingTaskQueueCounterSize, &runningOffset);
-        }
-
-        if (m_buildConfig.rebraidType == GpuRt::RebraidType::V2)
+        if (m_buildConfig.enableRebraid)
         {
             rebraidTaskQueueCounter = ReserveBytes(RayTracingTaskQueueCounterSize, &runningOffset);
         }
-
-        if (m_buildConfig.topDownBuild)
+        if (m_buildConfig.buildMode == BvhBuildMode::PLOC)
         {
-            tdTaskQueueCounter = ReserveBytes(RayTracingTaskQueueCounterSize, &runningOffset);
-        }
-        else
-        {
-            if (m_buildConfig.buildMode == BvhBuildMode::PLOC)
-            {
-                plocTaskQueueCounter = ReserveBytes(RayTracingTaskQueueCounterSize, &runningOffset);
-            }
+            plocTaskQueueCounter = ReserveBytes(RayTracingTaskQueueCounterSize, &runningOffset);
         }
     }
 
@@ -875,27 +852,11 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
         bvhNodeData = ReserveBytes(nodeCount * RayTracingScratchNodeSize, &runningOffset);
 
         // Unsorted leaf buffer
-        if (m_buildConfig.topDownBuild == false)
-        {
-            // Scratch data for storing unsorted leaf nodes. No additional memory is
-            // used, so no additional scratch memory needs to be reserved.
-            bvhLeafNodeData = bvhNodeData + (m_buildConfig.maxNumPrimitives - 1) * RayTracingScratchNodeSize;
-        }
-        else
-        {
-            // Additional scratch data for storing unsorted leaf nodes
-            bvhLeafNodeData = ReserveBytes(aabbCount * RayTracingScratchNodeSize, &runningOffset);
-        }
+        // Scratch data for storing unsorted leaf nodes. No additional memory is
+        // used, so no additional scratch memory needs to be reserved.
+        bvhLeafNodeData = bvhNodeData + (m_buildConfig.maxNumPrimitives - 1) * RayTracingScratchNodeSize;
 
-        if (m_buildConfig.triangleSplitting)
-        {
-            triangleSplitBoxes = ReserveBytes(aabbCount * sizeof(Aabb), &runningOffset);
-        }
-
-        if (m_buildConfig.enableFastLBVH)
-        {
-            fastLBVHRootNodeIndex = ReserveBytes(sizeof(uint32), &runningOffset);
-        }
+        fastLBVHRootNodeIndex = ReserveBytes(sizeof(uint32), &runningOffset);
 
         if ((m_buildConfig.triangleCompressionMode == TriangleCompressionMode::Pair) &&
             (m_buildConfig.enableEarlyPairCompression == false))
@@ -955,43 +916,26 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
             batchIndices = ReserveBytes(aabbCount * sizeof(uint32), &runningOffset);
         }
 
-        if (m_buildConfig.triangleSplitting)
-        {
-            triangleSplitState = ReserveBytes(RayTracingStateTSBuildSize, &runningOffset);
-        }
-
-        if (m_buildConfig.rebraidType == GpuRt::RebraidType::V2)
+        if (m_buildConfig.enableRebraid)
         {
             rebraidState = ReserveBytes(RayTracingStateRebraidBuildSize, &runningOffset);
         }
 
-        if ((m_buildConfig.topDownBuild == false) && (m_buildConfig.buildMode == BvhBuildMode::PLOC))
+        if (m_buildConfig.buildMode == BvhBuildMode::PLOC)
         {
             // PLOC state
             currentState = ReserveBytes(RayTracingStatePLOCSize, &runningOffset);
-        }
-
-        if (m_buildConfig.topDownBuild)
-        {
-            uint32 tdStateSize = 0;
-            if (m_buildConfig.rebraidType == GpuRt::RebraidType::V1)
-            {
-                tdStateSize = RayTracingStateTDTRBuildSize;
-            }
-            else
-            {
-                tdStateSize = RayTracingStateTDBuildSize;
-            }
-            tdState = ReserveBytes(tdStateSize, &runningOffset);
         }
 
         dynamicBlockIndex = ReserveBytes(sizeof(uint32), &runningOffset);
 
         // scene bounding box + min/max prim size
         sceneBounds = ReserveBytes(sizeof(Aabb) + 2 * sizeof(float), &runningOffset);
-        if (m_buildConfig.topLevelBuild == true)
+
+        // reserve an extra aabb if we have centroids enabled
+        if (m_buildConfig.mortonFlags & (MortonFlags::EnableCentroidBounds | MortonFlags::EnableConciseBounds))
         {
-            ReserveBytes(sizeof(Aabb), &runningOffset); // scene bounding box for rebraid
+            ReserveBytes(sizeof(Aabb), &runningOffset);
         }
     }
     bvh2PhaseMaxSize = Util::Max(bvh2PhaseMaxSize, runningOffset);
@@ -1010,20 +954,10 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
     {
         runningOffset = baseOffset1;
     }
-    if (m_buildConfig.triangleSplitting)
-    {
-        triangleSplitRefs0 = ReserveBytes(aabbCount * RayTracingTSRefScratchSize, &runningOffset);
-        triangleSplitRefs1 = ReserveBytes(aabbCount * RayTracingTSRefScratchSize, &runningOffset);
-
-        splitPriorities = ReserveBytes(aabbCount * sizeof(float), &runningOffset);
-
-        // TODO: calculate number of blocks based on KEYS_PER_THREAD
-        atomicFlagsTS = ReserveBytes(aabbCount * RayTracingAtomicFlags, &runningOffset);
-    }
-    else if (m_buildConfig.rebraidType == GpuRt::RebraidType::V2)
+    if (m_buildConfig.enableRebraid)
     {
         const uint32 numFlags = Util::RoundUpToMultiple(aabbCount, uint32(REBRAID_KEYS_PER_THREAD));
-        atomicFlagsTS = ReserveBytes(numFlags * RayTracingScanDLBFlagsSize, &runningOffset);;
+        rebraidPrefixSumFlags = ReserveBytes(numFlags * RayTracingScanDLBFlagsSize, &runningOffset);;
     }
     bvh2PhaseMaxSize = Util::Max(bvh2PhaseMaxSize, runningOffset);
 
@@ -1032,21 +966,6 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
     {
         runningOffset = baseOffset1;
     }
-    if (m_buildConfig.topDownBuild)
-    {
-        const uint32 refListSize = (m_buildConfig.rebraidType == GpuRt::RebraidType::V1) ?
-                                   RayTracingTDTRRefScratchSize : RayTracingTDRefScratchSize;
-        refList = ReserveBytes(refListSize * aabbCount, &runningOffset);
-
-        // Align the beginning of the TDBins structs to 8 bytes so that 64-bit atomic operations on the first field in
-        // the struct work correctly.
-        runningOffset = Util::RoundUpToMultiple(runningOffset, 8u);
-        tdBins = ReserveBytes(RayTracingTDBinsSize * (aabbCount / 3), &runningOffset);
-
-        const uint32 tdNodeListSize = (m_buildConfig.rebraidType == GpuRt::RebraidType::V1) ?
-                                      RayTracingTDTRNodeSize : RayTracingTDNodeSize;
-        tdNodeList = ReserveBytes(RayTracingTDTRNodeSize * (aabbCount - 1), &runningOffset);
-    }
     bvh2PhaseMaxSize = Util::Max(bvh2PhaseMaxSize, runningOffset);
 
     // ============ Sort ============
@@ -1054,70 +973,69 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
     {
         runningOffset = baseOffset2;
     }
-    if (m_buildConfig.topDownBuild == false)
+
+    // Align to 8 bytes to prevent cache line straddling for 64 bit morton codes
+    runningOffset = Util::Pow2Align(runningOffset, sizeof(uint64));
+
+    const uint32 dataSize = m_deviceSettings.enableMortonCode30 ? sizeof(uint32) : sizeof(uint64);
+
+    // Morton codes buffer size
+    mortonCodes = ReserveBytes(aabbCount * dataSize, &runningOffset);
+    // Sorted morton codes buffer size
+    mortonCodesSorted = ReserveBytes(aabbCount * dataSize, &runningOffset);
+
+    // GetAccelerationStructurePrebuildInfo may be called for an AS with number of elements being greater
+    // than the MergeSort override threshold, but the actual AS build may have less elements and use MergeSort.
+    // Currently, RadixSort always requires more scratch than MergeSort, so the size reported in the PrebuildInfo
+    // will be sufficient, but this assumption must always hold.
+
+    // Merge Sort
+    if (m_buildConfig.enableMergeSort)
     {
-        // Align to 8 bytes to prevent cache line straddling for 64 bit morton codes
-        runningOffset = Util::Pow2Align(runningOffset, sizeof(uint64));
+        primIndicesSortedSwap = ReserveBytes(aabbCount * sizeof(uint32), &runningOffset);
+    }
+    // Radix Sort
+    else
+    {
+        // Radix sort temporary buffers
+        const uint32 numBlocks = (aabbCount + m_radixSortConfig.groupBlockSize - 1) /
+                                 m_radixSortConfig.groupBlockSize;
 
-        const uint32 dataSize = m_deviceSettings.enableMortonCode30 ? sizeof(uint32) : sizeof(uint64);
+        // device histograms buffer (int4)
+        const uint32 numHistogramElements = numBlocks * m_radixSortConfig.numBins;
+        histogram = ReserveBytes(numHistogramElements * sizeof(uint32), &runningOffset);
 
-        // Morton codes buffer size
-        mortonCodes = ReserveBytes(aabbCount * dataSize, &runningOffset);
-        // Sorted morton codes buffer size
-        mortonCodesSorted = ReserveBytes(aabbCount * dataSize, &runningOffset);
+        // device temp keys buffer (int)
+        tempKeys = ReserveBytes(aabbCount * dataSize, &runningOffset);
 
-        // GetAccelerationStructurePrebuildInfo may be called for an AS with number of elements being greater
-        // than the MergeSort override threshold, but the actual AS build may have less elements and use MergeSort.
-        // Currently, RadixSort always requires more scratch than MergeSort, so the size reported in the PrebuildInfo
-        // will be sufficient, but this assumption must always hold.
+        // device temp vals buffer (int)
+        tempVals = ReserveBytes(aabbCount * sizeof(uint32), &runningOffset);
 
-        // Merge Sort
-        if (m_buildConfig.enableMergeSort)
+        if (m_buildConfig.radixSortScanLevel == 0)
         {
-            primIndicesSortedSwap = ReserveBytes(aabbCount * sizeof(uint32), &runningOffset);
+            const uint32 blockSize = m_radixSortConfig.workGroupSize;
+            const uint32 numKeysPerThread = m_radixSortConfig.keysPerThread;
+            const uint32 numDynamicBlocks = (numHistogramElements +
+                ((blockSize * numKeysPerThread) - 1)) / (blockSize * numKeysPerThread);
+
+            atomicFlags = ReserveBytes(numDynamicBlocks * RayTracingScanDLBFlagsSize, &runningOffset);
         }
-        // Radix Sort
         else
         {
-            // Radix sort temporary buffers
-            const uint32 numBlocks = (aabbCount + m_radixSortConfig.groupBlockSize - 1) /
-                                     m_radixSortConfig.groupBlockSize;
+            // partial sum scratch memory
+            const uint32 numGroupsBottomLevelScan =
+                Util::RoundUpQuotient(m_buildConfig.numHistogramElements, m_radixSortConfig.groupBlockSizeScan);
 
-            // device histograms buffer (int4)
-            const uint32 numHistogramElements = numBlocks * m_radixSortConfig.numBins;
-            histogram = ReserveBytes(numHistogramElements * sizeof(uint32), &runningOffset);
-
-            // device temp keys buffer (int)
-            tempKeys = ReserveBytes(aabbCount * dataSize, &runningOffset);
-
-            // device temp vals buffer (int)
-            tempVals = ReserveBytes(aabbCount * sizeof(uint32), &runningOffset);
-
-            if (m_buildConfig.radixSortScanLevel == 0)
+            distributedPartSums = ReserveBytes(numGroupsBottomLevelScan * sizeof(uint32), &runningOffset);
+            if (m_buildConfig.numHistogramElements >= m_radixSortConfig.scanThresholdTwoLevel)
             {
-                const uint32 blockSize = m_radixSortConfig.workGroupSize;
-                const uint32 numKeysPerThread = m_radixSortConfig.keysPerThread;
-                const uint32 numDynamicBlocks = (numHistogramElements +
-                    ((blockSize * numKeysPerThread) - 1)) / (blockSize * numKeysPerThread);
-
-                atomicFlags = ReserveBytes(numDynamicBlocks * RayTracingScanDLBFlagsSize, &runningOffset);
-            }
-            else
-            {
-                // partial sum scratch memory
-                const uint32 numGroupsBottomLevelScan =
-                    Util::RoundUpQuotient(m_buildConfig.numHistogramElements, m_radixSortConfig.groupBlockSizeScan);
-
-                distributedPartSums = ReserveBytes(numGroupsBottomLevelScan * sizeof(uint32), &runningOffset);
-                if (m_buildConfig.numHistogramElements >= m_radixSortConfig.scanThresholdTwoLevel)
-                {
-                    const uint32 numGroupsMidLevelScan =
-                        Util::RoundUpQuotient(numGroupsBottomLevelScan, m_radixSortConfig.groupBlockSizeScan);
-                    ReserveBytes(numGroupsMidLevelScan * sizeof(uint32), &runningOffset);
-                }
+                const uint32 numGroupsMidLevelScan =
+                    Util::RoundUpQuotient(numGroupsBottomLevelScan, m_radixSortConfig.groupBlockSizeScan);
+                ReserveBytes(numGroupsMidLevelScan * sizeof(uint32), &runningOffset);
             }
         }
     }
+
     bvh2PhaseMaxSize = Util::Max(bvh2PhaseMaxSize, runningOffset);
 
     // ============ PLOC/LTD ============
@@ -1125,16 +1043,14 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
     {
         runningOffset = baseOffset2;
     }
-    if (m_buildConfig.topDownBuild == false)
+
+    if (m_buildConfig.buildMode == BvhBuildMode::PLOC)
     {
-        if (m_buildConfig.buildMode == BvhBuildMode::PLOC)
-        {
-            clustersList0 = ReserveBytes(aabbCount * sizeof(uint32), &runningOffset);
-            clustersList1 = ReserveBytes(aabbCount * sizeof(uint32), &runningOffset);
-            neighbourIndices = ReserveBytes(aabbCount * sizeof(uint32), &runningOffset);
-            // TODO: calculate number of blocks based on KEYS_PER_THREAD
-            atomicFlagsPloc = ReserveBytes(aabbCount * RayTracingPLOCFlags, &runningOffset);
-        }
+        clustersList0 = ReserveBytes(aabbCount * sizeof(uint32), &runningOffset);
+        clustersList1 = ReserveBytes(aabbCount * sizeof(uint32), &runningOffset);
+        neighbourIndices = ReserveBytes(aabbCount * sizeof(uint32), &runningOffset);
+        // TODO: calculate number of blocks based on KEYS_PER_THREAD
+        atomicFlagsPloc = ReserveBytes(aabbCount * RayTracingPLOCFlags, &runningOffset);
     }
     bvh2PhaseMaxSize = Util::Max(bvh2PhaseMaxSize, runningOffset);
 
@@ -1142,23 +1058,11 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
     if (pOffsets != nullptr)
     {
         pOffsets->bvhNodeData = bvhNodeData;
-        pOffsets->triangleSplitBoxes = triangleSplitBoxes;
-        pOffsets->triangleSplitRefs0 = triangleSplitRefs0;
-        pOffsets->triangleSplitRefs1 = triangleSplitRefs1;
-        pOffsets->splitPriorities = splitPriorities;
-        pOffsets->triangleSplitState = triangleSplitState;
         pOffsets->encodeTaskCounter = encodeTaskCounter;
         pOffsets->taskLoopCounters = taskLoopCounters;
-        pOffsets->triangleSplitTaskQueueCounter = triangleSplitTaskQueueCounter;
         pOffsets->rebraidState = rebraidState;
         pOffsets->rebraidTaskQueueCounter = rebraidTaskQueueCounter;
-        pOffsets->splitAtomicFlags = atomicFlagsTS;
-        pOffsets->tdRefs = refList;
-        pOffsets->tdNodeList = tdNodeList;
-        pOffsets->tdBins = tdBins;
-        pOffsets->tdState = tdState;
-        pOffsets->tdTaskQueueCounter = tdTaskQueueCounter;
-        pOffsets->refOffsets = refOffsets;
+        pOffsets->rebraidPrefixSumFlags = rebraidPrefixSumFlags;
         pOffsets->bvhLeafNodeData = bvhLeafNodeData;
         pOffsets->clusterList0 = clustersList0;
         pOffsets->clusterList1 = clustersList1;
@@ -1166,7 +1070,6 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
         pOffsets->currentState = currentState;
         pOffsets->plocTaskQueueCounter = plocTaskQueueCounter;
         pOffsets->atomicFlagsPloc = atomicFlagsPloc;
-        pOffsets->clusterOffsets = clusterOffsets;
         pOffsets->sceneBounds = sceneBounds;
         pOffsets->primRefCount = primRefCount;
         pOffsets->mortonCodes = mortonCodes;
@@ -1324,7 +1227,7 @@ void BvhBuilder::InitBuildConfig(
 
     m_buildConfig.numPrimitives = primitiveCount;
     m_buildConfig.maxNumPrimitives = primitiveCount;
-    m_buildConfig.rebraidType = m_deviceSettings.rebraidType;
+    m_buildConfig.enableRebraid = m_deviceSettings.enableRebraid;
     m_buildConfig.topLevelBuild = buildArgs.inputs.type == AccelStructType::TopLevel;
     m_buildConfig.geometryType = GetGeometryType(buildArgs.inputs);
 
@@ -1343,54 +1246,22 @@ void BvhBuilder::InitBuildConfig(
         }
     }
 
-    m_buildConfig.allowTopDownBuild = (m_buildConfig.topLevelBuild) &&
-        ((m_deviceSettings.topDownBuild == true) || (m_deviceSettings.rebraidType == RebraidType::V1));
-
-    m_buildConfig.topDownBuild = m_buildConfig.allowTopDownBuild &&
-        (buildArgs.inputs.inputElemCount <= m_deviceSettings.maxTopDownBuildInstances);
-
-    if ((UpdateAllowed() == false) && m_buildConfig.topLevelBuild)
+    if (UpdateAllowed() || (m_buildConfig.topLevelBuild == false))
     {
-        if (m_buildConfig.rebraidType == RebraidType::V1)
-        {
-            // inputs > maxTopDownBuildInstances turn off rebraid
-            if (m_buildConfig.topDownBuild == false)
-            {
-                m_buildConfig.rebraidType = RebraidType::Off;
-            }
-        }
-        else
-        {
-            m_buildConfig.rebraidType = m_buildConfig.rebraidType;
-        }
-    }
-    else
-    {
-        m_buildConfig.rebraidType = RebraidType::Off;
+        m_buildConfig.enableRebraid = false;
     }
 
     // Enable BLAS build code paths required for rebraid support
     m_buildConfig.enableInstanceRebraid =
-        (m_deviceSettings.rebraidType != RebraidType::Off) &&
-        (m_buildConfig.topLevelBuild == false);
-
-    m_buildConfig.triangleSplitting = (m_deviceSettings.enableParallelBuild) &&
-        m_deviceSettings.enableTriangleSplitting && (buildArgs.inputs.type == AccelStructType::BottomLevel) &&
-        (UpdateAllowed() == false) && Util::TestAnyFlagSet(buildArgs.inputs.flags, AccelStructBuildFlagPreferFastTrace);
+        (m_deviceSettings.enableRebraid) && (m_buildConfig.topLevelBuild == false);
 
     m_buildConfig.buildMode = OverrideBuildMode(buildArgs);
 
     m_buildConfig.rebraidFactor = m_deviceSettings.rebraidFactor;
 
-    if (m_buildConfig.rebraidType != RebraidType::Off)
+    if (m_buildConfig.enableRebraid)
     {
         m_buildConfig.maxNumPrimitives *= m_buildConfig.rebraidFactor;
-    }
-
-    if (m_buildConfig.triangleSplitting == true)
-    {
-        m_buildConfig.maxNumPrimitives = NumPrimitivesAfterSplit(m_buildConfig.maxNumPrimitives,
-                                                                 m_deviceSettings.triangleSplittingFactor);
     }
 
     // Merge sort outperforms Radix sort in most cases in the batched builder
@@ -1427,10 +1298,13 @@ void BvhBuilder::InitBuildConfig(
     }
 
     m_buildConfig.numMortonSizeBits = m_deviceSettings.numMortonSizeBits;
-
-    m_buildConfig.enableFastLBVH = (m_buildConfig.topDownBuild == false) && (m_deviceSettings.enableFastLBVH == true) &&
-        ((m_buildConfig.buildMode == BvhBuildMode::Linear)
-             );
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 53
+    m_buildConfig.mortonFlags = (m_deviceSettings.enableVariableBitsMortonCodes > 0) ?
+                                   MortonFlags::DefaultVariableBitMortonCodes :
+                                   MortonFlags::EnableRegularMortonCodes;
+#else
+    m_buildConfig.mortonFlags = m_deviceSettings.mortonFlags;
+#endif
 
     m_buildConfig.sceneCalcType = SceneBoundsCalculation::BasedOnGeometry;
 
@@ -1510,13 +1384,11 @@ BuildShaderConstants BvhBuilder::GetBuildShaderConstants() const
         .resultBufferAddrLo      = Util::LowPart(resultBufferAddress),
         .resultBufferAddrHi      = Util::HighPart(resultBufferAddress),
         .numPrimitives           = m_buildConfig.numPrimitives,
-        .tsBudgetPerTriangle     = IsUpdate() ? 0 : m_deviceSettings.tsBudgetPerTriangle,
-
         .maxNumPrimitives        = m_buildConfig.maxNumPrimitives,
         .rebraidFactor           = IsUpdate() ? 0 : m_buildConfig.rebraidFactor,
 
         .indirectArgBufferStride = m_buildArgs.indirect.indirectStride,
-        .numDescs                = m_buildArgs.inputs.inputElemCount,
+        .numDescs                = (m_buildConfig.maxNumPrimitives > 0) ? m_buildArgs.inputs.inputElemCount : 0,
         .numMortonSizeBits       = m_buildConfig.numMortonSizeBits,
 
         .header                  = IsUpdate() ? AccelStructHeader{} : InitAccelStructHeader(),
@@ -1646,11 +1518,10 @@ AccelStructHeader BvhBuilder::InitAccelStructHeader() const
     info.mode                       = m_buildSettings.buildMode;
     info.triCompression             = static_cast<uint32>(m_buildConfig.triangleCompressionMode);
     info.fp16BoxNodesInBlasMode     = static_cast<uint32>(m_buildConfig.fp16BoxNodesInBlasMode);
-    info.triangleSplitting          = m_buildConfig.triangleSplitting;
 
     if (m_buildConfig.topLevelBuild)
     {
-        info.rebraid = m_buildConfig.rebraidType != RebraidType::Off;
+        info.rebraid = m_buildConfig.enableRebraid;
     }
     else
     {
@@ -1668,7 +1539,7 @@ AccelStructHeader BvhBuilder::InitAccelStructHeader() const
     header.sizeInBytes              = accelStructSize;
     header.compactedSizeInBytes     = accelStructSize;
     header.numPrimitives            = m_buildConfig.maxNumPrimitives; // Is this correct?
-    header.numDescs                 = m_buildArgs.inputs.inputElemCount;
+    header.numDescs                 = (m_buildConfig.maxNumPrimitives > 0) ? m_buildArgs.inputs.inputElemCount : 0;
     header.geometryType             = static_cast<uint32>(m_buildConfig.geometryType);
     header.uuidLo                   = Util::LowPart(m_deviceSettings.accelerationStructureUUID);
     header.uuidHi                   = Util::HighPart(m_deviceSettings.accelerationStructureUUID);
@@ -1904,29 +1775,27 @@ void BvhBuilder::InitAccelerationStructure()
         const uint32 InitialMin = FloatToUintForCompare(FLT_MAX);
 
         const GpuRt::gpusize sceneBoundVa = RemappedScratchBufferBaseVa() + m_scratchOffsets.sceneBounds;
-        if (m_buildConfig.rebraidType == RebraidType::V2)
+
+        if (m_buildConfig.mortonFlags & (MortonFlags::EnableCentroidBounds | MortonFlags::EnableConciseBounds))
         {
             uint32 sceneBounds[] =
             {
-                InitialMin, InitialMin, InitialMin,
+                InitialMin, InitialMin, InitialMin, // scene bounds
                 InitialMax, InitialMax, InitialMax,
-                InitialMin, InitialMax, // size
-
-                InitialMin, InitialMin, InitialMin, //used for rebraid
+                InitialMin, InitialMax,             // min/max primitive size
+                InitialMin, InitialMin, InitialMin, // centroid bounds
                 InitialMax, InitialMax, InitialMax,
             };
-
             WriteImmediateData(sceneBoundVa, sceneBounds);
         }
         else
         {
             uint32 sceneBounds[] =
             {
-                InitialMin, InitialMin, InitialMin,
+                InitialMin, InitialMin, InitialMin, // scene bounds
                 InitialMax, InitialMax, InitialMax,
-                InitialMin, InitialMax, // size
+                InitialMin, InitialMax,             // min/max primitive size
             };
-
             WriteImmediateData(sceneBoundVa, sceneBounds);
         }
 
@@ -1957,10 +1826,10 @@ void BvhBuilder::InitAccelerationStructure()
         ZeroDataImmediate(counterPtrVa, RayTracingBuildDebugCounters);
     }
 
-    // Early triangle pairing, triangle splitting and indirect BLAS builds dynamically increment
+    // Early triangle pairing and indirect BLAS builds dynamically increment
     // primitive reference counter. Initialise counters to 0 when these features are enabled.
     const bool dynamicallyIncrementsPrimRefCount =
-        m_buildConfig.enableEarlyPairCompression || m_buildConfig.triangleSplitting || m_buildSettings.isIndirectBuild;
+        m_buildConfig.enableEarlyPairCompression || m_buildSettings.isIndirectBuild;
     const uint32 primRefInitCount =
         (dynamicallyIncrementsPrimRefCount) ? 0 : m_buildConfig.numPrimitives;
 
@@ -1996,8 +1865,6 @@ void BvhBuilder::InitAccelerationStructure()
     ZeroDataImmediate(taskLoopCountersOffset, TASK_LOOP_COUNTERS_NUM_DWORDS);
 
     ResetTaskQueueCounters(m_scratchOffsets.rebraidTaskQueueCounter);
-    ResetTaskQueueCounters(m_scratchOffsets.triangleSplitTaskQueueCounter);
-    ResetTaskQueueCounters(m_scratchOffsets.tdTaskQueueCounter);
     ResetTaskQueueCounters(m_scratchOffsets.plocTaskQueueCounter);
 
     RGP_POP_MARKER();
@@ -2075,25 +1942,6 @@ const char* BvhBuilder::ConvertBuildModeToString()
 }
 
 // =====================================================================================================================
-const char* BvhBuilder::ConvertRebraidTypeToString()
-{
-    static_assert(static_cast<uint32>(RebraidType::Off) == 0, "RebraidType enum mismatch");
-    static_assert(static_cast<uint32>(RebraidType::V1)  == 1, "RebraidType enum mismatch");
-    static_assert(static_cast<uint32>(RebraidType::V2)  == 2, "RebraidType enum mismatch");
-
-    constexpr const char* RebraidTypeStr[] =
-    {
-        "Off", // RebraidTypeOff,
-        "V1",  // RebraidTypeV1,
-        "V2",  // RebraidTypeV2,
-    };
-
-    static_assert(GPURT_ARRAY_SIZE(RebraidTypeStr) == static_cast<uint32>(RebraidType::Count),
-        "Mismatched array. Must match RebraidType::Count");
-    return RebraidTypeStr[static_cast<uint32>(m_buildConfig.rebraidType)];
-}
-
-// =====================================================================================================================
 const char* BvhBuilder::ConvertTriCompressionTypeToString()
 {
     static_assert(static_cast<uint32>(TriangleCompressionMode::None) == 0,
@@ -2153,15 +2001,12 @@ void BvhBuilder::OutputBuildInfo()
 
     constexpr uint32 MaxInfoStrLength = 128;
     char buildModeString[MaxInfoStrLength];
-    Util::Snprintf(buildModeString, MaxInfoStrLength, ", BuildMode:%s",
-        m_buildConfig.topDownBuild ? "TopDown" : ConvertBuildModeToString());
+    Util::Snprintf(buildModeString, MaxInfoStrLength, ", BuildMode:%s", ConvertBuildModeToString());
     Util::Strncat(buildShaderInfo, MaxInfoStrLength, buildModeString);
 
-    if (m_buildSettings.rebraidType != static_cast<uint32>(RebraidType::Off))
+    if (m_buildSettings.enableRebraid)
     {
-        char infoString[MaxInfoStrLength];
-        Util::Snprintf(infoString, MaxInfoStrLength, ", RebraidType:%s", ConvertRebraidTypeToString());
-        Util::Strncat(buildShaderInfo, MaxInfoStrLength, infoString);
+        Util::Strncat(buildShaderInfo, MaxInfoStrLength, ", Rebraid");
     }
 
     if (m_buildConfig.fp16BoxNodesInBlasMode != Fp16BoxNodesInBlasMode::NoNodes)
@@ -2176,15 +2021,6 @@ void BvhBuilder::OutputBuildInfo()
         char infoString[MaxInfoStrLength];
         Util::Snprintf(infoString, MaxInfoStrLength, ", TriangleCompressionMode:%s",
             ConvertTriCompressionTypeToString());
-        Util::Strncat(buildShaderInfo, MaxInfoStrLength, infoString);
-    }
-
-    if (m_buildSettings.doTriangleSplitting > 0)
-    {
-        char infoString[MaxInfoStrLength];
-        Util::Strncat(buildShaderInfo, MaxInfoStrLength, ", TriangleSplitting");
-        Util::Snprintf(infoString, MaxInfoStrLength, ", TriangleSplittingBudgetPerTriangle:%d, TriangleSplittingPriority:%f",
-            m_deviceSettings.tsBudgetPerTriangle, m_deviceSettings.tsPriority);
         Util::Strncat(buildShaderInfo, MaxInfoStrLength, infoString);
     }
 
@@ -2231,7 +2067,6 @@ void BvhBuilder::InitBuildSettings()
     m_buildSettings.buildMode                    = static_cast<uint32>(buildMode);
     m_buildSettings.triangleCompressionMode      = static_cast<uint32>(m_buildConfig.triangleCompressionMode);
     m_buildSettings.isIndirectBuild              = m_buildArgs.indirect.indirectGpuAddr > 0;
-    m_buildSettings.doTriangleSplitting          = m_buildConfig.triangleSplitting;
     m_buildSettings.fp16BoxNodesMode             = (m_buildSettings.topLevelBuild) ?
                                                    static_cast<uint32>(Fp16BoxNodesInBlasMode::NoNodes) :
                                                    static_cast<uint32>(m_buildConfig.fp16BoxNodesInBlasMode);
@@ -2242,29 +2077,20 @@ void BvhBuilder::InitBuildSettings()
         m_buildSettings.nnSearchRadius = m_deviceSettings.plocRadius;
     }
     m_buildSettings.enablePairCostCheck          = m_deviceSettings.enablePairCompressionCostCheck;
-    m_buildSettings.enableVariableBitsMortonCode = m_deviceSettings.enableVariableBitsMortonCodes;
+    m_buildSettings.mortonFlags                  = m_buildConfig.mortonFlags;
 
-    m_buildSettings.rebraidType                  = static_cast<uint32>(m_buildConfig.rebraidType);
-    m_buildSettings.enableTopDownBuild           = m_buildConfig.topDownBuild;
+    m_buildSettings.enableRebraid                = m_buildConfig.enableRebraid;
     m_buildSettings.useMortonCode30              = m_deviceSettings.enableMortonCode30;
     m_buildSettings.enableFusedInstanceNode      = m_deviceSettings.enableFusedInstanceNode;
     m_buildSettings.enableMergeSort              = m_buildConfig.enableMergeSort;
 
     m_buildSettings.enableInstanceRebraid        = m_buildConfig.enableInstanceRebraid;
 
-    m_buildSettings.tsPriority                   = m_deviceSettings.tsPriority;
-    // Force priority to 1 if the client set it to 0
-    if (m_buildSettings.tsPriority <= 0.f)
-    {
-        m_buildSettings.tsPriority = 1.0f;
-    }
-
     m_buildSettings.numRebraidIterations    = Util::Max(1u, m_deviceSettings.numRebraidIterations);
     m_buildSettings.rebraidQualityHeuristic = m_deviceSettings.rebraidQualityHeuristic;
     m_buildSettings.radixSortScanLevel      = m_buildConfig.radixSortScanLevel;
 
     m_buildSettings.enableEarlyPairCompression = m_buildConfig.enableEarlyPairCompression;
-    m_buildSettings.enableFastLBVH      = m_buildConfig.enableFastLBVH;
 
     m_buildSettings.rtIpLevel = static_cast<uint32>(m_pDevice->GetRtIpLevel());
 
@@ -2286,6 +2112,8 @@ void BvhBuilder::InitBuildSettings()
     m_buildSettings.encodeArrayOfPointers =
         (m_buildArgs.inputs.inputElemLayout == InputElementLayout::ArrayOfPointers);
     m_buildSettings.sceneBoundsCalculationType = static_cast<uint32>(m_buildConfig.sceneCalcType);
+
+    m_buildSettings.cullIllegalInstances = m_deviceSettings.cullIllegalInstances;
 
     m_buildSettingsHash = m_backend.HashBuildSettings(m_buildSettings);
 
@@ -2318,8 +2146,6 @@ void BvhBuilder::GetAccelerationStructurePrebuildInfo(
     m_buildArgs.inputs = buildInfo;
     InitBuildConfig(m_buildArgs);
 
-    AccelStructPrebuildInfo prebuildInfo = {};
-
     // Calculate the amount of scratch space needed during the construction process.
     const ScratchBufferInfo scratchBufferInfo = CalculateScratchBufferInfo(nullptr);
 
@@ -2349,38 +2175,10 @@ void BvhBuilder::GetAccelerationStructurePrebuildInfo(
     // that's only 4 bytes, so we pass back 8 bytes instead.
     scratchDataSize = Util::Max(static_cast<uint32>(sizeof(uint64)), scratchDataSize);
 
-    prebuildInfo.scratchDataSizeInBytes       = scratchDataSize;
-    prebuildInfo.updateScratchDataSizeInBytes = updateDataSize;
-
-    prebuildInfo.resultDataMaxSizeInBytes = resultDataSize;
-    prebuildInfo.maxPrimitiveCount        = m_buildConfig.maxNumPrimitives;
-
-    // The reported size may legally be used for a build with fewer input elements. It's possible that a build with
-    // fewer inputs produces a larger size if we disabled top down builds (especially with rebraid) due to the input
-    // element count. We must make sure to report the max size of each possible build type in this case.
-    if (m_buildConfig.allowTopDownBuild && (m_buildConfig.topDownBuild == false))
-    {
-        PAL_ASSERT(buildInfo.type == AccelStructType::TopLevel);
-        PAL_ASSERT(buildInfo.inputElemCount > m_deviceSettings.maxTopDownBuildInstances);
-
-        AccelStructPrebuildInfo alternatePrebuildInfo = {};
-        AccelStructBuildInputs  alternateBuildInfo    = buildInfo;
-
-        alternateBuildInfo.inputElemCount = m_deviceSettings.maxTopDownBuildInstances;
-
-        GetAccelerationStructurePrebuildInfo(alternateBuildInfo, &alternatePrebuildInfo);
-
-        prebuildInfo.resultDataMaxSizeInBytes =
-            Util::Max(prebuildInfo.resultDataMaxSizeInBytes, alternatePrebuildInfo.resultDataMaxSizeInBytes);
-        prebuildInfo.scratchDataSizeInBytes =
-            Util::Max(prebuildInfo.scratchDataSizeInBytes, alternatePrebuildInfo.scratchDataSizeInBytes);
-        prebuildInfo.updateScratchDataSizeInBytes =
-            Util::Max(prebuildInfo.updateScratchDataSizeInBytes, alternatePrebuildInfo.updateScratchDataSizeInBytes);
-        prebuildInfo.maxPrimitiveCount =
-            Util::Max(prebuildInfo.maxPrimitiveCount, alternatePrebuildInfo.maxPrimitiveCount);
-    }
-
-    *pPrebuildInfo = prebuildInfo;
+    pPrebuildInfo->scratchDataSizeInBytes       = scratchDataSize;
+    pPrebuildInfo->updateScratchDataSizeInBytes = updateDataSize;
+    pPrebuildInfo->resultDataMaxSizeInBytes     = resultDataSize;
+    pPrebuildInfo->maxPrimitiveCount            = m_buildConfig.maxNumPrimitives;
 }
 
 // =====================================================================================================================
@@ -2668,6 +2466,7 @@ void BvhBuilder::EncodeQuadPrimitives()
 
     BuildShaderRootConstants0 shaderConstants =
     {
+        .numThreadGroups = GetNumThreadGroupsCopy(64),
         .geometryIndex = m_buildConfig.trianglePairBlockCount
     };
 
@@ -3280,50 +3079,33 @@ BuildPhaseFlags BvhBuilder::EnabledPhases() const
                 flags |= BuildPhaseFlags::Rebraid;
             }
 
-            if (m_buildConfig.topDownBuild)
+            flags |= BuildPhaseFlags::GenerateMortonCodes;
+
+            if (m_buildConfig.enableMergeSort)
             {
-                flags |= BuildPhaseFlags::BuildBVHTD;
-                flags |= BuildPhaseFlags::EncodeHwBvh;
-                // Top Down Builds do not execute any other build phases
+                flags |= BuildPhaseFlags::MergeSort;
             }
             else
             {
-                flags |= BuildPhaseFlags::GenerateMortonCodes;
-
-                if (m_buildConfig.enableMergeSort)
-                {
-                    flags |= BuildPhaseFlags::MergeSort;
-                }
-                else
-                {
-                    flags |= BuildPhaseFlags::RadixSort;
-                }
-
-                if ((m_buildConfig.buildMode == BvhBuildMode::Linear)
-                    )
-                {
-                    if (m_buildConfig.enableFastLBVH)
-                    {
-                        flags |= BuildPhaseFlags::BuildFastAgglomerativeLbvh;
-                    }
-                    else
-                    {
-                        flags |= BuildPhaseFlags::BuildBVH;
-                        flags |= BuildPhaseFlags::RefitBounds;
-                    }
-                }
-                if (m_buildConfig.buildMode == BvhBuildMode::PLOC)
-                {
-                    flags |= BuildPhaseFlags::BuildPLOC;
-                }
-                if (AllowLatePairCompression())
-                {
-                    flags |= BuildPhaseFlags::PairCompression;
-                }
-
-                flags |= BuildPhaseFlags::EncodeHwBvh;
-
+                flags |= BuildPhaseFlags::RadixSort;
             }
+
+            if ((m_buildConfig.buildMode == BvhBuildMode::Linear)
+                )
+            {
+                flags |= BuildPhaseFlags::BuildFastAgglomerativeLbvh;
+            }
+            if (m_buildConfig.buildMode == BvhBuildMode::PLOC)
+            {
+                flags |= BuildPhaseFlags::BuildPLOC;
+            }
+            if (AllowLatePairCompression())
+            {
+                flags |= BuildPhaseFlags::PairCompression;
+            }
+
+            flags |= BuildPhaseFlags::EncodeHwBvh;
+
         }
     }
 
@@ -3334,9 +3116,7 @@ BuildPhaseFlags BvhBuilder::EnabledPhases() const
 // Builds an acceleration structure by executing several shaders
 void BvhBuilder::BuildAccelerationStructure()
 {
-    // if rebraid type == v1 then force to non-build parallel for now
-    // BuildParallel only supports RebraidType::v2
-    if (m_deviceSettings.enableParallelBuild && (m_buildConfig.rebraidType != RebraidType::V1))
+    if (m_deviceSettings.enableParallelBuild)
     {
         BuildParallel();
     }
@@ -3479,7 +3259,7 @@ void BvhBuilder::MergeSortCopyLastLevel()
 bool BvhBuilder::AllowRebraid() const
 {
     const bool enableRebraid = (m_buildConfig.topLevelBuild) &&
-                               (m_buildConfig.rebraidType == GpuRt::RebraidType::V2) &&
+                               (m_buildConfig.enableRebraid) &&
                                (m_buildConfig.numPrimitives > 0);
     return enableRebraid;
 }
@@ -3537,59 +3317,6 @@ void BvhBuilder::GenerateMortonCodes()
 
     RGP_PUSH_MARKER("Generate Morton Codes (maxNumPrimitives %u)", m_buildConfig.maxNumPrimitives);
     Dispatch(DispatchSize(m_buildConfig.maxNumPrimitives));
-
-    RGP_POP_MARKER();
-}
-
-// =====================================================================================================================
-// Binds and dispatches the provided build BVH shader
-void BvhBuilder::DispatchBuildBVHPipeline(
-    InternalRayTracingCsType pipeline)
-{
-    BindPipeline(pipeline);
-
-    WriteBuildBufferBindings();
-
-    RGP_PUSH_MARKER("Build BVH (maxNumPrimitives %u)", m_buildConfig.maxNumPrimitives);
-    Dispatch(DispatchSize(m_buildConfig.maxNumPrimitives));
-
-    RGP_POP_MARKER();
-}
-
-// =====================================================================================================================
-// Executes the build BVH shader
-void BvhBuilder::BuildBVH()
-{
-    DispatchBuildBVHPipeline(InternalRayTracingCsType::BuildBVH);
-}
-
-// =====================================================================================================================
-// Executes the build BVH shader
-void BvhBuilder::BuildBVHTD()
-{
-    PAL_ASSERT(m_buildConfig.topDownBuild);
-
-    if (m_buildConfig.rebraidType == RebraidType::V1)
-    {
-        BindPipeline(InternalRayTracingCsType::BuildBVHTDTR);
-    }
-    else
-    {
-        BindPipeline(InternalRayTracingCsType::BuildBVHTD);
-    }
-
-    const uint32 threadGroupSize = DefaultThreadGroupSize;
-    const uint32 numThreadGroups = GetNumPersistentThreadGroups(m_buildConfig.maxNumPrimitives, threadGroupSize);
-
-    BuildShaderRootConstants0 shaderConstants =
-    {
-        .numThreads = numThreadGroups * threadGroupSize
-    };
-
-    WriteBuildBufferBindings(shaderConstants);
-
-    RGP_PUSH_MARKER("Build BVHTD");
-    Dispatch(numThreadGroups);
 
     RGP_POP_MARKER();
 }
@@ -3763,14 +3490,7 @@ uint32 BvhBuilder::GetParallelBuildNumThreadGroups()
         switch (m_buildConfig.buildMode)
         {
         case BvhBuildMode::Linear:
-            if (m_buildConfig.triangleSplitting)
-            {
-                wavesPerSimd = 5;
-            }
-            else
-            {
-                wavesPerSimd = 8;
-            }
+            wavesPerSimd = 8;
             break;
         case BvhBuildMode::PLOC:
             wavesPerSimd = 2;
@@ -3807,20 +3527,6 @@ void BvhBuilder::EncodeHwBvh()
 
     RGP_PUSH_MARKER("Encode HW BVH (nodeCount %u)", nodeCount);
     Dispatch(numThreadGroups);
-    RGP_POP_MARKER();
-}
-
-// =====================================================================================================================
-// Executes the refit bounds shader
-void BvhBuilder::RefitBounds()
-{
-    BindPipeline(InternalRayTracingCsType::RefitBounds);
-
-    WriteBuildBufferBindings();
-
-    RGP_PUSH_MARKER("Refit Bounds");
-    Dispatch(DispatchSize(m_buildConfig.maxNumPrimitives));
-
     RGP_POP_MARKER();
 }
 
@@ -4330,15 +4036,6 @@ uint32 BvhBuilder::WriteBufferVa(
     uint32  entryOffset)    // Offset of the first entry
 {
     return m_pDevice->WriteBufferVa(m_cmdBuffer, virtualAddress, entryOffset);
-}
-
-// =====================================================================================================================
-// Helper function to that calculates the number of primitives after applying the triangle split factor
-uint32 BvhBuilder::NumPrimitivesAfterSplit(
-    uint32 primitiveCount, // Number of primitives
-    float  splitFactor)    // Number of triangle split factor
-{
-    return static_cast<uint32>(static_cast<float>(primitiveCount) * splitFactor);
 }
 
 // =====================================================================================================================

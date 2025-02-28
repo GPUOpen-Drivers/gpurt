@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2020-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2020-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -72,11 +72,11 @@ static void TraversalInternal2_0(
     inout_param(_AmdPrimitiveSystemState) candidate,
     inout_param(float2) candidateBarycentrics)
 {
-    const uint rayFlags         = data.ray.Flags();
+    const uint rayFlags         = data.hitObject.ray.Flags();
     const uint boxHeuristicMode = GetBoxHeuristicMode();
 
     // Root bvh address for reuse
-    const GpuVirtualAddress topBvhAddress = data.ray.AccelStruct();
+    const GpuVirtualAddress topBvhAddress = data.hitObject.ray.AccelStruct();
     // Updateable bottom level bvh for reuse
     GpuVirtualAddress bvhAddress;
 
@@ -92,8 +92,8 @@ static void TraversalInternal2_0(
     const bool triangleCullEnable    = triangleCullFrontFace || triangleCullBackFace;
 
     // Regenerate top-level ray for traversal from ray system state
-    float3 topLevelRayOrigin = data.ray.origin + (data.ray.tMin * data.ray.direction);
-    float3 topLevelRayDirection = data.ray.direction;
+    float3 topLevelRayOrigin = data.hitObject.ray.origin + (data.hitObject.ray.tMin * data.hitObject.ray.direction);
+    float3 topLevelRayDirection = data.hitObject.ray.direction;
 
     // Initialise transient traversal state
     uint lastNodePtr   = data.traversal.reservedNodePtr;
@@ -133,7 +133,7 @@ static void TraversalInternal2_0(
     if (data.traversal.instNodePtr != 0)
     {
         // Restore after AnyHit or Intersection was called
-        const GpuVirtualAddress nodeAddr64  = data.ray.AccelStruct() + ExtractNodePointerOffset(data.traversal.instNodePtr);
+        const GpuVirtualAddress nodeAddr64  = data.hitObject.ray.AccelStruct() + ExtractNodePointerOffset(data.traversal.instNodePtr);
         InstanceDesc desc                   = FetchInstanceDescAddr(nodeAddr64);
         bvhAddress                          = GetInstanceAddr(desc);
         instanceFlags                       = desc.InstanceContributionToHitGroupIndex_and_Flags >> 24;
@@ -155,11 +155,11 @@ static void TraversalInternal2_0(
     }
     else
     {
-        bvhAddress = data.ray.AccelStruct();
+        bvhAddress = data.hitObject.ray.AccelStruct();
     }
 
     // Shift 8-bit instance mask into upper 8-bits to align with instance mask from instance node
-    const uint instanceInclusionMask = ExtractInstanceInclusionMask(data.ray.traceParameters) << 24;
+    const uint instanceInclusionMask = ExtractInstanceInclusionMask(data.hitObject.ray.traceParameters) << 24;
 
     // Traverse acceleration structure while we have valid nodes to intersect. Note, the traversal routine is
     // re-entrant and AnyHit shaders may set nextNodePtr to invalid when AcceptHitAndEndSearch() is called.
@@ -295,7 +295,7 @@ static void TraversalInternal2_0(
                 bool hasAnyHit = false;
                 if ((rayForceOpaque == false) && (isOpaque == false))
                 {
-                    hasAnyHit = AnyHitIsNonNull(data.ray.traceParameters,
+                    hasAnyHit = AnyHitIsNonNull(data.hitObject.ray.traceParameters,
                                                 primitiveData.geometryIndex,
                                                 instanceContributionToHitGroupIndex);
                 }

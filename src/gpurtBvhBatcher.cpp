@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -295,11 +295,6 @@ void BvhBatcher::BuildMultiDispatch(Util::Span<BvhBuilder> builders)
         Barrier();
         BuildPhase(BuildPhaseFlags::Rebraid, builders, &BvhBuilder::Rebraid);
     }
-    if (PhaseEnabled(BuildPhaseFlags::BuildBVHTD))
-    {
-        Barrier();
-        BuildPhase(BuildPhaseFlags::BuildBVHTD, builders, &BvhBuilder::BuildBVHTD);
-    }
     if (PhaseEnabled(BuildPhaseFlags::GenerateMortonCodes))
     {
         Barrier();
@@ -382,11 +377,6 @@ void BvhBatcher::BuildMultiDispatch(Util::Span<BvhBuilder> builders)
         RadixSort(builders);
         RGP_POP_MARKER();
     }
-    if (PhaseEnabled(BuildPhaseFlags::BuildBVH))
-    {
-        Barrier();
-        BuildPhase(BuildPhaseFlags::BuildBVH, builders, &BvhBuilder::BuildBVH);
-    }
     if (PhaseEnabled(BuildPhaseFlags::BuildFastAgglomerativeLbvh))
     {
         Barrier();
@@ -400,11 +390,6 @@ void BvhBatcher::BuildMultiDispatch(Util::Span<BvhBuilder> builders)
         {
             builder.BuildPLOC(wavesPerSimd);
         });
-    }
-    if (PhaseEnabled(BuildPhaseFlags::RefitBounds))
-    {
-        Barrier();
-        BuildPhase(BuildPhaseFlags::RefitBounds, builders, &BvhBuilder::RefitBounds);
     }
     if (PhaseEnabled(BuildPhaseFlags::PairCompression))
     {
@@ -430,6 +415,7 @@ void BvhBatcher::DispatchInitAccelerationStructure(
     {
         .topLevelBuild               = IsTlas ? 1u : 0u,
         .enableBVHBuildDebugCounters = m_deviceSettings.enableBVHBuildDebugCounters,
+        .mortonFlags                 = m_deviceSettings.mortonFlags,
     };
 
     Util::MetroHash::Hash hash = {};
@@ -502,11 +488,10 @@ void BvhBatcher::DispatchInitAccelerationStructure(
 
             if constexpr (IsUpdate == false)
             {
-                // Early triangle pairing, triangle splitting and indirect BLAS builds dynamically increment
+                // Early triangle pairing and indirect BLAS builds dynamically increment
                 // primitive reference counter. Initialise counters to 0 when these features are enabled.
-                const bool dynamicallyIncrementsPrimRefCount = builder.m_buildConfig.enableEarlyPairCompression
-                    || builder.m_buildConfig.triangleSplitting
-                    || builder.m_buildSettings.isIndirectBuild;
+                const bool dynamicallyIncrementsPrimRefCount =
+                    builder.m_buildConfig.enableEarlyPairCompression || builder.m_buildSettings.isIndirectBuild;
                 const InitAccelerationStructure::Constants shaderConstants =
                 {
                     .maxNumPrimitives                     = builder.m_buildConfig.maxNumPrimitives,
@@ -514,7 +499,6 @@ void BvhBatcher::DispatchInitAccelerationStructure(
                     .sceneBoundsScratchOffset             = builder.m_scratchOffsets.sceneBounds,
                     .numBatchesScratchOffset              = builder.m_scratchOffsets.numBatches,
                     .rebraidTaskQueueCounterScratchOffset = builder.m_scratchOffsets.rebraidTaskQueueCounter,
-                    .tdTaskQueueCounterScratchOffset      = builder.m_scratchOffsets.tdTaskQueueCounter,
                     .plocTaskQueueCounterScratchOffset    = builder.m_scratchOffsets.plocTaskQueueCounter,
                     .encodeTaskCounterScratchOffset       = builder.m_scratchOffsets.encodeTaskCounter,
                     .taskLoopCountersOffset               = builder.m_scratchOffsets.taskLoopCounters,

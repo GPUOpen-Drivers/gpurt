@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2024-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -254,7 +254,7 @@ void CompactASImpl1_1(
     const uint triangleCompressionMode =
         (srcHeader.info >> ACCEL_STRUCT_HEADER_INFO_TRI_COMPRESS_SHIFT) & ACCEL_STRUCT_HEADER_INFO_TRI_COMPRESS_MASK;
 
-    AccelStructOffsets dstOffsets;
+    INIT_VAR(AccelStructOffsets, dstOffsets);
     const uint dstSizeInBytes = CalcCompactedSize(srcHeader,
                                                   (type == TOP_LEVEL),
                                                   dstOffsets,

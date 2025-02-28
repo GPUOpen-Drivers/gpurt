@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -46,13 +46,13 @@ inline uint64 GetInternalPsoHash(
             uint64 shaderType              : 18;
             uint64 topLevelBuild           : 1;
             uint64 buildMode               : 2;
-            uint64 reserved                : 1;
+            uint64 unused0                 : 1;
             uint64 triangleCompressionMode : 2;
-            uint64 doTriangleSplitting     : 1;
-            uint64 unused                  : 1;
+            uint64 unused1                 : 2;
             uint64 fp16BoxNodesMode        : 2;
             uint64 radixSortScanLevel      : 2;
-            uint64 rebraidType             : 2;
+            uint64 enableRebraid           : 1;
+            uint64 unused2                 : 1;
             uint64 hashPrefix              : 32;
         };
 
@@ -64,10 +64,9 @@ inline uint64 GetInternalPsoHash(
     hash.topLevelBuild           = buildSettings.topLevelBuild;
     hash.buildMode               = buildSettings.buildMode;
     hash.triangleCompressionMode = buildSettings.triangleCompressionMode;
-    hash.doTriangleSplitting     = buildSettings.doTriangleSplitting;
     hash.fp16BoxNodesMode        = buildSettings.fp16BoxNodesMode;
     hash.radixSortScanLevel      = buildSettings.radixSortScanLevel;
-    hash.rebraidType             = buildSettings.rebraidType;
+    hash.enableRebraid           = buildSettings.enableRebraid;
     hash.hashPrefix              = RayTracingPsoHashPrefix;
 
     return hash.u64All;

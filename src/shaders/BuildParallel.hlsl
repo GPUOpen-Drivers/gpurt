@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -50,6 +50,14 @@ T LoadInstanceDescBuffer(uint offset)
 #define MAX_ELEMENT_PER_THREAD 16
 #define MAX_LDS_ELEMENTS (MAX_ELEMENT_PER_THREAD * BUILD_THREADGROUP_SIZE)
 groupshared uint SharedMem[MAX_LDS_ELEMENTS];
+uint GetSharedMem(uint index)
+{
+    return SharedMem[index];
+}
+void SetSharedMem(uint index, uint value)
+{
+    SharedMem[index] = value;
+}
 
 #include "TaskQueueCounter.hlsl"
 
@@ -87,116 +95,31 @@ void WaitForEncodeTasksToFinish(
 #include "RadixSort/RadixSortParallel.hlsl"
 #include "BuildPLOC.hlsl"
 #include "BuildQBVH.hlsl"
-#include "BuildBVHTDTR.hlsl"
-#include "BuildBVH.hlsl"
 #include "BuildFastAgglomerativeLbvh.hlsl"
-#include "RefitBoundsImpl.hlsl"
-#include "TriangleSplitting.hlsl"
 #include "PairCompression.hlsl"
 #include "Rebraid.hlsl"
 #include "MergeSort.hlsl"
-
-//======================================================================================================================
-uint CurrentSplitState()
-{
-    return Settings.rebraidType == RebraidType::V2 ? ShaderConstants.offsets.rebraidState :
-                                                     ShaderConstants.offsets.triangleSplitState;
-}
-
-//======================================================================================================================
-uint CurrentSplitTaskQueueCounter()
-{
-    return Settings.rebraidType == RebraidType::V2 ? ShaderConstants.offsets.rebraidTaskQueueCounter :
-                                                     ShaderConstants.offsets.triangleSplitTaskQueueCounter;
-}
 
 //======================================================================================================================
 void GenerateMortonCodes(
     uint globalId,
     uint numPrimitives)
 {
-    const BoundingBox sceneBounds = FetchSceneBounds(ShaderConstants.offsets.sceneBounds);
-
-    const float3 sceneExtent = sceneBounds.max - sceneBounds.min;
-    const float3 sceneMin    = sceneBounds.min;
-
     const uint primCount = numPrimitives;
 
-    uint numSizeBits = ShaderConstants.numMortonSizeBits;
-
-    float2  sizeMinMax = float2(0, 0);
-
-    if (ShaderConstants.numMortonSizeBits > 0)
-    {
-        sizeMinMax = FetchSceneSize(ShaderConstants.offsets.sceneBounds);
-
-        if (sizeMinMax.x >= sizeMinMax.y)
-        {
-            numSizeBits = 0;
-        }
-    }
+    const MortonBoundingBox mortonBounds = FetchMortonBounds(ShaderConstants.offsets.sceneBounds, ShaderConstants.numMortonSizeBits);
 
     for (uint primitiveIndex = globalId; primitiveIndex < primCount; primitiveIndex += GetNumThreads())
     {
         GenerateMortonCodesImpl(
-            sceneMin,
-            sceneExtent,
+            mortonBounds.min,
+            mortonBounds.extent,
+            mortonBounds.sizeMinMax,
             primitiveIndex,
             ShaderConstants.offsets.bvhLeafNodeData,
             ShaderConstants.offsets.mortonCodes,
-            Settings.doTriangleSplitting,
-            ShaderConstants.offsets.triangleSplitBoxes,
-            Settings.enableVariableBitsMortonCode,
             Settings.useMortonCode30,
-            ShaderConstants.numMortonSizeBits,
-            sizeMinMax);
-    }
-}
-
-//======================================================================================================================
-void BuildBvhLinear(
-    uint globalId,
-    uint numActivePrims,
-    uint numPrimitives)
-{
-    const uint numInternalNodes = numActivePrims - 1;
-
-    for (uint nodeIndex = globalId; nodeIndex < numInternalNodes; nodeIndex += GetNumThreads())
-    {
-        SplitInternalNodeLbvh(
-            nodeIndex,
-            numActivePrims,
-            CalculateBvhNodesOffset(ShaderConstants, numActivePrims),
-            ShaderConstants.offsets.primIndicesSorted,
-            ShaderConstants.offsets.mortonCodesSorted,
-            Settings.useMortonCode30);
-    }
-}
-
-//======================================================================================================================
-void RefitBounds(
-    uint globalId,
-    uint numActivePrims)
-{
-    for (uint primIndex = globalId; primIndex < numActivePrims; primIndex += GetNumThreads())
-    {
-        RefitBoundsImpl(
-            primIndex,
-            numActivePrims,
-            ShaderConstants.offsets.propagationFlags,
-            CalculateBvhNodesOffset(ShaderConstants, numActivePrims),
-            ShaderConstants.offsets.bvhLeafNodeData,
-            ShaderConstants.offsets.primIndicesSorted,
-            Settings.doTriangleSplitting,
-            Settings.enableEarlyPairCompression,
-            EnableLatePairCompression(),
-            Settings.enablePairCostCheck,
-            ShaderConstants.offsets.triangleSplitBoxes,
-            ShaderConstants.offsets.numBatches,
-            ShaderConstants.offsets.batchIndices,
-            Settings.fp16BoxNodesMode,
-            Settings.fp16BoxModeMixedSaThreshold
-        );
+            mortonBounds.numSizeBits);
     }
 }
 
@@ -211,34 +134,6 @@ void FastAgglomerativeLbvh(
     {
         FastAgglomerativeLbvhImpl(primIndex, args);
     }
-}
-
-//======================================================================================================================
-void TriangleSplitting(
-    uint       globalId,
-    uint       localId,
-    uint       groupId)
-{
-    TriangleSplittingArgs args          = (TriangleSplittingArgs)0;
-
-    args.numThreadGroups                = ShaderRootConstants.NumThreadGroups();
-    args.numPrimitives                  = ShaderConstants.numPrimitives;
-    args.maxNumPrimitives               = ShaderConstants.maxNumPrimitives;
-    args.numSizeBits                    = ShaderConstants.numMortonSizeBits;
-    args.scratchLeafNodesScratchOffset  = ShaderConstants.offsets.bvhLeafNodeData;
-    args.splitBoxesScratchOffset        = ShaderConstants.offsets.triangleSplitBoxes;
-    args.refList0ScratchOffset          = ShaderConstants.offsets.triangleSplitRefs0;
-    args.refList1ScratchOffset          = ShaderConstants.offsets.triangleSplitRefs1;
-    args.splitPrioritiesScratchOffset   = ShaderConstants.offsets.splitPriorities;
-    args.currentStateScratchOffset      = CurrentSplitState();
-    args.taskQueueCounterScratchOffset  = CurrentSplitTaskQueueCounter();
-    args.atomicFlagsScratchOffset       = ShaderConstants.offsets.splitAtomicFlags;
-    args.dynamicBlockIndexScratchOffset = ShaderConstants.offsets.dynamicBlockIndex;
-    args.sceneBoundsByteOffset          = ShaderConstants.offsets.sceneBounds;
-    args.tsBudgetPerTriangle            = ShaderConstants.tsBudgetPerTriangle;
-    args.encodeTaskCounterScratchOffset = ShaderConstants.offsets.encodeTaskCounter;
-
-    TriangleSplittingImpl(globalId, localId, groupId, args);
 }
 
 //======================================================================================================================
@@ -266,7 +161,6 @@ void BuildPloc(
     plocArgs.fp16BoxNodesInBlasMode         = Settings.fp16BoxNodesMode;
     plocArgs.fp16BoxModeMixedSaThresh       = Settings.fp16BoxModeMixedSaThreshold;
     plocArgs.plocRadius                     = Settings.nnSearchRadius;
-    plocArgs.splitBoxesByteOffset           = ShaderConstants.offsets.triangleSplitBoxes;
     plocArgs.primIndicesSortedScratchOffset = ShaderConstants.offsets.primIndicesSorted;
     plocArgs.unsortedBvhLeafNodesOffset     = ShaderConstants.offsets.bvhLeafNodeData;
 
@@ -286,39 +180,15 @@ void Rebraid(
     args.maxNumPrims                        = ShaderConstants.rebraidFactor * ShaderConstants.numPrimitives;
     args.bvhLeafNodeDataScratchOffset       = ShaderConstants.offsets.bvhLeafNodeData;
     args.sceneBoundsOffset                  = ShaderConstants.offsets.sceneBounds;
-    args.stateScratchOffset                 = CurrentSplitState();
-    args.taskQueueCounterScratchOffset      = CurrentSplitTaskQueueCounter();
-    args.atomicFlagsScratchOffset           = ShaderConstants.offsets.splitAtomicFlags;
-    args.enableMortonSize                   = ShaderConstants.numMortonSizeBits > 0;
+    args.stateScratchOffset                 = ShaderConstants.offsets.rebraidState;
+    args.taskQueueCounterScratchOffset      = ShaderConstants.offsets.rebraidTaskQueueCounter;
+    args.atomicFlagsScratchOffset           = ShaderConstants.offsets.rebraidPrefixSumFlags;
+    args.enableMortonSize                   = IsMortonSizeBitsEnabled(ShaderConstants.numMortonSizeBits);
+    args.enableMortonCentroids              = IsCentroidMortonBoundsEnabled() || IsConciseMortonBoundsEnabled();
     args.numIterations                      = Settings.numRebraidIterations;
     args.qualityHeuristic                   = Settings.rebraidQualityHeuristic;
 
     RebraidImpl(globalId, localId, groupId, args);
-}
-
-//======================================================================================================================
-void BuildBvhTD(
-    uint       globalId,
-    uint       localId,
-    uint       groupId,
-    uint       numPrimitives)
-{
-    TDArgs args;
-
-    args.NumPrimitives                = numPrimitives;
-    args.NumThreads                   = GetNumThreads();
-    args.MaxRefCountSize              = numPrimitives * ShaderConstants.rebraidFactor;
-    args.LengthPercentage             = 0.1;
-    args.BvhNodeDataScratchOffset     = ShaderConstants.offsets.bvhNodeData;
-    args.BvhLeafNodeDataScratchOffset = ShaderConstants.offsets.bvhLeafNodeData;
-    args.SceneBoundsOffset            = ShaderConstants.offsets.sceneBounds;
-    args.RefScratchOffset             = ShaderConstants.offsets.tdRefs;
-    args.TDNodeScratchOffset          = ShaderConstants.offsets.tdNodeList;
-    args.TDBinsScratchOffset          = ShaderConstants.offsets.tdBins;
-    args.CurrentStateScratchOffset    = ShaderConstants.offsets.tdState;
-    args.TdTaskQueueCounterScratchOffset = ShaderConstants.offsets.tdTaskQueueCounter;
-
-    BuildBVHTDImpl(globalId, localId, groupId, args);
 }
 
 //======================================================================================================================
@@ -406,21 +276,17 @@ void InitAccelerationStructure()
         WriteTaskCounterData(
             ShaderConstants.offsets.encodeTaskCounter, ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET, 0);
 
-        // Early triangle pairing and triangle splitting dynamically increment primitive reference counter. Initialise
+        // Early triangle pairing and indirect builds dynamically increment primitive reference counter. Initialise
         // counters to 0 when these features are enabled
-
-        const bool dynamicallyIncrementsPrimRefCount =
-            Settings.enableEarlyPairCompression || Settings.doTriangleSplitting || Settings.isIndirectBuild;
-        const uint primRefInitCount =
-            (dynamicallyIncrementsPrimRefCount) ? 0 : ShaderConstants.numPrimitives;
+        const bool dynamicallyIncrementsPrimRefCount = Settings.enableEarlyPairCompression || Settings.isIndirectBuild;
+        const uint primRefInitCount = (dynamicallyIncrementsPrimRefCount) ? 0 : ShaderConstants.numPrimitives;
 
         WriteTaskCounterData(
             ShaderConstants.offsets.encodeTaskCounter, ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET, primRefInitCount);
 
         // Initialize valid scratch buffer counters to 0
         InitScratchCounter(ShaderConstants.offsets.plocTaskQueueCounter);
-        InitScratchCounter(ShaderConstants.offsets.tdTaskQueueCounter);
-        InitScratchCounter(CurrentSplitTaskQueueCounter());
+        InitScratchCounter(ShaderConstants.offsets.rebraidTaskQueueCounter);
         ClearNumBatches(ShaderConstants.offsets.numBatches);
 
         // Initialize scene bounds
@@ -509,11 +375,7 @@ void BuildBvh(
 
     DeviceMemoryBarrierWithGroupSync();
 
-    if (Settings.doTriangleSplitting)
-    {
-        TriangleSplitting(globalId, localId, groupId);
-    }
-    else if (Settings.rebraidType == RebraidType::V2)
+    if (Settings.enableRebraid)
     {
         Rebraid(globalId, localId, groupId);
     }
@@ -522,7 +384,6 @@ void BuildBvh(
     //
     // BLAS Default: Number of triangles processed by Encode.
     // BLAS EarlyPairCompression: Number of triangle references including paired triangles.
-    // BLAS TriangleSplitting: Number of split triangle references.
     // TLAS Default: Number of instances processed by Encode.
     // TLAS Rebraid: Number of rebraided instances created by the rebraid process.
     //
@@ -533,103 +394,68 @@ void BuildBvh(
 
     uint numActivePrims;
 
-    if (Settings.enableTopDownBuild)
-    {
-        BuildBvhTD(globalId, localId, groupId, numPrimitives);
+    BEGIN_TASK(ShaderRootConstants.NumThreadGroups());
 
-        numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+    GenerateMortonCodes(globalId, numPrimitives);
+
+    END_TASK(ShaderRootConstants.NumThreadGroups());
+    WriteDebugCounter(COUNTER_MORTONGEN_OFFSET);
+    numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
+
+    if (numActivePrims > 0)
+    {
+        if (Settings.enableMergeSort)
+        {
+            MergeSort(numTasksWait, waveId, localId, groupId, numPrimitives);
+        }
+        else
+        {
+            RadixSort(numTasksWait, waveId, globalId, localId, groupId, numPrimitives, Settings.radixSortScanLevel, Settings.useMortonCode30);
+        }
+        WriteDebugCounter(COUNTER_MORTON_SORT_OFFSET);
+        // Note there is an implicit sync on the last pass of the sort
+
+        // If the top down builder is off, the unsorted leaves will stay where the
+            // Encode step put them. On top of that, if TS or Rebraid is also on,
+            // there might be a gap between the last inner node and the first leaf
+            // if we place the root of the tree at ShaderConstants.offsets.bvhNodeData.
+        // To avoid that gap, the root is moved forward by numLeafNodes - numActivePrims
+        // nodes from this point onwards.
+
+        if (Settings.buildMode == BUILD_MODE_PLOC)
+        {
+            BuildPloc(numTasksWait, waveId, globalId, localId, groupId, numActivePrims);
+            WriteDebugCounter(COUNTER_BUILDPLOC_OFFSET);
+        }
+        else
+        {
+            BEGIN_TASK(ShaderRootConstants.NumThreadGroups());
+
+            FastAgglomerativeLbvh(globalId, numActivePrims);
+
+            END_TASK(ShaderRootConstants.NumThreadGroups());
+            WriteDebugCounter(COUNTER_BUILDFASTLBVH_OFFSET);
+        }
     }
-    else
+
+    if (numActivePrims > 0)
     {
-        bool needRefit = false;
+        const uint geometryType = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET);
 
-        BEGIN_TASK(ShaderRootConstants.NumThreadGroups());
-
-        GenerateMortonCodes(globalId, numPrimitives);
-
-        END_TASK(ShaderRootConstants.NumThreadGroups());
-        WriteDebugCounter(COUNTER_MORTONGEN_OFFSET);
-        numActivePrims = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET);
-
-        if (numActivePrims > 0)
+        if (EnableLatePairCompression() && (geometryType == GEOMETRY_TYPE_TRIANGLES))
         {
-            if (Settings.enableMergeSort)
-            {
-                MergeSort(numTasksWait, waveId, localId, groupId, numPrimitives);
-            }
-            else
-            {
-                RadixSort(numTasksWait, waveId, globalId, localId, groupId, numPrimitives, Settings.radixSortScanLevel, Settings.useMortonCode30);
-            }
-            WriteDebugCounter(COUNTER_MORTON_SORT_OFFSET);
-            // Note there is an implicit sync on the last pass of the sort
+            const uint numBatches = FetchNumBatches(ShaderConstants.offsets.numBatches);
 
-            // If the top down builder is off, the unsorted leaves will stay where the
-                // Encode step put them. On top of that, if TS or Rebraid is also on,
-                // there might be a gap between the last inner node and the first leaf
-                // if we place the root of the tree at ShaderConstants.offsets.bvhNodeData.
-            // To avoid that gap, the root is moved forward by numLeafNodes - numActivePrims
-            // nodes from this point onwards.
+            BEGIN_TASK(RoundUpQuotient(numBatches, BUILD_THREADGROUP_SIZE));
 
-            if (Settings.buildMode == BUILD_MODE_PLOC)
-            {
-                BuildPloc(numTasksWait, waveId, globalId, localId, groupId, numActivePrims);
-                WriteDebugCounter(COUNTER_BUILDPLOC_OFFSET);
-            }
-            else
-            {
-                if (Settings.enableFastLBVH == false)
-                {
-                    BEGIN_TASK(ShaderRootConstants.NumThreadGroups());
+            PairCompression(globalId, localId, numActivePrims);
 
-                    BuildBvhLinear(globalId, numActivePrims, numPrimitives);
-
-                    END_TASK(ShaderRootConstants.NumThreadGroups());
-                    WriteDebugCounter(COUNTER_BUILDLBVH_OFFSET);
-                    needRefit = true;
-                }
-                else
-                {
-                    BEGIN_TASK(ShaderRootConstants.NumThreadGroups());
-
-                    FastAgglomerativeLbvh(globalId, numActivePrims);
-
-                    END_TASK(ShaderRootConstants.NumThreadGroups());
-                    WriteDebugCounter(COUNTER_BUILDFASTLBVH_OFFSET);
-                }
-            }
+            END_TASK(RoundUpQuotient(numBatches, BUILD_THREADGROUP_SIZE));
         }
-
-        if (numActivePrims > 0)
-        {
-            if (needRefit)
-            {
-                BEGIN_TASK(ShaderRootConstants.NumThreadGroups());
-
-                RefitBounds(globalId, numActivePrims);
-
-                END_TASK(ShaderRootConstants.NumThreadGroups());
-
-                WriteDebugCounter(COUNTER_REFIT_OFFSET);
-            }
-
-            const uint geometryType = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET);
-
-            if (EnableLatePairCompression() && (geometryType == GEOMETRY_TYPE_TRIANGLES))
-            {
-                const uint numBatches = FetchNumBatches(ShaderConstants.offsets.numBatches);
-
-                BEGIN_TASK(RoundUpQuotient(numBatches, BUILD_THREADGROUP_SIZE));
-
-                PairCompression(globalId, localId, numActivePrims);
-
-                END_TASK(RoundUpQuotient(numBatches, BUILD_THREADGROUP_SIZE));
-            }
-        }
-        else if (Settings.topLevelBuild)
-        {
-            WriteDebugCounter(COUNTER_EMPTYPRIM_OFFSET);
-        }
+    }
+    else if (Settings.topLevelBuild)
+    {
+        WriteDebugCounter(COUNTER_EMPTYPRIM_OFFSET);
     }
 
     if (numActivePrims > 0)

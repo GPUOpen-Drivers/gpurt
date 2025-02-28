@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -47,6 +47,14 @@ T LoadInstanceDescBuffer(uint offset)
 
 #define MAX_LDS_ELEMENTS_PER_THREADGROUP (MAX_ELEMENTS_PER_THREAD * BUILD_THREADGROUP_SIZE)
 groupshared uint SharedMem[MAX_LDS_ELEMENTS_PER_THREADGROUP];
+uint GetSharedMem(uint index)
+{
+    return SharedMem[index];
+}
+void SetSharedMem(uint index, uint value)
+{
+    SharedMem[index] = value;
+}
 
 #include "BuildCommonScratch.hlsl"
 #endif
@@ -107,9 +115,7 @@ uint WriteInstanceNode(
     const uint instanceIndex = scratchNode.left_or_primIndex_or_instIndex;
 
     // When rebraiding is disabled the destination index is just the instance index.
-    const uint destIndex = (Settings.rebraidType != RebraidType::Off) ?
-                           (scratchNodeIndex - numActivePrims + 1) :
-                           instanceIndex;
+    const uint destIndex = (Settings.enableRebraid) ? (scratchNodeIndex - numActivePrims + 1) : instanceIndex;
 
     const uint numLeafsDoneOffset = ShaderConstants.offsets.qbvhGlobalStackPtrs + STACK_PTRS_NUM_LEAFS_DONE_OFFSET;
     ScratchGlobal.InterlockedAdd(numLeafsDoneOffset, 1);
@@ -120,11 +126,13 @@ uint WriteInstanceNode(
     }
 
     const uint nodePointer = PackNodePointer(NODE_TYPE_USER_NODE_INSTANCE, nodeOffset);
-    const InstanceDesc instanceDesc = LoadInstanceDesc(instanceIndex, LoadNumPrimAndOffset().primitiveOffset);
+    InstanceDesc instanceDesc = LoadInstanceDesc(instanceIndex, LoadNumPrimAndOffset().primitiveOffset);
 
     const uint blasRootNodePointer = scratchNode.splitBox_or_nodePointer;
     const uint blasMetadataSize = scratchNode.numPrimitivesAndDoCollapse;
     const uint geometryType = ExtractScratchNodeGeometryType(scratchNode.packedFlags);
+
+    CullIllegalInstances(blasMetadataSize, scratchNode, instanceDesc);
 
     {
         WriteInstanceNode1_1(instanceDesc,
@@ -231,8 +239,7 @@ static void InitBuildQBVHImpl(
 
         ScratchGlobal.Store<StackPtrs>(ShaderConstants.offsets.qbvhGlobalStackPtrs, stackPtrs);
 
-        const uint32_t rootNodeIndex =
-            FetchRootNodeIndex(Settings.enableFastLBVH, ShaderConstants.offsets.fastLBVHRootNodeIndex);
+        const uint rootNodeIndex = GetBvh2RootNodeIndex();
 
         if (IsDestIndexInStack())
         {
@@ -765,8 +772,7 @@ void BuildQBVHImpl(
     const AccelStructHeader  header  = DstBuffer.Load<AccelStructHeader>(0);
     const AccelStructOffsets offsets = header.offsets;
 
-    const uint rootNodeIndex =
-        FetchRootNodeIndex(Settings.enableFastLBVH, ShaderConstants.offsets.fastLBVHRootNodeIndex);
+    const uint rootNodeIndex = GetBvh2RootNodeIndex();
     const uint scratchNodesScratchOffset = CalculateBvhNodesOffset(ShaderConstants, numActivePrims);
     const uint metadataSizeInBytes = DstMetadata.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
 

@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2024-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -22,10 +22,12 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#ifndef _LANE_GROUP_HLSL
-#define _LANE_GROUP_HLSL
+#ifndef LANE_GROUP_HLSLI
+#define LANE_GROUP_HLSLI
 
-#include "../shadersClean/common/Extensions.hlsli"
+#include "Extensions.hlsli"
+#include "Bits.hlsli"
+#include "Common.hlsli"
 
 //=====================================================================================================================
 // The following is a wrapper structure for wave lanes groups. A lanes group is a set of lanes within a wave that
@@ -173,7 +175,7 @@ struct LaneGroup
         return WaveReadLaneAt(val, adjustedTargetLane);
     }
 
-    uint ExclusivePrefixSum(bool condition)
+    uint ExclusivePrefixSumBool(bool condition)
     {
         //  Ballot the condition across the group to get a bitmask.
         uint mask = Ballot(condition);
@@ -187,6 +189,16 @@ struct LaneGroup
         uint exclusiveSum = countbits(shiftedMask);
 
         return exclusiveSum;
+    }
+
+    template<typename T>
+    T ExclusivePrefixSum(T val)
+    {
+        T prefixSum          = WavePrefixSum(val);
+        T laneGroupBaseVal   = ReadFirstLane(prefixSum);
+        T laneGroupPrefixSum = prefixSum - laneGroupBaseVal;
+
+        return laneGroupPrefixSum;
     }
 };
 #endif

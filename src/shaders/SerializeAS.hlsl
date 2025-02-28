@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -47,8 +47,8 @@ struct InputArgs
 [[vk::binding(4, 0)]] RWByteAddressBuffer ScratchBuffer : register(u4);
 [[vk::binding(5, 0)]] RWByteAddressBuffer EmitBuffer    : register(u5);
 
-#include "Common.hlsl"
-#include "SerializeCommon.hlsl"
+#include "../shadersClean/common/Common.hlsli"
+#include "../shadersClean/common/SerializeDefs.hlsli"
 #include "DecodeCommon.hlsl"
 
 //=====================================================================================================================

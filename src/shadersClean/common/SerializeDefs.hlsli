@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -22,34 +22,38 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-// Include dependencies
-#include "Common.hlsl"
+#ifndef SERIALIZE_DEFS_HLSLI
+#define SERIALIZE_DEFS_HLSLI
 
-#define RootSig "RootConstants(num32BitConstants=2, b0, visibility=SHADER_VISIBILITY_ALL), "\
-                "UAV(u0, visibility=SHADER_VISIBILITY_ALL),"\
+// D3D12DDI_SERIALIZED_DATA_DRIVER_MATCHING_IDENTIFIER AMD GUID
+#define GPURT_AMD_GUID_0    0x445D18EA
+#define GPURT_AMD_GUID_1    0xB42547D8
+#define GPURT_AMD_GUID_2    0x867BA9A4
+#define GPURT_AMD_GUID_3    0x496A1A2E
 
-//=====================================================================================================================
-// 32 bit constants
-struct InputArgs
-{
-    uint size;
-    uint value;
-};
+// sizeof(D3D12DDI_GPU_VIRTUAL_ADDRESS)
+#define GPUVA_SIZE 8
 
-[[vk::push_constant]] ConstantBuffer<InputArgs> ShaderConstants : register(b0);
+// sizeof(D3D12DDI_SERIALIZED_DATA_DRIVER_MATCHING_IDENTIFIER)
+#define GUID_SIZE 32
 
-[[vk::binding(0, 0)]] RWStructuredBuffer<uint> BufferToClear : register(u0);
+// D3D12_SERIALIZED_ACCELERATION_STRUCTURE_HEADER
+#define SERIALIZED_AS_HEADER_SIZE (GUID_SIZE + (8 * 3))
 
-//=====================================================================================================================
-// Main Function : ClearBuffer
-//=====================================================================================================================
-[RootSignature(RootSig)]
-[numthreads(BUILD_THREADGROUP_SIZE, 1, 1)]
-void ClearBuffer(
-    in uint3 globalThreadId : SV_DispatchThreadID)
-{
-    if (globalThreadId.x < ShaderConstants.size)
-    {
-        BufferToClear[globalThreadId.x] = ShaderConstants.value;
-    }
-}
+#define SERIALIZED_AS_HEADER_SERIALIZED_SIZE_OFFSET   (GUID_SIZE)
+#define SERIALIZED_AS_HEADER_DESERIALIZED_SIZE_OFFSET (GUID_SIZE + 8)
+#define SERIALIZED_AS_HEADER_NUM_BLAS_PTRS_OFFSET     (GUID_SIZE + 16)
+
+// D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_TOOLS_VISUALIZATION_HEADER
+#define VISUALIZATION_HEADER_SIZE 8
+
+#define VISUALIZATION_HEADER_TYPE_OFFSET      0
+#define VISUALIZATION_HEADER_NUM_DESCS_OFFSET 4
+
+// D3D12_RAYTRACING_GEOMETRY_DESC
+#define GEOMETRY_DESC_SIZE 56
+
+#define GEOMETRY_DESC_TYPE_OFFSET  0 // D3D12_RAYTRACING_GEOMETRY_TYPE
+#define GEOMETRY_DESC_FLAGS_OFFSET 4 // D3D12_RAYTRACING_GEOMETRY_FLAGS
+
+#endif

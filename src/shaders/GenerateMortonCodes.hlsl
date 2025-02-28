@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -27,85 +27,97 @@
 #include "../shadersClean/common/ShaderDefs.hlsli"
 
 #include "../shadersClean/build/BuildRootSignature.hlsli"
+
+template<typename T>
+T LoadInstanceDescBuffer(uint offset)
+{
+    return InstanceDescBuffer.Load<T> (offset);
+}
+#include "IndirectArgBufferUtils.hlsl"
 #endif
 
 #include "BuildCommonScratch.hlsl"
 
 //=====================================================================================================================
 void GenerateMortonCodesImpl(
-    float3  sceneMin,
-    float3  sceneExtents,
+    float3  boundsMin,
+    float3  boundsExtent,
+    float2  sizeMinMax,
     uint    primitiveIndex,
     uint    leafNodesOffset,
     uint    mortonCodesOffset,
-    uint    doTriangleSplitting,
-    uint    splitBoxesOffset,
-    uint    enableVariableBits,
     uint    useMortonCode30,
-    uint    numSizeBits,
-    float2  sizeMinMax)
+    uint    numSizeBits)
 {
     ScratchNode node = FetchScratchNode(leafNodesOffset, primitiveIndex);
 
-    if (IsNodeActive(node))
+    if (useMortonCode30)
     {
-        // Calculate the scene-normalized position of the center of the current bounding box.
-        // This is required for the morton code generation.
-        const BoundingBox bounds = GetScratchNodeBoundingBox(node,
-                                                             true,
-                                                             doTriangleSplitting,
-                                                             splitBoxesOffset,
-                                                             Settings.enableEarlyPairCompression,
-                                                             leafNodesOffset);
-
-        const bool isDegenerate = IsInvalidBoundingBox(bounds);
-
-        const float3 center = (0.5 * (bounds.max + bounds.min));
-        float3 normalizedPos = ((center - sceneMin) / sceneExtents);
-
-        // TODO: optimize this based on instance transform or primitive centroid
-        if (isDegenerate)
+        uint mortonCode = UINT32_MAX;
+        if (IsNodeActive(node))
         {
-            normalizedPos = float3(0.5, 0.5, 0.5);
-        }
+            const BoundingBox primitiveBounds = GetScratchNodeBoundingBox(node,
+                                                                          true,
+                                                                          Settings.enableEarlyPairCompression,
+                                                                          leafNodesOffset);
 
-        if (useMortonCode30)
-        {
-            const uint mortonCode = CalculateMortonCode32(normalizedPos, sceneExtents, enableVariableBits);
-            WriteMortonCode(mortonCodesOffset, primitiveIndex, mortonCode);
-        }
-        else
-        {
-            const float surfaceArea = ComputeBoxSurfaceArea(bounds);
+            const float3 position = 0.5f * (primitiveBounds.max + primitiveBounds.min);
 
-            uint64_t mortonCode = CalculateMortonCode64(
-                normalizedPos, sceneExtents, surfaceArea, sizeMinMax, numSizeBits, enableVariableBits);
+            float3 normalizedPos = clamp((position - boundsMin) / boundsExtent, 0.0f, 1.0f);
 
-            // To address the bug in MergeSort().
-            if (mortonCode == 0x7FFFFFFFFFFFFFFF)
+            // TODO: optimize degenerates based on instance transform or primitive centroid
+            if (IsInvalidBoundingBox(primitiveBounds))
             {
-                mortonCode = 0x7FFFFFFFFFFFFFFE;
+                normalizedPos = float3(0.5f, 0.5f, 0.5f);
             }
 
-            WriteMortonCode64(mortonCodesOffset, primitiveIndex, mortonCode);
-        }
+            mortonCode = CalculateMortonCode32(normalizedPos, boundsExtent);
 
-        IncrementAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, 1);
+            // If we generated an invalid morton, make it "valid" so we don't lose the primitive
+            if (mortonCode == UINT32_MAX)
+            {
+                mortonCode = UINT32_MAX - 1U;
+            }
+
+            IncrementAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, 1);
+        }
+        WriteMortonCode(mortonCodesOffset, primitiveIndex, mortonCode);
     }
     else
     {
-        if (useMortonCode30)
+        uint64_t mortonCode = 0xFFFFFFFFFFFFFFFEULL;
+        if (IsNodeActive(node))
         {
-            WriteMortonCode(mortonCodesOffset, primitiveIndex, INT_MAX);
+            const BoundingBox primitiveBounds = GetScratchNodeBoundingBox(node,
+                                                                          true,
+                                                                          Settings.enableEarlyPairCompression,
+                                                                          leafNodesOffset);
+            const float surfaceArea = ComputeBoxSurfaceArea(primitiveBounds);
+            const float3 position = 0.5f * (primitiveBounds.max + primitiveBounds.min);
+
+            mortonCode = CalculateMortonCode64(
+                boundsMin,
+                boundsExtent,
+                sizeMinMax,
+                position,
+                surfaceArea,
+                IsInvalidBoundingBox(primitiveBounds),
+                numSizeBits
+            );
+
+            // If we generated an invalid morton, make it "valid" so we don't lose the primitive
+            if (mortonCode > 0xFFFFFFFFFFFFFFFEULL)
+            {
+                mortonCode = 0xFFFFFFFFFFFFFFFEULL;
+            }
+
+            IncrementAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET, 1);
         }
-        else
-        {
-            WriteMortonCode64(mortonCodesOffset, primitiveIndex, 0x7FFFFFFFFFFFFFFE);
-        }
+        WriteMortonCode64(mortonCodesOffset, primitiveIndex, mortonCode);
     }
 
     // Clear refit propagation flags for each leaf node in BVH2.
-    const uint initValue = (Settings.enableFastLBVH ? 0xffffffffu : 0);
+    const uint initValue = (UsesFastLbvhLayout() ? 0xffffffffu : 0);
     const uint flagOffset = ShaderConstants.offsets.propagationFlags + (primitiveIndex * sizeof(uint));
     ScratchBuffer.Store(flagOffset, initValue);
 }
@@ -126,23 +138,17 @@ void GenerateMortonCodes(
 
     if (primitiveIndex < numPrimitives)
     {
-        const BoundingBox sceneBounds = FetchSceneBounds(ShaderConstants.offsets.sceneBounds);
-
-        const float3 sceneExtent = sceneBounds.max - sceneBounds.min;
-        const float3 sceneMin    = sceneBounds.min;
+        MortonBoundingBox mortonBounds = FetchMortonBounds(ShaderConstants.offsets.sceneBounds, ShaderConstants.numMortonSizeBits);
 
         GenerateMortonCodesImpl(
-            sceneMin,
-            sceneExtent,
+            mortonBounds.min,
+            mortonBounds.extent,
+            mortonBounds.sizeMinMax,
             primitiveIndex,
             ShaderConstants.offsets.bvhLeafNodeData,
             ShaderConstants.offsets.mortonCodes,
-            Settings.doTriangleSplitting,
-            ShaderConstants.offsets.triangleSplitBoxes,
-            Settings.enableVariableBitsMortonCode,
             Settings.useMortonCode30,
-            0,
-            float2(0, 0));
+            mortonBounds.numSizeBits);
     }
 }
 #endif

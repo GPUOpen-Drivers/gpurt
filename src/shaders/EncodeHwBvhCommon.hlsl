@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -63,8 +63,6 @@ BoundingBox GetScratchNodeBoundingBoxTS(
 
     return GetScratchNodeBoundingBox(node,
                                      isLeafNode,
-                                     Settings.doTriangleSplitting,
-                                     ShaderConstants.offsets.triangleSplitBoxes,
                                      enablePairCompression,
                                      baseScratchNodesOffset);
 }
@@ -133,7 +131,7 @@ void PostHwBvhBuild(
 
         // Unused
         uint metadataSizeInBytes = 0;
-        AccelStructOffsets offsets;
+        INIT_VAR(AccelStructOffsets, offsets);
 
         // Calculate compacted size
         uint compactedSize = CalcCompactedSize(header,
@@ -152,6 +150,29 @@ void PostHwBvhBuild(
             EmitBuffer.Store2(0, uint2(compactedSize, 0));
         }
 
+    }
+}
+
+//=====================================================================================================================
+//
+void CullIllegalInstances(
+    in    uint         blasMetadataSize,
+    in    ScratchNode  scratchNode,
+    inout InstanceDesc instanceDesc)
+{
+    if (Settings.cullIllegalInstances == true)
+    {
+        const GpuVirtualAddress blasBaseAddr = (blasMetadataSize +
+            MakeGpuVirtualAddress(instanceDesc.accelStructureAddressLo, instanceDesc.accelStructureAddressHiAndFlags));
+
+        const GpuVirtualAddress expectedBlasBaseAddr = GetInstanceAddr(asuint(scratchNode.sah_or_v2_or_instBasePtr.x),
+                                                                       asuint(scratchNode.sah_or_v2_or_instBasePtr.y));
+
+        if (blasBaseAddr != expectedBlasBaseAddr)
+        {
+            // Force instance inclusion mask to 0 so that the illegal instance is culled out during traversal.
+            instanceDesc.InstanceID_and_Mask &= bits(24);
+        }
     }
 }
 

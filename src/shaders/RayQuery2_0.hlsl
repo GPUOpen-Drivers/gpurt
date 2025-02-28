@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -338,17 +338,6 @@ static bool RayQueryProceedImpl2_0(
                                           rayQuery.candidate.direction,
                                           rcp(rayQuery.candidate.direction));
 
-#if GPURT_ENABLE_GPU_DEBUG
-        // Check if the child pointers returned are valid.
-        if (IsBoxNode1_1(nodePointer))
-        {
-            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.x, bvhAddress, topBvhAddress);
-            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.y, bvhAddress, topBvhAddress);
-            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.z, bvhAddress, topBvhAddress);
-            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.w, bvhAddress, topBvhAddress);
-        }
-#endif
-
         rayQuery.currNodePtr = INVALID_NODE;
 
         // Check if it is an internal node
@@ -572,6 +561,17 @@ static bool RayQueryProceedImpl2_0(
         else if (EnableTraversalCounter() && IsBoxNode1_1(rayQuery.prevNodePtr))
         {
             rayQuery.numRayBoxTest++;
+        }
+#endif
+
+#if GPURT_ENABLE_GPU_DEBUG
+        // Check if the child pointers returned are valid.
+        if (IsBoxNode1_1(nodePointer))
+        {
+            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.x, bvhAddress, topBvhAddress);
+            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.y, bvhAddress, topBvhAddress);
+            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.z, bvhAddress, topBvhAddress);
+            OutOfRangeNodePointerAssert(GPURT_RTIP2_0, intersectionResult.w, bvhAddress, topBvhAddress);
         }
 #endif
 
