@@ -50,6 +50,20 @@
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_EARLY_PAIR_COMPRESSION_ID)]]          uint enableEarlyPairCompression    = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_RTIP_LEVEL_ID)]]                             uint rtIpLevel                     = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_GEOMETRY_TYPE_ID)]]                          uint geometryType                  = 0;
+#if GPURT_BUILD_RTIP3
+[[vk::constant_id(BUILD_SETTINGS_DATA_HIGH_PRECISION_BOX_NODE_ENABLE_ID)]]         uint highPrecisionBoxNodeEnable    = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_BVH8_ENABLE_ID)]]                            uint bvh8Enable                    = 0;
+#endif
+#if GPURT_BUILD_RTIP3_1
+[[vk::constant_id(BUILD_SETTINGS_DATA_PRIM_COMPRESSION_FLAGS_ID)]]                 uint primCompressionFlags          = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_ORIENTED_BOUNDING_BOXES_ID)]]         uint enableOrientedBoundingBoxes   = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_OBB_NUM_LEVELS_ID)]]                         uint obbNumLevels                  = 0xFFFFFFFF;
+[[vk::constant_id(BUILD_SETTINGS_DATA_INSTANCE_MODE_ID)]]                          uint instanceMode                  = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_MAX_PRIM_RANGE_SIZE_ID)]]                    uint maxPrimRangeSize              = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_BOX_SPLITTING_FLAGS_ID)]]                    uint boxSplittingFlags             = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_BVH_CHANNEL_REBALANCING_ID)]]         uint enableBvhChannelBalancing     = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_TLAS_REFITTING_MODE)]]                       uint tlasRefittingMode             = 0;
+#endif
 [[vk::constant_id(BUILD_SETTINGS_DATA_ENABLE_INSTANCE_REBRAID_ID)]]                uint enableInstanceRebraid         = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_GPU_DEBUG_FLAGS_ID)]]                        uint gpuDebugFlags                 = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_UPDATE_FLAGS_ID)]]                           uint updateFlags                   = 0;
@@ -59,6 +73,10 @@
 [[vk::constant_id(BUILD_SETTINGS_DATA_REBRAID_QUALITY_HEURISTIC_ID)]]              uint rebraidQualityHeuristic       = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_DISABLE_COMPACTION_ID)]]                     uint disableCompaction             = 0;
 [[vk::constant_id(BUILD_SETTINGS_DATA_DISABLE_DEGEN_PRIMS_ID)]]                    uint disableDegenPrims             = 0;
+#if GPURT_BUILD_RTIP3_1
+[[vk::constant_id(BUILD_SETTINGS_DATA_REBRAID_OPEN_SA_FACTOR_ID)]]                 float rebraidOpenSAFactor          = 0;
+[[vk::constant_id(BUILD_SETTINGS_DATA_REBRAID_OPEN_MIN_PRIMS_ID)]]                 uint rebraidOpenMinPrims           = 0;
+#endif
 
 static const CompileTimeBuildSettings Settings = {
     topLevelBuild,
@@ -89,6 +107,23 @@ static const CompileTimeBuildSettings Settings = {
     0,
     rtIpLevel,
     geometryType,
+#if GPURT_BUILD_RTIP3
+    highPrecisionBoxNodeEnable,
+    bvh8Enable,
+#else
+    0,
+    0,
+#endif
+#if GPURT_BUILD_RTIP3_1
+    primCompressionFlags,
+    enableOrientedBoundingBoxes,
+    obbNumLevels,
+    instanceMode,
+    maxPrimRangeSize,
+    boxSplittingFlags,
+    enableBvhChannelBalancing,
+    tlasRefittingMode,
+#else
     0,
     0,
     0,
@@ -97,8 +132,7 @@ static const CompileTimeBuildSettings Settings = {
     0,
     0,
     0,
-    0,
-    0,
+#endif
     enableInstanceRebraid,
     gpuDebugFlags,
     updateFlags,
@@ -110,8 +144,13 @@ static const CompileTimeBuildSettings Settings = {
     0,
     disableCompaction,
     disableDegenPrims,
+#if GPURT_BUILD_RTIP3_1
+    rebraidOpenSAFactor,
+    rebraidOpenMinPrims,
+#else
     0,
     0,
+#endif
 };
 
 #endif

@@ -41,6 +41,36 @@ typedef uint64_t uint64;
 #define constexpr static const
 #endif
 
+#if GPURT_BUILD_RTIP3_1
+namespace PrimCompFlags
+{
+    static const uint32 MultiPrim                   = 1;
+    static const uint32 Reserved                    = 2;
+    static const uint32 EnableTrailingZeroAndPrefix = 4;
+    static const uint32 reserved1                   = 8;
+};
+
+// Intersectable instance node mode
+namespace InstanceMode
+{
+    static const uint32 Passthrough   = 0;
+    static const uint32 FilterNode    = 1;
+    static const uint32 VariableArity = 2;
+} // namespace InstanceMode
+
+namespace BoxSplittingFlags
+{
+    static const uint32 Instance = 1;
+}
+
+namespace TlasRefittingMode
+{
+    static const uint32 Disabled = 0;
+    static const uint32 Early = 1;
+    static const uint32 Late  = 2;
+}
+#endif
+
 namespace GpuDebugFlags
 {
     static const uint32 HostAssert = 1;
@@ -90,8 +120,23 @@ struct CompileTimeBuildSettings
     uint32 unused6;
     uint32 rtIpLevel;
     uint32 geometryType;
+#if GPURT_BUILD_RTIP3
+    uint32 highPrecisionBoxNodeEnable;
+    uint32 bvh8Enable;
+#else
     uint32 reserved2;
     uint32 reserved3;
+#endif
+#if GPURT_BUILD_RTIP3_1
+    uint32 primCompressionFlags;
+    uint32 enableOrientedBoundingBoxes;
+    uint32 obbNumLevels;
+    uint32 instanceMode;
+    uint32 maxPrimRangeSize;
+    uint32 boxSplittingFlags;
+    uint32 enableBvhChannelBalancing;
+    uint32 tlasRefittingMode;
+#else
     uint32 reserved4;
     uint32 reserved5;
     uint32 reserved6;
@@ -100,6 +145,7 @@ struct CompileTimeBuildSettings
     uint32 reserved9;
     uint32 reserved10;
     uint32 reserved11;
+#endif
     uint32 enableInstanceRebraid;
     uint32 gpuDebugFlags;
     uint32 updateFlags;
@@ -111,8 +157,13 @@ struct CompileTimeBuildSettings
     uint32 reserved13;
     uint32 disableCompaction;
     uint32 disableDegenPrims;
+#if GPURT_BUILD_RTIP3_1
+    float  rebraidOpenSAFactor;
+    uint32 rebraidOpenMinPrims;
+#else
     uint32 reserved14;
     uint32 reserved15;
+#endif
 };
 
 #define BUILD_SETTINGS_DATA_TOP_LEVEL_BUILD_ID                        0
@@ -143,6 +194,20 @@ struct CompileTimeBuildSettings
 // unused6 id                                                         25
 #define BUILD_SETTINGS_DATA_RTIP_LEVEL_ID                             26
 #define BUILD_SETTINGS_DATA_GEOMETRY_TYPE_ID                          27
+#if GPURT_BUILD_RTIP3
+#define BUILD_SETTINGS_DATA_HIGH_PRECISION_BOX_NODE_ENABLE_ID         28
+#define BUILD_SETTINGS_DATA_BVH8_ENABLE_ID                            29
+#endif
+#if GPURT_BUILD_RTIP3_1
+#define BUILD_SETTINGS_DATA_PRIM_COMPRESSION_FLAGS_ID                 30
+#define BUILD_SETTINGS_DATA_ENABLE_ORIENTED_BOUNDING_BOXES_ID         31
+#define BUILD_SETTINGS_DATA_OBB_NUM_LEVELS_ID                         32
+#define BUILD_SETTINGS_DATA_INSTANCE_MODE_ID                          33
+#define BUILD_SETTINGS_DATA_MAX_PRIM_RANGE_SIZE_ID                    34
+#define BUILD_SETTINGS_DATA_BOX_SPLITTING_FLAGS_ID                    35
+#define BUILD_SETTINGS_DATA_ENABLE_BVH_CHANNEL_REBALANCING_ID         36
+#define BUILD_SETTINGS_DATA_TLAS_REFITTING_MODE                       37
+#endif
 #define BUILD_SETTINGS_DATA_ENABLE_INSTANCE_REBRAID_ID                38
 #define BUILD_SETTINGS_DATA_GPU_DEBUG_FLAGS_ID                        39
 #define BUILD_SETTINGS_DATA_UPDATE_FLAGS_ID                           40
@@ -152,6 +217,10 @@ struct CompileTimeBuildSettings
 #define BUILD_SETTINGS_DATA_REBRAID_QUALITY_HEURISTIC_ID              44
 #define BUILD_SETTINGS_DATA_DISABLE_COMPACTION_ID                     47
 #define BUILD_SETTINGS_DATA_DISABLE_DEGEN_PRIMS_ID                    48
+#if GPURT_BUILD_RTIP3_1
+#define BUILD_SETTINGS_DATA_REBRAID_OPEN_SA_FACTOR_ID                 49
+#define BUILD_SETTINGS_DATA_REBRAID_OPEN_MIN_PRIMS_ID                 50
+#endif
 
 #ifdef __cplusplus
 } // namespace GpuRt

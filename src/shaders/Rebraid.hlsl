@@ -91,12 +91,23 @@ void FetchBlasRootChildInfo(
     out_param(BoundingBox) bbox[4],
     out_param(uint4)       child)
 {
+#if GPURT_BUILD_RTIP3_1
+    if (EnableCompressedFormat())
+    {
+        // Multi-level rebraid is not supported, so nodePtr is unused.
+        DecodeRebraidChildInfoBVH4(blasBaseAddr, bbox, child);
+    }
+    else
+#endif
     {
         Float32BoxNode node;
 
         if (GetNodeType(nodePtr) == NODE_TYPE_BOX_FLOAT32)
         {
             node = FetchFloat32BoxNode(blasBaseAddr,
+#if GPURT_BUILD_RTIP3
+                                       Settings.highPrecisionBoxNodeEnable,
+#endif
                                        nodePtr);
         }
         else
@@ -194,6 +205,9 @@ void RebraidImpl(
 
     // more than 1 iteration is not yet supported
     // since only the first level is up to 4 children
+#if GPURT_BUILD_RTIP3_1
+    args.numIterations = 1;
+#endif
 
     while (1)
     {
@@ -226,6 +240,9 @@ void RebraidImpl(
                         WriteFlagsDLB(args.atomicFlagsScratchOffset, stage, type, flags);
                     }
                 }
+#if GPURT_BUILD_RTIP3_1
+                if(EnableNonPrioritySortingRebraid() == false)
+#endif
                 {
                     if (iterationCount == 0)
                     {
@@ -328,6 +345,9 @@ void RebraidImpl(
                     const ScratchNode leaf = FetchScratchNode(args.bvhLeafNodeDataScratchOffset, i);
 
                     bool isOpen = false;
+#if GPURT_BUILD_RTIP3_1
+                    if (EnableNonPrioritySortingRebraid() == false)
+#endif
                     {
                         if (IsNodeActive(leaf) && (globalSum != 0))
                         {
@@ -372,6 +392,28 @@ void RebraidImpl(
                             }
                         }
                     }
+#if GPURT_BUILD_RTIP3_1
+                    else
+                    {
+                        if (IsNodeActive(leaf))
+                        {
+                            isOpen = (leaf.splitBox_or_nodePointer == 0);
+
+                            if (isOpen)
+                            {
+                                const uint64_t instanceBasePointer =
+                                    PackUint64(asuint(leaf.sah_or_v2_or_instBasePtr.x),
+                                               asuint(leaf.sah_or_v2_or_instBasePtr.y));
+
+                                const uint childCount =
+                                    GetBlasRebraidChildCount(instanceBasePointer, rootNodePointer);
+
+                                localKeys[keyIndex] = childCount - 1; // Additional children
+                                open[keyIndex] = true;
+                            }
+                        }
+                    }
+#endif
 
                     if (isOpen == false)
                     {
@@ -561,6 +603,9 @@ void RebraidImpl(
                         }
                         else // no openings
                         {
+#if GPURT_BUILD_RTIP3_1
+                            if (EnableNonPrioritySortingRebraid() == false)
+#endif
                             {
                                 // last iteration
                                 if (iterationCount == (args.numIterations - 1))
@@ -613,6 +658,23 @@ void RebraidImpl(
                                     }
                                 }
                             }
+#if GPURT_BUILD_RTIP3_1
+                            else
+                            {
+                                const BoundingBox aabb = GetScratchNodeInstanceBounds(leaf);
+
+                                // We have to update the scene size and centroid bounds during opening
+                                // as primitives could get smaller and centroid bounds could get larger
+                                if (args.enableMortonSize)
+                                {
+                                    UpdateSceneSize(args.sceneBoundsOffset, aabb);
+                                }
+                                if (args.enableMortonCentroids)
+                                {
+                                    UpdateCentroidBounds(args.sceneBoundsOffset, aabb);
+                                }
+                            }
+#endif
                             }
                     }
 
@@ -641,6 +703,9 @@ void RebraidImpl(
                     }
                 }
 
+#if GPURT_BUILD_RTIP3_1
+                if (EnableNonPrioritySortingRebraid() == false)
+#endif
                 {
 
                     // create sum for next iteration

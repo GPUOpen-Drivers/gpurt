@@ -26,6 +26,14 @@
 #include "RayQuery1_1.hlsl"
 #include "RayQuery2_0.hlsl"
 
+#if GPURT_BUILD_RTIP3
+#include "RayQuery3_0.hlsl"
+#endif
+
+#if GPURT_BUILD_RTIP3_1
+#include "RayQuery3_1.hlsl"
+#endif
+
 //=====================================================================================================================
 // TraceRayInline() internal
 static void TraceRayInlineCommon(
@@ -61,6 +69,30 @@ static void TraceRayInlineCommon(
                                   rayDesc,
                                   dispatchThreadId);
             break;
+#if GPURT_BUILD_RTIP3
+        case GPURT_RTIP3_0:
+            TraceRayInlineImpl3_0(rayQuery,
+                                  accelStructLo,
+                                  accelStructHi,
+                                  constRayFlags,
+                                  rayFlags,
+                                  instanceMask,
+                                  rayDesc,
+                                  dispatchThreadId);
+            break;
+#endif
+#if GPURT_BUILD_RTIP3_1
+        case GPURT_RTIP3_1:
+            TraceRayInlineImpl3_1(rayQuery,
+                                  accelStructLo,
+                                  accelStructHi,
+                                  constRayFlags,
+                                  rayFlags,
+                                  instanceMask,
+                                  rayDesc,
+                                  dispatchThreadId);
+            break;
+#endif
         default:
             break;
     }
@@ -73,6 +105,9 @@ static bool RayQueryProceedCommon(
     in    uint                    constRayFlags,
     in    uint3                   dispatchThreadId,
     in    uint                    rtIpLevel
+#if GPURT_BUILD_RTIP3
+  , in    bool                    isBVH8
+#endif
 )
 {
     bool continueTraversal = false;
@@ -89,6 +124,32 @@ static bool RayQueryProceedCommon(
                                                        constRayFlags,
                                                        dispatchThreadId);
             break;
+#if GPURT_BUILD_RTIP3
+        case GPURT_RTIP3_0:
+            if (isBVH8)
+            {
+                continueTraversal = RayQueryProceedImpl3_0BVH8(
+                    rayQuery,
+                    constRayFlags,
+                    dispatchThreadId);
+            }
+            else
+            {
+                continueTraversal = RayQueryProceedImpl3_0(
+                    rayQuery,
+                    constRayFlags,
+                    dispatchThreadId);
+            }
+            break;
+#endif
+#if GPURT_BUILD_RTIP3_1
+        case GPURT_RTIP3_1:
+            continueTraversal = RayQueryProceedImpl3_1(
+                rayQuery,
+                constRayFlags,
+                dispatchThreadId);
+            break;
+#endif
         default:
             break;
     }

@@ -61,6 +61,27 @@ void UpdateParentPointerAndChildPointer(
         }
     }
 
+#if GPURT_BUILD_RTIP3
+    const AccelStructHeader srcHeader = SrcBuffer.Load<AccelStructHeader>(srcMetadataSizeInBytes);
+    const bool enableFloat32x2 = (srcHeader.UsesHighPrecisionBoxNode() == false) && srcHeader.UsesBVH8();
+
+    if (enableFloat32x2)
+    {
+        const uint parentChildPointers2[4] =
+            SrcBuffer.Load<uint[4]>(parentNodeOffset + sizeof(Float32BoxNode) + srcMetadataSizeInBytes);
+
+        for (uint childIndex = 0; childIndex < 4; childIndex++)
+        {
+            if (srcNodePointer == parentChildPointers2[childIndex])
+            {
+                DstMetadata.Store(
+                    parentNodeOffset + sizeof(Float32BoxNode) + dstMetadataSizeInBytes + (childIndex * sizeof(uint)),
+                    dstNodePointer);
+                break;
+            }
+        }
+    }
+#endif
 }
 
 //=====================================================================================================================
@@ -78,22 +99,50 @@ void CopyFp16BoxNode(
     const Float16BoxNode node = SrcBuffer.Load<Float16BoxNode>(srcInternalNodeDataOffset);
 
     // Skip leaf child pointers because they will be updated while copying leaf nodes
+#if GPURT_BUILD_RTIP3_1
+    if ((node.child0 == INVALID_IDX) || IsBoxNode(node.child0, false, false, false))
+#elif GPURT_BUILD_RTIP3
+    // HighPrecisionBoxNode can't be enabled the same time if FP16 is enabled.
+    if ((node.child0 == INVALID_IDX) || IsBoxNode(node.child0, false, false))
+#else
     if ((node.child0 == INVALID_IDX) || IsBoxNode(node.child0))
+#endif
     {
         DstMetadata.Store(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_CHILD0_OFFSET, node.child0);
     }
 
+#if GPURT_BUILD_RTIP3_1
+    if ((node.child1 == INVALID_IDX) || IsBoxNode(node.child1, false, false, false))
+#elif GPURT_BUILD_RTIP3
+    // HighPrecisionBoxNode can't be enabled the same time if FP16 is enabled.
+    if ((node.child1 == INVALID_IDX) || IsBoxNode(node.child1, false, false))
+#else
     if ((node.child1 == INVALID_IDX) || IsBoxNode(node.child1))
+#endif
     {
         DstMetadata.Store(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_CHILD1_OFFSET, node.child1);
     }
 
+#if GPURT_BUILD_RTIP3_1
+    if ((node.child2 == INVALID_IDX) || IsBoxNode(node.child2, false, false, false))
+#elif GPURT_BUILD_RTIP3
+    // HighPrecisionBoxNode can't be enabled the same time if FP16 is enabled.
+    if ((node.child2 == INVALID_IDX) || IsBoxNode(node.child2, false, false))
+#else
     if ((node.child2 == INVALID_IDX) || IsBoxNode(node.child2))
+#endif
     {
         DstMetadata.Store(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_CHILD2_OFFSET, node.child2);
     }
 
+#if GPURT_BUILD_RTIP3_1
+    if ((node.child3 == INVALID_IDX) || IsBoxNode(node.child3, false, false, false))
+#elif GPURT_BUILD_RTIP3
+    // HighPrecisionBoxNode can't be enabled the same time if FP16 is enabled.
+    if ((node.child3 == INVALID_IDX) || IsBoxNode(node.child3, false, false))
+#else
     if ((node.child3 == INVALID_IDX) || IsBoxNode(node.child3))
+#endif
     {
         DstMetadata.Store(dstInternalNodeDataOffset + FLOAT16_BOX_NODE_CHILD3_OFFSET, node.child3);
     }
@@ -128,22 +177,47 @@ void CopyFp32BoxNode(
 
     // Skip leaf child pointers because they will be updated while copying leaf nodes
 
+#if GPURT_BUILD_RTIP3_1
+    if ((node.child0 == INVALID_IDX) || IsBoxNode(node.child0, false, Settings.bvh8Enable, false))
+#elif GPURT_BUILD_RTIP3
+    // CopyFp32BoxNode is not called when HighPrecisionBoxNode is enabled.
+    if ((node.child0 == INVALID_IDX) || IsBoxNode(node.child0, false, Settings.bvh8Enable))
+#else
     if ((node.child0 == INVALID_IDX) || IsBoxNode(node.child0))
+#endif
     {
         DstMetadata.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_CHILD0_OFFSET, node.child0);
     }
 
+#if GPURT_BUILD_RTIP3_1
+    if ((node.child1 == INVALID_IDX) || IsBoxNode(node.child1, false, Settings.bvh8Enable, false))
+#elif GPURT_BUILD_RTIP3
+    if ((node.child1 == INVALID_IDX) || IsBoxNode(node.child1, false, Settings.bvh8Enable))
+#else
     if ((node.child1 == INVALID_IDX) || IsBoxNode(node.child1))
+#endif
     {
         DstMetadata.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_CHILD1_OFFSET, node.child1);
     }
 
+#if GPURT_BUILD_RTIP3_1
+    if ((node.child2 == INVALID_IDX) || IsBoxNode(node.child2, false, Settings.bvh8Enable, false))
+#elif GPURT_BUILD_RTIP3
+    if ((node.child2 == INVALID_IDX) || IsBoxNode(node.child2, false, Settings.bvh8Enable))
+#else
     if ((node.child2 == INVALID_IDX) || IsBoxNode(node.child2))
+#endif
     {
         DstMetadata.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_CHILD2_OFFSET, node.child2);
     }
 
+#if GPURT_BUILD_RTIP3_1
+    if ((node.child3 == INVALID_IDX) || IsBoxNode(node.child3, false, Settings.bvh8Enable, false))
+#elif GPURT_BUILD_RTIP3
+    if ((node.child3 == INVALID_IDX) || IsBoxNode(node.child3, false, Settings.bvh8Enable))
+#else
     if ((node.child3 == INVALID_IDX) || IsBoxNode(node.child3))
+#endif
     {
         DstMetadata.Store(dstInternalNodeDataOffset + FLOAT32_BOX_NODE_CHILD3_OFFSET, node.child3);
     }
@@ -163,6 +237,9 @@ void CopyFp32BoxNode(
     const uint dstNodePointer = PackNodePointer(NODE_TYPE_BOX_FLOAT32, dstInternalNodeDataOffset - dstMetadataSizeInBytes);
 
     // Update parent pointer.
+#if GPURT_BUILD_RTIP3
+    // This reads and writes garbage for the second half of Float32x2 nodes, but that's okay.
+#endif
     UpdateParentPointer(srcMetadataSizeInBytes, srcNodePointer, dstMetadataSizeInBytes, dstNodePointer);
 }
 
@@ -294,6 +371,67 @@ void CompactASImpl1_1(
     const uint dstOffsetDataGeometryInfo  = dstOffsets.geometryInfo  + dstMetadataSizeInBytes;
     const uint dstOffsetDataPrimNodePtrs  = dstOffsets.primNodePtrs  + dstMetadataSizeInBytes;
 
+#if GPURT_BUILD_RTIP3
+    if (Settings.highPrecisionBoxNodeEnable)
+    {
+        // Note, both source and destination metadata section starts right before the acceleration structure
+        // header. The metadata size includes the metadata header (written by globalId=0 above) and is always 128-bytes
+        // aligned. As a result the size to copy must exclude the header and not overwrite it
+        const uint dstMetadataSize = dstMetadataSizeInBytes - sizeof(AccelStructMetadataHeader);
+
+        // Note, we need to copy metadata chunks separate than the node data because the acceleration structure
+        // header is sandwiched between them. We could possibly do a single loop copy of the entire data followed
+        // by updating the header separately, but that requires synchronisation across workgroups. It is much
+        // simpler to do this and probably no worse performance as the other solution.
+        //
+
+        // Compute compacted metadata chunks to copy
+        const uint numValidMetadataChunks = dstMetadataSize / sizeof(uint);
+
+        // Note, we cannot do larger than 4 byte chunks because the metadata size aligned to 128-byte includes
+        // the header which has already been written and we have to avoid overwriting it here.
+
+        // We copy in reverse order starting from the end of the metadata section to avoid copying the unused space
+        for (uint chunkIdx = globalId; chunkIdx < numValidMetadataChunks; chunkIdx += ShaderConstants.numThreads)
+        {
+            // +1 because we are copying in reverse, so chunk offsets would be [-4, -8, -16, ...]
+            const uint chunkOffset = ((chunkIdx + 1) * sizeof(uint));
+
+            const uint payload = SrcBuffer.Load(srcMetadataSizeInBytes - chunkOffset);
+            DstMetadata.Store(dstMetadataSizeInBytes - chunkOffset, payload);
+        }
+
+        // Internal nodes and leaf nodes are in contiguous memory. Just BLT the data section containing internal
+        // nodes and leaf nodes
+
+        // Each thread copies 64-byte chunks on each iteration. The total size to copy is guaranteed to be a multiple
+        // of 64-bytes since the minimum node size is 64-bytes.
+
+        const uint numLeafNodes = srcHeader.numLeafNodes;
+
+        const uint leafSize =
+            ((type == TOP_LEVEL) ? GetBvhNodeSizeLeaf(PrimitiveType::Instance, Settings.enableFusedInstanceNode) :
+                ((srcHeader.geometryType == GEOMETRY_TYPE_TRIANGLES) ? sizeof(TriangleNode) : sizeof(ProceduralNode)));
+
+        const uint boxNodeSize =
+            Settings.highPrecisionBoxNodeEnable ? sizeof(HighPrecisionBoxNode) : sizeof(Float32BoxNode);
+
+        const uint sizeInBytes = (srcHeader.numInternalNodesFp32 * boxNodeSize) +
+                                 (srcHeader.numInternalNodesFp16 * sizeof(Float16BoxNode)) +
+                                 (numLeafNodes * leafSize);
+
+        // Copy acceleration structure internal and leaf nodes
+        const uint numChunks = sizeInBytes  / sizeof(uint4[4]);
+        for (uint chunkIdx = globalId; chunkIdx < numChunks; chunkIdx += ShaderConstants.numThreads)
+        {
+            const uint chunkOffset = (chunkIdx * sizeof(uint4[4]));
+
+            const uint4 payload[4] = SrcBuffer.Load<uint4[4]>(srcOffsetDataInternalNodes + chunkOffset);
+            DstMetadata.Store<uint4[4]>(dstOffsetDataInternalNodes + chunkOffset, payload);
+        }
+    }
+    else
+#endif
     {
         const uint fp16BoxNodesInBlasMode =
             (srcHeader.info >> ACCEL_STRUCT_HEADER_INFO_FP16_BOXNODE_IN_BLAS_MODE_SHIFT) & ACCEL_STRUCT_HEADER_INFO_FP16_BOXNODE_IN_BLAS_MODE_MASK;
@@ -519,9 +657,32 @@ void CompactASImpl1_1(
             DstMetadata.Store<GeometryInfo>(dstGeometryInfoOffset, geometryInfo);
         }
 
+#if GPURT_BUILD_RTIP3_1
+        // Copy KDOP metadata
+        for (uint i = globalId; i < KDOP_PLANE_COUNT; i += ShaderConstants.numThreads)
+        {
+            uint offset = ACCEL_STRUCT_METADATA_KDOP_OFFSET + (i * sizeof(uint2));
+            const uint2 data = SrcBuffer.Load2(offset);
+            DstMetadata.Store2(offset, data);
+        }
+#endif
     }
 
     // Copy primitive node pointers
+#if GPURT_BUILD_RTIP3
+    if (Settings.highPrecisionBoxNodeEnable)
+    {
+        for (uint primIndex = globalId; primIndex < srcHeader.numPrimitives; primIndex += ShaderConstants.numThreads)
+        {
+            const uint srcNodePtrOffset = srcOffsetDataPrimNodePtrs + (primIndex * NODE_PTR_SIZE);
+            const uint dstNodePtrOffset = dstOffsetDataPrimNodePtrs + (primIndex * NODE_PTR_SIZE);
+
+            const uint srcNodePointer = SrcBuffer.Load(srcNodePtrOffset);
+            DstMetadata.Store(dstNodePtrOffset, srcNodePointer);
+        }
+    }
+    else
+#endif
     {
         for (uint primIndex = globalId; primIndex < srcHeader.numPrimitives; primIndex += ShaderConstants.numThreads)
         {

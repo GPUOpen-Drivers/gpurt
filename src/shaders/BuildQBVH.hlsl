@@ -95,6 +95,17 @@ void WriteBoxNode(
     DstBuffer.Store<Float32BoxNode>(offset, f32BoxNode);
 }
 
+#if GPURT_BUILD_RTIP3
+//=====================================================================================================================
+void WriteHighPrecisionBoxNode(
+    in uint             offset,
+    in Float32BoxNode   f32BoxNode)
+{
+    HighPrecisionBoxNode hpBoxNode = EncodeHighPrecisionBoxNode(f32BoxNode);
+    DstBuffer.Store<HighPrecisionBoxNode>(offset, hpBoxNode);
+}
+#endif
+
 //=====================================================================================================================
 void WriteFp16BoxNode(
     in uint             offset,
@@ -120,6 +131,9 @@ uint WriteInstanceNode(
     const uint numLeafsDoneOffset = ShaderConstants.offsets.qbvhGlobalStackPtrs + STACK_PTRS_NUM_LEAFS_DONE_OFFSET;
     ScratchGlobal.InterlockedAdd(numLeafsDoneOffset, 1);
 
+#if GPURT_BUILD_RTIP3
+    if (Settings.highPrecisionBoxNodeEnable == false)
+#endif
     {
         nodeOffset =
             offsets.leafNodes + (destIndex * GetBvhNodeSizeInstance(Settings.enableFusedInstanceNode));
@@ -134,6 +148,19 @@ uint WriteInstanceNode(
 
     CullIllegalInstances(blasMetadataSize, scratchNode, instanceDesc);
 
+#if GPURT_BUILD_RTIP3
+    if (Settings.rtIpLevel == GPURT_RTIP3_0)
+    {
+        WriteInstanceNode3_0(instanceDesc,
+                             geometryType,
+                             instanceIndex,
+                             nodePointer,
+                             blasRootNodePointer,
+                             blasMetadataSize,
+                             metadataSizeInBytes);
+    }
+    else
+#endif
     {
         WriteInstanceNode1_1(instanceDesc,
                              geometryType,
@@ -153,6 +180,9 @@ uint WriteInstanceNode(
 bool IsDestIndexInStack()
 {
     const bool destIndexInStack = (Settings.fp16BoxNodesMode == LEAF_NODES_IN_BLAS_AS_FP16) ||
+#if GPURT_BUILD_RTIP3
+                                  (Settings.highPrecisionBoxNodeEnable == true) ||
+#endif
                                   (Settings.fp16BoxNodesMode == MIXED_NODES_IN_BLAS_AS_FP16);
     return destIndexInStack;
 }
@@ -191,11 +221,36 @@ static uint GetNum64BChunks(
     in bool isLeafNode,
     in bool isFp16)
 {
+#if GPURT_BUILD_RTIP3
+    if (Settings.highPrecisionBoxNodeEnable)
     {
+        if (isLeafNode)
+        {
+            // 128-byte instance node for top-level, 64-byte triangle or procedural node for bottom-level
+            return (Settings.topLevelBuild ? 2 : 1);
+        }
+        else
+        {
+            // 64-byte high precision box node (2x for BVH8)
+            return (Settings.bvh8Enable ? 2 : 1);
+        }
+    }
+    else
+#endif
+    {
+#if GPURT_BUILD_RTIP3
+#endif
         if (isLeafNode)
         {
             return 0;
         }
+#if GPURT_BUILD_RTIP3
+        else if (Settings.bvh8Enable)
+        {
+            // Float32x2 BVH8 node
+            return 4;
+        }
+#endif
         else if (isFp16)
         {
             return 1;
@@ -234,7 +289,12 @@ static void InitBuildQBVHImpl(
         // Source node index in linear memory
         stackPtrs.stackPtrSrcNodeId = 1;
         // Node destination in linear memory. Counts in 64B chunks.
+#if GPURT_BUILD_RTIP3
+        stackPtrs.stackPtrNodeDest = Settings.highPrecisionBoxNodeEnable ? 1 : 2;
+        stackPtrs.stackPtrNodeDest *= Settings.bvh8Enable ? 2 : 1;
+#else
         stackPtrs.stackPtrNodeDest = 2;
+#endif
         stackPtrs.numLeafsDone = 0;
 
         ScratchGlobal.Store<StackPtrs>(ShaderConstants.offsets.qbvhGlobalStackPtrs, stackPtrs);
@@ -258,6 +318,13 @@ void WriteTriangleNodePrimitive0(
     in uint nodeOffset,
     in uint primitiveIndex)
 {
+#if GPURT_BUILD_RTIP3
+    if (Settings.rtIpLevel >= GPURT_RTIP3_0)
+    {
+        DstBuffer.Store(nodeOffset + RTIP3_TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET, primitiveIndex);
+    }
+    else
+#endif
     {
         DstBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET, primitiveIndex);
     }
@@ -291,6 +358,9 @@ uint WritePrimitiveNode(
                                  1,
                                  numLeafsDone);
 
+#if GPURT_BUILD_RTIP3
+    if (Settings.highPrecisionBoxNodeEnable == false)
+#endif
     {
         // Use 'numLeafsDone' as the destination index. This will pack all leaf nodes together
         // without any holes (invalid nodes) in between.
@@ -315,6 +385,19 @@ uint WritePrimitiveNode(
         DstBuffer.Store3(nodeOffset + USER_NODE_PROCEDURAL_MIN_OFFSET, asuint(scratchNode.bbox_min_or_v0));
         DstBuffer.Store3(nodeOffset + USER_NODE_PROCEDURAL_MAX_OFFSET, asuint(scratchNode.bbox_max_or_v1));
 
+#if GPURT_BUILD_RTIP3
+        if (Settings.rtIpLevel >= GPURT_RTIP3_0)
+        {
+            nodeType = NODE_TYPE_TRIANGLE_0;
+            const uint triangleId = WriteTriangleIdField(0, NODE_TYPE_TRIANGLE_0, 0, boxNodeFlags);
+            DstBuffer.Store(nodeOffset + USER_NODE_PROCEDURAL_TRIANGLE_ID_OFFSET, triangleId);
+
+            DstBuffer.Store(nodeOffset + RTIP3_USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET, scratchNode.left_or_primIndex_or_instIndex);
+            // We don't use geometry flags during RTIP 3.0 traversal, so no need to pack and unpack it unnecessarily.
+            DstBuffer.Store(nodeOffset + RTIP3_USER_NODE_PROCEDURAL_GEOMETRY_INDEX_OFFSET, geometryIndex);
+        }
+        else
+#endif
         {
             DstBuffer.Store(nodeOffset + USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET, scratchNode.left_or_primIndex_or_instIndex);
             DstBuffer.Store(nodeOffset + USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
@@ -347,6 +430,16 @@ uint WritePrimitiveNode(
 
         DstBuffer.Store(nodeOffset + TRIANGLE_NODE_ID_OFFSET, triangleId);
 
+#if GPURT_BUILD_RTIP3
+        if (Settings.rtIpLevel >= GPURT_RTIP3_0)
+        {
+            // We don't use geometry flags during RTIP 3.0 traversal, so no need to pack and unpack it unnecessarily.
+            DstBuffer.Store(nodeOffset + RTIP3_TRIANGLE_NODE_GEOMETRY_INDEX_OFFSET, geometryIndex);
+            DstBuffer.Store(nodeOffset + RTIP3_TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + (nodeType * 4),
+                            scratchNode.left_or_primIndex_or_instIndex);
+        }
+        else
+#endif
         {
             DstBuffer.Store(nodeOffset + TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
             DstBuffer.Store(nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + (nodeType * 4),
@@ -450,6 +543,13 @@ uint GetDestIdx(
     {
         destIndex = 2 * stackIndex;
 
+#if GPURT_BUILD_RTIP3
+        if (Settings.bvh8Enable)
+        {
+            // Float32BoxNodex2
+            destIndex *= 2;
+        }
+#endif
     }
     // All but root node are fp16
     else
@@ -466,9 +566,20 @@ uint AllocQBVHStackNumItems(
     uint          compChildInfo,       ///< flag if child is to be written out
     uint4         intChildNodeIdx,     ///< scratch node index (from parent) for each child node
     inout uint4   intChildDstOffset,   ///< destination address offset for each child node, uses fp16 / fp32 node size
+#if GPURT_BUILD_RTIP3
+    uint4         intChildNodeIdx2,    ///< scratch node index (from parent) for each child node (right 4 children in BVH8)
+    inout uint4   intChildDstOffset2,  ///< destination address offset for each child node, uses (right 4 children in BVH8)
+#endif
     uint          numDstChunks64B)     ///< number of 64B chunks required for all child nodes
 {
     uint numStackItems;
+#if GPURT_BUILD_RTIP3
+    if (Settings.bvh8Enable)
+    {
+        numStackItems = countbits(compChildInfo & 0xFF);
+    }
+    else
+#endif
     {
         numStackItems = countbits(compChildInfo & 0xF);
     }
@@ -484,6 +595,17 @@ uint AllocQBVHStackNumItems(
                                                         countbits(compChildInfo & 0x3),
                                                         countbits(compChildInfo & 0x7));
 
+#if GPURT_BUILD_RTIP3
+    uint4 intChildStackIdx2;
+    if (Settings.bvh8Enable)
+    {
+        intChildStackIdx2 = origStackIdx + uint4(countbits(compChildInfo & 0xf),
+                                                 countbits(compChildInfo & 0x1f),
+                                                 countbits(compChildInfo & 0x3f),
+                                                 countbits(compChildInfo & 0x7f));
+    }
+#endif
+
     uint origDest;
 
     // Uniform nodes - rely on a single stack item per thread
@@ -493,6 +615,12 @@ uint AllocQBVHStackNumItems(
 
         // Destination offset index for each child node
         intChildDstOffset += origDest;
+#if GPURT_BUILD_RTIP3
+        if (Settings.bvh8Enable)
+        {
+            intChildDstOffset2 += origDest;
+        }
+#endif
 
         // Store node index for every box child node
         for (uint i = 0; i < 4; i++)
@@ -502,6 +630,16 @@ uint AllocQBVHStackNumItems(
                 ScratchGlobal.Store(ShaderConstants.offsets.qbvhGlobalStack + intChildStackIdx[i] * sizeof(uint),
                                     intChildNodeIdx[i]);
             }
+#if GPURT_BUILD_RTIP3
+            if (Settings.bvh8Enable)
+            {
+                if (compChildInfo & bit(i + 4))
+                {
+                    ScratchGlobal.Store(ShaderConstants.offsets.qbvhGlobalStack + intChildStackIdx2[i] * sizeof(uint),
+                                        intChildNodeIdx2[i]);
+                }
+            }
+#endif
         }
 
         DeviceMemoryBarrier();
@@ -516,6 +654,13 @@ uint AllocQBVHStackNumItems(
         // Destination offset index for each child node
         intChildDstOffset += origDest;
 
+#if GPURT_BUILD_RTIP3
+        if (Settings.bvh8Enable)
+        {
+            intChildDstOffset2 += origDest;
+        }
+#endif
+
         // Store node index, destination offset index for every box child node
         for (uint i = 0; i < 4; i++)
         {
@@ -526,6 +671,18 @@ uint AllocQBVHStackNumItems(
                     ShaderConstants.offsets.qbvhGlobalStack + intChildStackIdx[i] * sizeof(uint2),
                     toWrite);
             }
+#if GPURT_BUILD_RTIP3
+            if (Settings.bvh8Enable)
+            {
+                if (compChildInfo & bit(i + 4))
+                {
+                    const uint2 toWrite = { intChildNodeIdx2[i], intChildDstOffset2[i] };
+                    ScratchGlobal.Store<uint2>(
+                        ShaderConstants.offsets.qbvhGlobalStack + intChildStackIdx2[i] * sizeof(uint2),
+                        toWrite);
+                }
+            }
+#endif
         }
 
         DeviceMemoryBarrier();
@@ -553,6 +710,9 @@ static uint ProcessNode(
     if (isLeafNode == false)
     {
         bool writeAsFp16BoxNode = false;
+#if GPURT_BUILD_RTIP3
+        if (!Settings.highPrecisionBoxNodeEnable)
+#endif
         {
             writeAsFp16BoxNode = ((Settings.topLevelBuild == false) && isFp16);
         }
@@ -588,6 +748,13 @@ static void PullUpChildren(
     inout uint                    child[4],
     inout BoundingBox             bbox[4],
     inout uint                    boxNodeFlags,
+#if GPURT_BUILD_RTIP3
+    in    uint4                   nodeIdx2,
+    in    uint4                   dstIdx2,
+    inout uint                    child2[4],
+    inout BoundingBox             bbox2[4],
+    inout uint                    boxNodeFlags2,
+#endif
     in    uint                    numActivePrims)
 {
     [unroll]
@@ -622,6 +789,42 @@ static void PullUpChildren(
         }
     }
 
+#if GPURT_BUILD_RTIP3
+    if (Settings.bvh8Enable == true)
+    {
+        [unroll]
+        for (uint i = 0; i < 4; i++)
+        {
+            if (nodeIdx2[i] != INVALID_IDX)
+            {
+                const uint scratchNodeIdx = ExtractPackedNodeIndex(nodeIdx2[i]);
+                bool isLeafNode = IsLeafNode(scratchNodeIdx, numActivePrims);
+
+                const ScratchNode n = FetchScratchNode(scratchNodesScratchOffset, scratchNodeIdx);
+
+                child2[i] = ProcessNode(scratchNodesScratchOffset,
+                                        metadataSizeInBytes,
+                                        n,
+                                        scratchNodeIdx,
+                                        dstIdx2[i],
+                                        qbvhNodePtr,
+                                        offsets,
+                                        isLeafNode,
+                                        false,
+                                        numActivePrims);
+
+                bbox2[i]      = GetScratchNodeBoundingBoxTS(scratchNodesScratchOffset, isLeafNode, n);
+                boxNodeFlags2 = SetBoxNodeFlagsField(boxNodeFlags2, ExtractScratchNodeBoxFlags(n.packedFlags), i);
+            }
+            else
+            {
+                // Note, box node flags are combined together by using an AND operation. Thus, we need to initialise
+                // invalid child flags as 0xff
+                boxNodeFlags2 = SetBoxNodeFlagsField(boxNodeFlags2, 0xff, i);
+            }
+        }
+    }
+#endif
 }
 
 //=====================================================================================================================
@@ -689,9 +892,19 @@ static void ApplyHeuristic(
     inout uint                    info,
     inout uint4                   nodeIdxFinal,
     inout uint4                   dstIdx,
+#if GPURT_BUILD_RTIP3
+    inout uint4                   nodeIdxFinal2,
+    inout uint4                   dstIdx2,
+#endif
     inout uint                    count64B)
 {
     uint baseLdsOffset = (localId * 4); // BVH4 has 4 child nodes.
+#if GPURT_BUILD_RTIP3
+    if (Settings.bvh8Enable == true)
+    {
+        baseLdsOffset *= 2;  // BVH8 has 8 child nodes.
+    }
+#endif
 
     SharedMem[baseLdsOffset + 0] = node.left_or_primIndex_or_instIndex;
     SharedMem[baseLdsOffset + 1] = node.right_or_geometryIndex;
@@ -700,7 +913,23 @@ static void ApplyHeuristic(
 
     uint nodeCounter = 2;
 
+#if GPURT_BUILD_RTIP3
+    if (Settings.bvh8Enable == true)
+    {
+        SharedMem[baseLdsOffset + 4] = INVALID_IDX;
+        SharedMem[baseLdsOffset + 5] = INVALID_IDX;
+        SharedMem[baseLdsOffset + 6] = INVALID_IDX;
+        SharedMem[baseLdsOffset + 7] = INVALID_IDX;
+    }
+#endif
+
     uint numIterations = 2; // BVH4 needs 2 iterations to find 4 child nodes to open up.
+#if GPURT_BUILD_RTIP3
+    if (Settings.bvh8Enable == true)
+    {
+        numIterations = 6;  // BVH8 needs 6 iterations to find 8 child nodes to open up.
+    }
+#endif
 
     for (uint i = 0; i < numIterations; i++)
     {
@@ -759,6 +988,23 @@ static void ApplyHeuristic(
         count64B += GetNum64BChunks(isLeafNode, isFp16);
     }
 
+#if GPURT_BUILD_RTIP3
+    if (Settings.bvh8Enable == true)
+    {
+        for (uint i = 4; i < nodeCounter; i++)
+        {
+            const uint scratchNodeIdx = SharedMem[baseLdsOffset + i];
+            nodeIdxFinal2[i-4] = PackScratchNodeIndex(scratchNodeIdx, false);
+            dstIdx2[i-4] = count64B;
+
+            const bool isLeafNode = IsLeafNode(scratchNodeIdx, numActivePrims);
+            info |= (isLeafNode ? 0 : (1u << i));
+
+            count64B += GetNum64BChunks(isLeafNode, false);
+        }
+    }
+
+#endif
 }
 
 //=====================================================================================================================
@@ -798,6 +1044,14 @@ void BuildQBVHImpl(
         if (numLeafNodes == 1)
         {
             uint destIndex = 0;
+#if GPURT_BUILD_RTIP3
+            // We need to pass in destination offset index for the leaf node only in case of high precision box nodes.
+            // For other cases, we determine the index later.
+            if (Settings.highPrecisionBoxNodeEnable)
+            {
+                destIndex = Settings.bvh8Enable ? 2 : 1;
+            }
+#endif
             const uint childNodePtr = ProcessNode(scratchNodesScratchOffset,
                                                   metadataSizeInBytes,
                                                   rootScratchNode,
@@ -823,10 +1077,43 @@ void BuildQBVHImpl(
 
             const uint qbvhNodeAddr = Calc64BChunkOffset(0);
 
+#if GPURT_BUILD_RTIP3
+            if (Settings.bvh8Enable)
+            {
+                Float32BoxNode fp32BoxNode2 = (Float32BoxNode)0;
+                fp32BoxNode2.child0 = INVALID_IDX;
+                fp32BoxNode2.child1 = INVALID_IDX;
+                fp32BoxNode2.child2 = INVALID_IDX;
+                fp32BoxNode2.child3 = INVALID_IDX;
+
+                if (Settings.highPrecisionBoxNodeEnable)
+                {
+                    WriteHighPrecisionBoxNode(qbvhNodeAddr, fp32BoxNode);
+                    WriteHighPrecisionBoxNode(qbvhNodeAddr + sizeof(HighPrecisionBoxNode), fp32BoxNode2);
+                }
+                else
+                {
+                    WriteBoxNode(qbvhNodeAddr, fp32BoxNode);
+                    WriteBoxNode(qbvhNodeAddr + sizeof(Float32BoxNode), fp32BoxNode2);
+                }
+            }
+            else if (Settings.highPrecisionBoxNodeEnable)
+            {
+                WriteHighPrecisionBoxNode(qbvhNodeAddr, fp32BoxNode);
+            }
+            else
+#endif
             {
                 WriteBoxNode(qbvhNodeAddr, fp32BoxNode);
             }
 
+#if GPURT_BUILD_RTIP3
+            if (Settings.bvh8Enable)
+            {
+                WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP32_NODES_OFFSET, 2);
+            }
+            else
+#endif
             {
                 WriteAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP32_NODES_OFFSET, 1);
             }
@@ -876,6 +1163,9 @@ void BuildQBVHImpl(
             // Each stack writes to linear QBVH memory indexed by stack index
             bool writeAsFp16BoxNode = false;
 
+#if GPURT_BUILD_RTIP3
+            if (!Settings.highPrecisionBoxNodeEnable)
+#endif
             {
                 const bool isFp16 = IsPackedNodeFp16(packedNodeIdx);
                 writeAsFp16BoxNode = (Settings.fp16BoxNodesMode != NO_NODES_IN_BLAS_AS_FP16) &&
@@ -890,15 +1180,28 @@ void BuildQBVHImpl(
                    (writeAsFp16BoxNode ? ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP16_NODES_OFFSET
                                        : ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP32_NODES_OFFSET);
 
+#if GPURT_BUILD_RTIP3
+            if (Settings.bvh8Enable)
+            {
+                IncrementAccelStructHeaderField(nodeTypeToAccum, 2);
+            }
+            else
+#endif
             {
                 IncrementAccelStructHeaderField(nodeTypeToAccum, 1);
             }
 
             // Pre-allocated locations for our children using their sizes
             uint4 intChildDstIdx  = { 0, 0, 0, 0 };
+#if GPURT_BUILD_RTIP3
+            uint4 intChildDstIdx2 = { 0, 0, 0, 0 };
+#endif
 
             // Indices of the nodes in BVH2 that will be the new children in QBVH
             uint4 intChildNodeIdx = { INVALID_IDX, INVALID_IDX, INVALID_IDX, INVALID_IDX };
+#if GPURT_BUILD_RTIP3
+            uint4 intChildNodeIdx2 = { INVALID_IDX, INVALID_IDX, INVALID_IDX, INVALID_IDX };
+#endif
 
             // Compressed child bit mask
             uint  compChildInfo    = 0;
@@ -916,17 +1219,32 @@ void BuildQBVHImpl(
                            compChildInfo,
                            intChildNodeIdx,
                            intChildDstIdx,
+#if GPURT_BUILD_RTIP3
+                           intChildNodeIdx2,
+                           intChildDstIdx2,
+#endif
                            childDstCount64B);
 
             const uint origStackIdx = AllocQBVHStackNumItems(compChildInfo,
                                                              intChildNodeIdx,
                                                              intChildDstIdx,
+#if GPURT_BUILD_RTIP3
+                                                             intChildNodeIdx2,
+                                                             intChildDstIdx2,
+#endif
                                                              childDstCount64B);
 
             // Temporary child node pointers and bounds
             uint        child[4]     = { INVALID_IDX, INVALID_IDX, INVALID_IDX, INVALID_IDX };
             BoundingBox bbox[4]      = { (BoundingBox)0, (BoundingBox)0, (BoundingBox)0, (BoundingBox)0 };
             uint        boxNodeFlags = 0;
+
+#if GPURT_BUILD_RTIP3
+            // Temporary child node pointers and bounds
+            uint        child2[4]     = { INVALID_IDX, INVALID_IDX, INVALID_IDX, INVALID_IDX };
+            BoundingBox bbox2[4]      = { (BoundingBox)0, (BoundingBox)0, (BoundingBox)0, (BoundingBox)0 };
+            uint        boxNodeFlags2 = 0;
+#endif
 
             // Pull up the nodes chosen by SAH to be the new children in QBVH
             PullUpChildren(scratchNodesScratchOffset,
@@ -938,6 +1256,13 @@ void BuildQBVHImpl(
                            child,
                            bbox,
                            boxNodeFlags,
+#if GPURT_BUILD_RTIP3
+                           intChildNodeIdx2,
+                           intChildDstIdx2,
+                           child2,
+                           bbox2,
+                           boxNodeFlags2,
+#endif
                            numActivePrims);
 
             if (writeAsFp16BoxNode)
@@ -972,6 +1297,42 @@ void BuildQBVHImpl(
                 fp32BoxNode.flags          = boxNodeFlags;
                 fp32BoxNode.numPrimitives  = FetchScratchNodeNumPrimitives(node, false);
 
+#if GPURT_BUILD_RTIP3
+                if (Settings.bvh8Enable)
+                {
+                    Float32BoxNode fp32BoxNode2 = (Float32BoxNode)0;
+                    fp32BoxNode2.child0         = child2[0];
+                    fp32BoxNode2.child1         = child2[1];
+                    fp32BoxNode2.child2         = child2[2];
+                    fp32BoxNode2.child3         = child2[3];
+                    fp32BoxNode2.bbox0_min      = bbox2[0].min;
+                    fp32BoxNode2.bbox0_max      = bbox2[0].max;
+                    fp32BoxNode2.bbox1_min      = bbox2[1].min;
+                    fp32BoxNode2.bbox1_max      = bbox2[1].max;
+                    fp32BoxNode2.bbox2_min      = bbox2[2].min;
+                    fp32BoxNode2.bbox2_max      = bbox2[2].max;
+                    fp32BoxNode2.bbox3_min      = bbox2[3].min;
+                    fp32BoxNode2.bbox3_max      = bbox2[3].max;
+                    fp32BoxNode2.flags          = boxNodeFlags2;
+
+                    if (Settings.highPrecisionBoxNodeEnable)
+                    {
+                        WriteHighPrecisionBoxNode(qbvhNodeAddr, fp32BoxNode);
+                        WriteHighPrecisionBoxNode(qbvhNodeAddr + sizeof(HighPrecisionBoxNode),
+                                                  fp32BoxNode2);
+                    }
+                    else
+                    {
+                        WriteBoxNode(qbvhNodeAddr, fp32BoxNode);
+                        WriteBoxNode(qbvhNodeAddr + sizeof(Float32BoxNode), fp32BoxNode2);
+                    }
+                }
+                else if (Settings.highPrecisionBoxNodeEnable)
+                {
+                    WriteHighPrecisionBoxNode(qbvhNodeAddr, fp32BoxNode);
+                }
+                else
+#endif
                 {
                     WriteBoxNode(qbvhNodeAddr, fp32BoxNode);
                 }

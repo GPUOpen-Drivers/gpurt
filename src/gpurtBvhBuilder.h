@@ -100,6 +100,9 @@ public:
         uint32 baseOffset;
         uint32 nodeSize;
         uint32 dataSize;
+#if GPURT_BUILD_RTIP3_1
+        uint32 obbBlasMetadataOffset;
+#endif
     };
 
     // data offset and size in ScratchBuffer
@@ -108,6 +111,9 @@ public:
         uint32 baseOffset;
         uint32 bvh2PhaseSize;
         uint32 qbvhPhaseSize;
+#if GPURT_BUILD_RTIP3_1
+        uint32 postProcKdopsMaxSize;
+#endif
     };
 
     bool UsePrimIndicesArray() const;
@@ -135,6 +141,10 @@ public:
     void EncodeInstances(
         uint32             numDesc,
         InputElementLayout descLayout);
+
+#if GPURT_BUILD_RTIP3_1
+    void RefitInstanceBounds();
+#endif
 
     void GetAccelerationStructurePrebuildInfo(
         const AccelStructBuildInputs& buildInfo,
@@ -213,6 +223,12 @@ private:
         uint32                          numMortonSizeBits;
         uint32                          mortonFlags;
 
+#if GPURT_BUILD_RTIP3_1
+        uint32                          primCompressionFlags;
+        uint32                          maxPrimRangeSize;
+        uint32                          enableOrientedBoundingBoxes;
+#endif
+
         uint32                          trianglePairBlockCount;       // For early pair compression
         SceneBoundsCalculation          sceneCalcType;
         bool                            topLevelBuild;
@@ -220,6 +236,10 @@ private:
         bool                            enableEarlyPairCompression;
         bool                            enableMergeSort;
         bool                            enableInstanceRebraid;
+#if GPURT_BUILD_RTIP3_1
+        bool                            enableCompressPrimsPass;
+        bool                            shouldUseTrivialBuilder;
+#endif
         bool                            rebuildAccelStruct;
         bool                            enableEmitCompactSizeDispatch;
         bool                            nonInlinePostBuildEmits;
@@ -327,6 +347,11 @@ private:
 
     uint32 GetParallelBuildNumThreadGroups();
 
+#if GPURT_BUILD_RTIP3_1
+    void BuildSingleThreadGroup();
+    bool UseSingleThreadGroupBuild() const;
+#endif
+
     void BuildParallel();
 
     void BuildTrivialBvh();
@@ -344,6 +369,12 @@ private:
     void UpdateParallel();
 
     void EncodeHwBvh();
+
+#if GPURT_BUILD_RTIP3_1
+    void RefitOrientedBounds();
+
+    void CompressPrims();
+#endif
 
     void PairCompression();
 
@@ -428,6 +459,9 @@ private:
     // options for WriteBuildBufferBindings
     enum BuildBufferBindingFlags : uint32
     {
+#if GPURT_BUILD_RTIP3_1
+        ObbLut         = 0x1,
+#endif
         GeometryBuffer = 0x2,
     };
 
@@ -505,6 +539,10 @@ private:
     uint32 GetMinPrimsPerInternalNode() const;
     uint32 GetMaxInternalNodeChildCount() const;
     uint32 GetMaxLastLevelInternalNodeCount() const;
+#if GPURT_BUILD_RTIP3_1
+    uint32 GetMaxObbSlotCount() const;
+    void   InitTlasRefit();
+#endif
 
 #if GPURT_DEVELOPER
     // Driver generated RGP markers are only added in internal builds because they expose details about the

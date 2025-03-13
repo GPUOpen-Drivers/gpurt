@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2021-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2021-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -48,6 +48,10 @@ static RayTracingIpLevel GetRtIpLevel()
         return RayTracingIpLevel::RtIp1_1;
     case GPURT_RTIP2_0:
         return RayTracingIpLevel::RtIp2_0;
+#if GPURT_BUILD_RTIP3_1
+    case GPURT_RTIP3_1:
+        return RayTracingIpLevel::RtIp3_1;
+#endif
     default:
         // Should never be called
         GPU_ASSERT(false);
@@ -59,6 +63,12 @@ static RayTracingIpLevel GetRtIpLevel()
     {
         return RayTracingIpLevel::_None;
     }
+#if GPURT_BUILD_RTIP3_1
+    if (GPURT_RTIP_LEVEL == (uint)RayTracingIpLevel::RtIp3_1)
+    {
+        return RayTracingIpLevel::RtIp3_1;
+    }
+#endif
     return RayTracingIpLevel::RtIp2_0; //default to ip 2.0
 #else // GPURT_DEBUG_CONTINUATION_TRAVERSAL
     return _AmdGetRtip(); // Continuation path
@@ -113,6 +123,9 @@ export void TraceRay1_1(
         0,
         true,
         GPURT_RTIP1_1
+#if GPURT_BUILD_RTIP3
+      , false
+#endif
     );
 }
 
@@ -157,6 +170,9 @@ export void TraceRayUsingHitToken1_1(
         tlasPointer,
         false,
         GPURT_RTIP1_1
+#if GPURT_BUILD_RTIP3
+      , false
+#endif
     );
 }
 
@@ -199,6 +215,9 @@ export void TraceRay2_0(
         0,
         true,
         GPURT_RTIP2_0
+#if GPURT_BUILD_RTIP3
+      , false
+#endif
     );
 }
 
@@ -243,8 +262,236 @@ export void TraceRayUsingHitToken2_0(
         tlasPointer,
         false,
         GPURT_RTIP2_0
+#if GPURT_BUILD_RTIP3
+      , false
+#endif
     );
 }
+
+#if GPURT_BUILD_RTIP3
+//=====================================================================================================================
+// TraceRay() entry point for ray tracing IP 3.0
+export void TraceRay3_0(
+    uint  accelStructLo,
+    uint  accelStructHi,
+    uint  rayFlags,
+    uint  instanceInclusionMask,
+    uint  rayContributionToHitGroupIndex,
+    uint  multiplierForGeometryContributionToShaderIndex,
+    uint  missShaderIndex,
+    float originX,
+    float originY,
+    float originZ,
+    float tMin,
+    float dirX,
+    float dirY,
+    float dirZ,
+    float tMax)
+{
+    TraceRayCommon(
+        accelStructLo,
+        accelStructHi,
+        rayFlags,
+        instanceInclusionMask,
+        rayContributionToHitGroupIndex,
+        multiplierForGeometryContributionToShaderIndex,
+        missShaderIndex,
+        originX,
+        originY,
+        originZ,
+        tMin,
+        dirX,
+        dirY,
+        dirZ,
+        tMax,
+        0,
+        0,
+        true,
+        GPURT_RTIP3_0
+      , false
+    );
+}
+
+//=====================================================================================================================
+// TraceRay() entry point for ray tracing IP 3.0
+export void TraceRay3_0BVH8(
+    uint accelStructLo,
+    uint accelStructHi,
+    uint rayFlags,
+    uint instanceInclusionMask,
+    uint rayContributionToHitGroupIndex,
+    uint multiplierForGeometryContributionToShaderIndex,
+    uint missShaderIndex,
+    float originX,
+    float originY,
+    float originZ,
+    float tMin,
+    float dirX,
+    float dirY,
+    float dirZ,
+    float tMax)
+{
+    TraceRayCommon(
+        accelStructLo,
+        accelStructHi,
+        rayFlags,
+        instanceInclusionMask,
+        rayContributionToHitGroupIndex,
+        multiplierForGeometryContributionToShaderIndex,
+        missShaderIndex,
+        originX,
+        originY,
+        originZ,
+        tMin,
+        dirX,
+        dirY,
+        dirZ,
+        tMax,
+        0,
+        0,
+        true,
+        GPURT_RTIP3_0
+        , true
+    );
+}
+
+//=====================================================================================================================
+// TraceRay() hit-token extension entry point for ray tracing IP 3.0
+export void TraceRayUsingHitToken3_0(
+    uint  accelStructLo,
+    uint  accelStructHi,
+    uint  rayFlags,
+    uint  instanceInclusionMask,
+    uint  rayContributionToHitGroupIndex,
+    uint  multiplierForGeometryContributionToShaderIndex,
+    uint  missShaderIndex,
+    float originX,
+    float originY,
+    float originZ,
+    float tMin,
+    float dirX,
+    float dirY,
+    float dirZ,
+    float tMax,
+    uint  blasPointer,
+    uint  tlasPointer)
+{
+    TraceRayCommon(
+        accelStructLo,
+        accelStructHi,
+        rayFlags,
+        instanceInclusionMask,
+        rayContributionToHitGroupIndex,
+        multiplierForGeometryContributionToShaderIndex,
+        missShaderIndex,
+        originX,
+        originY,
+        originZ,
+        tMin,
+        dirX,
+        dirY,
+        dirZ,
+        tMax,
+        blasPointer,
+        tlasPointer,
+        false,
+        GPURT_RTIP3_0
+#if GPURT_BUILD_RTIP3
+        , false
+#endif
+    );
+}
+#endif
+
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+// TraceRay() entry point for ray tracing IP 3.1
+export void TraceRay3_1(
+    uint accelStructLo,
+    uint accelStructHi,
+    uint rayFlags,
+    uint instanceInclusionMask,
+    uint rayContributionToHitGroupIndex,
+    uint multiplierForGeometryContributionToShaderIndex,
+    uint missShaderIndex,
+    float originX,
+    float originY,
+    float originZ,
+    float tMin,
+    float dirX,
+    float dirY,
+    float dirZ,
+    float tMax)
+{
+    TraceRayCommon(
+        accelStructLo,
+        accelStructHi,
+        rayFlags,
+        instanceInclusionMask,
+        rayContributionToHitGroupIndex,
+        multiplierForGeometryContributionToShaderIndex,
+        missShaderIndex,
+        originX,
+        originY,
+        originZ,
+        tMin,
+        dirX,
+        dirY,
+        dirZ,
+        tMax,
+        0,
+        0,
+        true,
+        GPURT_RTIP3_1
+        , true
+    );
+}
+
+//=====================================================================================================================
+// TraceRay() hit-token extension entry point for ray tracing IP 3.1
+export void TraceRayUsingHitToken3_1(
+    uint  accelStructLo,
+    uint  accelStructHi,
+    uint  rayFlags,
+    uint  instanceInclusionMask,
+    uint  rayContributionToHitGroupIndex,
+    uint  multiplierForGeometryContributionToShaderIndex,
+    uint  missShaderIndex,
+    float originX,
+    float originY,
+    float originZ,
+    float tMin,
+    float dirX,
+    float dirY,
+    float dirZ,
+    float tMax,
+    uint  blasPointer,
+    uint  tlasPointer)
+{
+    TraceRayCommon(
+        accelStructLo,
+        accelStructHi,
+        rayFlags,
+        instanceInclusionMask,
+        rayContributionToHitGroupIndex,
+        multiplierForGeometryContributionToShaderIndex,
+        missShaderIndex,
+        originX,
+        originY,
+        originZ,
+        tMin,
+        dirX,
+        dirY,
+        dirZ,
+        tMax,
+        blasPointer,
+        tlasPointer,
+        false,
+        GPURT_RTIP3_1
+        , false
+    );
+}
+#endif
 
 //=====================================================================================================================
 // RayQuery::Proceed() entry point for ray tracing IP 1.1
@@ -258,6 +505,9 @@ export bool RayQueryProceed1_1(
         constRayFlags,
         dispatchThreadId,
         GPURT_RTIP1_1
+#if GPURT_BUILD_RTIP3
+      , false
+#endif
     );
 }
 
@@ -273,8 +523,63 @@ export bool RayQueryProceed2_0(
         constRayFlags,
         dispatchThreadId,
         GPURT_RTIP2_0
+#if GPURT_BUILD_RTIP3
+      , false
+#endif
     );
 }
+
+#if GPURT_BUILD_RTIP3
+//=====================================================================================================================
+// RayQuery::Proceed() entry point for ray tracing IP 3.0
+export bool RayQueryProceed3_0(
+    inout_param(RayQueryInternal) rayQuery,
+    in    uint                    constRayFlags,
+    in    uint3                   dispatchThreadId)
+{
+    return RayQueryProceedCommon(
+        rayQuery,
+        constRayFlags,
+        dispatchThreadId,
+        GPURT_RTIP3_0
+      , false
+    );
+}
+
+//=====================================================================================================================
+// RayQuery::Proceed() entry point for ray tracing IP 3.0 BVH8
+export bool RayQueryProceed3_0BVH8(
+    inout_param(RayQueryInternal) rayQuery,
+    in uint                       constRayFlags,
+    in uint3                      dispatchThreadId)
+{
+    return RayQueryProceedCommon(
+        rayQuery,
+        constRayFlags,
+        dispatchThreadId,
+        GPURT_RTIP3_0
+      , true
+    );
+}
+#endif
+
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+// RayQuery::Proceed() entry point for ray tracing IP 3.1
+export bool RayQueryProceed3_1(
+    inout_param(RayQueryInternal) rayQuery,
+    in uint                       constRayFlags,
+    in uint3                      dispatchThreadId)
+{
+    return RayQueryProceedCommon(
+        rayQuery,
+        constRayFlags,
+        dispatchThreadId,
+        GPURT_RTIP3_1
+      , true
+    );
+}
+#endif
 
 //=====================================================================================================================
 // TraceRayInline() entry point for ray tracing IP 1.1
@@ -321,6 +626,56 @@ export void TraceRayInline2_0(
                          dispatchThreadId,
                          GPURT_RTIP2_0);
 }
+
+#if GPURT_BUILD_RTIP3
+//=====================================================================================================================
+// TraceRayInline() entry point for ray tracing IP 3.0
+export void TraceRayInline3_0(
+    inout_param(RayQueryInternal) rayQuery,
+    in    uint                    accelStructLo,
+    in    uint                    accelStructHi,
+    in    uint                    constRayFlags,
+    in    uint                    rayFlags,
+    in    uint                    instanceMask,
+    in    RayDesc                 rayDesc,
+    in    uint3                   dispatchThreadId)
+{
+    TraceRayInlineCommon(rayQuery,
+                         accelStructLo,
+                         accelStructHi,
+                         constRayFlags,
+                         rayFlags,
+                         instanceMask,
+                         rayDesc,
+                         dispatchThreadId,
+                         GPURT_RTIP3_0);
+}
+#endif
+
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+// TraceRayInline() entry point for ray tracing IP 3.1
+export void TraceRayInline3_1(
+    inout_param(RayQueryInternal) rayQuery,
+    in    uint                    accelStructLo,
+    in    uint                    accelStructHi,
+    in    uint                    constRayFlags,
+    in    uint                    rayFlags,
+    in    uint                    instanceMask,
+    in    RayDesc                 rayDesc,
+    in    uint3                   dispatchThreadId)
+{
+    TraceRayInlineCommon(rayQuery,
+                         accelStructLo,
+                         accelStructHi,
+                         constRayFlags,
+                         rayFlags,
+                         instanceMask,
+                         rayDesc,
+                         dispatchThreadId,
+                         GPURT_RTIP3_1);
+}
+#endif
 
 //=====================================================================================================================
 // GPURT intrinsic for fetching instance ID from instance node for ray tracing IP 1.1/2.0
@@ -373,6 +728,32 @@ static float3x4 GetObjectToWorld3x4(
 
     switch (GetRtIpLevel())
     {
+#if GPURT_BUILD_RTIP3
+    case RayTracingIpLevel::RtIp3_0:
+    {
+        const uint offset = RTIP3_INSTANCE_SIDEBAND_OBJECT2WORLD_TRANSFORM_OFFSET;
+
+        transform[0] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + sizeof(HwInstanceTransformNode) + offset + 0));
+        transform[1] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + sizeof(HwInstanceTransformNode) + offset + 16));
+        transform[2] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + sizeof(HwInstanceTransformNode) + offset + 32));
+
+        break;
+    }
+#endif
+#if GPURT_BUILD_RTIP3_1
+    case RayTracingIpLevel::RtIp3_1:
+    {
+        const uint64_t instSidebandBaseAddr = GetInstanceSidebandBaseAddr3_1(instanceNodePtr);
+
+        const uint offset = RTIP3_INSTANCE_SIDEBAND_OBJECT2WORLD_TRANSFORM_OFFSET;
+
+        transform[0] = asfloat(ConstantLoadDwordAtAddrx4(instSidebandBaseAddr + offset + 0));
+        transform[1] = asfloat(ConstantLoadDwordAtAddrx4(instSidebandBaseAddr + offset + 16));
+        transform[2] = asfloat(ConstantLoadDwordAtAddrx4(instSidebandBaseAddr + offset + 32));
+
+        break;
+    }
+#endif
     default:
     {
         const uint offset = RTIP1_1_INSTANCE_SIDEBAND_OBJECT2WORLD_OFFSET;
@@ -395,6 +776,31 @@ static float3x4 GetWorldToObject3x4(
 
     switch (GetRtIpLevel())
     {
+#if GPURT_BUILD_RTIP3
+    case RayTracingIpLevel::RtIp3_0:
+    {
+        const uint offset = RTIP3_INSTANCE_NODE_WORLD2OBJECT_TRANSFORM_OFFSET;
+
+        transform[0] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + offset + 0));
+        transform[1] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + offset + 16));
+        transform[2] = asfloat(ConstantLoadDwordAtAddrx4(instanceNodePtr + offset + 32));
+
+        break;
+    }
+#endif
+#if GPURT_BUILD_RTIP3_1
+    case RayTracingIpLevel::RtIp3_1:
+    {
+        const uint64_t instSidebandBaseAddr = GetInstanceNodeBaseAddr3_1(instanceNodePtr);
+        const uint offset = RTIP3_INSTANCE_NODE_WORLD2OBJECT_TRANSFORM_OFFSET;
+
+        transform[0] = asfloat(ConstantLoadDwordAtAddrx4(instSidebandBaseAddr + offset + 0));
+        transform[1] = asfloat(ConstantLoadDwordAtAddrx4(instSidebandBaseAddr + offset + 16));
+        transform[2] = asfloat(ConstantLoadDwordAtAddrx4(instSidebandBaseAddr + offset + 32));
+
+        break;
+    }
+#endif
     default:
     {
         const uint offset = INSTANCE_DESC_WORLD_TO_OBJECT_XFORM_OFFSET;
@@ -435,6 +841,140 @@ export uint64_t GetRayQuery64BitInstanceNodePtr(
     return CalculateNodeAddr64(tlasBaseAddr, instanceNodePtr);
 }
 
+#if GPURT_BUILD_RTIP3
+//=====================================================================================================================
+// GPURT intrinsic for fetching instance ID from instance node for ray tracing IP 3.0
+export uint GetInstanceID3_0(
+    in uint64_t instanceNodePtr) // 64-bit instance node address
+{
+    const uint instanceIdAndMask = LoadDwordAtAddr(instanceNodePtr +
+                                                   sizeof(HwInstanceTransformNode) +
+                                                   RTIP3_INSTANCE_SIDEBAND_INSTANCE_ID_AND_FLAGS_OFFSET);
+    return (instanceIdAndMask & 0x00ffffff);
+}
+
+//=====================================================================================================================
+// GPURT intrinsic for fetching instance index from instance node for ray tracing IP 3.0
+export uint GetInstanceIndex3_0(
+    in uint64_t instanceNodePtr) // 64-bit instance node address
+{
+    return LoadDwordAtAddr(instanceNodePtr +
+                           sizeof(HwInstanceTransformNode) +
+                           RTIP3_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET);
+}
+
+//=====================================================================================================================
+// GPURT intrinsic for fetching object to world transform matrix from instance node for ray tracing IP 3.0
+export float GetObjectToWorldTransform3_0(
+    in uint64_t instanceNodePtr, // 64-bit instance node address
+    in uint32_t row,             // row index
+    in uint32_t col)             // column index
+{
+    const uint32_t elementOffset = (row * sizeof(float4)) + (col * sizeof(float));
+    return asfloat(LoadDwordAtAddr(instanceNodePtr +
+                                   sizeof(HwInstanceTransformNode) +
+                                   RTIP3_INSTANCE_SIDEBAND_OBJECT2WORLD_TRANSFORM_OFFSET +
+                                   elementOffset));
+}
+
+//=====================================================================================================================
+// GPURT intrinsic for fetching world to object transform matrix (float3x4) from instance node for ray tracing IP 3.0
+export float GetWorldToObjectTransform3_0(
+    in uint64_t instanceNodePtr, // 64-bit instance node address
+    in uint32_t row,             // row index
+    in uint32_t col)             // column index
+{
+    const uint32_t elementOffset = (row * sizeof(float4)) + (col * sizeof(float));
+    return asfloat(LoadDwordAtAddr(instanceNodePtr +
+                                   RTIP3_INSTANCE_NODE_WORLD2OBJECT_TRANSFORM_OFFSET +
+                                   elementOffset));
+}
+
+#endif
+
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+// GPURT intrinsic for fetching instance ID from instance node for ray tracing IP 3.1
+export uint GetInstanceID3_1(
+    in uint64_t instanceNodePtr) // 64-bit instance node address of sideband section
+{
+    const uint64_t instSidebandBaseAddr = GetInstanceSidebandBaseAddr3_1(instanceNodePtr);
+
+    const uint instanceIdAndMask =
+        LoadDwordAtAddr(instSidebandBaseAddr + RTIP3_INSTANCE_SIDEBAND_INSTANCE_ID_AND_FLAGS_OFFSET);
+
+    return (instanceIdAndMask & 0x00ffffff);
+}
+
+//=====================================================================================================================
+// GPURT intrinsic for fetching instance index from instance node for ray tracing IP 3.1
+export uint GetInstanceIndex3_1(
+    in uint64_t instanceNodePtr) // 64-bit instance node address of sideband section
+{
+    const uint64_t instSidebandBaseAddr = GetInstanceSidebandBaseAddr3_1(instanceNodePtr);
+    return LoadDwordAtAddr(instSidebandBaseAddr + RTIP3_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET);
+}
+
+//=====================================================================================================================
+// GPURT intrinsic for fetching object to world transform matrix from instance node for ray tracing IP 3.1
+export float GetObjectToWorldTransform3_1(
+    in uint64_t instanceNodePtr, // 64-bit instance node address of sideband section
+    in uint32_t row,             // row index
+    in uint32_t col)             // column index
+{
+    const uint64_t instSidebandBaseAddr = GetInstanceSidebandBaseAddr3_1(instanceNodePtr);
+
+    const uint32_t elementOffset = (row * sizeof(float4)) + (col * sizeof(float));
+    return asfloat(LoadDwordAtAddr(instSidebandBaseAddr +
+                                   RTIP3_INSTANCE_SIDEBAND_OBJECT2WORLD_TRANSFORM_OFFSET +
+                                   elementOffset));
+}
+
+//=====================================================================================================================
+// GPURT intrinsic for fetching world to object transform matrix (float3x4) from instance node for ray tracing IP 3.1
+export float GetWorldToObjectTransform3_1(
+    in uint64_t instanceNodePtr, // 64-bit instance node address
+    in uint32_t row,             // row index
+    in uint32_t col)             // column index
+{
+    const uint64_t instanceBaseAddr = GetInstanceNodeBaseAddr3_1(instanceNodePtr);
+
+    const uint32_t elementOffset = (row * sizeof(float4)) + (col * sizeof(float));
+    return asfloat(LoadDwordAtAddr(instanceBaseAddr +
+                                   RTIP3_INSTANCE_NODE_WORLD2OBJECT_TRANSFORM_OFFSET +
+                                   elementOffset));
+}
+
+//=====================================================================================================================
+// GPURT function for fetching 64-bit instance node pointer used in RayQuery for ray tracing IP 3.1
+export uint64_t GetRayQuery64BitInstanceNodePtr3_1(
+    in uint64_t tlasBaseAddr,     // 64-bit TLAS base address
+    in uint32_t instanceNodePtr)  // Instance node pointer
+{
+    return PackInstanceNodePtr3_1(tlasBaseAddr, instanceNodePtr);
+}
+//=====================================================================================================================
+// GPURT intrinsic for fetching triangle position from given BVH address and node pointer
+export TriangleData FetchTrianglePositionFromNodePointer3_1(
+    in GpuVirtualAddress bvhAddress,  // BVH address
+    in uint              nodePointer) // Node pointer
+{
+    return FetchTriangleFromNode3_1(bvhAddress, nodePointer, ((nodePointer & TRI1_NODE_FLAG) == 0));
+}
+
+//=====================================================================================================================
+// GPURT intrinsic for fetching triangle position from given ray query object
+export TriangleData FetchTrianglePositionFromRayQuery3_1(
+    inout_param(RayQueryInternal) rayQuery,  // BVH address
+    in bool                       committed) // Node pointer
+{
+    GpuVirtualAddress bvhAddress = MakeGpuVirtualAddress(rayQuery.bvhLo, rayQuery.bvhHi);
+    uint nodePointer = committed ? rayQuery.committed.currNodePtr : rayQuery.candidate.currNodePtr;
+
+    return FetchTriangleFromNode3_1(bvhAddress, nodePointer, ((nodePointer & TRI1_NODE_FLAG) == 0));
+}
+#endif
+
 //=====================================================================================================================
 // GPURT intrinsic for fetching triangle position from given BVH address and node pointer
 export TriangleData FetchTrianglePositionFromNodePointer(
@@ -465,6 +1005,20 @@ static uint GetGeneralInstanceID(
     uint id = 0;
     switch (GetRtIpLevel())
     {
+#if GPURT_BUILD_RTIP3
+    case RayTracingIpLevel::RtIp3_0:
+    {
+        id = GetInstanceID3_0(instNodeAddr);
+        break;
+    }
+#endif
+#if GPURT_BUILD_RTIP3_1
+    case RayTracingIpLevel::RtIp3_1:
+    {
+        id = GetInstanceID3_1(instNodeAddr);
+        break;
+    }
+#endif
     default:
     {
         // For RtIp2.0 and Rtip1.1
@@ -484,6 +1038,20 @@ static uint GetGeneralInstanceIndex(
     RayTracingIpLevel rtip = GetRtIpLevel();
     switch (rtip)
     {
+#if GPURT_BUILD_RTIP3
+    case RayTracingIpLevel::RtIp3_0:
+    {
+        index = GetInstanceIndex3_0(instNodeAddr);
+        break;
+    }
+#endif
+#if GPURT_BUILD_RTIP3_1
+    case RayTracingIpLevel::RtIp3_1:
+    {
+        index = GetInstanceIndex3_1(instNodeAddr);
+        break;
+    }
+#endif
     default:
     {
         // For RtIp2.0 and Rtip1.1
@@ -504,6 +1072,20 @@ static uint64_t GetRayQueryInstanceNodePtr(
     RayTracingIpLevel rtip = GetRtIpLevel();
     switch (rtip)
     {
+#if GPURT_BUILD_RTIP3
+    case RayTracingIpLevel::RtIp3_0:
+    {
+        instNodePtr = GetRayQuery64BitInstanceNodePtr(tlasBaseAddr, instanceNodePtr);
+        break;
+    }
+#endif
+#if GPURT_BUILD_RTIP3_1
+    case RayTracingIpLevel::RtIp3_1:
+    {
+        instNodePtr = GetRayQuery64BitInstanceNodePtr3_1(tlasBaseAddr, instanceNodePtr);
+        break;
+    }
+#endif
     default:
     {
         instNodePtr = GetRayQuery64BitInstanceNodePtr(tlasBaseAddr, instanceNodePtr);
@@ -1048,6 +1630,13 @@ export TriangleData _RayQuery_FetchTrianglePosition(
     RayTracingIpLevel rtip = GetRtIpLevel();
     switch (rtip)
     {
+#if GPURT_BUILD_RTIP3_1
+    case RayTracingIpLevel::RtIp3_1:
+    {
+        tdata = FetchTrianglePositionFromRayQuery3_1(rayQuery, committed);
+        break;
+    }
+#endif
     default:
     {
         tdata = FetchTrianglePositionFromRayQuery(rayQuery, committed);
@@ -1070,6 +1659,9 @@ export bool _RayQuery_Proceed(
         constRayFlags,
         dispatchThreadId,
         rtIpLevel
+#if GPURT_BUILD_RTIP3
+      , false
+#endif
     );
 }
 

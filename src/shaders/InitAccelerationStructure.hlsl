@@ -102,6 +102,18 @@ void InitAccelerationStructure(
     const EncodeTaskCountersUpdate encodeTaskCountersUpdate = (EncodeTaskCountersUpdate)0;
     ScratchGlobal.Store<EncodeTaskCountersUpdate>(0, encodeTaskCountersUpdate);
 
+#if GPURT_BUILD_RTIP3_1
+    if ((Settings.topLevelBuild == 0) && (Settings.tlasRefittingMode != TlasRefittingMode::Disabled))
+    {
+        const RWByteAddressBuffer DstBuffer = BatchDstHeaderBuffers[groupId];
+
+        for (uint i = 0; i < KDOP_PLANE_COUNT; i++)
+        {
+            const uint dstOffset = ACCEL_STRUCT_METADATA_KDOP_OFFSET + i * sizeof(float2);
+            DstBuffer.Store2(dstOffset, uint2(InitialMin, InitialMax));
+        }
+    }
+#endif
 #else
     const ConstantBuffer<Constants> BuilderConstants = BatchBuilderConstants[groupId];
     const RWByteAddressBuffer       HeaderBuffer     = BatchHeaderBuffers[groupId];
@@ -176,6 +188,17 @@ void InitAccelerationStructure(
 
     HeaderBuffer.Store<AccelStructMetadataHeader>(0, BuilderConstants.metadataHeader);
     HeaderBuffer.Store<AccelStructHeader>(BuilderConstants.header.metadataSizeInBytes, BuilderConstants.header);
+
+#if GPURT_BUILD_RTIP3_1
+    if ((Settings.topLevelBuild == 0) && (Settings.tlasRefittingMode != TlasRefittingMode::Disabled))
+    {
+        for (uint i = 0; i < KDOP_PLANE_COUNT; i++)
+        {
+            const uint dstOffset = ACCEL_STRUCT_METADATA_KDOP_OFFSET + i * sizeof(float2);
+            HeaderBuffer.Store2(dstOffset, uint2(InitialMin, InitialMax));
+        }
+    }
+#endif
 
 #endif
 }

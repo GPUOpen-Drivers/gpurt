@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -25,6 +25,11 @@
 #ifndef _COMPACTCOMMON_HLSL
 #define _COMPACTCOMMON_HLSL
 
+#if GPURT_BUILD_RTIP3_1
+#include "QuantizedBVH8BoxNode.hlsl"
+#include "rtip3_1.hlsli"
+#endif
+
 //=====================================================================================================================
 uint CalcCompactedSize(
     in  AccelStructHeader  srcHeader,
@@ -41,6 +46,22 @@ uint CalcCompactedSize(
     uint internalNodeSize = 0;
     uint leafNodeSize     = 0;
 
+#if GPURT_BUILD_RTIP3_1
+    if (Settings.rtIpLevel == GPURT_RTIP3_1)
+    {
+        internalNodeSize = sizeof(QuantizedBVH8BoxNode);
+        leafNodeSize = PRIMITIVE_STRUCT_SIZE_IN_BYTE;
+    }
+    else
+#endif
+#if GPURT_BUILD_RTIP3
+    if (Settings.highPrecisionBoxNodeEnable)
+    {
+        leafNodeSize = GetBvhNodeSizeLeaf(srcHeader.geometryType, 0);
+        internalNodeSize = sizeof(HighPrecisionBoxNode);
+    }
+    else
+#endif
     {
         leafNodeSize = GetBvhNodeSizeLeaf(srcHeader.geometryType, 0);
         internalNodeSize = sizeof(Float32BoxNode);
@@ -49,12 +70,23 @@ uint CalcCompactedSize(
     if (topLevelBuild == false)
     {
         internalNodeSize = srcHeader.numInternalNodesFp32 * internalNodeSize;
+#if GPURT_BUILD_RTIP3_1
+        if (Settings.rtIpLevel < GPURT_RTIP3_1)
+#endif
         {
             internalNodeSize += srcHeader.numInternalNodesFp16 * sizeof(Float16BoxNode);
         }
         runningOffset += internalNodeSize;
 
         offsets.leafNodes = runningOffset;
+#if GPURT_BUILD_RTIP3_1
+        if (srcHeader.UsesLegacyLeafCompression())
+        {
+            // In RTIP 3.1, legacy compression leaves gaps in the AS, so we take numActivePrims as worst case.
+            leafNodeSize = srcHeader.numActivePrims * leafNodeSize;
+        }
+        else
+#endif
         {
             leafNodeSize = srcHeader.numLeafNodes * leafNodeSize;
         }
@@ -67,8 +99,21 @@ uint CalcCompactedSize(
             offsets.primNodePtrs = runningOffset;
             runningOffset += srcHeader.numPrimitives * sizeof(uint);
 
+#if GPURT_BUILD_RTIP3_1
+            if (Settings.rtIpLevel == GPURT_RTIP3_1)
+            {
+                // We are using numInternalNodesFp16 to store fat leaf offsets for update.
+                runningOffset += (srcHeader.numInternalNodesFp16) * sizeof(uint);
+            }
+#endif
         }
 
+#if GPURT_BUILD_RTIP3_1
+        if (srcHeader.obbBlasMetadataOffset != 0)
+        {
+            runningOffset += BLAS_OBB_METADATA_SIZE;
+        }
+#endif
     }
     else
     {
@@ -81,6 +126,15 @@ uint CalcCompactedSize(
             = srcHeader.numLeafNodes * GetBvhNodeSizeLeaf(PrimitiveType::Instance, Settings.enableFusedInstanceNode);
         runningOffset += leafNodeSize;
 
+#if GPURT_BUILD_RTIP3_1
+        if (Settings.rtIpLevel == GPURT_RTIP3_1)
+        {
+            // Instance sideband data is stored in geometryInfo offset in RTIP 3.1
+            offsets.geometryInfo = runningOffset;
+            runningOffset += srcHeader.numLeafNodes * sizeof(InstanceSidebandData);
+        }
+        else
+#endif
         {
             // Top level acceleration structures do not have geometry info.
             offsets.geometryInfo = 0;
@@ -90,15 +144,43 @@ uint CalcCompactedSize(
             offsets.primNodePtrs = runningOffset;
             runningOffset += srcHeader.numPrimitives * sizeof(uint);
 
+#if GPURT_BUILD_RTIP3_1
+            if (Settings.rtIpLevel == GPURT_RTIP3_1)
+            {
+                // We are using numInternalNodesFp16 to store fat leaf offsets for update.
+                runningOffset += (srcHeader.numInternalNodesFp16) * sizeof(uint);
+            }
+#endif
         }
     }
 
+#if GPURT_BUILD_RTIP3_1
+    if (Settings.rtIpLevel >= GPURT_RTIP3_1)
+    {
+        // RTIP 3.1 does not store parent pointers in metadata.
+        // Maintain the original metadata size which includes variable padding to avoid channel imbalance.
+        metadataSizeInBytes = srcHeader.metadataSizeInBytes;
+    }
+    else
+#endif
     {
         metadataSizeInBytes = CalcMetadataSizeInBytes(internalNodeSize, leafNodeSize);
         metadataSizeInBytes = Pow2Align(metadataSizeInBytes, 128);
     }
 
     uint totalSizeInBytes = runningOffset + metadataSizeInBytes;
+
+#if GPURT_BUILD_RTIP3_1
+    if ((Settings.rtIpLevel >= GPURT_RTIP3_1) && Settings.enableBvhChannelBalancing)
+    {
+        const uint cacheLineSize = 256;
+        const uint metadataSizeWithoutPadding = Pow2Align(ACCEL_STRUCT_METADATA_HEADER_SIZE, cacheLineSize);
+        const uint maxPaddedMetadataSize = metadataSizeWithoutPadding + ACCEL_STRUCT_METADATA_MAX_PADDING;
+
+        // Max padding so that compacted size is deterministic.
+        totalSizeInBytes += (maxPaddedMetadataSize - metadataSizeInBytes);
+    }
+#endif
 
     dstOffsets = offsets;
 

@@ -142,6 +142,13 @@ void SerializeAS(in uint3 globalThreadId : SV_DispatchThreadID)
                     // are mixed in this array so we need to read the instance index from memory to account for
                     // all API instances. There is some duplication here since we may have multiple leaf nodes
                     // pointing to same instance but Serialize performance is not of great concern.
+#if GPURT_BUILD_RTIP3
+                    if (header.UsesHardwareInstanceNode())
+                    {
+                        apiInstanceIndex = FetchInstanceIndex3_0(0, header, currentInstNodeOffset);
+                    }
+                    else
+#endif
                     {
                         apiInstanceIndex = FetchInstanceIndex(0, header, currentInstNodeOffset);
                     }

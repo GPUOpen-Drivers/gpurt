@@ -53,6 +53,9 @@ namespace GpuRt
 // Constants needed for raytracing
 
 // Sizes of the node structures used by the BVH building shaders
+#if GPURT_BUILD_RTIP3_1
+static constexpr size_t RayTracingCompressedPrimitiveStructureSize = 128;
+#endif
 
 static constexpr size_t RayTracingQBVHLeafSize          = 64;
 static constexpr size_t RayTracingScratchNodeSize       = 64;
@@ -113,7 +116,15 @@ enum RtIpLevel : uint32
     RtIp1_0         = 0x1,  ///< First Implementation of HW RT
     RtIp1_1         = 0x2,  ///< Added computation of triangle barycentrics into HW
     RtIp2_0         = 0x3,  ///< Added more Hardware RayTracing features, such as BoxSort, PointerFlag, etc
+#if GPURT_BUILD_RTIP3
+    RtIp3_0         = 0x4,  ///< Added high precision box node, HW instance node, dual intersect ray, BVH8 intersect
+                            ///  ray, LDS stack push 8 pop 1, and LDS stack push 8 pop 2
+#endif
     RtIpReserved    = 0x5,  ///< Special value, should not be used
+#if GPURT_BUILD_RTIP3_1
+    RtIp3_1         = 0x6,  ///< Added improved bvh footprints (change to node pointer, 128 Byte primitive structure
+                            ///  format, 128 Byte Quantized box node, obb support, wide sort)
+#endif
 };
 
 // =====================================================================================================================
@@ -133,6 +144,16 @@ static RtIpLevel PalToGpuRtIpLevel(Pal::RayTracingIpLevel palRtIpLevel)
     case Pal::RayTracingIpLevel::RtIp2_0:
         gpuRtIpLevel = RtIpLevel::RtIp2_0;
         break;
+#if GPURT_BUILD_RTIP3
+    case Pal::RayTracingIpLevel::RtIp3_0:
+        gpuRtIpLevel = RtIpLevel::RtIp3_0;
+        break;
+#endif
+#if GPURT_BUILD_RTIP3_1
+    case Pal::RayTracingIpLevel::RtIp3_1:
+        gpuRtIpLevel = RtIpLevel::RtIp3_1;
+        break;
+#endif
     case Pal::RayTracingIpLevel::None:
     default:
         gpuRtIpLevel = RtIpLevel::RtIpNone;
@@ -304,6 +325,9 @@ PipelineShaderCode GPURT_API_ENTRY GetShaderLibraryCode(
 // @return whether the function table was found successfully
 Pal::Result GPURT_API_ENTRY QueryRayTracingEntryFunctionTable(
     const Pal::RayTracingIpLevel   rayTracingIpLevel,
+#if GPURT_BUILD_RTIP3
+    bool                           bvh8Enable,
+#endif
     EntryFunctionTable* const      pEntryFunctionTable);
 
 // =====================================================================================================================
@@ -754,6 +778,10 @@ public:
     }
 #endif
 
+#if GPURT_BUILD_RTIP3_1
+    Pal::gpusize GetLutVa() const { return m_lutGpuVa; }
+#endif
+
 #if GPURT_DEVELOPER
     // Driver generated RGP markers are only added in internal builds because they expose details about the
     // construction of acceleration structure.
@@ -768,6 +796,11 @@ public:
     // Overrides the BuildFlags and return new build inputs when device settings requires it
     const AccelStructBuildInputs OverrideBuildInputs(
         const AccelStructBuildInputs& inputs) const;
+
+#if GPURT_BUILD_RTIP3_1
+    bool ShouldUseTrivialBuilderForBuild(
+        const AccelStructBuildInputs& inputs) const;
+#endif
 
 private:
 
@@ -802,6 +835,10 @@ private:
     Util::Mutex                              m_traceRayHistoryLock;
     const IBackend*                          m_pBackend;
 
+#if GPURT_BUILD_RTIP3_1
+    ClientGpuMemHandle                       m_lutGpuMem;
+    Pal::gpusize                             m_lutGpuVa;
+#endif
 #if GPURT_ENABLE_GPU_DEBUG
     GpuRt::DebugMonitor                      m_debugMonitor;
 #endif

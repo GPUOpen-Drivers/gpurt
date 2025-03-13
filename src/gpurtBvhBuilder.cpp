@@ -301,6 +301,13 @@ uint32 BvhBuilder::GetLeafNodeSize() const
         }
         else
         {
+#if GPURT_BUILD_RTIP3_1
+            if (m_pDevice->GetRtIpLevel() == Pal::RayTracingIpLevel::RtIp3_1)
+            {
+                size = RayTracingCompressedPrimitiveStructureSize;
+            }
+            else
+#endif
             {
                 size = RayTracingQBVHLeafSize;
             }
@@ -314,6 +321,15 @@ uint32 BvhBuilder::GetLeafNodeSize() const
 uint32 BvhBuilder::GetMinPrimsPerInternalNode() const
 {
     uint32 minPrimsPerLastInternalNode = 2u;
+
+#if GPURT_BUILD_RTIP3_1
+    if (m_pDevice->GetRtIpLevel() == Pal::RayTracingIpLevel::RtIp3_1)
+    {
+        // When pairs are enabled (range size at least 2), there are at least 3 primitives (one pair and one single
+        // triangle) in a last level internal node.
+        minPrimsPerLastInternalNode = (m_buildConfig.maxPrimRangeSize >= 2) ? 3u : 2u;
+    }
+#endif
 
     return minPrimsPerLastInternalNode;
 }
@@ -330,8 +346,37 @@ uint32 BvhBuilder::GetMaxInternalNodeChildCount() const
 {
     uint32 maxNumChildren = 4u;
 
+#if GPURT_BUILD_RTIP3_1
+    {
+        maxNumChildren = m_deviceSettings.bvh8Enable ? 8u : 4u;
+    }
+#endif
+
     return maxNumChildren;
 }
+
+#if GPURT_BUILD_RTIP3_1
+// =====================================================================================================================
+uint32 BvhBuilder::GetMaxObbSlotCount() const
+{
+    const uint32 maxNumInternalNodes = GetNumInternalNodeCount();
+    const uint32 maxNumLeafNodes = GetMaxNumLeafNodes();
+
+    // Ideally, we only need one slot per internal node. But because primitive packets are interleaved with
+    // internal nodes, we need to account for those.
+    uint32 maxObbSlotCount =
+        m_buildConfig.enableCompressPrimsPass ? maxNumInternalNodes : (maxNumInternalNodes + maxNumLeafNodes);
+
+    if (m_deviceSettings.enableRebraid)
+    {
+        // With rebraid enabled, the leaf nodes referenced by the root are allocated in interleaved memory at
+        // the beginning of the internal node data section.
+        maxObbSlotCount += 4 * Util::RoundUpQuotient(m_deviceSettings.maxPrimRangeSize, 2u);
+    }
+
+    return maxObbSlotCount;
+}
+#endif
 
 // =====================================================================================================================
 uint32 BvhBuilder::GetNumInternalNodeCount() const
@@ -376,7 +421,28 @@ uint32 BvhBuilder::CalculateInternalNodesSize() const
 
     uint32 internalNodeSize;
     {
+#if GPURT_BUILD_RTIP3
+#if GPURT_BUILD_RTIP3_1
+        if (m_pDevice->GetRtIpLevel() == Pal::RayTracingIpLevel::RtIp3_1)
+        {
+            internalNodeSize = RayTracingQuantizedBVH8BoxNodeSize;
+            PAL_ASSERT(numBox16Nodes == 0);
+        }
+        else
+#endif
+        {
+            internalNodeSize = m_deviceSettings.highPrecisionBoxNodeEnable ?
+                RayTracingHighPrecisionBoxNodeSize : RayTracingQBVH32NodeSize;
+
+            if (m_deviceSettings.bvh8Enable)
+            {
+                // BVH8 consisting of 2xHPB64 nodes or 2xFP32 box nodes
+                internalNodeSize *= 2;
+            }
+        }
+#else
         internalNodeSize = RayTracingQBVH32NodeSize;
+#endif
     }
     const uint32 sizeInBytes = (RayTracingQBVH16NodeSize * numBox16Nodes) +
                                (internalNodeSize * numInternalNodes);
@@ -388,6 +454,16 @@ uint32 BvhBuilder::CalculateInternalNodesSize() const
 uint32 BvhBuilder::GetMaxNumLeafNodes() const
 {
     uint32 maxNumLeafNodes = m_buildConfig.maxNumPrimitives;
+
+#if GPURT_BUILD_RTIP3_1
+    if (m_buildConfig.enableCompressPrimsPass)
+    {
+        {
+            // The builder will always pack at least two primitives per primitive structure in this case
+            maxNumLeafNodes = Util::RoundUpQuotient(m_buildConfig.maxNumPrimitives, 2u);
+        }
+    }
+#endif
 
     return maxNumLeafNodes;
 }
@@ -557,6 +633,13 @@ BvhBuildMode BvhBuilder::OverrideBuildMode(
 //=====================================================================================================================
 bool BvhBuilder::UsePrimIndicesArray() const
 {
+#if GPURT_BUILD_RTIP3_1
+    if (
+        0)
+    {
+        return true;
+    }
+#endif
 
     return false;
 }
@@ -598,10 +681,22 @@ uint32 BvhBuilder::CalculateScratchBufferSize(
 {
     uint32 size = scratchBufferInfo.qbvhPhaseSize;
 
+#if GPURT_BUILD_RTIP3_1
+    size = Util::Max(size, scratchBufferInfo.postProcKdopsMaxSize);
+#endif
+
     if ((AllowRemappingScratchBuffer() == false) || (scratchBufferInfo.bvh2PhaseSize > resultBufferInfo.nodeSize))
     {
         size = Util::Max(size, scratchBufferInfo.baseOffset + scratchBufferInfo.bvh2PhaseSize);
     }
+
+#if GPURT_BUILD_RTIP3_1
+    if (m_buildConfig.shouldUseTrivialBuilder == true)
+    {
+        // Trivial builds use no scratch memory.
+        size = 0;
+    }
+#endif
 
     return size;
 }
@@ -614,6 +709,37 @@ uint32 BvhBuilder::CalculateMetadataSize(
     uint32* const pRunningOffset)
 {
     uint metadataSizeInBytes;
+#if GPURT_BUILD_RTIP3_1
+    if (m_pDevice->GetRtIpLevel() >= Pal::RayTracingIpLevel::RtIp3_1)
+    {
+        const uint32 cacheLineSize = 256;
+
+        // RTIP 3.1 does not store parent pointers in metadata
+        metadataSizeInBytes = ACCEL_STRUCT_METADATA_HEADER_SIZE;
+        // Align metadata size to cache line size. This leaves the root node at a 128B aligned offset, but the following
+        // sets of 8 child nodes are cleanly packed into 4 256B cache lines.
+        metadataSizeInBytes = Util::Pow2Align(metadataSizeInBytes, cacheLineSize);
+
+        *pRunningOffset += metadataSizeInBytes;
+
+        // Add variable padding to the metadata. This helps distribute the root nodes for different BLAS across
+        // different memory channels. If the metadata is a fixed size and AS base addresses are aligned to 64K
+        // or higher, all root nodes across different BLAS map to the same channel. This creates significant
+        // channel imbalance for divergent rays. Root nodes and nearby nodes are accessed with high frequency
+        // across different BLAS, so it is important to have good channel distribution.
+        if (m_deviceSettings.enableBvhChannelBalancing)
+        {
+            // Select an arbitrary aligned offset for each build
+            const uint32 increments = ACCEL_STRUCT_METADATA_MAX_PADDING / cacheLineSize;
+            const uint32 additional = (g_buildCounter.fetch_add(1) % increments) * cacheLineSize;
+            metadataSizeInBytes += additional;
+
+            // Max padding so that total size is deterministic.
+            *pRunningOffset += ACCEL_STRUCT_METADATA_MAX_PADDING;
+        }
+    }
+    else
+#endif
     {
         metadataSizeInBytes = CalcMetadataSizeInBytes(internalNodeSize, leafNodeSize);
         // Align metadata size to cache line
@@ -632,7 +758,58 @@ BvhBuilder::ResultBufferInfo BvhBuilder::CalculateResultBufferInfo(
     uint32* pMetadataSizeInBytes,
     uint32 remapScratchBufferSize)
 {
+#if GPURT_BUILD_RTIP3_1
+    if (m_buildConfig.shouldUseTrivialBuilder)
+    {
+        uint32 runningOffset = 0;
+
+        AccelStructDataOffsets offsets = {};
+
+        // Acceleration structure data starts with the header
+        ReserveBytes(sizeof(AccelStructHeader), &runningOffset);
+
+        const uint32 geometryInfoSize = CalculateGeometryInfoSize(m_buildArgs.inputs.inputElemCount);
+        if (m_buildConfig.maxNumPrimitives > 0)
+        {
+            // There is only one box node for root in Trivial Builds.
+            const uint32 internalNodeSize = RayTracingQuantizedBVH8BoxNodeSize;
+            const uint32 leafNodeSize = Util::RoundUpQuotient(m_buildConfig.maxNumPrimitives, 2u) * GetLeafNodeSize();
+
+            offsets.internalNodes = ReserveBytes(internalNodeSize, &runningOffset);
+            offsets.leafNodes = ReserveBytes(leafNodeSize, &runningOffset);
+
+            offsets.geometryInfo = ReserveBytes(geometryInfoSize, &runningOffset);
+            offsets.primNodePtrs = ReserveBytes(m_buildConfig.maxNumPrimitives * sizeof(uint32), &runningOffset);
+        }
+
+        uint32 totalSizeInBytes = runningOffset;
+
+        // Metadata section is at the beginning of the acceleration structure buffer
+        const uint32 metadataSizeInBytes = CalculateMetadataSize(0u, 0u, &totalSizeInBytes);
+
+        if (pOffsets != nullptr)
+        {
+            memcpy(pOffsets, &offsets, sizeof(offsets));
+        }
+
+        if (pMetadataSizeInBytes != nullptr)
+        {
+            *pMetadataSizeInBytes = metadataSizeInBytes;
+        }
+
+        ResultBufferInfo info = {};
+        info.baseOffset = sizeof(AccelStructHeader);
+        info.nodeSize = 0;
+        info.dataSize = totalSizeInBytes;
+        return info;
+    }
+    else
+    {
+        return CalculateResultBufferInfoDefault(pOffsets, pMetadataSizeInBytes, remapScratchBufferSize);
+    }
+#else
     return CalculateResultBufferInfoDefault(pOffsets, pMetadataSizeInBytes, remapScratchBufferSize);
+#endif
 }
 
 // =====================================================================================================================
@@ -657,6 +834,9 @@ BvhBuilder::ResultBufferInfo BvhBuilder::CalculateResultBufferInfoDefault(
     //  Leaf Nodes                                  : BVHNode (BVH2), TriangleNode (BVH4) or InstanceNode (TopLevel)
     //  Per-geometry description info               : Geometry info in Bottom Level
     //  Per-leaf node pointers (uint32)
+#if GPURT_BUILD_RTIP3_1
+    //  Inner node K-DOPs                           : ObbKdop in Bottom Level
+#endif
     //
     // Note: When earlyPairCompression is enabled, the leaf node data section is used to store the per-wave
     //       triangle pair counts and compute the prefix sum across all waves for a BLAS build. The encode
@@ -695,12 +875,38 @@ BvhBuilder::ResultBufferInfo BvhBuilder::CalculateResultBufferInfoDefault(
             const uint32 geometryInfoSize = CalculateGeometryInfoSize(m_buildArgs.inputs.inputElemCount);
             offsets.geometryInfo = ReserveBytes(geometryInfoSize, &runningOffset);
         }
+#if GPURT_BUILD_RTIP3_1
+        else if (m_pDevice->GetRtIpLevel() >= Pal::RayTracingIpLevel::RtIp3_1)
+        {
+            // Instance sideband data section when compressed format nodes are enabled
+            const uint32 sidebandDataSize = m_buildConfig.maxNumPrimitives * sizeof(InstanceSidebandData);
+            offsets.geometryInfo = ReserveBytes(sidebandDataSize, &runningOffset);
+        }
+#endif
 
         {
             offsets.primNodePtrs = ReserveBytes(m_buildConfig.maxNumPrimitives * sizeof(uint32), &runningOffset);
 
+#if GPURT_BUILD_RTIP3_1
+            if ((m_pDevice->GetRtIpLevel() == Pal::RayTracingIpLevel::RtIp3_1) && UpdateAllowed())
+            {
+                ReserveBytes(GetMaxLastLevelInternalNodeCount() * sizeof(uint), &runningOffset);
+            }
+#endif
         }
     }
+
+#if GPURT_BUILD_RTIP3_1
+    if (m_buildConfig.topLevelBuild == false)
+    {
+        if ((m_buildConfig.enableOrientedBoundingBoxes != 0) &&
+           ((m_buildConfig.enableInstanceRebraid == true) ||
+             Util::BitfieldIsSet(m_buildConfig.enableOrientedBoundingBoxes, uint32(AccelStructType::TopLevel))))
+        {
+            info.obbBlasMetadataOffset = ReserveBytes(sizeof(BlasObbMetadata), &runningOffset);
+        }
+    }
+#endif
 
     uint32 totalSizeInBytes = runningOffset;
 
@@ -727,7 +933,118 @@ BvhBuilder::ResultBufferInfo BvhBuilder::CalculateResultBufferInfoDefault(
 BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfo(
     RayTracingScratchDataOffsets* pOffsets)
 {
+#if GPURT_BUILD_RTIP3_1
+    //--------------------------------------------
+    // Single thread group builder scratch node layout
+    // See: shaders\SingleThreadGroupBuild\ScratchBuffer.hlsl
+    //
+    if (UseSingleThreadGroupBuild())
+    {
+        const bool blasWithObb = (m_buildConfig.enableOrientedBoundingBoxes != 0) &&
+                                 (m_buildConfig.topLevelBuild == false);
+
+        const uint32 maxObbSlotCount = GetMaxObbSlotCount();
+
+        RayTracingScratchDataOffsets offsets;
+        memset(&offsets, 0xffffffff, sizeof(offsets));
+
+        // BVH2 node data including an additional 32-bytes for miscellaneous data (byte stride: 32 bytes)
+        uint32 bvh2NodeDataSize = m_buildConfig.maxNumPrimitives * 2 * 32;
+        // BVH2 node flags
+        bvh2NodeDataSize += m_buildConfig.maxNumPrimitives * 2 * sizeof(uint32);
+        // BVH2 node primitive counts
+        bvh2NodeDataSize += m_buildConfig.maxNumPrimitives * sizeof(uint32);
+
+        // Align BVH2 node data size and offset to cache line
+        constexpr uint32 CacheLineSize = 256u;
+        bvh2NodeDataSize = Util::Pow2Align(bvh2NodeDataSize, CacheLineSize);
+
+        // Reserve the beginning of the scratch buffer for the offsets data if dumping.
+        uint32 runningOffset =
+            (m_deviceSettings.enableBuildAccelStructScratchDumping ? sizeof(RayTracingScratchDataOffsets) : 0);
+
+        // Note, the obbRefitStack needs to be allocated at the beginning of scratch memory to allow reusing
+        // the BVH2 memory for OBB refit phase.
+        uint32 obbRefitBaseOffset = 0;
+
+        // Common counters between hardware encode phase and OBB refit
+        offsets.qbvhGlobalStackPtrs = ReserveBytes(sizeof(STGBHwEncodeCounters), &runningOffset);
+
+        if (blasWithObb)
+        {
+            // The OBB refit stack contains pointers to fat leaves (internal nodes with all leaf references). In the
+            // worst case scenario, the last level internal node can have a minimum of 2 leaf references, as a result
+            // the maximum number of such fat leaf nodes cannot exceed maxLastLevelPrimRefCount.
+            const uint32 maxLastLevelPrimRefCount = GetMaxLastLevelInternalNodeCount();
+
+            // Refit stack pointers. Align offset to 16-bytes for indirect dispatch
+            runningOffset = Util::Pow2Align(runningOffset, 16u);
+            offsets.obbRefitStackPtrs = ReserveBytes(sizeof(ObbRefitStackPtrs), &runningOffset);
+
+            runningOffset = Util::Pow2Align(runningOffset, CacheLineSize);
+            offsets.obbRefitStack = ReserveBytes(maxLastLevelPrimRefCount * sizeof(uint), &runningOffset);
+
+            // These flags tell us which BVH8 nodes are leaf parents and how many box children
+            // they have. They are used to kickstart and control the OBB postprocess phase, so
+            // they need to be at the top of the scratch buffer to allow the rest to be re-used
+            // for storing Kdops.
+            runningOffset = Util::Pow2Align(runningOffset, CacheLineSize);
+            offsets.qbvhObbFlags = ReserveBytes(OBB_TABLE_ENTRY_SIZE * maxObbSlotCount, &runningOffset);
+
+            // Data beyond this point can be shared between the BVH build and OBB refit phase
+            obbRefitBaseOffset = runningOffset;
+        }
+
+        const uint32 maxNumInternalNodes = GetNumInternalNodeCount();
+
+        runningOffset = Util::Pow2Align(runningOffset, CacheLineSize);
+        offsets.bvhNodeData = ReserveBytes(bvh2NodeDataSize, &runningOffset);
+
+        // 8-bytes per internal node stack entry
+        runningOffset = Util::Pow2Align(runningOffset, CacheLineSize);
+        offsets.qbvhGlobalStack = ReserveBytes(maxNumInternalNodes * sizeof(uint64), &runningOffset);
+
+        // This section stores compression batch indices. Each batch is referenced by the BVH2 subtree parent
+        // scratch node that is collapsed into a BVH8. The worst case batches occur when each BVH8 internal
+        // node has at least one leaf to compress.
+        runningOffset = Util::Pow2Align(runningOffset, CacheLineSize);
+        offsets.primCompNodeIndices = ReserveBytes(maxNumInternalNodes * sizeof(uint32), &runningOffset);
+        offsets.primCompNodeIndicesEnd = runningOffset;
+
+        ScratchBufferInfo info = {};
+        info.baseOffset = 0;
+        info.bvh2PhaseSize = runningOffset;
+        info.qbvhPhaseSize = runningOffset;
+
+        if (blasWithObb)
+        {
+            // Reset running offset to OBB refit data section
+            runningOffset = obbRefitBaseOffset;
+
+            offsets.qbvhKdops = ReserveBytes(OBBKDOP_SIZE * maxObbSlotCount, &runningOffset);
+            info.postProcKdopsMaxSize = runningOffset;
+        }
+
+        if (pOffsets != nullptr)
+        {
+            memcpy(pOffsets, &offsets, sizeof(offsets));
+        }
+
+        return info;
+    }
+    else if (m_buildConfig.shouldUseTrivialBuilder == true)
+    {
+        // Trivial builds use no scratch memory.
+        ScratchBufferInfo info = {};
+        return info;
+    }
+    else
+    {
+        return CalculateScratchBufferInfoDefault(pOffsets);
+    }
+#else
     return CalculateScratchBufferInfoDefault(pOffsets);
+#endif
 }
 
 // =====================================================================================================================
@@ -756,9 +1073,15 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
     uint32 baseOffset0 = 0; // [0] end of BVH2 & QBVH section
     uint32 baseOffset1 = 0; // [1] end of State section
     uint32 baseOffset2 = 0; // [2] end of BVH2 section
+#if GPURT_BUILD_RTIP3_1
+    uint32 baseOffset4 = 0; // [4] start of PostProc Kdop data
+#endif
 
     uint32 bvh2PhaseMaxSize = 0; // max bvh2 data size from baseOffset
     uint32 qbvhPhaseMaxSize = 0; // max qbvh data size from 0
+#if GPURT_BUILD_RTIP3_1
+    uint32 postProcKdopsMaxSize = 0; // max post Kdops data size from 0
+#endif
 
     // The scratch acceleration structure is built as a BVH2.
     const uint32 aabbCount = m_buildConfig.maxNumPrimitives;
@@ -769,6 +1092,10 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
     uint32 bvhNodeData = 0xFFFFFFFF;
     uint32 bvhLeafNodeData = 0xFFFFFFFF;
     uint32 fastLBVHRootNodeIndex = 0xFFFFFFFF;
+#if GPURT_BUILD_RTIP3_1
+    uint32 primCompNodeIndices = 0xFFFFFFFF;
+    uint32 primCompNodeIndicesEnd = 0xFFFFFFFF;
+#endif
     uint32 numBatches = 0xFFFFFFFF;
 
     //--------------------------------------------
@@ -824,6 +1151,12 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
     // QBVH
     uint32 qbvhGlobalStack = 0;
     uint32 qbvhGlobalStackPtrs = 0;
+#if GPURT_BUILD_RTIP3_1
+    uint32 obbRefitStackPtrs = 0;
+    uint32 obbRefitStack = 0;
+    uint32 qbvhObbFlags = 0;
+    uint32 qbvhKdops = 0;
+#endif
 
     // ============ TaskLoopCounters ============
     {
@@ -832,6 +1165,11 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
     }
 
     // ============ TaskQueueCounter ============
+#if GPURT_BUILD_RTIP3_1
+    // These task queue counters need to be here, at the beginning of the scratch buffer,
+    // in order to enable PostProc Kdops. We cannot ovewrite this section because waves
+    // may come later that will need these counters to indicate which phases are done.
+#endif
     {
         if (m_buildConfig.enableRebraid)
         {
@@ -842,6 +1180,40 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
             plocTaskQueueCounter = ReserveBytes(RayTracingTaskQueueCounterSize, &runningOffset);
         }
     }
+
+#if GPURT_BUILD_RTIP3_1
+    // ============ PostProc Kdops ============
+    {
+        if (Util::BitfieldIsSet(m_buildConfig.enableOrientedBoundingBoxes, uint32(m_buildArgs.inputs.type)))
+        {
+            const uint32 maxObbSlotCount = GetMaxObbSlotCount();
+
+            // Refit stack related memory. Align offset to 16-bytes for indirect dispatch
+            runningOffset = Util::Pow2Align(runningOffset, 16u);
+            obbRefitStackPtrs = ReserveBytes(sizeof(ObbRefitStackPtrs), &runningOffset);
+
+            // The OBB refit stack contains pointers to fat leaves (internal nodes with all leaf references). In the
+            // worst case scenario, the last level internal node can have a minimum of 2 leaf references, as a result
+            // the maximum number of such fat leaf nodes cannot exceed maxLastLevelPrimRefCount.
+            obbRefitStack = ReserveBytes(GetMaxLastLevelInternalNodeCount() * sizeof(uint), &runningOffset);
+
+            // These flags contains the precomputed packed bits for OBB computation for each internal node
+            qbvhObbFlags = ReserveBytes(OBB_TABLE_ENTRY_SIZE * maxObbSlotCount, &runningOffset);
+            baseOffset4 = runningOffset;
+
+            // Kdop storage space: we're trying to re-use as much of the scratch buffer as possible.
+            // For some reason, we can't overwrite the TaskQueueCounter area with Kdops.
+            qbvhKdops = ReserveBytes(OBBKDOP_SIZE * maxObbSlotCount, &runningOffset);
+            postProcKdopsMaxSize = runningOffset;
+
+            // Reset the runningOffset: the Kdops won't be used until much later
+            if (willDumpScratchOffsets == false)
+            {
+                runningOffset = baseOffset4;
+            }
+        }
+    }
+#endif
 
     // ============ BVH2 & QBVH ============
     {
@@ -884,12 +1256,38 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
             (m_buildArgs.inputs.type == AccelStructType::BottomLevel);
 
         bool stackHasTwoEntries = intNodeTypesMixInBlas;
+#if GPURT_BUILD_RTIP3
+        // Since the leaf node offsets are allocated along with box node offsets, we cannot calculate destination
+        // offset using node index alone. So we need to store the destination offset as the second dword in stack.
+        stackHasTwoEntries |= m_deviceSettings.highPrecisionBoxNodeEnable;
+#if GPURT_BUILD_RTIP3_1
+        // For Quantized BVH8 box nodes, we store the parent pointer and index in parent as the second dword in stack.
+        stackHasTwoEntries |= (m_pDevice->GetRtIpLevel() == Pal::RayTracingIpLevel::RtIp3_1);
+#endif
+#endif
 
         const uint32 stackEntrySize = stackHasTwoEntries ? 2u : 1u;
         ReserveBytes(maxStackEntry * stackEntrySize * sizeof(uint32), &runningOffset);
 
+#if GPURT_BUILD_RTIP3_1
+        // Align indirect dispatch arguments to 16 bytes to avoid fetching two cache lines in the CP.
+        runningOffset = Util::Pow2Align(runningOffset, 16);
+#endif
         qbvhGlobalStackPtrs = ReserveBytes(sizeof(StackPtrs), &runningOffset);
 
+#if GPURT_BUILD_RTIP3_1
+        // Primitive compression pass for RTIP 3.1
+        if (m_buildConfig.enableCompressPrimsPass)
+        {
+            // This section stores compression batch indices. Each batch is referenced by the BVH2 subtree parent
+            // scratch node that is collapsed into a BVH8. The worst case batches occur when each BVH8 internal
+            // node has at least one leaf to compress.
+            const uint32 primCompIdxsBytes = GetNumInternalNodeCount() * sizeof(uint32);
+            primCompNodeIndices = ReserveBytes(primCompIdxsBytes, &runningOffset);
+
+            primCompNodeIndicesEnd = runningOffset;
+        }
+#endif
     }
     qbvhPhaseMaxSize = runningOffset;
 
@@ -901,6 +1299,19 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
     {
         runningOffset = baseOffset0;
     }
+
+#if GPURT_BUILD_RTIP3_1
+    // ============ EncodeQuadPrimitives ============
+    {
+        uint baseOffset = runningOffset;
+        if (m_buildConfig.enableEarlyPairCompression)
+        {
+            primRefCount = ReserveBytes(m_buildConfig.trianglePairBlockCount * sizeof(uint32), &runningOffset);
+        }
+        bvh2PhaseMaxSize = Util::Max(bvh2PhaseMaxSize, runningOffset);
+        runningOffset = baseOffset;
+    }
+#endif
 
     // ============ State ============
     {
@@ -1090,12 +1501,25 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
         pOffsets->batchIndices = batchIndices;
         pOffsets->fastLBVHRootNodeIndex = fastLBVHRootNodeIndex;
 
+#if GPURT_BUILD_RTIP3_1
+        pOffsets->obbRefitStackPtrs = obbRefitStackPtrs;
+        pOffsets->obbRefitStack = obbRefitStack;
+        pOffsets->qbvhObbFlags = qbvhObbFlags;
+        pOffsets->qbvhKdops = qbvhKdops;
+#endif
+#if GPURT_BUILD_RTIP3_1
+        pOffsets->primCompNodeIndices    = primCompNodeIndices;
+        pOffsets->primCompNodeIndicesEnd = primCompNodeIndicesEnd;
+#endif
     }
 
     ScratchBufferInfo info;
     info.baseOffset = (AllowRemappingScratchBuffer() ? baseOffset0 : 0);
     info.bvh2PhaseSize = bvh2PhaseMaxSize;
     info.qbvhPhaseSize = qbvhPhaseMaxSize;
+#if GPURT_BUILD_RTIP3_1
+    info.postProcKdopsMaxSize = postProcKdopsMaxSize;
+#endif
     return info;
 }
 
@@ -1118,6 +1542,10 @@ uint32 BvhBuilder::CalculateUpdateScratchBufferInfo(
     // Encode task loop counter
     offsets.encodeTaskCounter = ReserveBytes(Util::Pow2Align(sizeof(EncodeTaskCountersUpdate), 128u), &runningOffset);
 
+#if GPURT_BUILD_RTIP3_1
+    // We don't use any additional scratch memory for RTIP 3.1+
+    if (m_pDevice->GetRtIpLevel() < Pal::RayTracingIpLevel::RtIp3_1)
+#endif
     {
         // Allocate space for the node flags
         offsets.propagationFlags = ReserveBytes(m_buildConfig.maxNumPrimitives * sizeof(uint32), &runningOffset);
@@ -1126,6 +1554,34 @@ uint32 BvhBuilder::CalculateUpdateScratchBufferInfo(
         // node pointer for updating
         offsets.updateStack = ReserveBytes(m_buildConfig.maxNumPrimitives * sizeof(uint32), &runningOffset);
 
+#if GPURT_BUILD_RTIP3
+        const bool childBoundsInScratch = m_deviceSettings.highPrecisionBoxNodeEnable;
+
+        if (childBoundsInScratch)
+        {
+            // We allocate one AABB slot per internal node child (4 for BVH4, 8 for BVH8) because with primitive data
+            // compression there can be as many as 16 triangles referencing the same primitive data structure. Thus,
+            // mapping a node pointer to an offset will require us to allocate a max of 16 * maxNumPrimitives slots.
+
+            uint32 maxInternalNodeSlot = 0;
+
+            // In RtIp3.0 and earlier levels, the node sizes may vary and both internal and leaf nodes are stored
+            // in an interleaved manner. Therefore, a 64-byte chunk index is used as the node index, it requires
+            // slightly more memory than allocating based on 64-byte chunks in the acceleration structure as below
+            //
+            // const uint32 internalNodeSize = CalculateInternalNodesSize();
+            // const uint32 leafNodeSize = CalculateLeafNodesSize();
+            // const uint32 num64ByteChunks = (internalNodeSize + leafNodeSize) / 64;
+
+            maxInternalNodeSlot = CalculateNodesSize() / 64;
+
+            const uint32 maxNumChildSlots = GetMaxInternalNodeChildCount();
+
+            // Repurpose bvhNodeData offset for fp32 bounds
+            offsets.bvhNodeData =
+                ReserveBytes((maxInternalNodeSlot * maxNumChildSlots) * sizeof(Aabb), &runningOffset);
+        }
+#endif
     }
 
     if (pOffsets != nullptr)
@@ -1173,6 +1629,10 @@ bool BvhBuilder::ForceRebuild(
         (inputs.type == GpuRt::AccelStructType::BottomLevel);
 
     bool rebuildAS = rebuildBottomLevel || rebuildTopLevel;
+#if GPURT_BUILD_RTIP3_1
+    // Trivial Builder forces eligible updates to be rebuilds.
+    rebuildAS = rebuildAS || pDevice->ShouldUseTrivialBuilderForBuild(inputs);
+#endif
 
     return rebuildAS;
 }
@@ -1234,6 +1694,16 @@ void BvhBuilder::InitBuildConfig(
     const bool isTrianglePrimitiveBuild = (buildArgs.inputs.type == AccelStructType::BottomLevel) &&
                                           (m_buildConfig.geometryType == GeometryType::Triangles);
 
+#if GPURT_BUILD_RTIP3_1
+    if (m_pDevice->GetRtIpLevel() >= Pal::RayTracingIpLevel::RtIp3_1)
+    {
+        // RTIP3.1+ only supports early triangle pairing.
+        m_buildConfig.triangleCompressionMode =
+            (isTrianglePrimitiveBuild && m_deviceSettings.enableEarlyPairCompression) ?
+                TriangleCompressionMode::Pair : TriangleCompressionMode::None;
+    }
+    else
+#endif
     {
         m_buildConfig.fp16BoxNodesInBlasMode = ForceDisableFp16BoxNodes(m_buildArgs.inputs, m_deviceSettings) ?
             Fp16BoxNodesInBlasMode::NoNodes : m_deviceSettings.fp16BoxNodesInBlasMode;
@@ -1258,6 +1728,14 @@ void BvhBuilder::InitBuildConfig(
     m_buildConfig.buildMode = OverrideBuildMode(buildArgs);
 
     m_buildConfig.rebraidFactor = m_deviceSettings.rebraidFactor;
+
+#if GPURT_BUILD_RTIP3_1
+    // needed for EnableNonPrioritySortingRebraid optimization
+    if (m_pDevice->GetRtIpLevel() == Pal::RayTracingIpLevel::RtIp3_1)
+    {
+        m_buildConfig.rebraidFactor = 4;
+    }
+#endif
 
     if (m_buildConfig.enableRebraid)
     {
@@ -1327,21 +1805,100 @@ void BvhBuilder::InitBuildConfig(
         m_buildConfig.trianglePairBlockCount = trianglePairBlockCount;
     }
 
+#if GPURT_BUILD_RTIP3_1
+    if ((buildArgs.inputs.type == AccelStructType::BottomLevel) &&
+        (m_buildConfig.geometryType == GeometryType::Triangles))
+    {
+        m_buildConfig.primCompressionFlags = m_deviceSettings.primCompressionFlags;
+
+        uint numPrimsPerLeaf;
+        {
+            numPrimsPerLeaf = 2u;
+        }
+
+        // Disable features not supported in update
+        if (UpdateAllowed())
+        {
+            m_buildConfig.primCompressionFlags &=
+                ~uint32(PrimCompFlags::MultiPrim | PrimCompFlags::EnableTrailingZeroAndPrefix);
+
+            m_buildConfig.maxPrimRangeSize = Util::Min(numPrimsPerLeaf, m_deviceSettings.maxPrimRangeSize);
+        }
+        else
+        {
+            m_buildConfig.maxPrimRangeSize = m_deviceSettings.maxPrimRangeSize;
+        }
+
+#if GPURT_BUILD_RTIP3_1
+        // Check whether to use the Trivial BVH Builder.
+        m_buildConfig.shouldUseTrivialBuilder = m_pDevice->ShouldUseTrivialBuilderForBuild(buildArgs.inputs);
+#endif
+
+        m_buildConfig.enableCompressPrimsPass =
+            (m_deviceSettings.enableParallelBuild == false) &&
+#if GPURT_BUILD_RTIP3_1
+            (m_buildConfig.shouldUseTrivialBuilder == false) &&
+#endif
+            ((m_buildConfig.primCompressionFlags & PrimCompFlags::MultiPrim) ||
+             (m_buildConfig.maxPrimRangeSize > numPrimsPerLeaf));
+    }
+    m_buildConfig.enableOrientedBoundingBoxes = m_deviceSettings.enableOrientedBoundingBoxes;
+
+    // OBBs are disabled for procedural geometry
+    if ((m_buildConfig.geometryType != GeometryType::Triangles) ||
+        Util::TestAnyFlagSet(m_buildArgs.inputs.flags, AccelStructBuildFlagAllowUpdate
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 49
+        // Disable OBBs depending on which D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS flags
+        // are enabled for the current AS.
+        | m_deviceSettings.obbDisableBuildFlags
+#endif
+        ) ||
+        m_buildConfig.shouldUseTrivialBuilder)
+    {
+        m_buildConfig.enableOrientedBoundingBoxes = 0;
+    }
+
+    // OBBs are disabled in the TLAS if rebraid is enabled
+    if (m_deviceSettings.enableRebraid)
+    {
+        m_buildConfig.enableOrientedBoundingBoxes &= ~(1 << uint32(AccelStructType::TopLevel));
+    }
+#endif
+
     // Max geometries we can fit in the SRD table for merged encode buiping ld/update
     const uint32 maxDescriptorTableSize = (m_cmdBuffer != nullptr) ?
         m_backend.GetMaxDescriptorTableSize(m_cmdBuffer) : 0;
 
     m_buildConfig.needEncodeDispatch =
+#if GPURT_BUILD_RTIP3
+        (IsUpdate() && m_deviceSettings.highPrecisionBoxNodeEnable) ||
+#endif
         (IsUpdate() &&
+#if GPURT_BUILD_RTIP3_1
+         // RTIP 3.1+ requires merged Encode-Update path since it handles multiple geometries in a primitive structure,
+         // which the non-merged path cannot handle.
+         (m_pDevice->GetRtIpLevel() < Pal::RayTracingIpLevel::RtIp3_1) &&
+#endif
          (m_deviceSettings.enableMergedEncodeUpdate == 0)) ||
         ((IsUpdate() == false) && (m_deviceSettings.enableMergedEncodeBuild == 0)) ||
         ((buildArgs.inputs.type == AccelStructType::TopLevel)
+#if GPURT_BUILD_RTIP3_1
+         // RTIP 3.1+ updates (both BLAS and TLAS) are supported only through merged Encode-Update path.
+         && ((IsUpdate() == false) || (m_pDevice->GetRtIpLevel() < Pal::RayTracingIpLevel::RtIp3_1))
+#endif
          ) ||
         ((IsUpdate() == false) && (m_buildConfig.geometryType == GeometryType::Aabbs))
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 46
         || (buildArgs.inputs.inputElemCount > maxDescriptorTableSize)
 #endif
         ;
+
+#if GPURT_BUILD_RTIP3_1
+    if ((m_buildConfig.shouldUseTrivialBuilder == false) && UseSingleThreadGroupBuild())
+    {
+        m_buildConfig.enableEarlyPairCompression = false;
+    }
+#endif
 
     // The builder supports one compacted size emit during the build itself. Additional postbuild info requires
     // extra dispatches or CP writes.
@@ -1532,6 +2089,17 @@ AccelStructHeader BvhBuilder::InitAccelStructHeader() const
     info.fusedInstanceNode          = m_deviceSettings.enableFusedInstanceNode;
     info.flags                      = m_buildArgs.inputs.flags;
 
+#if GPURT_BUILD_RTIP3
+    // Hardware instance node formats are always required on RTIP3.x
+    if (m_pDevice->GetRtIpLevel() >= Pal::RayTracingIpLevel::RtIp3_0)
+    {
+        info.hwInstanceNodeEnable = 1;
+    }
+
+    info.highPrecisionBoxNodeEnable = m_buildSettings.highPrecisionBoxNodeEnable;
+    info2.bvh8Enable                = m_buildSettings.bvh8Enable;
+#endif
+
     header.info                     = info;
     header.info2                    = info2;
     header.accelStructVersion       = GPURT_ACCEL_STRUCT_VERSION;
@@ -1555,6 +2123,9 @@ AccelStructHeader BvhBuilder::InitAccelStructHeader() const
     header.offsets.geometryInfo     = m_resultOffsets.geometryInfo;
     header.offsets.primNodePtrs     = m_resultOffsets.primNodePtrs;
 
+#if GPURT_BUILD_RTIP3_1
+    header.obbBlasMetadataOffset    = m_resultBufferInfo.obbBlasMetadataOffset;
+#endif
     return header;
 }
 
@@ -1664,13 +2235,32 @@ void BvhBuilder::EncodeInstances(
 {
     BindPipeline(InternalRayTracingCsType::EncodeInstances);
 
+#if GPURT_BUILD_RTIP3_1
+    WriteBuildBufferBindings({}, BuildBufferBindingFlags::ObbLut);
+#else
     WriteBuildBufferBindings();
+#endif
 
     RGP_PUSH_MARKER("Encode Instances (NumDescs=%u)", numDesc);
     Dispatch(DispatchSize(numDesc));
 
     RGP_POP_MARKER();
 }
+
+#if GPURT_BUILD_RTIP3_1
+// =====================================================================================================================
+void BvhBuilder::RefitInstanceBounds()
+{
+    BindPipeline(InternalRayTracingCsType::RefitInstanceBounds);
+
+    WriteBuildBufferBindings({}, BuildBufferBindingFlags::ObbLut);
+
+    RGP_PUSH_MARKER("Refit Instance Bounds (NumDescs=%u)", m_buildConfig.numPrimitives);
+    Dispatch(DispatchSize(m_buildConfig.numPrimitives));
+
+    RGP_POP_MARKER();
+}
+#endif
 
 // =====================================================================================================================
 void BvhBuilder::WriteImmediateSingle(
@@ -1762,6 +2352,24 @@ uint32 FloatToUintForCompare(
 
     return ui;
 }
+
+#if GPURT_BUILD_RTIP3_1
+// =====================================================================================================================
+void BvhBuilder::InitTlasRefit()
+{
+    if ((m_buildConfig.topLevelBuild == false) && (m_deviceSettings.tlasRefittingMode != TlasRefittingMode::Disabled))
+    {
+        const uint32 InitialMax = FloatToUintForCompare(-FLT_MAX);
+        const uint32 InitialMin = FloatToUintForCompare(FLT_MAX);
+        for (uint i = 0; i < KDOP_PLANE_COUNT; i++)
+        {
+            const uint32 InitialValues[] = { InitialMin, InitialMax };
+            const uint dstOffset = ACCEL_STRUCT_METADATA_KDOP_OFFSET + i * sizeof(InitialValues);
+            WriteImmediateData(HeaderBufferBaseVa() + dstOffset, InitialValues);
+        }
+    }
+}
+#endif
 
 // =====================================================================================================================
 // Initialize an acceleration structure into a valid state to begin building
@@ -1860,6 +2468,10 @@ void BvhBuilder::InitAccelerationStructure()
         const gpusize encodeTaskCountersOffset = ScratchBufferBaseVa() + m_scratchOffsets.encodeTaskCounter;
         WriteImmediateData(encodeTaskCountersOffset, encodeTaskCounters);
     }
+
+#if GPURT_BUILD_RTIP3_1
+    InitTlasRefit();
+#endif
 
     const gpusize taskLoopCountersOffset = ScratchBufferBaseVa() + m_scratchOffsets.taskLoopCounters;
     ZeroDataImmediate(taskLoopCountersOffset, TASK_LOOP_COUNTERS_NUM_DWORDS);
@@ -2043,6 +2655,31 @@ void BvhBuilder::OutputBuildInfo()
         }
         Util::Strncat(buildShaderInfo, MaxInfoStrLength, infoString);
     }
+#if GPURT_BUILD_RTIP3_1
+
+    if (m_buildConfig.enableOrientedBoundingBoxes)
+    {
+        Util::Strncat(buildShaderInfo, MaxInfoStrLength, ", OBB");
+    }
+    if (m_buildConfig.enableCompressPrimsPass)
+    {
+        Util::Strncat(buildShaderInfo, MaxInfoStrLength, ", CompressPrimsPass");
+    }
+    if (m_buildConfig.maxPrimRangeSize > 0)
+    {
+        char infoString[MaxInfoStrLength];
+        Util::Snprintf(infoString, MaxInfoStrLength, ", maxPrimRangeSize:%d",
+            m_buildConfig.maxPrimRangeSize);
+        Util::Strncat(buildShaderInfo, MaxInfoStrLength, infoString);
+    }
+    if (m_buildConfig.primCompressionFlags > 0)
+    {
+        char infoString[MaxInfoStrLength];
+        Util::Snprintf(infoString, MaxInfoStrLength, ", primCompressionFlags:%x",
+            m_buildConfig.primCompressionFlags);
+        Util::Strncat(buildShaderInfo, MaxInfoStrLength, infoString);
+    }
+#endif
     m_backend.CommentString(m_cmdBuffer, buildShaderInfo);
 }
 
@@ -2079,7 +2716,33 @@ void BvhBuilder::InitBuildSettings()
     m_buildSettings.enablePairCostCheck          = m_deviceSettings.enablePairCompressionCostCheck;
     m_buildSettings.mortonFlags                  = m_buildConfig.mortonFlags;
 
+#if GPURT_BUILD_RTIP3_1
+    m_buildSettings.enableOrientedBoundingBoxes  = m_buildConfig.enableOrientedBoundingBoxes;
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 49
+    // The default value for obbQuality is 0. Using this as obbNumLevels would disable OBBs, so
+    // let's manually plug the correct default value here:
+    m_buildSettings.obbNumLevels                 = (m_deviceSettings.obbQuality == 0) ? 0xFFFFFFFFu : m_deviceSettings.obbQuality;
+#else
+    m_buildSettings.obbNumLevels                 = m_deviceSettings.obbNumLevels;
+#endif
+    m_buildSettings.boxSplittingFlags            = m_deviceSettings.boxSplittingFlags;
+    m_buildSettings.enableBvhChannelBalancing    = m_deviceSettings.enableBvhChannelBalancing;
+    m_buildSettings.tlasRefittingMode            = m_deviceSettings.tlasRefittingMode;
+    // TLAS Refitting is disabled for procedural geometry
+    if ((m_buildConfig.geometryType != GeometryType::Triangles))
+    {
+        m_buildSettings.tlasRefittingMode = static_cast<uint32>(TlasRefittingMode::Disabled);
+    }
+#endif
+#if GPURT_BUILD_RTIP3
+    m_buildSettings.highPrecisionBoxNodeEnable   = m_deviceSettings.highPrecisionBoxNodeEnable;
+    m_buildSettings.bvh8Enable                   = m_deviceSettings.bvh8Enable;
+#endif
     m_buildSettings.enableRebraid                = m_buildConfig.enableRebraid;
+#if GPURT_BUILD_RTIP3_1
+    m_buildSettings.rebraidOpenSAFactor          = (m_deviceSettings.rebraidOpenSAFactor == 0) ? 0.70f : m_deviceSettings.rebraidOpenSAFactor;
+    m_buildSettings.rebraidOpenMinPrims          = (m_deviceSettings.rebraidOpenMinPrims == 0) ? 16 : m_deviceSettings.rebraidOpenMinPrims;
+#endif
     m_buildSettings.useMortonCode30              = m_deviceSettings.enableMortonCode30;
     m_buildSettings.enableFusedInstanceNode      = m_deviceSettings.enableFusedInstanceNode;
     m_buildSettings.enableMergeSort              = m_buildConfig.enableMergeSort;
@@ -2100,6 +2763,11 @@ void BvhBuilder::InitBuildSettings()
 
     m_buildSettings.gpuDebugFlags = m_deviceSettings.gpuDebugFlags;
 
+#if GPURT_BUILD_RTIP3_1
+    m_buildSettings.primCompressionFlags = m_buildConfig.primCompressionFlags;
+    m_buildSettings.maxPrimRangeSize     = m_buildConfig.maxPrimRangeSize;
+    m_buildSettings.instanceMode         = m_deviceSettings.instanceMode;
+#endif
     m_buildSettings.updateFlags =
         m_buildArgs.inputs.flags & (AccelStructBuildFlagPerformUpdate | AccelStructBuildFlagAllowUpdate);
 
@@ -2128,6 +2796,13 @@ void BvhBuilder::InitCopySettings()
 {
     m_buildSettings = {};
 
+#if GPURT_BUILD_RTIP3_1
+    m_buildSettings.enableBvhChannelBalancing = m_deviceSettings.enableBvhChannelBalancing;
+#endif
+#if GPURT_BUILD_RTIP3
+    m_buildSettings.highPrecisionBoxNodeEnable = m_deviceSettings.highPrecisionBoxNodeEnable;
+    m_buildSettings.bvh8Enable                 = m_deviceSettings.bvh8Enable;
+#endif
     m_buildSettings.enableFusedInstanceNode = m_deviceSettings.enableFusedInstanceNode;
 
     m_buildSettings.rtIpLevel = static_cast<uint32>(m_pDevice->GetRtIpLevel());
@@ -2221,9 +2896,16 @@ void BvhBuilder::BuildRaytracingAccelerationStructure()
         // Reset update encode task counters
         const EncodeTaskCountersUpdate encodeTaskCountersUpdate = {};
         WriteImmediateData(ScratchBufferBaseVa(), encodeTaskCountersUpdate);
+#if GPURT_BUILD_RTIP3_1
+        InitTlasRefit();
+#endif
         Barrier(BarrierFlagSyncPostCpWrite);
     }
+#if GPURT_BUILD_RTIP3_1
+    else if ((UseSingleThreadGroupBuild() || m_buildConfig.shouldUseTrivialBuilder) == false)
+#else
     else
+#endif
     {
         InitAccelerationStructure();
         Barrier(BarrierFlagSyncPostCpWrite);
@@ -2234,6 +2916,25 @@ void BvhBuilder::BuildRaytracingAccelerationStructure()
         PreBuildDumpEvents();
     }
 
+#if GPURT_BUILD_RTIP3_1
+    if (m_buildConfig.shouldUseTrivialBuilder)
+    {
+        Util::Span<BvhBuilder> builder(this, 1);
+        BvhBatcher batcher(m_cmdBuffer, m_backend, m_pDevice, m_deviceProps, m_clientCb, m_deviceSettings);
+        batcher.BuildTrivialBvhs(builder);
+    }
+    else if (UseSingleThreadGroupBuild())
+    {
+        BuildSingleThreadGroup();
+
+        if (Util::BitfieldIsSet(m_buildConfig.enableOrientedBoundingBoxes, uint32(AccelStructType::TopLevel)))
+        {
+            Barrier(BarrierFlagSyncIndirectArg | BarrierFlagSyncDispatch);
+            RefitOrientedBounds();
+        }
+    }
+    else
+#endif
     if (m_buildConfig.maxNumPrimitives > 0)
     {
         if (m_buildSettings.enableEarlyPairCompression)
@@ -2470,7 +3171,12 @@ void BvhBuilder::EncodeQuadPrimitives()
         .geometryIndex = m_buildConfig.trianglePairBlockCount
     };
 
+#if GPURT_BUILD_RTIP3_1
+    WriteBuildBufferBindings(shaderConstants,
+        BuildBufferBindingFlags::GeometryBuffer | BuildBufferBindingFlags::ObbLut);
+#else
     WriteBuildBufferBindings(shaderConstants, BuildBufferBindingFlags::GeometryBuffer);
+#endif
 
     RGP_PUSH_MARKER("Encode Quad Nodes (NumPrimitives=%u)(NumBlocks=%u)",
                      m_buildConfig.maxNumPrimitives,
@@ -2497,7 +3203,11 @@ void BvhBuilder::EncodePrimitives()
 
         constexpr uint32 EncodeRootConstEntryOffset = 0;
 
+#if GPURT_BUILD_RTIP3_1
+        WriteBuildBufferBindings({}, BuildBufferBindingFlags::GeometryBuffer | BuildBufferBindingFlags::ObbLut);
+#else
         WriteBuildBufferBindings({}, BuildBufferBindingFlags::GeometryBuffer);
+#endif
 
         // Prepare merged source AABB buffer data from geometry
         for (uint32 geometryIndex = 0; geometryIndex < m_buildArgs.inputs.inputElemCount; ++geometryIndex)
@@ -3106,6 +3816,26 @@ BuildPhaseFlags BvhBuilder::EnabledPhases() const
 
             flags |= BuildPhaseFlags::EncodeHwBvh;
 
+#if GPURT_BUILD_RTIP3_1
+            if (m_buildConfig.topLevelBuild == true)
+            {
+                if (m_deviceSettings.tlasRefittingMode == TlasRefittingMode::Late)
+                {
+                    flags |= BuildPhaseFlags::RefitInstanceBounds;
+                }
+            }
+            else
+            {
+                if (Util::BitfieldIsSet(m_buildConfig.enableOrientedBoundingBoxes, uint32(m_buildArgs.inputs.type)))
+                {
+                    flags |= BuildPhaseFlags::RefitOrientedBounds;
+                }
+                if (m_buildConfig.enableCompressPrimsPass)
+                {
+                    flags |= BuildPhaseFlags::CompressPrims;
+                }
+            }
+#endif
         }
     }
 
@@ -3313,7 +4043,11 @@ void BvhBuilder::GenerateMortonCodes()
 {
     BindPipeline(InternalRayTracingCsType::GenerateMortonCodes);
 
+#if GPURT_BUILD_RTIP3_1
+    WriteBuildBufferBindings({}, BuildBufferBindingFlags::ObbLut);
+#else
     WriteBuildBufferBindings();
+#endif
 
     RGP_PUSH_MARKER("Generate Morton Codes (maxNumPrimitives %u)", m_buildConfig.maxNumPrimitives);
     Dispatch(DispatchSize(m_buildConfig.maxNumPrimitives));
@@ -3378,6 +4112,13 @@ void BvhBuilder::UpdateQBVH()
 
     entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
 
+#if GPURT_BUILD_RTIP3_1
+    if (m_deviceSettings.tlasRefittingMode != TlasRefittingMode::Disabled)
+    {
+        entryOffset = WriteBufferVa(m_pDevice->GetLutVa(), entryOffset);
+    }
+    else
+#endif
     {
         entryOffset = WriteBufferVa(0, entryOffset);
     }
@@ -3416,6 +4157,13 @@ void BvhBuilder::UpdateParallel()
 
     entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
 
+#if GPURT_BUILD_RTIP3_1
+    if (m_deviceSettings.tlasRefittingMode != TlasRefittingMode::Disabled)
+    {
+        entryOffset = WriteBufferVa(m_pDevice->GetLutVa(), entryOffset);
+    }
+    else
+#endif
     {
         entryOffset = WriteBufferVa(0, entryOffset);
     }
@@ -3435,6 +4183,27 @@ void BvhBuilder::EncodeUpdate()
 {
     uint32 numThreadGroups = 0;
 
+#if GPURT_BUILD_RTIP3_1
+    if (m_pDevice->GetRtIpLevel() >= Pal::RayTracingIpLevel::RtIp3_1)
+    {
+        {
+            BindPipeline(InternalRayTracingCsType::Update3_1);
+        }
+
+#if GPURT_BUILD_RTIP3_1
+        WriteBuildBufferBindings({}, BuildBufferBindingFlags::GeometryBuffer | BuildBufferBindingFlags::ObbLut);
+#else
+        WriteBuildBufferBindings({}, BuildBufferBindingFlags::GeometryBuffer);
+#endif
+
+        RGP_PUSH_MARKER("Update (NumPrimitives=%u)", m_buildConfig.maxNumPrimitives);
+        const gpusize updateGroupCountGpuVa =
+            SourceHeaderBufferBaseVa() + ACCEL_STRUCT_METADATA_UPDATE_GROUP_COUNT_OFFSET;
+        DispatchIndirect(updateGroupCountGpuVa);
+        RGP_POP_MARKER();
+    }
+    else
+#endif
     {
         BindPipeline((m_buildConfig.geometryType == GeometryType::Triangles) ?
             InternalRayTracingCsType::UpdateTriangles : InternalRayTracingCsType::UpdateAabbs);
@@ -3457,6 +4226,14 @@ void BvhBuilder::EncodeUpdate()
 
         entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
 
+#if GPURT_BUILD_RTIP3_1
+        // Obb Lut Constants
+        if (m_deviceSettings.tlasRefittingMode != TlasRefittingMode::Disabled)
+        {
+            entryOffset = WriteBufferVa(m_pDevice->GetLutVa(), entryOffset);
+        }
+        else
+#endif
         {
             entryOffset = WriteBufferVa(0, entryOffset);
         }
@@ -3511,6 +4288,13 @@ uint32 BvhBuilder::GetParallelBuildNumThreadGroups()
 // Executes the EncodeHwBvh shader
 void BvhBuilder::EncodeHwBvh()
 {
+#if GPURT_BUILD_RTIP3_1
+    if (m_pDevice->GetRtIpLevel() == Pal::RayTracingIpLevel::RtIp3_1)
+    {
+        BindPipeline(InternalRayTracingCsType::EncodeHwBvh3_1);
+    }
+    else
+#endif
     {
         BindPipeline(InternalRayTracingCsType::BuildQBVH);
     }
@@ -3523,12 +4307,57 @@ void BvhBuilder::EncodeHwBvh()
        .numThreads = numThreadGroups * DefaultThreadGroupSize
     };
 
+#if GPURT_BUILD_RTIP3_1
+    WriteBuildBufferBindings(shaderConstants, BuildBufferBindingFlags::ObbLut);
+#else
     WriteBuildBufferBindings(shaderConstants);
+#endif
 
     RGP_PUSH_MARKER("Encode HW BVH (nodeCount %u)", nodeCount);
     Dispatch(numThreadGroups);
     RGP_POP_MARKER();
 }
+
+#if GPURT_BUILD_RTIP3_1
+// =====================================================================================================================
+// Executes the refit oriented bounds shader
+void BvhBuilder::RefitOrientedBounds()
+{
+    if (m_buildConfig.topLevelBuild == true)
+    {
+        BindPipeline(InternalRayTracingCsType::RefitOrientedBoundsTopLevel);
+    }
+    else
+    {
+        BindPipeline(InternalRayTracingCsType::RefitOrientedBounds);
+    }
+    WriteBuildBufferBindings({}, BuildBufferBindingFlags::ObbLut);
+
+    const gpusize stackPtrsGpuVa = ScratchBufferBaseVa() + m_scratchOffsets.obbRefitStackPtrs;
+    RGP_PUSH_MARKER("Refit Oriented Bounds");
+    DispatchIndirect(stackPtrsGpuVa + STACK_PTRS_OBB_REFIT_GROUP_COUNT_X);
+    RGP_POP_MARKER();
+}
+
+// =====================================================================================================================
+// Compress primitives into RTIP 3.1 primitive structures
+void BvhBuilder::CompressPrims()
+{
+    PAL_ASSERT(m_buildConfig.enableCompressPrimsPass);
+
+    {
+        BindPipeline(InternalRayTracingCsType::CompressPrims);
+    }
+
+    WriteBuildBufferBindings();
+
+    const gpusize stackPtrsGpuVa = ScratchBufferBaseVa() + m_scratchOffsets.qbvhGlobalStackPtrs;
+
+    RGP_PUSH_MARKER("Compress Primitives");
+    DispatchIndirect(stackPtrsGpuVa + STACK_PTRS_PRIM_COMP_GROUP_COUNT_X);
+    RGP_POP_MARKER();
+}
+#endif
 
 // =====================================================================================================================
 // Executes the pair compression shader
@@ -3692,7 +4521,16 @@ void BvhBuilder::SortRadixInt32()
 // BVH build implementation with no barriers and a single dispatch.
 void BvhBuilder::BuildParallel()
 {
+#if GPURT_BUILD_RTIP3|| GPURT_BUILD_RTIP3_1
+    bool useRtip3xShader = false;
+#if GPURT_BUILD_RTIP3
+    useRtip3xShader |= m_pDevice->GetRtIpLevel() >= Pal::RayTracingIpLevel::RtIp3_0;
+#endif
+    const auto buildParallelShaderType = useRtip3xShader ?
+        InternalRayTracingCsType::BuildParallelRtip3x : InternalRayTracingCsType::BuildParallel;
+#else
     const auto buildParallelShaderType = InternalRayTracingCsType::BuildParallel;
+#endif
     if (m_buildConfig.radixSortScanLevel > 0)
     {
         PAL_ASSERT(m_buildConfig.numPrimitives < (m_radixSortConfig.numScanElemsPerWorkGroup *
@@ -3708,13 +4546,70 @@ void BvhBuilder::BuildParallel()
     {
        .numThreadGroups = numThreadGroups
     };
+#if GPURT_BUILD_RTIP3_1
+    WriteBuildBufferBindings(shaderConstants, (BuildBufferBindingFlags::ObbLut | BuildBufferBindingFlags::GeometryBuffer));
+#else
     WriteBuildBufferBindings(shaderConstants, BuildBufferBindingFlags::GeometryBuffer);
+#endif
 
     RGP_PUSH_MARKER("BVH build");
     Dispatch(numThreadGroups);
 
     RGP_POP_MARKER();
 }
+
+#if GPURT_BUILD_RTIP3_1
+// =====================================================================================================================
+void BvhBuilder::BuildTrivialBvh()
+{
+    const uint32 numThreadGroups = 1;
+
+    BindPipeline(InternalRayTracingCsType::BuildTrivialBvh);
+
+    uint32 entryOffset = 0;
+
+    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
+
+    // Set output buffer
+    entryOffset = WriteBufferVa(ResultBufferBaseVa(), entryOffset);
+
+    // Set header buffer
+    entryOffset = WriteBufferVa(HeaderBufferBaseVa(), entryOffset);
+
+    if (m_buildSettings.emitCompactSize == 1)
+    {
+        entryOffset = WriteBufferVa(m_emitCompactDstGpuVa, entryOffset);
+    }
+    else
+    {
+        entryOffset = WriteBufferVa(0, entryOffset);
+    }
+
+    if (m_buildSettings.isIndirectBuild)
+    {
+        entryOffset = WriteBufferVa(m_buildArgs.indirect.indirectGpuAddr, entryOffset);
+    }
+    else
+    {
+        entryOffset = WriteBufferVa(0, entryOffset);
+    }
+
+#if GPURT_ENABLE_GPU_DEBUG
+    entryOffset = WriteBufferVa(m_pDevice->GetGpuDebugBufferVa(), entryOffset);
+#endif
+
+    const uint32 cbvSrdTableGpuVaLo = Util::LowPart(m_geomConstSrdTable);
+    entryOffset = WriteUserDataEntries(&cbvSrdTableGpuVaLo, 1, entryOffset);
+
+    const uint32 vbvSrdTableGpuVaLo = Util::LowPart(m_geomBufferSrdTable);
+    entryOffset = WriteUserDataEntries(&vbvSrdTableGpuVaLo, 1, entryOffset);
+
+    RGP_PUSH_MARKER("BVH build");
+    Dispatch(numThreadGroups);
+
+    RGP_POP_MARKER();
+}
+#endif
 
 // =====================================================================================================================
 // Executes the appropriate exclusive scan shader depending on the number of elements
@@ -4051,6 +4946,16 @@ uint32 BvhBuilder::WriteBuildBufferBindings(
     // ShaderConstants
     entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
 
+#if GPURT_BUILD_RTIP3_1
+    // Obb Lut Constants
+    if ((buildBufferBindingFlags & BuildBufferBindingFlags::ObbLut) &&
+        (m_deviceSettings.enableOrientedBoundingBoxes != 0) ||
+        (m_deviceSettings.tlasRefittingMode != TlasRefittingMode::Disabled))
+    {
+        entryOffset = WriteBufferVa(m_pDevice->GetLutVa(), entryOffset);
+    }
+    else
+#endif
     {
         entryOffset = WriteBufferVa(0, entryOffset);
     }
@@ -4151,4 +5056,75 @@ uint32 BvhBuilder::WriteBuildShaderConstantBuffer(uint32 entryOffset)
     return entryOffset;
 }
 
+#if GPURT_BUILD_RTIP3_1
+// =====================================================================================================================
+bool BvhBuilder::UseSingleThreadGroupBuild() const
+{
+    return ((m_pDevice->GetRtIpLevel() == Pal::RayTracingIpLevel::RtIp3_1) &&
+            (m_deviceSettings.enableSingleThreadGroupBuild == true) &&
+            (m_buildConfig.topLevelBuild == false)                  &&
+            (m_buildConfig.geometryType == GeometryType::Triangles) &&
+            (m_buildConfig.numPrimitives <= 1024));
+}
+
+// =====================================================================================================================
+void BvhBuilder::BuildSingleThreadGroup()
+{
+    InternalRayTracingCsType pipelineType = InternalRayTracingCsType::BuildSingleThreadGroup32;
+
+    if (m_buildConfig.maxNumPrimitives > 32)
+    {
+        // Note, we need to pad primitive count to next power of 2 for MergeSort.
+        const uint32 alignedPrimCount = Util::Pow2Pad(m_buildConfig.maxNumPrimitives);
+        switch (alignedPrimCount)
+        {
+        case 64:  pipelineType = InternalRayTracingCsType::BuildSingleThreadGroup64;   break;
+        case 128: pipelineType = InternalRayTracingCsType::BuildSingleThreadGroup128;  break;
+        case 256: pipelineType = InternalRayTracingCsType::BuildSingleThreadGroup256;  break;
+        case 512: pipelineType = InternalRayTracingCsType::BuildSingleThreadGroup512;  break;
+        default:  pipelineType = InternalRayTracingCsType::BuildSingleThreadGroup1024; break;
+        }
+    }
+
+    BindPipeline(pipelineType);
+
+    uint32 entryOffset = 0;
+
+    entryOffset = WriteBuildShaderConstantBuffer(entryOffset);
+    entryOffset = WriteBufferVa(m_pDevice->GetLutVa(), entryOffset);
+    entryOffset = WriteBufferVa(HeaderBufferBaseVa(), entryOffset);
+    entryOffset = WriteBufferVa(ResultBufferBaseVa(), entryOffset);
+    entryOffset = WriteBufferVa(ScratchBufferBaseVa(), entryOffset);
+
+    if (m_buildConfig.topLevelBuild)
+    {
+        entryOffset = WriteBufferVa(m_buildArgs.inputs.instances.gpu, entryOffset);
+    }
+    else
+    {
+        entryOffset = WriteBufferVa(m_buildArgs.indirect.indirectGpuAddr, entryOffset);
+    }
+
+    entryOffset = WriteBufferVa(m_emitCompactDstGpuVa, entryOffset);
+
+    if (m_buildSettings.isIndirectBuild)
+    {
+        entryOffset = WriteBufferVa(m_buildArgs.indirect.indirectGpuAddr, entryOffset);
+    }
+    else
+    {
+        entryOffset = WriteBufferVa(0, entryOffset);
+    }
+
+    const uint32 cbvSrdTableGpuVaLo = Util::LowPart(m_geomConstSrdTable);
+    entryOffset = WriteUserDataEntries(&cbvSrdTableGpuVaLo, 1, entryOffset);
+
+    const uint32 vbvSrdTableGpuVaLo = Util::LowPart(m_geomBufferSrdTable);
+    entryOffset = WriteUserDataEntries(&vbvSrdTableGpuVaLo, 1, entryOffset);
+
+    RGP_PUSH_MARKER("BVH build (STGB) (NumPrimitives=%u)", m_buildConfig.maxNumPrimitives);
+    Dispatch(1);
+    RGP_POP_MARKER();
+}
+#endif
 }

@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -34,6 +34,9 @@ T LoadInstanceDescBuffer(uint offset)
 #include "IndirectArgBufferUtils.hlsl"
 #include "IntersectCommon.hlsl"
 #include "BuildCommonScratch.hlsl"
+#if GPURT_BUILD_RTIP3_1
+#include "KDOP.hlsl"
+#endif
 #include "EncodeTopLevelCommon.hlsl"
 #include "EncodeTopLevelBuild.hlsl"
 #include "EncodeTopLevelUpdate.hlsl"
@@ -167,4 +170,36 @@ void EncodeInstances(
 void RefitInstanceBounds(
     in uint3 globalThreadId : SV_DispatchThreadID)
 {
+#if GPURT_BUILD_RTIP3_1
+    const uint numPrimitives = FetchTaskCounter(
+        ShaderConstants.offsets.encodeTaskCounter + ENCODE_TASK_COUNTER_PRIM_REFS_OFFSET);
+
+    if (globalThreadId.x < numPrimitives)
+    {
+        // Skip inactive instances
+        ScratchNode node = FetchScratchNode(ShaderConstants.offsets.bvhLeafNodeData, globalThreadId.x);
+        if (IsNodeActive(node))
+        {
+            const NumPrimAndOffset numPrimAndOffset = LoadNumPrimAndOffset();
+
+            const uint instanceIndex = node.left_or_primIndex_or_instIndex;
+            const InstanceDesc desc = LoadInstanceDesc(instanceIndex, numPrimAndOffset.primitiveOffset);
+
+            const uint64_t blasBaseAddr = PackUint64(desc.accelStructureAddressLo, desc.accelStructureAddressHiAndFlags);
+            const uint64_t kdopAddress = blasBaseAddr + ACCEL_STRUCT_METADATA_KDOP_OFFSET;
+            const uint     geometryType = FetchHeaderField(blasBaseAddr + ACCEL_STRUCT_METADATA_HEADER_SIZE,
+                                                       ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET);
+            if (geometryType == GEOMETRY_TYPE_TRIANGLES)
+            {
+                const BoundingBox boundingBox = ComputeInstanceBoundsFromKdop(kdopAddress, desc.Transform);
+
+                // Write back to scratch node
+                const uint nodeOffset =
+                    CalcScratchNodeOffset(ShaderConstants.offsets.bvhLeafNodeData, globalThreadId.x);
+                WriteScratchNodeDataAtOffset(nodeOffset, SCRATCH_NODE_BBOX_MIN_OFFSET, boundingBox.min);
+                WriteScratchNodeDataAtOffset(nodeOffset, SCRATCH_NODE_BBOX_MAX_OFFSET, boundingBox.max);
+            }
+        }
+    }
+#endif
 }

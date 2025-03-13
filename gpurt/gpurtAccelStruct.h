@@ -65,6 +65,9 @@ struct AccelStructDataOffsets
     uint32 internalNodes;       // Offset to internal box nodes
     uint32 leafNodes;           // Offset to leaf nodes
     uint32 geometryInfo;        // Offset to geometry desc info (bottom level acceleration structure)
+#if GPURT_BUILD_RTIP3_1
+                                // Offset to instance sideband data (top level acceleration structure on RTIP3.1)
+#endif
     uint32 primNodePtrs;        // Offset to prim node pointers (BVH4 with triangle compression or ALLOW_UPDATE only)
 };
 
@@ -93,11 +96,23 @@ struct AccelStructMetadataHeader
     uint32 taskCounter;         // Task counter for dispatch-wide spin loop sync. Align to 8 bytes so taskCounter and
                                 // numTasksDone can be reset in one 64 bit CP write.
     uint32 numTasksDone;        // Number of tasks done
+#if GPURT_BUILD_RTIP3_1
+    uint32 instanceNode[16];    // Intersectable instance node data (BVH4)
+#else
     uint32 reserved0[16];       // Reserved
+#endif
     uint32 reserved1[3];        // Reserved
+#if GPURT_BUILD_RTIP3_1
+    uint32 updateGroupCount[3]; // Indirect dispatch group count x, y, z for Updates.
+#else
     uint32 reserved2[3];        // Reserved
+#endif
     uint32 padding[5];          // 128-byte alignment padding
+#if GPURT_BUILD_RTIP3_1
+    uint32 kdop[32];            // BLAS KDOP data.
+#else
     uint32 reserved3[32];
+#endif
 };
 
 #define ACCEL_STRUCT_METADATA_VA_LO_OFFSET              0
@@ -105,10 +120,19 @@ struct AccelStructMetadataHeader
 #define ACCEL_STRUCT_METADATA_SIZE_OFFSET               8
 #define ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET       12
 #define ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET     16
+#if GPURT_BUILD_RTIP3_1
+#define ACCEL_STRUCT_METADATA_INSTANCE_NODE_OFFSET      20
+#else
 #define ACCEL_STRUCT_METADATA_RESERVED_0                20
+#endif
 #define ACCEL_STRUCT_METADATA_RESERVED_1                84
+#if GPURT_BUILD_RTIP3_1
+#define ACCEL_STRUCT_METADATA_UPDATE_GROUP_COUNT_OFFSET 96
+#define ACCEL_STRUCT_METADATA_KDOP_OFFSET               128
+#else
 #define ACCEL_STRUCT_METADATA_RESERVED_2                96
 #define ACCEL_STRUCT_METADATA_RESERVED_3                128
+#endif
 #define ACCEL_STRUCT_METADATA_HEADER_SIZE               256
 
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_HEADER_SIZE == sizeof(AccelStructMetadataHeader), "Acceleration structure header mismatch");
@@ -118,6 +142,15 @@ GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_VA_HI_OFFSET == offsetof(AccelStructMe
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_SIZE_OFFSET == offsetof(AccelStructMetadataHeader, sizeInBytes), "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_TASK_COUNTER_OFFSET == offsetof(AccelStructMetadataHeader, taskCounter), "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_NUM_TASKS_DONE_OFFSET == offsetof(AccelStructMetadataHeader, numTasksDone), "");
+#if GPURT_BUILD_RTIP3_1
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_INSTANCE_NODE_OFFSET == offsetof(AccelStructMetadataHeader, instanceNode), "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_UPDATE_GROUP_COUNT_OFFSET == offsetof(AccelStructMetadataHeader, updateGroupCount), "");
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_METADATA_KDOP_OFFSET == offsetof(AccelStructMetadataHeader, kdop), "");
+#endif
+#endif
+
+#if GPURT_BUILD_RTIP3_1
+#define ACCEL_STRUCT_METADATA_MAX_PADDING 4096
 #endif
 
 // =====================================================================================================================
@@ -153,7 +186,12 @@ union AccelStructHeaderInfo
         uint32 unused0                : 1;  // Unused bits
         uint32 rebraid                : 1;  // Enable Rebraid for TLAS
         uint32 fusedInstanceNode      : 1;  // Enable fused instance nodes
+#if GPURT_BUILD_RTIP3
+        uint32 highPrecisionBoxNodeEnable : 1; // Internal nodes are encoded as high precision box nodes
+        uint32 hwInstanceNodeEnable       : 1; // Instance nodes are formatted in hardware instance node format
+#else
         uint32 reserved               : 2;  // Unused bits
+#endif
         uint32 flags                  : 16; // AccelStructBuildFlags
     };
 
@@ -171,8 +209,18 @@ union AccelStructHeaderInfo2
     struct
     {
         uint32 compacted              : 1;   // This BVH has been compacted
+#if GPURT_BUILD_RTIP3_1
+        uint32 bvh8Enable             : 1;   // Internal box nodes are BVH8 nodes
+#elif GPURT_BUILD_RTIP3
+        uint32 bvh8Enable             : 1;   // Internal box nodes are BVH8 nodes
+#else
         uint32 reserved               : 1;   // Unused bits
+#endif
+#if GPURT_BUILD_RTIP3_1
+        uint32 legacyLeafCompression  : 1;   // Indicates if legacy compression for primitive structures was used
+#else
         uint32 reserved2              : 1;
+#endif
         uint32 reserved3              : 29;  // Unused bits
     };
 
@@ -196,11 +244,25 @@ typedef uint32 AccelStructHeaderInfo2;
 #define ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_MASK                     0x1
 #define ACCEL_STRUCT_HEADER_INFO_FUSED_INSTANCE_NODE_FLAGS_SHIFT        13
 #define ACCEL_STRUCT_HEADER_INFO_FUSED_INSTANCE_NODE_FLAGS_MASK         0x1
+#if GPURT_BUILD_RTIP3
+#define ACCEL_STRUCT_HEADER_INFO_HIGH_PRECISION_BOX_NODE_FLAGS_SHIFT    14
+#define ACCEL_STRUCT_HEADER_INFO_HIGH_PRECISION_BOX_NODE_FLAGS_MASK     0x1
+#define ACCEL_STRUCT_HEADER_INFO_HW_INSTANCE_NODE_FMT_SHIFT             15
+#define ACCEL_STRUCT_HEADER_INFO_HW_INSTANCE_NODE_FMT_MASK              0x1
+#endif
 #define ACCEL_STRUCT_HEADER_INFO_FLAGS_SHIFT                            16
 #define ACCEL_STRUCT_HEADER_INFO_FLAGS_MASK                             0xffff
 
 #define ACCEL_STRUCT_HEADER_INFO_2_BVH_COMPACTION_FLAGS_SHIFT           0
 #define ACCEL_STRUCT_HEADER_INFO_2_BVH_COMPACTION_FLAGS_MASK            0x1
+#if GPURT_BUILD_RTIP3
+#define ACCEL_STRUCT_HEADER_INFO_2_BVH8_FLAGS_SHIFT                     1
+#define ACCEL_STRUCT_HEADER_INFO_2_BVH8_FLAGS_MASK                      0x1
+#endif
+#if GPURT_BUILD_RTIP3_1
+#define ACCEL_STRUCT_HEADER_INFO_2_LEGACY_LEAF_COMPRESSION_FLAGS_SHIFT  2
+#define ACCEL_STRUCT_HEADER_INFO_2_LEGACY_LEAF_COMPRESSION_FLAGS_MASK   0x1
+#endif
 
 // =====================================================================================================================
 // Primary acceleration structure header.
@@ -211,7 +273,12 @@ struct AccelStructHeader
     uint32                 sizeInBytes;             // Total size of the AS including both the metadata and primary AS
     uint32                 numPrimitives;           // Number of primitives encoded in the structure
     uint32                 numActivePrims;          // Number of active primitives
+#if GPURT_BUILD_RTIP3_1
+    uint32                 obbBlasMetadataOffset;   // Offset to BLAS metadata required by the TLAS builder when OBBs
+                                                    // are enabled.
+#else
     uint32                 reserved0;
+#endif
     uint32                 numDescs;                // Number of instance/geometry descs in the structure
     uint32                 geometryType;            // Type of geometry contained in a bottom level structure
     AccelStructDataOffsets offsets;                 // Offsets within accel struct (not including the header)
@@ -274,6 +341,34 @@ struct AccelStructHeader
             ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_MASK);
     }
 
+#if GPURT_BUILD_RTIP3
+    bool UsesHighPrecisionBoxNode()
+    {
+        return ((GetInfo() >> ACCEL_STRUCT_HEADER_INFO_HIGH_PRECISION_BOX_NODE_FLAGS_SHIFT) &
+            ACCEL_STRUCT_HEADER_INFO_HIGH_PRECISION_BOX_NODE_FLAGS_MASK);
+    }
+
+    bool UsesHardwareInstanceNode()
+    {
+        return ((GetInfo() >> ACCEL_STRUCT_HEADER_INFO_HW_INSTANCE_NODE_FMT_SHIFT) &
+            ACCEL_STRUCT_HEADER_INFO_HW_INSTANCE_NODE_FMT_MASK);
+    }
+
+    bool UsesBVH8()
+    {
+        return ((GetInfo2() >> ACCEL_STRUCT_HEADER_INFO_2_BVH8_FLAGS_SHIFT) &
+            ACCEL_STRUCT_HEADER_INFO_2_BVH8_FLAGS_MASK);
+    }
+#endif
+
+#if GPURT_BUILD_RTIP3_1
+    bool UsesLegacyLeafCompression()
+    {
+        return ((GetInfo2() >> ACCEL_STRUCT_HEADER_INFO_2_LEGACY_LEAF_COMPRESSION_FLAGS_SHIFT) &
+            ACCEL_STRUCT_HEADER_INFO_2_LEGACY_LEAF_COMPRESSION_FLAGS_MASK);
+    }
+#endif
+
     uint32 BuildFlags()
     {
 #ifdef __cplusplus
@@ -290,7 +385,11 @@ struct AccelStructHeader
 #define ACCEL_STRUCT_HEADER_BYTE_SIZE_OFFSET                     8
 #define ACCEL_STRUCT_HEADER_NUM_PRIMS_OFFSET                    12
 #define ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET             16
+#if GPURT_BUILD_RTIP3_1
+#define ACCEL_STRUCT_HEADER_OBB_BLAS_METADATA_OFFSET_OFFSET     20
+#else
 #define ACCEL_STRUCT_RESERVERED0_OFFSET                         20
+#endif
 #define ACCEL_STRUCT_HEADER_NUM_DESCS_OFFSET                    24
 #define ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET                28
 #define ACCEL_STRUCT_HEADER_OFFSETS_OFFSET                      32
@@ -318,7 +417,11 @@ GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_BYTE_SIZE_OFFSET               == offset
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_NUM_PRIMS_OFFSET               == offsetof(AccelStructHeader, numPrimitives),        "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_NUM_ACTIVE_PRIMS_OFFSET        == offsetof(AccelStructHeader, numActivePrims),       "");
 
+#if GPURT_BUILD_RTIP3_1
+GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_OBB_BLAS_METADATA_OFFSET_OFFSET == offsetof(AccelStructHeader, obbBlasMetadataOffset), "");
+#else
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_RESERVERED0_OFFSET                     == offsetof(AccelStructHeader, reserved0),             "");
+#endif
 
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_NUM_DESCS_OFFSET               == offsetof(AccelStructHeader, numDescs),             "");
 GPURT_STATIC_ASSERT(ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET           == offsetof(AccelStructHeader, geometryType),         "");
@@ -381,6 +484,57 @@ struct DriverDecodeHeader
     AccelStructHeaderInfo  info;
     AccelStructHeaderInfo2 info2;
 };
+
+#if GPURT_BUILD_RTIP3
+//=====================================================================================================================
+// RTIP3.x hardware instance transform node
+struct HwInstanceTransformNode
+{
+    float  worldToObject[3][4];     // World-to-object transformation matrix (float4x3)
+    uint64 childBasePtr;            // Child acceleration structure base pointer
+    uint32 childRootNodeOrParentPtr;// Child root node pointer (RTIP3.0) or parent pointer (RTIP3.1)
+    uint32 userDataAndInstanceMask; // [0:23] Instance contribution to hit group index, [24:31] Instance mask
+};
+
+//=====================================================================================================================
+// Instance sideband data for RTIP3.x instance nodes
+struct InstanceSidebandData
+{
+    uint32 instanceIndex;      // Auto generated instance index
+    uint32 instanceIdAndFlags; // [0:23] Instance ID, [24:31] Instance Flags
+    uint32 blasMetadataSize;   // Child acceleration structure metadata size
+    uint32 padding0;           // Unused
+    float  objectToWorld[3][4];// Object-to-world transformation matrix (float4x3)
+};
+
+//=====================================================================================================================
+struct HwInstanceNode
+{
+    HwInstanceTransformNode data;
+    InstanceSidebandData    sideband;
+
+#ifdef __cplusplus
+    HwInstanceNode(uint32 val)
+    {
+        memset(this, val, sizeof(HwInstanceNode));
+    }
+#endif
+};
+
+#define RTIP3_INSTANCE_NODE_WORLD2OBJECT_TRANSFORM_OFFSET       0
+#define RTIP3_INSTANCE_NODE_CHILD_BASE_PTR_OFFSET              48
+#define RTIP3_INSTANCE_NODE_CHILD_ROOT_NODE_OFFSET             56
+#define RTIP3_INSTANCE_NODE_USER_DATA_AND_INSTANCE_MASK_OFFSET 60
+
+#define RTIP3_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET           0
+#define RTIP3_INSTANCE_SIDEBAND_INSTANCE_ID_AND_FLAGS_OFFSET    4
+#define RTIP3_INSTANCE_SIDEBAND_BLAS_METADATA_SIZE_OFFSET       8
+#define RTIP3_INSTANCE_SIDEBAND_OBJECT2WORLD_TRANSFORM_OFFSET  16
+
+#if GPURT_BUILD_RTIP3_1
+#define RTIP3_1_INSTANCE_NODE_PARENT_POINTER_OFFSET RTIP3_INSTANCE_NODE_CHILD_ROOT_NODE_OFFSET
+#endif
+#endif
 
 #ifdef __cplusplus
 }

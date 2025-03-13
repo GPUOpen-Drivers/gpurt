@@ -138,6 +138,13 @@ void Update(
     uint globalId,
     uint localId)
 {
+#if GPURT_BUILD_RTIP3_1
+    if ((Settings.tlasRefittingMode != TlasRefittingMode::Disabled) && (geometryType == GEOMETRY_TYPE_TRIANGLES))
+    {
+        InitLocalKdop(localId, BUILD_THREADGROUP_SIZE);
+        GroupMemoryBarrierWithGroupSync();
+    }
+#endif
 
     uint waveId = 0;
     uint numTasksWait = 0;
@@ -155,6 +162,13 @@ void Update(
                    numWorkItems,
                    ShaderRootConstants.numThreads);
 
+#if GPURT_BUILD_RTIP3_1
+    if ((Settings.tlasRefittingMode != TlasRefittingMode::Disabled) && (geometryType == GEOMETRY_TYPE_TRIANGLES))
+    {
+        GroupMemoryBarrierWithGroupSync();
+        MergeLocalKdop(localId, BUILD_THREADGROUP_SIZE);
+    }
+#endif
 }
 
 //======================================================================================================================

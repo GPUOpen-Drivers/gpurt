@@ -38,6 +38,9 @@ enum CpsCandidatePrimitiveMode:
                   #  Implementation status:
                   #   * RtIp 1.1: Not supported, SuspendLane is always used.
                   #   * RtIp 2.0: DeferFirst is supported, but only for triangle primitives.
+#if GPURT_BUILD_RTIP3_1
+                  #   * RtIp 3.1: DeferFirst is fully supported.
+#endif
 
 # ------------------------------------------------------------------------------------------------------------------
 # This is the definition of the single options struct.
@@ -50,6 +53,16 @@ Options:
     threadTraceEnabled:
         Type: uint32
         Default: 0
+
+#if GPURT_BUILD_RTIP3_1
+    dynamicVgprsEnabled:
+        # Whether dynamic Vgprs are enabled in a continuations-compiled shader.
+        # Has no meaning in non-continuations shaders.
+        # This option is owned by pipeline compilers.
+        Type: uint32
+        # 0 and 1 are valid values. Use -1 as invalid default to detect missing initialization by the compiler.
+        Default: ~0u
+#endif
 
     cpsCandidatePrimitiveMode:
         Type: CpsCandidatePrimitiveMode

@@ -174,3 +174,16 @@ void ClearNumBatches(uint numBatchesOffset)
     }
 }
 
+#if GPURT_BUILD_RTIP3_1
+//======================================================================================================================
+uint FetchCompressPrimBatchCount(uint stackPtrsScratchOffset)
+{
+    return ScratchGlobal.Load(stackPtrsScratchOffset + STACK_PTRS_PRIM_COMP_BATCH_COUNT);
+}
+
+//======================================================================================================================
+uint FetchCompressPrimSingleCount(uint stackPtrsScratchOffset)
+{
+    return ScratchGlobal.Load(stackPtrsScratchOffset + STACK_PTRS_PRIM_COMP_SINGLE_COUNT);
+}
+#endif

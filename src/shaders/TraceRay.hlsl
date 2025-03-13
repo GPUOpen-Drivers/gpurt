@@ -26,6 +26,14 @@
 #include "TraceRay1_1.hlsl"
 #include "TraceRay2_0.hlsl"
 
+#if GPURT_BUILD_RTIP3
+#include "TraceRay3_0.hlsl"
+#endif
+
+#if GPURT_BUILD_RTIP3_1
+#include "TraceRay3_1.hlsl"
+#endif
+
 //=====================================================================================================================
 static IntersectionResult TraceRayInternal(
     in GpuVirtualAddress topLevelBvh,             // Top-level acceleration structure to use
@@ -34,6 +42,9 @@ static IntersectionResult TraceRayInternal(
     in RayDesc           rayDesc,                 // Ray to be traced
     in uint              rayId,                   // Ray ID for profiling
     in uint              rtIpLevel                // HW version to determine TraceRay implementation
+#if GPURT_BUILD_RTIP3
+    , in bool            isBVH8                   // is BVH8
+#endif
 #if DEVELOPER
     , in uint            dynamicId                // dynamic ID
 #endif
@@ -47,6 +58,9 @@ static IntersectionResult TraceRayInternal(
                                     rayId,
                                     rtIpLevel
 
+#if GPURT_BUILD_RTIP3
+                                    , isBVH8
+#endif
 #if DEVELOPER
                                     , dynamicId
 #endif
@@ -77,6 +91,39 @@ static IntersectionResult TraceRayInternal(
             rayDesc,
             rayId
         );
+#if GPURT_BUILD_RTIP3
+        case GPURT_RTIP3_0:
+            if (isBVH8)
+            {
+                return TraceRayImpl3_0BVH8(
+                    topLevelBvh,
+                    rayFlags,
+                    traceRayParameters,
+                    rayDesc,
+                    rayId
+                );
+            }
+            else
+            {
+                return TraceRayImpl3_0(
+                    topLevelBvh,
+                    rayFlags,
+                    traceRayParameters,
+                    rayDesc,
+                    rayId
+                );
+            }
+#endif
+#if GPURT_BUILD_RTIP3_1
+        case GPURT_RTIP3_1:
+            return TraceRayImpl3_1(
+                topLevelBvh,
+                rayFlags,
+                traceRayParameters,
+                rayDesc,
+                rayId
+                );
+#endif
         default: return (IntersectionResult) 0;
     }
 }
@@ -95,6 +142,12 @@ static IntersectionResult IntersectRay(
     {
         case GPURT_RTIP1_1:  return IntersectRayImpl1_1(topLevelBvh, ray, blasPointer, tlasPointer, rayId);
         case GPURT_RTIP2_0:  return IntersectRayImpl1_1(topLevelBvh, ray, blasPointer, tlasPointer, rayId);
+#if GPURT_BUILD_RTIP3
+        case GPURT_RTIP3_0:  return IntersectRayImpl3_0(topLevelBvh, ray, blasPointer, tlasPointer, rayId);
+#endif
+#if GPURT_BUILD_RTIP3_1
+        case GPURT_RTIP3_1:  return IntersectRayImpl3_1(topLevelBvh, ray, blasPointer, tlasPointer, rayId);
+#endif
         default: return (IntersectionResult)0;
     }
 }
@@ -120,6 +173,9 @@ static bool TraceRayCommon(
     uint  tlasPointer,
     bool  traverse,
     uint  rtIpLevel
+#if GPURT_BUILD_RTIP3
+  , bool  isBVH8
+#endif
 )
 {
 #if GPURT_DEBUG_CONTINUATION_TRAVERSAL
@@ -206,6 +262,9 @@ static bool TraceRayCommon(
                 ray,
                 rayId,
                 rtIpLevel
+#if GPURT_BUILD_RTIP3
+              , isBVH8
+#endif
 #if DEVELOPER
               , dynamicId
 #endif
@@ -319,6 +378,13 @@ static bool TraceRayCommon(
                                         result.geometryIndex);
             // Set hit triangle information
             GpuVirtualAddress blas;
+#if GPURT_BUILD_RTIP3
+            if(rtIpLevel >= GPURT_RTIP3_0)
+            {
+                blas = FetchInstanceBasePointerAddr3_0(accelStruct, result.instNodePtr);
+            }
+            else
+#endif
             {
                 InstanceDesc desc = FetchInstanceDesc(accelStruct, result.instNodePtr);
                 blas = GetInstanceAddr(desc);

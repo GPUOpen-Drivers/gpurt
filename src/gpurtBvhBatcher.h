@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -57,9 +57,18 @@ public:
     void UpdateEnabledPhaseFlags(
         BuildPhaseFlags builderPhaseFlags);
 
+#if GPURT_BUILD_RTIP3_1
+    void BuildTrivialBvhs(
+        Util::Span<BvhBuilder> builders);
+#endif
+
 private:
     template <bool IsTlas>
     void BuildRaytracingAccelerationStructureBatch(
+#if GPURT_BUILD_RTIP3_1
+        Util::Span<BvhBuilder> trivialBuilders,
+        Util::Span<BvhBuilder> stgbBuilders,
+#endif
         Util::Span<BvhBuilder> builders,
         Util::Span<BvhBuilder> updaters);
 

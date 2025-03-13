@@ -52,6 +52,66 @@ struct InputArgs
 #include "../shadersClean/common/SerializeDefs.hlsli"
 #include "../../gpurt/gpurtAccelStruct.h"
 
+#if GPURT_BUILD_RTIP3_1
+#include "rtip3_1.hlsli"
+#endif
+
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+// Decode the triangle specified by the pair and tri index and store it in the output buffer
+void StoreDecodedTri3_1(
+    uint               baseGeometryInfoOffset,
+    uint               baseVertexAndAabbOffset,
+    PrimitiveStructure primStruct,
+    uint               pair,
+    uint               tri)
+{
+    const uint geometryIndex  = primStruct.UnpackGeometryIndex(pair, tri);
+    const uint primitiveIndex = primStruct.UnpackPrimitiveIndex(pair, tri);
+
+    const TriangleData triData = primStruct.UnpackTriangleVertices(pair, tri);
+
+    const uint geometryInfoOffset = baseGeometryInfoOffset  + (geometryIndex * GEOMETRY_INFO_SIZE);
+    const uint baseGeometryOffset = baseVertexAndAabbOffset +
+                                    SrcBuffer.Load(geometryInfoOffset + GEOMETRY_INFO_GEOM_BUFFER_OFFSET);
+
+    const uint byteOffset = baseGeometryOffset + (primitiveIndex * DECODE_PRIMITIVE_STRIDE_TRIANGLE);
+
+    DstBuffer.Store<float3>(byteOffset + (DECODE_VERTEX_STRIDE * 0), triData.v0);
+    DstBuffer.Store<float3>(byteOffset + (DECODE_VERTEX_STRIDE * 1), triData.v1);
+    DstBuffer.Store<float3>(byteOffset + (DECODE_VERTEX_STRIDE * 2), triData.v2);
+}
+
+//=====================================================================================================================
+// Decode the specified procedural node into the output buffer.
+// Procedural node min and max are stored in the primitive struct currently to facilitate decoding.
+void StoreDecodedAabb3_1(
+    uint               baseGeometryInfoOffset,
+    uint               baseVertexAndAabbOffset,
+    PrimitiveStructure primStruct)
+{
+    const uint geometryIndex  = primStruct.UnpackGeometryIndex(0, 0);
+    const uint primitiveIndex = primStruct.UnpackPrimitiveIndex(0, 0);
+
+    const uint geometryInfoOffset = baseGeometryInfoOffset  + (geometryIndex * GEOMETRY_INFO_SIZE);
+    const uint baseGeometryOffset = baseVertexAndAabbOffset +
+                                    SrcBuffer.Load(geometryInfoOffset + GEOMETRY_INFO_GEOM_BUFFER_OFFSET);
+
+    // Note, AABB min/max are stored at fixed offsets in primitive packet. See WritePairPrimStruct() for details.
+    const float3 min = float3(asfloat(primStruct.primData[5]),
+                              asfloat(primStruct.primData[6]),
+                              asfloat(primStruct.primData[7]));
+    const float3 max = float3(asfloat(primStruct.primData[8]),
+                              asfloat(primStruct.primData[9]),
+                              asfloat(primStruct.primData[10]));
+
+    const uint byteOffset = baseGeometryOffset + (primitiveIndex * DECODE_PRIMITIVE_STRIDE_AABB);
+
+    DstBuffer.Store<float3>(byteOffset, min);
+    DstBuffer.Store<float3>(byteOffset + 12, max);
+}
+#endif
+
 //=====================================================================================================================
 // DecodeAS
 //=====================================================================================================================
@@ -198,6 +258,43 @@ void DecodeAS(in uint3 globalThreadId : SV_DispatchThreadID)
         const uint64_t srcBvhAddress = SrcBuffer.Load<uint64_t>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET);
 
         {
+#if GPURT_BUILD_RTIP3_1
+            if (Settings.rtIpLevel == GPURT_RTIP3_1)
+            {
+                const uint numPrimStructs = header.numLeafNodes;
+
+                for (uint i = globalID; i < numPrimStructs; i += ShaderConstants.NumThreads)
+                {
+                    const uint primStructOffset = SrcBuffer.Load(basePrimNodePointersOffset + (i * NODE_PTR_SIZE));
+
+                    const GpuVirtualAddress nodeAddress = srcBvhAddress + primStructOffset;
+
+                    INIT_VAR(PrimitiveStructure, primStruct);
+                    FetchPrimitiveStructFromNodeAddr(nodeAddress, primStruct);
+
+                    if (geometryType == GEOMETRY_TYPE_TRIANGLES)
+                    {
+                        const uint numPairs = primStruct.TrianglePairCount();
+
+                        for (uint pair = 0; pair < numPairs; ++pair)
+                        {
+                            const TrianglePairDesc pairDesc = primStruct.ReadTrianglePairDesc(pair);
+
+                            StoreDecodedTri3_1(baseGeometryInfoOffset, baseVertexAndAabbOffset, primStruct, pair, 0);
+                            if (pairDesc.Tri1Valid())
+                            {
+                                StoreDecodedTri3_1(baseGeometryInfoOffset, baseVertexAndAabbOffset, primStruct, pair, 1);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        StoreDecodedAabb3_1(baseGeometryInfoOffset, baseVertexAndAabbOffset, primStruct);
+                    }
+                }
+            }
+            else
+#endif
             {
                 // Copy vertices and aabbs
                 for (uint i = globalID; i < numPrimitives; i += ShaderConstants.NumThreads)
@@ -212,6 +309,13 @@ void DecodeAS(in uint3 globalThreadId : SV_DispatchThreadID)
                         PrimitiveData primitiveData;
                         const GpuVirtualAddress nodeAddress = srcBvhAddress + ExtractNodePointerOffset(nodePointer);
 
+#if GPURT_BUILD_RTIP3
+                        if (Settings.rtIpLevel >= GPURT_RTIP3_0)
+                        {
+                            primitiveData = FetchPrimitiveDataAddr3_0(nodePointer, nodeAddress);
+                        }
+                        else
+#endif
                         {
                             primitiveData = FetchPrimitiveDataAddr(nodePointer, nodeAddress);
                         }

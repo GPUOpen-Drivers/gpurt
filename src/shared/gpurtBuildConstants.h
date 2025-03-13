@@ -76,12 +76,21 @@ struct RayTracingScratchDataOffsets
     uint32 distributedPartialSums;
     uint32 qbvhGlobalStack;
     uint32 qbvhGlobalStackPtrs;
+#if GPURT_BUILD_RTIP3_1
+    uint32 obbRefitStackPtrs;
+    uint32 obbRefitStack;
+    uint32 qbvhObbFlags;
+    uint32 qbvhKdops;
+    uint32 primCompNodeIndices;
+    uint32 primCompNodeIndicesEnd;
+#else
     uint32 reserved3;
     uint32 reserved4;
     uint32 reserved5;
     uint32 reserved6;
     uint32 reserved7;
     uint32 reserved8;
+#endif
     uint32 taskLoopCounters;
     uint32 debugCounters;
     uint32 primRefCount;

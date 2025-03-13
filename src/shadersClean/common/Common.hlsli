@@ -177,6 +177,25 @@ static uint EnableFusedInstanceNodes()
     return (AmdTraceRayGetStaticFlags() & PIPELINE_FLAG_ENABLE_FUSED_INSTANCE);
 }
 
+#if GPURT_BUILD_RTIP3
+static uint IsBvhHighPrecisionBoxNodeEnabled()
+{
+    return (AmdTraceRayGetStaticFlags() & PIPELINE_FLAG_ENABLE_HIGH_PRECISION_BOX_NODE);
+}
+
+static uint IsBvh8()
+{
+    return (AmdTraceRayGetStaticFlags() & PIPELINE_FLAG_ENABLE_BVH8);
+}
+
+#if GPURT_BUILD_RTIP3_1
+static uint IsOrientedBoundingBoxesEnabled()
+{
+    return (AmdTraceRayGetStaticFlags() & PIPELINE_FLAG_ENABLE_ORIENTED_BOUNDING_BOXES);
+}
+#endif
+#endif
+
 #if DEVELOPER
 static bool EnableTraversalCounter()
 {
@@ -274,6 +293,12 @@ static uint64_t PackInstanceBasePointer(GpuVirtualAddress instanceVa, uint insta
                         ? (1ull << NODE_POINTER_SKIP_PROCEDURAL_SHIFT)
                         : (1ull << NODE_POINTER_SKIP_TRIANGLES_SHIFT);
 
+#if GPURT_BUILD_RTIP3
+    // When processing procedural nodes with BVH T#.pointer_flags = 1, always set disable triangle culling to 1.
+    // Since the TA can't distinguish triangles nodes from procedural nodes, this ensures that the node doesn't
+    // accidentally get culled early by the TA. The bug is specific to RTIP3+, but there's no harm in setting the
+    // flag in general.
+#endif
     instanceBasePointer |= (geometryType == GEOMETRY_TYPE_AABBS)
                        ? (1ull << NODE_POINTER_DISABLE_TRIANGLE_CULL_SHIFT) : 0;
 
@@ -318,12 +343,95 @@ static bool IsBoxNode16(uint pointer)
 {
     return NodeTypeIsBoxNode16(GetNodeType(pointer));
 }
+#if GPURT_BUILD_RTIP3
+//=====================================================================================================================
+static bool NodeTypeIsHighPrecisionBoxNode64(uint nodeType)
+{
+    return (nodeType == NODE_TYPE_BOX_HP64);
+}
+
+//=====================================================================================================================
+static bool IsHighPrecisionBoxNode64(uint pointer)
+{
+    return NodeTypeIsHighPrecisionBoxNode64(GetNodeType(pointer));
+}
+
+//=====================================================================================================================
+static bool NodeTypeIsHighPrecisionBoxNode64x2(uint nodeType)
+{
+    return (nodeType == NODE_TYPE_BOX_HP64x2);
+}
+
+//=====================================================================================================================
+static bool IsHighPrecisionBoxNode64x2(uint pointer)
+{
+    return NodeTypeIsHighPrecisionBoxNode64x2(GetNodeType(pointer));
+}
+
+//=====================================================================================================================
+static bool NodeTypeIsBoxNode32x2(uint nodeType)
+{
+    return (nodeType == NODE_TYPE_BOX_FLOAT32x2);
+}
+
+//=====================================================================================================================
+static bool IsBoxNode32x2(uint pointer)
+{
+    return NodeTypeIsBoxNode32x2(GetNodeType(pointer));
+}
+
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+static bool NodeTypeIsQuantizedBVH8BoxNode(uint nodeType)
+{
+    return (nodeType == NODE_TYPE_BOX_QUANTIZED_BVH8);
+}
+
+//=====================================================================================================================
+static bool IsQuantizedBVH8BoxNode(uint pointer)
+{
+    return NodeTypeIsQuantizedBVH8BoxNode(GetNodeType(pointer));
+}
+#endif
+#endif
 
 //=====================================================================================================================
 static bool NodeTypeIsBoxNode(
     uint nodeType
+#if GPURT_BUILD_RTIP3
+  , bool highPrecisionBoxNodeEnable,
+    bool bvh8Enable
+#if GPURT_BUILD_RTIP3_1
+  , bool enableCompressedFormat
+#endif
+#endif
 )
 {
+#if GPURT_BUILD_RTIP3
+#if GPURT_BUILD_RTIP3_1
+    if (enableCompressedFormat)
+    {
+        return NodeTypeIsQuantizedBVH8BoxNode(nodeType);
+    }
+    else
+#endif
+    if (bvh8Enable)
+    {
+        if (highPrecisionBoxNodeEnable)
+        {
+            return NodeTypeIsHighPrecisionBoxNode64x2(nodeType);
+        }
+        else
+        {
+            return NodeTypeIsBoxNode32x2(nodeType);
+        }
+    }
+    else if (highPrecisionBoxNodeEnable)
+    {
+        return NodeTypeIsHighPrecisionBoxNode64(nodeType);
+    }
+    else
+#endif
     {
         return NodeTypeIsBoxNode16(nodeType) || NodeTypeIsBoxNode32(nodeType);
     }
@@ -332,21 +440,91 @@ static bool NodeTypeIsBoxNode(
 //=====================================================================================================================
 static bool IsBoxNode(
     uint pointer
+#if GPURT_BUILD_RTIP3
+  , bool highPrecisionBoxNodeEnable,
+    bool bvh8Enable
+#if GPURT_BUILD_RTIP3_1
+  , bool enableCompressedFormat
+#endif
+#endif
 )
 {
     return NodeTypeIsBoxNode(
         GetNodeType(pointer)
+#if GPURT_BUILD_RTIP3
+        , highPrecisionBoxNodeEnable,
+          bvh8Enable
+#if GPURT_BUILD_RTIP3_1
+        , enableCompressedFormat
+#endif
+#endif
         );
 }
 
 //=====================================================================================================================
 static uint CreateRootNodePointer(
+#if GPURT_BUILD_RTIP3
+    bool highPrecisionBoxNodeEnable,
+    bool bvh8Enable
+#if GPURT_BUILD_RTIP3_1
+  , bool enableCompressedFormat
+#endif
+#endif
 )
 {
+#if GPURT_BUILD_RTIP3
+    uint nodeType = NODE_TYPE_BOX_FLOAT32;
+#if GPURT_BUILD_RTIP3_1
+    if (enableCompressedFormat)
+    {
+        nodeType = NODE_TYPE_BOX_QUANTIZED_BVH8;
+    }
+    else
+#endif
+    if (bvh8Enable)
+    {
+        if (highPrecisionBoxNodeEnable)
+        {
+            nodeType = NODE_TYPE_BOX_HP64x2;
+        }
+        else
+        {
+            nodeType = NODE_TYPE_BOX_FLOAT32x2;
+        }
+    }
+    else if (highPrecisionBoxNodeEnable)
+    {
+        nodeType = NODE_TYPE_BOX_HP64;
+    }
+
+    return PackNodePointer(nodeType, sizeof(AccelStructHeader));
+#else
     return PackNodePointer(NODE_TYPE_BOX_FLOAT32, sizeof(AccelStructHeader));
+#endif
 }
 
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+static uint CreateRootNodePointer3_1()
+{
+    return CreateRootNodePointer(false, true, true);
+}
+#endif
+
 #if GPURT_BVH_BUILD_SHADER
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+static bool EnableCompressedFormat()
+{
+    return (Settings.rtIpLevel >= GPURT_RTIP3_1);
+}
+
+//=====================================================================================================================
+static bool EnableNonPrioritySortingRebraid()
+{
+    return (Settings.rtIpLevel == GPURT_RTIP3_1);
+}
+#endif
 #endif
 
 //=====================================================================================================================
@@ -355,6 +533,36 @@ static bool IsTriangleNode1_1(
 {
     return (GetNodeType(nodePtr) <= NODE_TYPE_TRIANGLE_1);
 }
+
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+static bool NodeTypeIsTriangleNode3_1(uint nodeType)
+{
+    // Low 3 bits are <=3 for triangle nodes in the compressed format
+    return (nodeType <= 3);
+}
+
+//=====================================================================================================================
+static bool IsTriangleNode3_1(
+    uint nodePtr)
+{
+    return NodeTypeIsTriangleNode3_1(GetNodeType(nodePtr));
+}
+
+//=====================================================================================================================
+static bool NodeTypeIsBoxNode3_1(
+    uint nodeType)
+{
+    return NodeTypeIsBoxNode(nodeType, false, true, true);
+}
+
+//=====================================================================================================================
+static bool IsBoxNode3_1(
+    uint nodePtr)
+{
+    return IsBoxNode(nodePtr, false, true, true);
+}
+#endif
 
 //=====================================================================================================================
 static bool NodeTypeIsUserNodeInstance(uint nodeType)
@@ -740,6 +948,49 @@ static bool IsUpdate()
     return (Settings.updateFlags & DDI_BUILD_FLAG_PERFORM_UPDATE);
 }
 
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+// Transform a ray for a given OBB transform. TODO: Remove, opt for refactor of InstanceTransform instead.
+static void OBBTransform(
+    in  float3x3      transform,
+    in  float3        origin,
+    in  float3        direction,
+    out_param(float3) newOrigin,
+    out_param(float3) newDirection)
+{
+    float3 t0 = transform[0];
+    float3 t1 = transform[1];
+    float3 t2 = transform[2];
+
+    float r0x = mad(origin.z, t0.z, 0.0);
+    float r0y = mad(origin.z, t1.z, 0.0);
+    float r0z = mad(origin.z, t2.z, 0.0);
+
+    float r1x = mul(direction.z, t0.z);
+    float r1y = mul(direction.z, t1.z);
+    float r1z = mul(direction.z, t2.z);
+
+    r0x = mad(origin.y, t0.y, r0x);
+    r0y = mad(origin.y, t1.y, r0y);
+    r0z = mad(origin.y, t2.y, r0z);
+
+    r1x = mad(direction.y, t0.y, r1x);
+    r1y = mad(direction.y, t1.y, r1y);
+    r1z = mad(direction.y, t2.y, r1z);
+
+    r0x = mad(origin.x, t0.x, r0x);
+    r0y = mad(origin.x, t1.x, r0y);
+    r0z = mad(origin.x, t2.x, r0z);
+
+    r1x = mad(direction.x, t0.x, r1x);
+    r1y = mad(direction.x, t1.x, r1y);
+    r1z = mad(direction.x, t2.x, r1z);
+
+    newOrigin = float3(r0x, r0y, r0z);
+    newDirection = float3(r1x, r1y, r1z);
+}
+#endif
+
 //=====================================================================================================================
 // Transform a ray for the given instance. Hand-unrolled version since the version above results in less efficient code
 static void InstanceTransform(
@@ -891,6 +1142,29 @@ static PrimitiveData FetchPrimitiveDataAddr(
     return primitiveData;
 }
 
+#if GPURT_BUILD_RTIP3
+//=====================================================================================================================
+static PrimitiveData FetchPrimitiveDataAddr3_0(
+    in uint              nodePointer,
+    in GpuVirtualAddress nodeAddress)
+{
+    PrimitiveData primitiveData = { 0, 0, 0 };
+
+    // Load sideband data from leaf node
+    const uint  geometryIndex  = LoadDwordAtAddr(nodeAddress + RTIP3_TRIANGLE_NODE_GEOMETRY_INDEX_OFFSET);
+    const uint2 primitiveIndex = LoadDwordAtAddrx2(nodeAddress + RTIP3_TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET);
+
+    // Load the primitive index based on the bottom bit of the node pointer which indicates triangle index.
+    // Only 2 triangles can be potentially compressed in this path so we only care about the least significant bit
+    // Procedural node primitive index overlaps with primitive index of NODE_TYPE_TRIANGLE_1 and does not need
+    // additional checks.
+    primitiveData.primitiveIndex = (nodePointer & 0x1) ? primitiveIndex.y : primitiveIndex.x;
+    primitiveData.geometryIndex = (geometryIndex & 0xFFFFF);
+
+    return primitiveData;
+}
+#endif
+
 //=====================================================================================================================
 static PrimitiveData FetchPrimitiveData(
     in GpuVirtualAddress bvhAddress,
@@ -901,6 +1175,21 @@ static PrimitiveData FetchPrimitiveData(
 }
 
 //=====================================================================================================================
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+// Compute instance sideband offset from node offset when compressed node formats are enabled.
+static uint32_t ComputeInstanceSidebandOffset(
+    in uint32_t instanceNodeOffset,
+    in uint32_t leafNodeOffset,
+    in uint32_t sidebandDataOffset)
+{
+    // Map instance node offset to a sideband slot. Note, this requires that all instance node data is allocated
+    // in contiguous memory. Instance sideband data indexing mirrors instance node indexing in leaf node data section
+    //
+    const uint32_t sidebandIndex = ((instanceNodeOffset - leafNodeOffset) >> 7);
+    return sidebandDataOffset + (sidebandIndex * sizeof(InstanceSidebandData));
+}
+#endif
 
 //=====================================================================================================================
 static uint32_t GetInstanceSidebandOffset(
@@ -909,6 +1198,15 @@ static uint32_t GetInstanceSidebandOffset(
 {
     uint32_t sidebandOffset = 0;
 
+#if GPURT_BUILD_RTIP3_1
+    if (Settings.rtIpLevel >= GPURT_RTIP3_1)
+    {
+        sidebandOffset = ComputeInstanceSidebandOffset(instanceNodeOffset,
+                                                       header.offsets.leafNodes,
+                                                       header.offsets.geometryInfo);
+    }
+    else
+#endif
     {
         sidebandOffset = instanceNodeOffset + sizeof(InstanceDesc);
     }
@@ -932,10 +1230,27 @@ static void OutOfRangeNodePointerAssert(
 {
     uint nodeOffset = ExtractNodePointerOffset(nodePointer);
 
+#if GPURT_BUILD_RTIP3_1
+    if (rtIpLevel >= GPURT_RTIP3_1)
+    {
+        currBvhAddr = ExtractInstanceAddr(currBvhAddr);
+        tlasAddr    = ExtractInstanceAddr(tlasAddr);
+        nodeOffset  = ExtractNodePointerOffset3_1(nodePointer);
+    }
+#endif
+
     GpuVirtualAddress offsetAddress = currBvhAddr + ACCEL_STRUCT_HEADER_OFFSETS_OFFSET;
 
     if (currBvhAddr == tlasAddr)
     {
+#if GPURT_BUILD_RTIP3_1
+        // TLAS does not have valid geometry info offset before RTIP 3.1
+        if(rtIpLevel >= GPURT_RTIP3_1)
+        {
+            offsetAddress += ACCEL_STRUCT_OFFSETS_GEOMETRY_INFO_OFFSET;
+        }
+        else
+#endif
         {
             offsetAddress += ACCEL_STRUCT_OFFSETS_PRIM_NODE_PTRS_OFFSET;
         }
@@ -973,6 +1288,27 @@ static InstanceDesc FetchInstanceDescAddr(in GpuVirtualAddress instanceAddr)
 
     return desc;
 }
+
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+// Compute N-bit quantized bounds
+static UintBoundingBox ComputeQuantizedBounds(
+    in BoundingBox   bounds,
+    in float3        origin,
+    in float3        rcpExponents,
+    in uint          numQuantBits)
+{
+    UintBoundingBox result;
+    const uint3 invalidMin = uint3(bits(numQuantBits), bits(numQuantBits), bits(numQuantBits));
+    const uint3 invalidMax = uint3(0, 0, 0);
+    const bool  isInvalid  = IsInvalidBoundingBox(bounds);
+
+    result.min = select(isInvalid, invalidMin, ComputeQuantizedMin(bounds.min, origin, rcpExponents, numQuantBits));
+    result.max = select(isInvalid, invalidMax, ComputeQuantizedMax(bounds.max, origin, rcpExponents, numQuantBits));
+
+    return result;
+}
+#endif
 
 //=====================================================================================================================
 static bool UsesFastLbvhLayout()

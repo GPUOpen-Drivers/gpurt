@@ -37,6 +37,9 @@ T LoadInstanceDescBuffer(uint offset)
 #endif
 
 #include "BuildCommonScratch.hlsl"
+#if GPURT_BUILD_RTIP3_1
+#include "OrientedBoundingBoxes.hlsl"
+#endif
 
 //=====================================================================================================================
 void GenerateMortonCodesImpl(
@@ -115,6 +118,45 @@ void GenerateMortonCodesImpl(
         }
         WriteMortonCode64(mortonCodesOffset, primitiveIndex, mortonCode);
     }
+
+#if GPURT_BUILD_RTIP3_1
+    // Note, FetchTriKdopObbMatrixIndex current implementation is quite expensive in terms of both VGPR usage and
+    //       ALU. We pre-compute those in the morton code shader to avoid being occupancy limited due to VGPRs in
+    //       the EncodeHwBvh3_1 phase. An alternative is to compute this in EncodeNodes, but the code changes
+    //       there affect Updates as well and really need the unified bindings to implement this in a clean way.
+    if (IsObbEnabled() && IsNodeActive(node))
+    {
+        uint obbMatrixIdx = INVALID_OBB;
+        if ((Settings.topLevelBuild == false))
+        {
+            float3 v0 = node.bbox_min_or_v0;
+            float3 v1 = node.bbox_max_or_v1;
+            float3 v2 = node.sah_or_v2_or_instBasePtr;
+            obbMatrixIdx = FetchTriKdopObbMatrixIndex(v0, v1, v2);
+        }
+        else
+        {
+            // Note: LTD builder uses entirety of flag offset, thus can't be used with TLAS OBBs
+            const uint instanceDescOffsetInBytes = LoadNumPrimAndOffset().primitiveOffset;
+            const InstanceDesc desc = LoadInstanceDesc(node.left_or_primIndex_or_instIndex, instanceDescOffsetInBytes);
+            const float3x3 rotationScale = float3x3(desc.Transform[0].xyz,
+                                                    desc.Transform[1].xyz,
+                                                    desc.Transform[2].xyz);
+
+            const float3 scale = float3(length(rotationScale[0]),
+                                        length(rotationScale[1]),
+                                        length(rotationScale[2]));
+
+            const float3x3 rotation = float3x3(rotationScale[0] * rcp(scale.x),
+                                               rotationScale[1] * rcp(scale.y),
+                                               rotationScale[2] * rcp(scale.z));
+            obbMatrixIdx = MatrixToBestOBBIndex(rotation);
+        }
+        const uint scratchNodeOffset = leafNodesOffset + (primitiveIndex * sizeof(ScratchNode));
+        const uint packedFlags = (node.packedFlags & bits(24)) | (obbMatrixIdx << 24);
+        ScratchGlobal.Store(scratchNodeOffset + SCRATCH_NODE_FLAGS_OFFSET, packedFlags);
+    }
+#endif
 
     // Clear refit propagation flags for each leaf node in BVH2.
     const uint initValue = (UsesFastLbvhLayout() ? 0xffffffffu : 0);

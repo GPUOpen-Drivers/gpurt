@@ -77,6 +77,10 @@ void BvhBatcher::BuildAccelerationStructureBatch(
     Util::Vector<BvhBuilder, 1, Internal::Device> tlasUpdaters(m_pDevice);
 
     Util::Vector<BvhBuilder, 1, Internal::Device> emptyBuilders(m_pDevice);
+#if GPURT_BUILD_RTIP3_1
+    Util::Vector<BvhBuilder, 1, Internal::Device> stgbBuilders(m_pDevice);
+    Util::Vector<BvhBuilder, 1, Internal::Device> trivialBuilders(m_pDevice);
+#endif
 
     blasBuilders.Reserve(static_cast<uint32>(buildInfos.size()));
     blasUpdaters.Reserve(static_cast<uint32>(buildInfos.size()));
@@ -111,6 +115,12 @@ void BvhBatcher::BuildAccelerationStructureBatch(
                 emptyBuilders.EmplaceBack(std::move(builder));
             }
         }
+#if GPURT_BUILD_RTIP3_1
+        else if (builder.m_buildConfig.shouldUseTrivialBuilder == true)
+        {
+            trivialBuilders.EmplaceBack(std::move(builder));
+        }
+#endif
         else if (isUpdate)
         {
             if (isTlas)
@@ -130,6 +140,13 @@ void BvhBatcher::BuildAccelerationStructureBatch(
             }
             else
             {
+#if GPURT_BUILD_RTIP3_1
+                if (builder.UseSingleThreadGroupBuild())
+                {
+                    stgbBuilders.EmplaceBack(std::move(builder));
+                }
+                else
+#endif
                 {
                     blasBuilders.EmplaceBack(std::move(builder));
                 }
@@ -155,11 +172,19 @@ void BvhBatcher::BuildAccelerationStructureBatch(
     }
 
     if (
+#if GPURT_BUILD_RTIP3_1
+        (trivialBuilders.IsEmpty() == false) ||
+        (stgbBuilders.IsEmpty() == false) ||
+#endif
         (blasBuilders.IsEmpty() == false) ||
         (blasUpdaters.IsEmpty() == false))
     {
         RGP_PUSH_MARKER("BLAS: %u builds, %u updates", blasBuilders.size(), blasUpdaters.size());
         BuildRaytracingAccelerationStructureBatch<false>(
+#if GPURT_BUILD_RTIP3_1
+            trivialBuilders,
+            stgbBuilders,
+#endif
             blasBuilders,
             blasUpdaters);
         RGP_POP_MARKER();
@@ -168,6 +193,10 @@ void BvhBatcher::BuildAccelerationStructureBatch(
     {
         RGP_PUSH_MARKER("TLAS: %u builds, %u updates", tlasBuilders.size(), tlasUpdaters.size());
         BuildRaytracingAccelerationStructureBatch<true>(
+#if GPURT_BUILD_RTIP3_1
+            trivialBuilders,
+            stgbBuilders,
+#endif
             tlasBuilders,
             tlasUpdaters);
         RGP_POP_MARKER();
@@ -180,10 +209,18 @@ void BvhBatcher::BuildAccelerationStructureBatch(
 // Executes each build phase for each builder within the batch
 template <bool IsTlas>
 void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
+#if GPURT_BUILD_RTIP3_1
+    Util::Span<BvhBuilder> trivialBuilders,
+    Util::Span<BvhBuilder> stgbBuilders,    // Batch of single thread group builds
+#endif
     Util::Span<BvhBuilder> builders,        // Batch of BVH builds
     Util::Span<BvhBuilder> updaters)        // Batch of BVH updates
 {
     if (
+#if GPURT_BUILD_RTIP3_1
+        trivialBuilders.IsEmpty() &&
+        stgbBuilders.IsEmpty() &&
+#endif
         builders.IsEmpty() && updaters.IsEmpty())
     {
         return;
@@ -220,6 +257,10 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
         // TODO: Disable per-bvh timestamp events for batched builds
         BuildPhase(builders, &BvhBuilder::PreBuildDumpEvents);
         BuildPhase(updaters, &BvhBuilder::PreBuildDumpEvents);
+#if GPURT_BUILD_RTIP3_1
+        BuildPhase(trivialBuilders, &BvhBuilder::PreBuildDumpEvents);
+        BuildPhase(stgbBuilders, &BvhBuilder::PreBuildDumpEvents);
+#endif
     }
 
     if (builders.IsEmpty() == false)
@@ -250,6 +291,36 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
         RGP_POP_MARKER();
     }
 
+#if GPURT_BUILD_RTIP3_1
+    if constexpr (IsTlas == false)
+    {
+        if (stgbBuilders.IsEmpty() == false)
+        {
+            RGP_PUSH_MARKER("STGB BLAS: %u builds", stgbBuilders.size());
+
+            BuildPhase("BuildSingleThreadGroup", stgbBuilders, &BvhBuilder::BuildSingleThreadGroup);
+
+            // TODO: Remove this once inlined RefitOrientedBounds issues are debugged and fixed.
+            if (PhaseEnabled(BuildPhaseFlags::RefitOrientedBounds))
+            {
+                Barrier(BarrierFlagSyncIndirectArg | BarrierFlagSyncDispatch);
+                BuildPhase(BuildPhaseFlags::RefitOrientedBounds, stgbBuilders, &BvhBuilder::RefitOrientedBounds);
+            }
+
+            RGP_POP_MARKER();
+        }
+
+        if (trivialBuilders.IsEmpty() == false)
+        {
+            RGP_PUSH_MARKER("Trivial BLAS: %u builds/updates", trivialBuilders.size());
+
+            BuildTrivialBvhs(trivialBuilders);
+
+            RGP_POP_MARKER();
+        }
+    }
+#endif
+
     if (updaters.IsEmpty() == false)
     {
         RGP_PUSH_MARKER("Updates");
@@ -270,6 +341,10 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
         Barrier();
         BuildPhase(BuildPhaseFlags::SeparateEmitPostBuildInfoPass, updaters, &BvhBuilder::EmitPostBuildInfoDispatch);
         BuildPhase(BuildPhaseFlags::SeparateEmitPostBuildInfoPass, builders, &BvhBuilder::EmitPostBuildInfoDispatch);
+#if GPURT_BUILD_RTIP3_1
+        BuildPhase(BuildPhaseFlags::SeparateEmitPostBuildInfoPass, trivialBuilders, &BvhBuilder::EmitPostBuildInfoDispatch);
+        BuildPhase(BuildPhaseFlags::SeparateEmitPostBuildInfoPass, stgbBuilders, &BvhBuilder::EmitPostBuildInfoDispatch);
+#endif
         RGP_POP_MARKER();
     }
 
@@ -277,6 +352,10 @@ void BvhBatcher::BuildRaytracingAccelerationStructureBatch(
     {
         BuildPhase(builders, &BvhBuilder::PostBuildDumpEvents);
         BuildPhase(updaters, &BvhBuilder::PostBuildDumpEvents);
+#if GPURT_BUILD_RTIP3_1
+        BuildPhase(trivialBuilders, &BvhBuilder::PostBuildDumpEvents);
+        BuildPhase(stgbBuilders, &BvhBuilder::PostBuildDumpEvents);
+#endif
     }
 }
 
@@ -396,12 +475,222 @@ void BvhBatcher::BuildMultiDispatch(Util::Span<BvhBuilder> builders)
         Barrier();
         BuildPhase(BuildPhaseFlags::PairCompression, builders, &BvhBuilder::PairCompression);
     }
+#if GPURT_BUILD_RTIP3_1
+    if (PhaseEnabled(BuildPhaseFlags::RefitInstanceBounds))
+    {
+        Barrier();
+        BuildPhase(BuildPhaseFlags::RefitInstanceBounds, builders, &BvhBuilder::RefitInstanceBounds);
+    }
+#endif
     if (PhaseEnabled(BuildPhaseFlags::EncodeHwBvh))
     {
         Barrier();
         BuildPhase(BuildPhaseFlags::EncodeHwBvh, builders, &BvhBuilder::EncodeHwBvh);
     }
+#if GPURT_BUILD_RTIP3_1
+    bool syncedIndirectArgs = false;
+    if (PhaseEnabled(BuildPhaseFlags::CompressPrims))
+    {
+        Barrier(BarrierFlagSyncIndirectArg | BarrierFlagSyncDispatch);
+        syncedIndirectArgs = true;
+        BuildPhase(BuildPhaseFlags::CompressPrims, builders, &BvhBuilder::CompressPrims);
+    }
+    if (PhaseEnabled(BuildPhaseFlags::RefitOrientedBounds))
+    {
+        const uint32 barrierFlags =
+            BarrierFlagSyncDispatch | (syncedIndirectArgs ? 0 : BarrierFlagSyncIndirectArg);
+        Barrier(barrierFlags);
+        BuildPhase(BuildPhaseFlags::RefitOrientedBounds, builders, &BvhBuilder::RefitOrientedBounds);
+    }
+#endif
 }
+
+#if GPURT_BUILD_RTIP3_1
+// =====================================================================================================================
+void BvhBatcher::BuildTrivialBvhs(
+    Util::Span<BvhBuilder> builders)
+{
+    // Separate builders by compile-time settings.
+    Util::HashMap<uint32, uint32, Internal::Device> groupedBuilders(4, m_pDevice);
+    groupedBuilders.Init();
+    Util::Vector<Util::Vector<BvhBuilder const*, 1, Internal::Device>, 1, Internal::Device> builderLists(m_pDevice);
+    for (const BvhBuilder& bvhBuilder : builders)
+    {
+        bool existed = false;
+        uint32* pIndex;
+        Pal::Result result = groupedBuilders.FindAllocate(bvhBuilder.m_buildSettingsHash, &existed, &pIndex);
+        PAL_ASSERT(result == Pal::Result::Success);
+
+        if (existed == false)
+        {
+            *pIndex = builderLists.size();
+            Util::Vector<BvhBuilder const*, 1, Internal::Device> builderList(m_pDevice);
+            builderList.PushBack(&bvhBuilder);
+            builderLists.EmplaceBack(std::move(builderList));
+        }
+        else
+        {
+            builderLists[*pIndex].PushBack(&bvhBuilder);
+        }
+    }
+
+    uint32 dispatchIdx = 0;
+    for (auto it = groupedBuilders.Begin(); it.Get(); it.Next())
+    {
+        const Util::Vector<BvhBuilder const*, 1, Internal::Device>& builderList = builderLists[it.Get()->value];
+        const uint32 buildCount = builderList.size();
+
+        uint32 maxGeometryCount = 0;
+        for (uint32 buildIdx = 0; buildIdx < buildCount; ++buildIdx)
+        {
+            const BvhBuilder& builder = *builderList[buildIdx];
+            maxGeometryCount = Util::Max(maxGeometryCount, builder.m_buildArgs.inputs.inputElemCount);
+        }
+
+        gpusize buildConstantsBufferGpuVa = 0ull;
+        BuildShaderConstants* pBuildShaderConstants = reinterpret_cast<BuildShaderConstants*>(
+            m_pDevice->AllocateTemporaryData(m_cmdBuffer,
+                                             sizeof(BuildShaderConstants) * buildCount,
+                                             &buildConstantsBufferGpuVa));
+
+        gpusize geometryConstantsBufferGpuVa = 0ull;
+        BuildShaderGeometryConstants* pBuildShaderGeometryConstants = reinterpret_cast<BuildShaderGeometryConstants*>(
+            m_pDevice->AllocateTemporaryData(m_cmdBuffer,
+                                             sizeof(BuildShaderGeometryConstants) * buildCount * maxGeometryCount,
+                                             &geometryConstantsBufferGpuVa));
+
+        gpusize vertexBufferTableGpuVa = 0ull;
+        void* pVbvTable = m_pDevice->AllocateTypedDescriptorTable(m_cmdBuffer,
+                                                                  maxGeometryCount * buildCount,
+                                                                  &vertexBufferTableGpuVa);
+        const uint32 typedSrdSizeBytes = m_pDevice->GetTypedBufferSrdSizeDw() * sizeof(uint32);
+
+        Util::Vector<BufferViewInfo, 1, Internal::Device> resultBuffers(m_pDevice);
+        Util::Vector<BufferViewInfo, 1, Internal::Device> headerBuffers(m_pDevice);
+        Util::Vector<BufferViewInfo, 1, Internal::Device> emitBuffers(m_pDevice);
+        Util::Vector<BufferViewInfo, 1, Internal::Device> indirectArgBuffers(m_pDevice);
+
+        for (uint32 buildIdx = 0; buildIdx < buildCount; ++buildIdx)
+        {
+            const BvhBuilder& builder = *builderList[buildIdx];
+            resultBuffers.EmplaceBack(BufferViewInfo
+            {
+                .gpuAddr = builder.ResultBufferBaseVa(),
+                .range = 0xFFFFFFFF,
+            });
+            headerBuffers.EmplaceBack(BufferViewInfo
+            {
+                .gpuAddr = builder.HeaderBufferBaseVa(),
+                .range = 0xFFFFFFFF,
+            });
+            emitBuffers.EmplaceBack(BufferViewInfo
+            {
+                .gpuAddr = (builder.m_buildSettings.emitCompactSize == 1) ? builder.m_emitCompactDstGpuVa : 0,
+                .range = 0xFFFFFFFF,
+            });
+            indirectArgBuffers.EmplaceBack(BufferViewInfo
+            {
+                .gpuAddr = builder.m_buildSettings.isIndirectBuild ? builder.m_buildArgs.indirect.indirectGpuAddr : 0,
+                .range = 0xFFFFFFFF,
+            });
+
+            pBuildShaderConstants[buildIdx] = builder.GetBuildShaderConstants();
+
+            uint32 primitiveOffset = 0;
+
+            const uint32 geometryCount = builder.m_buildArgs.inputs.inputElemCount;
+            for (uint32 geometryIdx = 0; geometryIdx < geometryCount; ++geometryIdx)
+            {
+                const Geometry geometry = m_clientCb.pfnConvertAccelStructBuildGeometry(builder.m_buildArgs.inputs,
+                                                                                        geometryIdx);
+                PAL_ASSERT(geometry.type == GeometryType::Triangles);
+
+                uint32 stride = 0;
+                uint32 vertexComponentCount = 0;
+
+                const BufferViewInfo vertexBufferViewInfo = builder.SetupVertexBuffer(geometry.triangles,
+                                                                                      &stride,
+                                                                                      &vertexComponentCount);
+                m_backend.CreateTypedBufferViewSrds(vertexBufferViewInfo, pVbvTable);
+                pVbvTable = Util::VoidPtrInc(pVbvTable, typedSrdSizeBytes);
+
+                const uint32 vertexComponentSize =
+                    uint32(GetBytesPerComponentForFormat(geometry.triangles.vertexFormat));
+
+                const uint32 primitiveCount = BvhBuilder::GetGeometryPrimCount(geometry);
+                const IndexBufferInfo indexBufferInfo = BvhBuilder::GetIndexBufferInfo(geometry.triangles);
+
+                const gpusize transformBufferGpuVa = geometry.triangles.columnMajorTransform3x4.gpu;
+
+                pBuildShaderGeometryConstants[buildIdx * maxGeometryCount + geometryIdx] =
+                {
+                    .numPrimitives          = primitiveCount,
+                    .primitiveOffset        = primitiveOffset,
+                    .geometryStride         = stride,
+                    .indexBufferGpuVaLo     = Util::LowPart(indexBufferInfo.gpuVa),
+                    .indexBufferGpuVaHi     = Util::HighPart(indexBufferInfo.gpuVa),
+                    .indexBufferByteOffset  = uint32(indexBufferInfo.byteOffset),
+                    .indexBufferFormat      = indexBufferInfo.format,
+                    .transformBufferGpuVaLo = Util::LowPart(transformBufferGpuVa),
+                    .transformBufferGpuVaHi = Util::HighPart(transformBufferGpuVa),
+                    .geometryFlags          = uint32(geometry.flags),
+                    .vertexCount            = geometry.triangles.vertexCount,
+                    .vertexComponentCount   = vertexComponentCount,
+                    .vertexComponentSize    = vertexComponentSize,
+                };
+
+                primitiveOffset += primitiveCount;
+            }
+            pVbvTable = Util::VoidPtrInc(pVbvTable, typedSrdSizeBytes * (maxGeometryCount - geometryCount));
+        }
+
+        // Because we've separated dispatches by build settings, each in the list should have the same.
+        m_pDevice->BindPipeline(m_cmdBuffer,
+                                InternalRayTracingCsType::BuildTrivialBvh,
+                                builderList[0]->m_buildSettings,
+                                builderList[0]->m_buildSettingsHash);
+
+        uint32 entryOffset = 0;
+
+        const BuildTrivialBvh::Constants shaderRootConstants =
+        {
+            .maxGeometryCount = maxGeometryCount,
+        };
+
+        entryOffset = m_pDevice->WriteUserDataEntries(m_cmdBuffer,
+                                                      &shaderRootConstants,
+                                                      BuildTrivialBvh::NumEntries,
+                                                      entryOffset);
+
+        const uint64 lutGpuVa =
+            (m_deviceSettings.tlasRefittingMode == TlasRefittingMode::Disabled) ? 0ull : m_pDevice->GetLutVa();
+
+        entryOffset = m_pDevice->WriteBufferVa(m_cmdBuffer, lutGpuVa, entryOffset);
+
+        entryOffset = m_pDevice->WriteBufferVa(m_cmdBuffer, buildConstantsBufferGpuVa, entryOffset);
+        entryOffset = m_pDevice->WriteBufferVa(m_cmdBuffer, geometryConstantsBufferGpuVa, entryOffset);
+
+#if GPURT_ENABLE_GPU_DEBUG
+        entryOffset = m_pDevice->WriteBufferVa(m_cmdBuffer, m_pDevice->GetGpuDebugBufferVa(), entryOffset);
+#endif
+
+        const uint32 vbvSrdTableGpuVaLo = Util::LowPart(vertexBufferTableGpuVa);
+        entryOffset = m_pDevice->WriteUserDataEntries(m_cmdBuffer, &vbvSrdTableGpuVaLo, 1, entryOffset);
+
+        entryOffset = m_pDevice->WriteUntypedBufferSrdTable(m_cmdBuffer, resultBuffers.Data(), buildCount, entryOffset);
+        entryOffset = m_pDevice->WriteUntypedBufferSrdTable(m_cmdBuffer, headerBuffers.Data(), buildCount, entryOffset);
+        entryOffset = m_pDevice->WriteUntypedBufferSrdTable(m_cmdBuffer, emitBuffers.Data(), buildCount, entryOffset);
+        entryOffset = m_pDevice->WriteUntypedBufferSrdTable(m_cmdBuffer, indirectArgBuffers.Data(), buildCount, entryOffset);
+
+        RGP_PUSH_MARKER("Trivial BVH Dispatch #%u (%u builds)", dispatchIdx, buildCount);
+        m_backend.Dispatch(m_cmdBuffer, buildCount, 1, 1);
+
+        RGP_POP_MARKER();
+
+        ++dispatchIdx;
+    }
+}
+#endif
 
 // =====================================================================================================================
 // Initialize the builders' acceleration structure data into a valid begin state using a compute shader
@@ -416,6 +705,9 @@ void BvhBatcher::DispatchInitAccelerationStructure(
         .topLevelBuild               = IsTlas ? 1u : 0u,
         .enableBVHBuildDebugCounters = m_deviceSettings.enableBVHBuildDebugCounters,
         .mortonFlags                 = m_deviceSettings.mortonFlags,
+#if GPURT_BUILD_RTIP3_1
+        .tlasRefittingMode           = m_deviceSettings.tlasRefittingMode,
+#endif
     };
 
     Util::MetroHash::Hash hash = {};

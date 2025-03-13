@@ -50,6 +50,12 @@ void EncodeTriangleNodes(
     in uint3 globalThreadId : SV_DispatchThreadID,
     in uint localId : SV_GroupThreadID)
 {
+#if GPURT_BUILD_RTIP3_1
+    if (Settings.tlasRefittingMode != TlasRefittingMode::Disabled)
+    {
+        InitLocalKdop(localId, BUILD_THREADGROUP_SIZE);
+    }
+#endif
 
     const uint geometryIndex = ShaderRootConstants.GeometryIndex();
     const BuildShaderGeometryConstants geomConstants = GeometryConstants[geometryIndex];
@@ -75,6 +81,13 @@ void EncodeTriangleNodes(
                                    inputOffsets.numPrimitives,
                                    geomConstants.numPrimitives);
 
+#if GPURT_BUILD_RTIP3_1
+    if (Settings.tlasRefittingMode != TlasRefittingMode::Disabled)
+    {
+        GroupMemoryBarrierWithGroupSync();
+        MergeLocalKdop(localId, BUILD_THREADGROUP_SIZE);
+    }
+#endif
 }
 
 //=====================================================================================================================
@@ -165,6 +178,12 @@ void EncodeQuadNodes(
     in uint globalId : SV_DispatchThreadID,
     in uint localId : SV_GroupThreadID)
 {
+#if GPURT_BUILD_RTIP3_1
+    if (Settings.tlasRefittingMode != TlasRefittingMode::Disabled)
+    {
+        InitLocalKdop(localId, BUILD_THREADGROUP_SIZE);
+    }
+#endif
 
     // Note, ShaderRootConstants.GeometryIndex() is reused for number of blocks needed across all geometries.
     InitBlockPrefixSum(localId, ShaderRootConstants.GeometryIndex());
@@ -254,6 +273,12 @@ void EncodeQuadNodes(
 
         if (isActive)
         {
+#if GPURT_BUILD_RTIP3_1
+            if (Settings.tlasRefittingMode != TlasRefittingMode::Disabled)
+            {
+                UpdateTriangleKdop(tri.v0, tri.v1, tri.v2);
+            }
+#endif
             // Note: Make sure to check for Settings.disableDegenPrims as the very first test in the 'if'
             if ((Settings.disableDegenPrims) && (IsUpdateAllowed() == false) && (isDegenQuad || isDegenTri0))
             {
@@ -412,4 +437,11 @@ void EncodeQuadNodes(
         }
     }
 
+#if GPURT_BUILD_RTIP3_1
+    if (Settings.tlasRefittingMode != TlasRefittingMode::Disabled)
+    {
+        GroupMemoryBarrierWithGroupSync();
+        MergeLocalKdop(localId, BUILD_THREADGROUP_SIZE);
+    }
+#endif
 }

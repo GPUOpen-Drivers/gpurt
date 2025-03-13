@@ -316,6 +316,9 @@ static void TraversalInternal2_0(
                     committed.primitiveIndex = primitiveData.primitiveIndex;
                     committed.PackInstanceContribution(instanceContributionToHitGroupIndex, hitKind);
                     committed.PackGeometryIndex(primitiveData.geometryIndex,
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+                        /* isTri0 */ 0,
+#endif
                         TRAVERSAL_STATE_COMMITTED_TRIANGLE_HIT, false);
                     committed.SetCurrNodePtr(nodePtr);
 
@@ -352,6 +355,9 @@ static void TraversalInternal2_0(
                     candidate.PackInstanceContribution(instanceContributionToHitGroupIndex, hitKind);
                     candidate.PackGeometryIndex(primitiveData.geometryIndex,
                     // This #ifdef is required until the legacy GPURT_RTIP_LEVEL == 0 lib has been removed:
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+                        /* isTri0 */ 0,
+#endif
                         TRAVERSAL_STATE_COMMITTED_TRIANGLE_HIT, isOpaque);
                     candidate.SetCurrNodePtr(nodePtr);
 

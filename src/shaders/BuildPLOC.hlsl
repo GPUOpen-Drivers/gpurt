@@ -543,6 +543,12 @@ void FindNearestNeighbour(
             WriteScratchNodeDataAtOffset(mergedNodeOffset, SCRATCH_NODE_LEFT_OFFSET, leftNodeIndex);
             WriteScratchNodeDataAtOffset(mergedNodeOffset, SCRATCH_NODE_RIGHT_OFFSET, rightNodeIndex);
 
+#if GPURT_BUILD_RTIP3_1
+            // Note, for RTIP3.1 primitive ranges, we reuse the scratch node parent field to store the
+            // pointer to the next leaf node in the primitive range. The parent field is only required for RTIP2.0
+            // pair compression logic and should be removed once that code is updated.
+            if (EnableLatePairCompression())
+#endif
             {
                 WriteScratchNodeDataAtOffset(leftNodeOffset, SCRATCH_NODE_PARENT_OFFSET, mergedNodeIndex);
                 WriteScratchNodeDataAtOffset(rightNodeOffset, SCRATCH_NODE_PARENT_OFFSET, mergedNodeIndex);

@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2024-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -34,6 +34,10 @@
 
 //=====================================================================================================================
 // Procedural node primitive data offsets
+#if GPURT_BUILD_RTIP3
+#define RTIP3_USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET      RTIP3_TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET
+#define RTIP3_USER_NODE_PROCEDURAL_GEOMETRY_INDEX_OFFSET       RTIP3_TRIANGLE_NODE_GEOMETRY_INDEX_OFFSET
+#endif
 #define USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET            TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET
 #define USER_NODE_PROCEDURAL_GEOMETRY_INDEX_AND_FLAGS_OFFSET   TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET
 #define USER_NODE_PROCEDURAL_TRIANGLE_ID_OFFSET                TRIANGLE_NODE_ID_OFFSET
@@ -52,5 +56,22 @@ struct ProceduralNode
 };
 
 GPURT_STATIC_ASSERT(USER_NODE_PROCEDURAL_SIZE == sizeof(ProceduralNode), "ProceduralNode structure mismatch");
+
+#if GPURT_BUILD_RTIP3
+//=====================================================================================================================
+// User defined procedural node format
+struct ProceduralNode3_0
+{
+    float3 bbox_min;
+    float3 bbox_max;
+    uint   padding1[6];
+    uint   primitiveIndex;
+    uint   reserved;
+    uint   geometryIndex;
+    uint   triangleId;
+};
+
+GPURT_STATIC_ASSERT(USER_NODE_PROCEDURAL_SIZE == sizeof(ProceduralNode3_0), "ProceduralNode structure mismatch");
+#endif
 
 #endif

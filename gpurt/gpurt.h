@@ -90,9 +90,18 @@ enum class StaticPipelineFlag : uint32
     EnableTraversalCounter         = (1u << 28),   // Enable Traversal counters
     Reserved                       = (1u << 27),
     EnableFusedInstanceNodes       = (1u << 26),   // Enable fused instance nodes
+#if GPURT_BUILD_RTIP3
+    BvhHighPrecisionBoxNodeEnabled = (1u << 25),   // Enable HP64 box node format
+    Bvh8Enabled                    = (1u << 24),   // Enable BVH8
+#else
     Reserved2                      = (1u << 25),
     Reserved3                      = (1u << 24),
+#endif
+#if GPURT_BUILD_RTIP3_1
+    EnableOrientedBoundingBoxes    = (1u << 23),
+#else
     Reserved4                      = (1u << 23),
+#endif
     Reserved5                      = (1u << 22),
 #if GPURT_ENABLE_GPU_DEBUG
     DebugAssertsHalt               = (1u << 21),
@@ -112,6 +121,16 @@ constexpr size_t RayTracingBVHNodeSize  = 64;
 
 // Byte size of a BVH4 node, each AABB encoded using 32bit floats
 constexpr size_t RayTracingQBVH32NodeSize = 128;
+
+#if GPURT_BUILD_RTIP3
+// Byte size of a high precision box node
+constexpr size_t RayTracingHighPrecisionBoxNodeSize = 64;
+
+#if GPURT_BUILD_RTIP3_1
+// Byte size of a quantized BVH8 box node
+constexpr size_t RayTracingQuantizedBVH8BoxNodeSize = 128;
+#endif
+#endif
 
 // Byte size of a BVH4 node, each AABB encoded using 16bit floats
 constexpr size_t RayTracingQBVH16NodeSize = 64;
@@ -325,8 +344,28 @@ enum class InternalRayTracingCsType : uint32
     UpdateAabbs,
     InitAccelerationStructure,
     InitUpdateAccelerationStructure,
+#if GPURT_BUILD_RTIP3_1
+    RefitOrientedBounds,
+    RefitOrientedBoundsTopLevel,
+    CompressPrims,
+#endif
+#if GPURT_BUILD_RTIP3|| GPURT_BUILD_RTIP3_1
+    BuildParallelRtip3x,
+#endif
     BuildFastAgglomerativeLbvh,
     EncodeQuadNodes,
+#if GPURT_BUILD_RTIP3_1
+    BuildTrivialBvh,
+    BuildSingleThreadGroup32,
+    BuildSingleThreadGroup64,
+    BuildSingleThreadGroup128,
+    BuildSingleThreadGroup256,
+    BuildSingleThreadGroup512,
+    BuildSingleThreadGroup1024,
+    EncodeHwBvh3_1,
+    Update3_1,
+    RefitInstanceBounds,
+#endif
     Count
 };
 
@@ -744,6 +783,10 @@ struct DeviceSettings
     uint32                      rebraidFactor;                        // Rebraid factor
     uint32                      numRebraidIterations;
     uint32                      rebraidQualityHeuristic;
+#if GPURT_BUILD_RTIP3_1
+    float                       rebraidOpenSAFactor;
+    uint32                      rebraidOpenMinPrims;
+#endif
 
     uint32                      plocRadius;                           // PLOC nearest neighbor search adius
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 54
@@ -794,6 +837,10 @@ struct DeviceSettings
 #endif
         uint32 allowFp16BoxNodesInUpdatableBvh : 1;         // Allow box node in updatable bvh.
         uint32 fp16BoxNodesRequireCompaction : 1;           // Compaction is set or not.
+#if GPURT_BUILD_RTIP3
+        uint32 highPrecisionBoxNodeEnable : 1;              // High precision box node enable
+        uint32 bvh8Enable : 1;                              // Enable BVH8 box nodes
+#endif
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 43
         uint32 enableSAHCost : 1;                           // Use more accurate SAH cost
 #endif
@@ -806,6 +853,10 @@ struct DeviceSettings
 #endif
 
         uint32 enableRemapScratchBuffer : 1;                // Enable remapping bvh2 data from ScratchBuffer to ResultBuffer
+#if GPURT_BUILD_RTIP3_1
+        uint32 enableBvhChannelBalancing : 1;               // Balance memory channels by adding variable padding to the BVH
+        uint32 enableSingleThreadGroupBuild : 1;            // Enable single thread group builder
+#endif
         uint32 checkBufferOverlapsInBatch : 1;
         uint32 disableCompaction : 1;                       // Reports and perform copy instead of compaction
         uint32 disableDegenPrims : 1;                       // Disable degenerate primitives, ie: set their vertex.x = NaN
@@ -826,6 +877,25 @@ struct DeviceSettings
 
     uint32                      gpuDebugFlags;
 
+#if GPURT_BUILD_RTIP3_1
+    uint8                       trivialBuilderMaxPrimThreshold; // Max number of prims the trivial builder should
+                                                                // run on. Supports at most 16.
+                                                                // A value of 0 implies the builder is disabled.
+#endif
+#if GPURT_BUILD_RTIP3_1
+    uint32                      primCompressionFlags;        // Debug flags for RTIP3.1+ primitive compression
+    uint32                      maxPrimRangeSize;            // Maximum number of triangles in a prim range
+    uint32                      enableOrientedBoundingBoxes; // Enable oriented bounding box traversal and build
+    uint32                      tlasRefittingMode;           // Enable TLAS leaf node refitting
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 49
+    uint32                      obbQuality;                  // Controls our OBB builder's K-DOP quality
+#else
+    uint32                      obbNumLevels;                // Controls how many BVH levels are converted to OBBs
+    uint32                      obbDisableBuildFlags;        // Controls which acceleration structures are affected by the OBB build pass
+#endif
+    uint32                      instanceMode;                // Intersectable instance node mode (See InstanceMode)
+    uint32                      boxSplittingFlags;           // Box splitting / Child reuse flags
+#endif
 #if GPURT_DEVELOPER
     RgpMarkerGranularityFlags   rgpMarkerGranularityFlags;
 #endif
@@ -1455,6 +1525,9 @@ PipelineShaderCode GPURT_API_ENTRY GetShaderLibraryCode(
 // @return whether the function table was found successfully
 Pal::Result GPURT_API_ENTRY QueryRayTracingEntryFunctionTable(
     const Pal::RayTracingIpLevel   rayTracingIpLevel,
+#if GPURT_BUILD_RTIP3
+    bool                           bvh8Enable,
+#endif
     EntryFunctionTable* const      pEntryFunctionTable);
 
 // =====================================================================================================================

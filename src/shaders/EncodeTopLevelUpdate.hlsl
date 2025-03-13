@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -35,6 +35,19 @@ void WriteInstanceDescriptor(
     in uint               blasMetadataSize,
     in uint               tlasMetadataSize)
 {
+#if GPURT_BUILD_RTIP3
+    if (Settings.rtIpLevel == GPURT_RTIP3_0)
+    {
+        WriteInstanceNode3_0(instanceDesc,
+                             geometryType,
+                             instanceIndex,
+                             instNodePtr,
+                             blasRootNodePointer,
+                             blasMetadataSize,
+                             tlasMetadataSize);
+    }
+    else
+#endif
     {
         WriteInstanceNode1_1(instanceDesc,
                              geometryType,
@@ -69,6 +82,17 @@ void EncodeInstancesUpdate(
 
         if (numActivePrims != 0)
         {
+#if GPURT_BUILD_RTIP3_1
+            if ((Settings.tlasRefittingMode != TlasRefittingMode::Disabled) && (geometryType == GEOMETRY_TYPE_TRIANGLES))
+            {
+                // Compute instance bounds using BLAS KDOP
+                const uint64_t blasBaseAddr = PackUint64(desc.accelStructureAddressLo, desc.accelStructureAddressHiAndFlags);
+                const uint64_t kdopAddress = blasBaseAddr + ACCEL_STRUCT_METADATA_KDOP_OFFSET;
+
+                boundingBox = ComputeInstanceBoundsFromKdop(kdopAddress, desc.Transform);
+            }
+            else
+#endif
             {
                 // Fetch root bounds from BLAS header
                 const BoundingBox rootBbox = FetchHeaderRootBoundingBox(baseAddrAccelStructHeader);
@@ -94,6 +118,15 @@ void EncodeInstancesUpdate(
             const uint nodePointer = SrcBuffer.Load(primNodePointerOffset);
 
             uint parentNodePointer;
+#if GPURT_BUILD_RTIP3_1
+            if (EnableCompressedFormat())
+            {
+                // RTIP 3.1 does not store parent pointers in metadata. Instance node has its parent pointer.
+                const uint nodeOffset = tlasMetadataSize + ExtractNodePointerOffset(nodePointer);
+                parentNodePointer = SrcBuffer.Load(nodeOffset + RTIP3_1_INSTANCE_NODE_PARENT_POINTER_OFFSET);
+            }
+            else
+#endif
             {
                 parentNodePointer = ReadParentPointer(tlasMetadataSize, nodePointer);
             }
@@ -103,6 +136,9 @@ void EncodeInstancesUpdate(
             {
                 DstMetadata.Store(primNodePointerOffset, nodePointer);
 
+#if GPURT_BUILD_RTIP3_1
+                if (EnableCompressedFormat() == false)
+#endif
                 {
                     WriteParentPointer(tlasMetadataSize, nodePointer, parentNodePointer);
                 }
@@ -138,7 +174,51 @@ void EncodeInstancesUpdate(
 
             uint baseBoxNodeOffset = tlasMetadataSize + ExtractNodePointerOffset(parentNodePointer);
 
+#if GPURT_BUILD_RTIP3
+#if GPURT_BUILD_RTIP3_1
+            if (EnableCompressedFormat())
             {
+                // Write leaf bounding box to update scratch memory
+                WriteUpdateScratchBoundingBox(parentNodePointer, childIdx, boundingBox);
+
+                // The instance flags can be changed in an update, so the node flags need to be updated.
+                UpdateQuantizedBoxNodeFlagsAndInstanceMask(
+                    baseBoxNodeOffset, childIdx, boxNodeFlags, instanceMask);
+            }
+            else
+#endif
+            if (Settings.highPrecisionBoxNodeEnable)
+            {
+                // Write leaf bounding box to update scratch memory
+                WriteUpdateScratchBoundingBox(parentNodePointer, childIdx, boundingBox);
+
+                if (Settings.bvh8Enable)
+                {
+                    // Compute node offset within BVH8 node
+                    baseBoxNodeOffset =
+                        (childIdx > 3) ? baseBoxNodeOffset + sizeof(HighPrecisionBoxNode) : baseBoxNodeOffset;
+
+                    // Compute child node index within BVH8 node
+                    childIdx = (childIdx % 4);
+                }
+
+                // The instance flags can be changed in an update, so the node flags need to be updated.
+                UpdateHighPrecisionBoxNodeFlags(baseBoxNodeOffset, childIdx, boxNodeFlags);
+            }
+            else
+#endif
+            {
+#if GPURT_BUILD_RTIP3
+                if (Settings.bvh8Enable)
+                {
+                    // Compute node offset within BVH8 node
+                    baseBoxNodeOffset =
+                        (childIdx > 3) ? baseBoxNodeOffset + sizeof(Float32BoxNode) : baseBoxNodeOffset;
+
+                    // Compute child node index within BVH8 node
+                    childIdx = (childIdx % 4);
+                }
+#endif
 
                 const uint childBboxOffset = FLOAT32_BOX_NODE_BB0_MIN_OFFSET + (childIdx * FLOAT32_BBOX_STRIDE);
                 DstMetadata.Store<BoundingBox>(baseBoxNodeOffset + childBboxOffset, boundingBox);

@@ -22,6 +22,28 @@ TraceRay2_0
 TraceRayUsingRayQuery2_0
 TraceRayUsingHitToken2_0
 GetRayQuery64BitInstanceNodePtr
+#if GPURT_BUILD_RTIP3
+TraceRayInline3_0
+RayQueryProceed3_0
+TraceRay3_0
+TraceRayUsingRayQuery3_0
+TraceRayUsingHitToken3_0
+GetInstanceID3_0
+GetInstanceIndex3_0
+GetObjectToWorldTransform3_0
+GetWorldToObjectTransform3_0
+#endif
+#if GPURT_BUILD_RTIP3_1
+TraceRayInline3_1
+RayQueryProceed3_1
+TraceRay3_1
+TraceRayUsingRayQuery3_1
+TraceRayUsingHitToken3_1
+GetInstanceID3_1
+GetInstanceIndex3_1
+GetObjectToWorldTransform3_1
+GetWorldToObjectTransform3_1
+#endif
 RayQueryInternal
 FetchTrianglePositionFromNodePointer
 FetchTrianglePositionFromRayQuery

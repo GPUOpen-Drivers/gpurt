@@ -86,6 +86,27 @@ void EncodeInstancesBuild(
         BoundingBox boundingBox = InvalidBoundingBox;
         if (numActivePrims != 0)
         {
+#if GPURT_BUILD_RTIP3_1
+            if ((Settings.tlasRefittingMode == TlasRefittingMode::Early) && (geometryType == GEOMETRY_TYPE_TRIANGLES))
+            {
+                // Compute instance bounds using BLAS KDOP
+                const uint64_t blasBaseAddr = PackUint64(desc.accelStructureAddressLo, desc.accelStructureAddressHiAndFlags);
+                const uint64_t kdopAddress = blasBaseAddr + ACCEL_STRUCT_METADATA_KDOP_OFFSET;
+                const BoundingBox apexBoundingBox = ComputeInstanceBoundsFromKdop(kdopAddress, desc.Transform);
+                if ((IsCorruptBox(apexBoundingBox) == false) && (IsInvalidBoundingBox(apexBoundingBox) == false))
+                {
+                    boundingBox = apexBoundingBox;
+                }
+                else
+                {
+                    // Fetch root bounds from BLAS header
+                    const BoundingBox rootBbox = FetchHeaderRootBoundingBox(baseAddrAccelStructHeader);
+                    // Compute transformed bounding box
+                    boundingBox = GenerateInstanceBoundingBox(desc.Transform, rootBbox);
+                }
+            }
+            else
+#endif
             {
                 // Fetch root bounds from BLAS header
                 const BoundingBox rootBbox = FetchHeaderRootBoundingBox(baseAddrAccelStructHeader);
@@ -122,6 +143,15 @@ void EncodeInstancesBuild(
 
             if (IsRebraidEnabled())
             {
+#if GPURT_BUILD_RTIP3_1
+                if (EnableNonPrioritySortingRebraid())
+                {
+                    const uint tempInfo = FetchHeaderField(baseAddrAccelStructHeader, ACCEL_STRUCT_HEADER_INFO_OFFSET);
+                    rebraidBLAS = (tempInfo >> ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_SHIFT) &
+                                  ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_MASK;
+                }
+                else
+#endif
                 {
                     rebraidBLAS = true;
                 }

@@ -29,8 +29,28 @@
 
 #define SORT(childA,childB,distA,distB) if((childB!=INVALID_NODE&&distB<distA)||childA==INVALID_NODE){  float t0 = distA; uint t1 = childA;  childA = childB; distA = distB;  childB=t1; distB=t0; }
 
+#if GPURT_BUILD_RTIP3_1
+#include "ObbCommon.hlsl"
+#endif
+
+#if GPURT_BUILD_RTIP3
+#include "HighPrecisionBoxNode.hlsl"
+#if GPURT_BUILD_RTIP3_1
+#include "QuantizedBVH8BoxNode.hlsl"
+#include "rtip3_1.hlsli"
+#endif
+#endif
+
 #define INTERSECT_RAY_VERSION_1 1
 #define INTERSECT_RAY_VERSION_2 2
+
+#if GPURT_BUILD_RTIP3
+#define INTERSECT_RAY_VERSION_3 3
+#endif
+
+#if GPURT_BUILD_RTIP3_1
+#define INTERSECT_RAY_VERSION_3_1 4
+#endif
 
 //=====================================================================================================================
 // Avoid tracing NaN rays or null acceleration structures.
@@ -76,6 +96,13 @@ static bool IsBoxNode1_1(
     uint nodePtr)
 {
     return IsBoxNode(nodePtr
+#if GPURT_BUILD_RTIP3
+                   , IsBvhHighPrecisionBoxNodeEnabled(),
+                     IsBvh8()
+#if GPURT_BUILD_RTIP3_1
+                   , false
+#endif
+#endif
                     );
 }
 
@@ -83,8 +110,68 @@ static bool IsBoxNode1_1(
 static uint CreateRootNodePointer1_1()
 {
     return CreateRootNodePointer(
+#if GPURT_BUILD_RTIP3
+        IsBvhHighPrecisionBoxNodeEnabled(),
+        IsBvh8()
+#if GPURT_BUILD_RTIP3_1
+      , false
+#endif
+#endif
         );
 }
+
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+static uint FetchParentNodePointer3_1(
+    in GpuVirtualAddress bvhAddress,
+    in uint              packedNodePtr)
+{
+    // Fetch parent pointer from HW instance node or QBVH8 node
+    const uint nodeOffset = ExtractNodePointerOffset(packedNodePtr);
+    const uint parentPointerOffset = IsUserNodeInstance(packedNodePtr) ?
+                                     RTIP3_1_INSTANCE_NODE_PARENT_POINTER_OFFSET :
+                                     QUANTIZED_BVH8_NODE_OFFSET_PARENT_POINTER;
+    return LoadDwordAtAddr(bvhAddress + nodeOffset + parentPointerOffset);
+}
+
+//=====================================================================================================================
+// Decode the BLAS root pointer from an instance intersection result. The packed child pointers are repurposed and not
+// used as intended by the HW spec.
+static uint DecodeBlasRootFromInstanceResult(
+    uint packedChildPointers)
+{
+    uint blasRoot;
+
+    if (IsBvhRebraid())
+    {
+        // Repurposed packed pointer encoding:
+        // Bits [3:0] - target rebraided root node (128B index from AS header base)
+        // Bit 4 - target child is prim node
+        const uint rootIndex   = packedChildPointers & 0b01111;
+        const uint rootOffset  = rootIndex << 4;
+        const bool isBoxNode   = (packedChildPointers & 0b10000) == 0;
+        const uint decodedRoot = isBoxNode ? (rootOffset | NODE_TYPE_BOX_QUANTIZED_BVH8) : rootOffset;
+
+        blasRoot = (packedChildPointers == INVALID_NODE) ? INVALID_NODE : decodedRoot;
+    }
+    else
+    {
+        blasRoot = (packedChildPointers == INVALID_NODE) ? INVALID_NODE : CreateRootNodePointer3_1();
+    }
+
+    return blasRoot;
+}
+#endif
+
+#if GPURT_BUILD_RTIP3
+//=====================================================================================================================
+static GpuVirtualAddress FetchInstanceBasePointerAddr3_0(in GpuVirtualAddress bvhAddress, in uint nodePointer)
+{
+    const GpuVirtualAddress instanceAddr = bvhAddress + ExtractNodePointerOffset(nodePointer);
+    const uint2 address = LoadDwordAtAddrx2(instanceAddr + RTIP3_INSTANCE_NODE_CHILD_BASE_PTR_OFFSET);
+    return MakeGpuVirtualAddress(address.x, address.y) ;
+}
+#endif
 
 //=====================================================================================================================
 static GpuVirtualAddress FetchAccelStructBaseAddr(GpuVirtualAddress bvhAddress)
@@ -140,6 +227,14 @@ static bool CheckInstanceCulling(in InstanceDesc desc, const uint rayFlags, cons
     return (isTriangleInstanceCulled || isProceduralInstanceCulled);
 }
 
+#if GPURT_BUILD_RTIP3
+//=====================================================================================================================
+static uint FetchInstanceNodePointerAddr3_0(in GpuVirtualAddress nodeAddr)
+{
+    return LoadDwordAtAddr(nodeAddr + RTIP3_INSTANCE_NODE_CHILD_ROOT_NODE_OFFSET);
+}
+#endif
+
 //=====================================================================================================================
 static uint FetchInstanceNodePointerAddr(in GpuVirtualAddress nodeAddr)
 {
@@ -176,6 +271,54 @@ static TriangleData FetchTriangleFromNode(in GpuVirtualAddress bvhAddress, in ui
     return tri;
 }
 
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+static TriangleData FetchTriangleFromNode3_1(in GpuVirtualAddress bvhAddress, in uint nodePointer, in bool tri0)
+{
+    const uint64_t bvh = ExtractInstanceAddr(bvhAddress);
+    INIT_VAR(PrimitiveStructure, primStruct);
+    FetchPrimitiveStructFromBvh(bvh, nodePointer, primStruct);
+    const uint pair = GetPairIndex(nodePointer);
+    return primStruct.UnpackTriangleVertices(pair, tri0 ? 0 : 1);
+}
+#endif
+
+#if GPURT_BUILD_RTIP3
+//=====================================================================================================================
+static HighPrecisionBoxNode FetchHighPrecisionBoxNode(
+    in GpuVirtualAddress bvhAddress, in uint nodePointer)
+{
+    const uint byteOffset = ExtractNodePointerOffset(nodePointer);
+    const GpuVirtualAddress nodeAddr = bvhAddress + byteOffset;
+
+    HighPrecisionBoxNode node = (HighPrecisionBoxNode)0;
+
+    uint4 d0 = LoadDwordAtAddrx4(nodeAddr);
+    uint4 d1 = LoadDwordAtAddrx4(nodeAddr + 0x10);
+    uint4 d2 = LoadDwordAtAddrx4(nodeAddr + 0x20);
+    uint4 d3 = LoadDwordAtAddrx4(nodeAddr + 0x30);
+
+    node.dword[0]  = d0.x;
+    node.dword[1]  = d0.y;
+    node.dword[2]  = d0.z;
+    node.dword[3]  = d0.w;
+    node.dword[4]  = d1.x;
+    node.dword[5]  = d1.y;
+    node.dword[6]  = d1.z;
+    node.dword[7]  = d1.w;
+    node.dword[8]  = d2.x;
+    node.dword[9]  = d2.y;
+    node.dword[10] = d2.z;
+    node.dword[11] = d2.w;
+    node.dword[12] = d3.x;
+    node.dword[13] = d3.y;
+    node.dword[14] = d3.z;
+    node.dword[15] = d3.w;
+
+    return node;
+}
+#endif
+
 //=====================================================================================================================
 static uint FetchFloat32BoxNodeNumPrimitives(in GpuVirtualAddress bvhAddress, in uint nodePointer)
 {
@@ -187,6 +330,9 @@ static uint FetchFloat32BoxNodeNumPrimitives(in GpuVirtualAddress bvhAddress, in
 
 //=====================================================================================================================
 static Float32BoxNode FetchFloat32BoxNode(in GpuVirtualAddress bvhAddress,
+#if GPURT_BUILD_RTIP3
+                                          in bool              highPrecisionBoxNodeEnable,
+#endif
                                           in uint              nodePointer)
 
 {
@@ -199,6 +345,33 @@ static Float32BoxNode FetchFloat32BoxNode(in GpuVirtualAddress bvhAddress,
     d2 = LoadDwordAtAddrx4(nodeAddr + 0x20);
     d3 = LoadDwordAtAddrx4(nodeAddr + 0x30);
 
+#if GPURT_BUILD_RTIP3
+    if (highPrecisionBoxNodeEnable)
+    {
+        HighPrecisionBoxNode hpBoxNode = (HighPrecisionBoxNode)0;
+
+        hpBoxNode.dword[0] = d0.x;
+        hpBoxNode.dword[1] = d0.y;
+        hpBoxNode.dword[2] = d0.z;
+        hpBoxNode.dword[3] = d0.w;
+        hpBoxNode.dword[4] = d1.x;
+        hpBoxNode.dword[5] = d1.y;
+        hpBoxNode.dword[6] = d1.z;
+        hpBoxNode.dword[7] = d1.w;
+        hpBoxNode.dword[8] = d2.x;
+        hpBoxNode.dword[9] = d2.y;
+        hpBoxNode.dword[10] = d2.z;
+        hpBoxNode.dword[11] = d2.w;
+        hpBoxNode.dword[12] = d3.x;
+        hpBoxNode.dword[13] = d3.y;
+        hpBoxNode.dword[14] = d3.z;
+        hpBoxNode.dword[15] = d3.w;
+
+        const Float32BoxNode node = DecodeHighPrecisionBoxNode(hpBoxNode);
+
+        return node;
+    }
+#endif
     d4 = LoadDwordAtAddrx4(nodeAddr + 0x40);
     d5 = LoadDwordAtAddrx4(nodeAddr + 0x50);
     d6 = LoadDwordAtAddrx4(nodeAddr + 0x60);
@@ -220,6 +393,10 @@ static Float32BoxNode FetchFloat32BoxNode(in GpuVirtualAddress bvhAddress,
     node.bbox3_max = asfloat(d6.yzw);
 
     node.flags = LoadDwordAtAddr(nodeAddr + FLOAT32_BOX_NODE_FLAGS_OFFSET);
+
+#if GPURT_BUILD_RTIP3_1
+    node.obbMatrixIndex = LoadDwordAtAddr(nodeAddr + FLOAT32_BOX_NODE_OBB_OFFSET);
+#endif
 
     return node;
 }
@@ -256,6 +433,10 @@ static Float32BoxNode FetchFloat16BoxNodeAsFp32(in GpuVirtualAddress bvhAddress,
     node.bbox2_max = b2.max;
     node.bbox3_min = b3.min;
     node.bbox3_max = b3.max;
+
+#if GPURT_BUILD_RTIP3_1
+    node.obbMatrixIndex = INVALID_OBB;
+#endif
 
     // fp16 node does not have space to store flags,
     // initialize the field to 0.
@@ -615,10 +796,16 @@ static void PerformTriangleCulling(
     in uint32_t        intersectRayVersion,
     in uint64_t        hwNodePtr,
     in bool            isOpaque,
+#if GPURT_BUILD_RTIP3
+    in bool            isProcedural,
+#endif
     inout_param(uint4) result)
 {
     bool triangleCulled = false;
 
+#if GPURT_BUILD_RTIP3
+    if (!isProcedural)
+#endif
     {
         // If determinant is positive and front face winding is counterclockwise or vice versa, the triangle is
         // back facing.
@@ -640,6 +827,13 @@ static void PerformTriangleCulling(
         triangleCulled = faceCulled || FLAG_IS_SET(hwNodePtr, NODE_POINTER_SKIP_TRIANGLES);
     }
 
+#if GPURT_BUILD_RTIP3
+    if ((intersectRayVersion >= INTERSECT_RAY_VERSION_3) && isProcedural)
+    {
+        triangleCulled = FLAG_IS_SET(hwNodePtr, NODE_POINTER_SKIP_PROCEDURAL);
+    }
+#endif
+
     const bool opaque =
         FLAG_IS_SET(hwNodePtr, NODE_POINTER_FORCE_OPAQUE) ||
         (FLAG_IS_CLEAR(hwNodePtr, NODE_POINTER_FORCE_NON_OPAQUE) &&
@@ -654,6 +848,35 @@ static void PerformTriangleCulling(
         // Set tNum and tDenom when primitive is culled
         result = uint4(asuint(INFINITY), asuint(1.0f), 0, 0);
     }
+#if GPURT_BUILD_RTIP3
+    else if ((intersectRayVersion >= INTERSECT_RAY_VERSION_3) && isProcedural)
+    {
+        // Set tNum and tDenom for non-culled procedural primitive
+        result = uint4(asuint(0.0f), asuint(1.0f), 0, 0);
+    }
+
+    if (intersectRayVersion >= INTERSECT_RAY_VERSION_3)
+    {
+        // Mask out the sign bits of the barycentrics.
+        result.z &= 0x7FFFFFFF;
+        result.w &= 0x7FFFFFFF;
+
+        if (isProcedural)
+        {
+            // Both barycentrics are always 1.0 for procedural primitives.
+            result.z = asuint(1.0f);
+            result.w = asuint(1.0f);
+            // Sign bit of I is set for procedural primitives to indicate the intersection shader needs to run.
+            result.z |= 0x80000000;
+        }
+
+        if (opaque == false)
+        {
+            // Sign bit of J is set for non-opaque primitives to indicate the anyhit shader needs to run.
+            result.w |= 0x80000000;
+        }
+    }
+#endif
 }
 
 //=====================================================================================================================
@@ -752,6 +975,9 @@ static uint4 image_bvh64_intersect_ray_base(
         Float32BoxNode node;
 
         if (IsBoxNode16(nodePointer)
+#if GPURT_BUILD_RTIP3
+            && !IsBvhHighPrecisionBoxNodeEnabled()
+#endif
             )
         {
             node = FetchFloat16BoxNodeAsFp32(bvhAddress, nodePointer);
@@ -759,6 +985,9 @@ static uint4 image_bvh64_intersect_ray_base(
         else
         {
             node = FetchFloat32BoxNode(bvhAddress,
+#if GPURT_BUILD_RTIP3
+                                       IsBvhHighPrecisionBoxNodeEnabled(),
+#endif
                                        nodePointer);
             if (intersectRayVersion >= INTERSECT_RAY_VERSION_2)
             {
@@ -785,8 +1014,17 @@ static uint4 image_bvh64_intersect_ray_base(
         {
             hwTriFlags = triangleId >> (GetNodeType(nodePointer) * TRIANGLE_ID_BIT_STRIDE);
 
+#if GPURT_BUILD_RTIP3
+            if (intersectRayVersion >= INTERSECT_RAY_VERSION_3)
+            {
+                procedural = FLAG_IS_SET(hwTriFlags, TRIANGLE_ID_PROCEDURAL);
+            }
+#endif
         }
 
+#if GPURT_BUILD_RTIP3
+        if ((intersectRayVersion < INTERSECT_RAY_VERSION_3) || (procedural == false))
+#endif
         {
             TriangleData tri = FetchTriangleFromNode(bvhAddress, nodePointer);
             result = fast_intersect_triangle(rayOrigin,
@@ -805,6 +1043,9 @@ static uint4 image_bvh64_intersect_ray_base(
             PerformTriangleCulling(intersectRayVersion,
                                    hwNodePtr,
                                    opaque,
+#if GPURT_BUILD_RTIP3
+                                   procedural,
+#endif
                                    result);
         }
     }
@@ -848,5 +1089,24 @@ static uint4 image_bvh64_intersect_ray_2_0(
         bvhAddress, nodePointer, pointerFlags, boxSortHeuristic, rayExtent, rayOrigin, rayDirection, rayDirectionInverse,
         INTERSECT_RAY_VERSION_2);
 }
+
+#if GPURT_BUILD_RTIP3
+//=====================================================================================================================
+static uint4 image_bvh64_intersect_ray_3_0(
+    GpuVirtualAddress bvhAddress,
+    uint              nodePointer,
+    uint              pointerFlags,
+    uint              boxSortHeuristic,
+    float             rayExtent,
+    float3            rayOrigin,
+    float3            rayDirection,
+    float3            rayDirectionInverse)
+{
+    return image_bvh64_intersect_ray_base(
+        bvhAddress, nodePointer, pointerFlags, boxSortHeuristic, rayExtent, rayOrigin, rayDirection, rayDirectionInverse,
+        INTERSECT_RAY_VERSION_3);
+}
+
+#endif
 
 #endif

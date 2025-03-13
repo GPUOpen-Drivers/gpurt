@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2024-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -142,7 +142,11 @@ struct RayQueryInternal
     COMMITTED_STATUS committedStatus;
     RaySystemData    committed;
 
+#if GPURT_BUILD_RTIP3
+    uint             currNodePtr2; // Second node pointer for dual traversal
+#else
     uint             reserved;
+#endif
 
     // Counter data
     // @note We don't wrap these in DEVELOPER because it would result in mismatch of RayQuery struct size

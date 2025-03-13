@@ -193,6 +193,45 @@ namespace InitAccelerationStructure
     constexpr uint32 NumEntries = (sizeof(Constants) / sizeof(uint32));
 }
 
+#if GPURT_BUILD_RTIP3_1
+constexpr NodeMapping BuildTrivialBvhMapping[] =
+{
+    { NodeType::Constant, BuildTrivialBvh::NumEntries },
+    { NodeType::ConstantBuffer, 2 },
+    { NodeType::Srv, 2 },
+    { NodeType::Srv, 2 },
+#if GPURT_ENABLE_GPU_DEBUG
+    { NodeType::Uav, 2 },
+#endif
+    { NodeType::TypedSrvTable, 1 },
+    { NodeType::UavTable, 1 },
+    { NodeType::UavTable, 1 },
+    { NodeType::UavTable, 1 },
+    { NodeType::UavTable, 1 },
+};
+
+constexpr NodeMapping BuildSingleThreadGroupMapping[] =
+{
+    { NodeType::ConstantBuffer, 2 },
+    { NodeType::ConstantBuffer, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::ConstantBufferTable, 1 },
+    { NodeType::TypedUavTable, 1 },
+};
+
+#define BuildSingleThreadGroup32Mapping BuildSingleThreadGroupMapping
+#define BuildSingleThreadGroup64Mapping BuildSingleThreadGroupMapping
+#define BuildSingleThreadGroup128Mapping BuildSingleThreadGroupMapping
+#define BuildSingleThreadGroup256Mapping BuildSingleThreadGroupMapping
+#define BuildSingleThreadGroup512Mapping BuildSingleThreadGroupMapping
+#define BuildSingleThreadGroup1024Mapping BuildSingleThreadGroupMapping
+#endif
+
 /* Update Shaders NodeMappings */
 
 constexpr NodeMapping UpdateQBVHMapping[] =

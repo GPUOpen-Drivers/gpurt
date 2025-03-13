@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -239,6 +239,10 @@ void PalBackend::InsertBarrier(
 
     if (syncPreCpWrite)
     {
+#if PAL_BUILD_GFX12
+        // Clients are expected to wait at PipelineStagePostPrefetch for API-level AS-related barrier operations.
+        // However, the CoherCp access transition (GL2 flush on GFX12) is deferred until GPURT requires it.
+#endif
         memoryBarrier.srcStageMask  |= Pal::PipelineStagePostPrefetch;
         memoryBarrier.srcAccessMask |= Pal::CoherShader;
         memoryBarrier.dstStageMask  |= Pal::PipelineStagePostPrefetch;

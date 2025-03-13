@@ -99,8 +99,28 @@ const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsTyp
     PIPELINE_BUILD_INFO(UpdateAabbs),
     PIPELINE_BUILD_INFO(InitAccelerationStructure),
     PIPELINE_BUILD_INFO(InitUpdateAccelerationStructure),
+#if GPURT_BUILD_RTIP3_1
+    PIPELINE_BUILD_BVH_INFO(RefitOrientedBounds),
+    PIPELINE_BUILD_BVH_INFO(RefitOrientedBoundsTopLevel),
+    PIPELINE_BUILD_BVH_INFO(CompressPrims),
+#endif
+#if GPURT_BUILD_RTIP3|| GPURT_BUILD_RTIP3_1
+    PIPELINE_BUILD_BVH_INFO(BuildParallelRtip3x),
+#endif
     PIPELINE_BUILD_BVH_INFO(BuildFastAgglomerativeLbvh),
     PIPELINE_BUILD_BVH_INFO(EncodeQuadNodes),
+#if GPURT_BUILD_RTIP3_1
+    PIPELINE_BUILD_INFO(BuildTrivialBvh),
+    PIPELINE_BUILD_INFO(BuildSingleThreadGroup32),
+    PIPELINE_BUILD_INFO(BuildSingleThreadGroup64),
+    PIPELINE_BUILD_INFO(BuildSingleThreadGroup128),
+    PIPELINE_BUILD_INFO(BuildSingleThreadGroup256),
+    PIPELINE_BUILD_INFO(BuildSingleThreadGroup512),
+    PIPELINE_BUILD_INFO(BuildSingleThreadGroup1024),
+    PIPELINE_BUILD_BVH_INFO(EncodeHwBvh3_1),
+    PIPELINE_BUILD_BVH_INFO(Update3_1),
+    PIPELINE_BUILD_BVH_INFO(RefitInstanceBounds),
+#endif
 };
 
 #undef PIPELINE_BUILD_INFO

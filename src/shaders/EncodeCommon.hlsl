@@ -25,9 +25,115 @@
 #include "BuildCommonScratch.hlsl"
 
 #include "../shadersClean/common/ShaderDefs.hlsli"
+#if GPURT_BUILD_RTIP3_1
+#include "rtip3_1.hlsli"
+#endif
 
 #include "TrianglePrimitive.hlsl"
 #include "UpdateCommon.hlsl"
+
+#if GPURT_BUILD_RTIP3_1
+#include "KDOP.hlsl"
+
+#define KDOP_CACHE_LDS_STRIDE                 16
+#define KDOP_CACHE_LDS_ELEMENT_INDEX_KDOP_MIN 0
+#define KDOP_CACHE_LDS_ELEMENT_INDEX_KDOP_MAX 1
+#define KDOP_CACHE_LDS_ELEMENT_COUNT          2
+
+groupshared uint ThreadGroupKdopCache[KDOP_CACHE_LDS_ELEMENT_COUNT * KDOP_CACHE_LDS_STRIDE];
+
+//=====================================================================================================================
+uint GetLdsIndexKDopMin(uint planeIndex)
+{
+    const uint elementOffset = (KDOP_CACHE_LDS_ELEMENT_INDEX_KDOP_MIN * KDOP_CACHE_LDS_STRIDE);
+    return elementOffset + planeIndex;
+}
+
+//=====================================================================================================================
+uint GetLdsIndexKDopMax(uint planeIndex)
+{
+    const uint elementOffset = (KDOP_CACHE_LDS_ELEMENT_INDEX_KDOP_MAX * KDOP_CACHE_LDS_STRIDE);
+    return elementOffset + planeIndex;
+}
+
+//=====================================================================================================================
+void UpdateKDopMin(uint planeIndex, float value)
+{
+    InterlockedMin(ThreadGroupKdopCache[GetLdsIndexKDopMin(planeIndex)], FloatToUint(value));
+}
+
+//=====================================================================================================================
+void UpdateKDopMax(uint planeIndex, float value)
+{
+    InterlockedMax(ThreadGroupKdopCache[GetLdsIndexKDopMax(planeIndex)], FloatToUint(value));
+}
+
+//=====================================================================================================================
+void WriteKDopMin(int planeIndex, float value)
+{
+    ThreadGroupKdopCache[GetLdsIndexKDopMin(planeIndex)] = FloatToUint(value);
+}
+
+//=====================================================================================================================
+void WriteKDopMax(uint planeIndex, float value)
+{
+    ThreadGroupKdopCache[GetLdsIndexKDopMax(planeIndex)] = FloatToUint(value);
+}
+
+//=====================================================================================================================
+uint ReadKDopMinUint(uint planeIndex)
+{
+    return ThreadGroupKdopCache[GetLdsIndexKDopMin(planeIndex)];
+}
+
+//=====================================================================================================================
+uint ReadKDopMaxUint(uint planeIndex)
+{
+    return ThreadGroupKdopCache[GetLdsIndexKDopMax(planeIndex)];
+}
+
+//=====================================================================================================================
+void InitLocalKdop(
+    uint localId,
+    uint groupSize)
+{
+    for (uint i = localId; i < KDOP_PLANE_COUNT; i += groupSize)
+    {
+        WriteKDopMin(i, +FLT_MAX);
+        WriteKDopMax(i, -FLT_MAX);
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+}
+
+//=====================================================================================================================
+void MergeLocalKdop(
+    uint localId,
+    uint groupSize)
+{
+    for (uint i = localId; i < KDOP_PLANE_COUNT; i += groupSize)
+    {
+        const uint dstOffset = ACCEL_STRUCT_METADATA_KDOP_OFFSET + (i * sizeof(float2));
+
+        DstMetadata.InterlockedMin(dstOffset, ReadKDopMinUint(i));
+        DstMetadata.InterlockedMax(dstOffset + sizeof(float), ReadKDopMaxUint(i));
+    }
+}
+
+//=====================================================================================================================
+static void UpdateTriangleKdop(
+    float3 v0,
+    float3 v1,
+    float3 v2)
+{
+    for (uint i = 0; i < KDOP_PLANE_COUNT; i++)
+    {
+        const float2 kdopExtents = ComputeTriangleKdopExtents(i, v0, v1, v2);
+        UpdateKDopMin(i, kdopExtents.x);
+        UpdateKDopMax(i, kdopExtents.y);
+    }
+}
+#endif
 
 //======================================================================================================================
 void WriteScratchTriangleNode(
@@ -161,6 +267,16 @@ void EncodeTriangleNode(
         // Generate triangle bounds and update scene bounding box
         BoundingBox boundingBox = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
 
+#if GPURT_BUILD_RTIP3_1
+        if (Settings.tlasRefittingMode != TlasRefittingMode::Disabled)
+        {
+            if (IsActive(tri))
+            {
+                UpdateTriangleKdop(tri.v0, tri.v1, tri.v2);
+            }
+        }
+#endif
+
         if (IsUpdate())
         {
             nodePointer = SrcBuffer.Load(primNodePointerOffset);
@@ -191,6 +307,15 @@ void EncodeTriangleNode(
                 {
                     const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(geometryIndex,
                                                                                  geomConstants.geometryFlags);
+#if GPURT_BUILD_RTIP3
+                    if (Settings.rtIpLevel >= GPURT_RTIP3_0)
+                    {
+                        // We don't use geometry flags during RTIP 3.0 traversal, so no need to pack and unpack it unnecessarily.
+                        DstMetadata.Store(
+                            nodeOffset + RTIP3_TRIANGLE_NODE_GEOMETRY_INDEX_OFFSET, geometryIndex);
+                    }
+                    else
+#endif
                     {
                         DstMetadata.Store(
                             nodeOffset + TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
@@ -198,6 +323,14 @@ void EncodeTriangleNode(
 
                     const uint primIndexOffset = CalcPrimitiveIndexOffset(nodePointer);
 
+#if GPURT_BUILD_RTIP3
+                    if (Settings.rtIpLevel >= GPURT_RTIP3_0)
+                    {
+                        DstMetadata.Store(
+                            nodeOffset + RTIP3_TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + primIndexOffset, primitiveIndex);
+                    }
+                    else
+#endif
                     {
                         DstMetadata.Store(
                             nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + primIndexOffset, primitiveIndex);
@@ -242,6 +375,12 @@ void EncodeTriangleNode(
                         childNodePointer |= NODE_TYPE_TRIANGLE_1;
 
                         uint otherPrimIndexOffset = TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET;
+#if GPURT_BUILD_RTIP3
+                        if (Settings.rtIpLevel >= GPURT_RTIP3_0)
+                        {
+                            otherPrimIndexOffset = RTIP3_TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET;
+                        }
+#endif
                         const uint otherPrimIndex = SrcBuffer.Load(triNodeOffset + otherPrimIndexOffset);
 
                         uint3 otherIndices = uint3(0, 0, 0);
@@ -479,6 +618,14 @@ void WriteProceduralNodePrimitiveData(
 {
     const uint nodeOffset = metadataSize + ExtractNodePointerOffset(nodePointer);
 
+#if GPURT_BUILD_RTIP3
+    if (Settings.rtIpLevel >= GPURT_RTIP3_0)
+    {
+        DstMetadata.Store(nodeOffset + RTIP3_USER_NODE_PROCEDURAL_PRIMITIVE_INDEX_OFFSET, primitiveIndex);
+        DstMetadata.Store(nodeOffset + RTIP3_USER_NODE_PROCEDURAL_GEOMETRY_INDEX_OFFSET, geometryIndex);
+    }
+    else
+#endif
     {
         const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(geometryIndex, geometryFlags);
 

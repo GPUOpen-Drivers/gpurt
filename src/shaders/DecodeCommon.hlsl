@@ -60,6 +60,80 @@ typedef struct D3D12DDI_RAYTRACING_GEOMETRY_TRIANGLES_DESC_0054
 #define GEOMETRY_DESC_AABB_COUNT_OFFSET  8
 #define GEOMETRY_DESC_AABBS_OFFSET      16
 
+#if GPURT_BUILD_RTIP3
+//=====================================================================================================================
+static HwInstanceNode FetchHwInstanceNode(
+    in uint                bufferOffset,
+    in AccelStructHeader   header,
+    in uint                nodeOffset)
+{
+    const uint offset = bufferOffset + header.metadataSizeInBytes + nodeOffset;
+
+    HwInstanceNode node = (HwInstanceNode)0;
+
+    const uint4 d0 = SrcBuffer.Load4(offset + 0x0);
+    const uint4 d1 = SrcBuffer.Load4(offset + 0x10);
+    const uint4 d2 = SrcBuffer.Load4(offset + 0x20);
+    const uint4 d3 = SrcBuffer.Load4(offset + 0x30);
+
+    node.data.worldToObject[0][0] = asfloat(d0.x);
+    node.data.worldToObject[0][1] = asfloat(d0.y);
+    node.data.worldToObject[0][2] = asfloat(d0.z);
+    node.data.worldToObject[0][3] = asfloat(d0.w);
+    node.data.worldToObject[1][0] = asfloat(d1.x);
+    node.data.worldToObject[1][1] = asfloat(d1.y);
+    node.data.worldToObject[1][2] = asfloat(d1.z);
+    node.data.worldToObject[1][3] = asfloat(d1.w);
+    node.data.worldToObject[2][0] = asfloat(d2.x);
+    node.data.worldToObject[2][1] = asfloat(d2.y);
+    node.data.worldToObject[2][2] = asfloat(d2.z);
+    node.data.worldToObject[2][3] = asfloat(d2.w);
+
+    node.data.childBasePtr             = PackUint64(d3.x, d3.y);
+    node.data.childRootNodeOrParentPtr = d3.z;
+    node.data.userDataAndInstanceMask  = d3.w;
+
+    const uint sidebandOffset =
+        bufferOffset + header.metadataSizeInBytes + GetInstanceSidebandOffset(header, nodeOffset);
+
+    const uint4 d4 = SrcBuffer.Load4(sidebandOffset + 0x00);
+    const uint4 d5 = SrcBuffer.Load4(sidebandOffset + 0x10);
+    const uint4 d6 = SrcBuffer.Load4(sidebandOffset + 0x20);
+    const uint4 d7 = SrcBuffer.Load4(sidebandOffset + 0x30);
+
+    node.sideband.instanceIndex      = d4.x;
+    node.sideband.instanceIdAndFlags = d4.y;
+    node.sideband.blasMetadataSize   = d4.z;
+    node.sideband.padding0           = d4.w;
+
+    node.sideband.objectToWorld[0][0] = asfloat(d5.x);
+    node.sideband.objectToWorld[0][1] = asfloat(d5.y);
+    node.sideband.objectToWorld[0][2] = asfloat(d5.z);
+    node.sideband.objectToWorld[0][3] = asfloat(d5.w);
+    node.sideband.objectToWorld[1][0] = asfloat(d6.x);
+    node.sideband.objectToWorld[1][1] = asfloat(d6.y);
+    node.sideband.objectToWorld[1][2] = asfloat(d6.z);
+    node.sideband.objectToWorld[1][3] = asfloat(d6.w);
+    node.sideband.objectToWorld[2][0] = asfloat(d7.x);
+    node.sideband.objectToWorld[2][1] = asfloat(d7.y);
+    node.sideband.objectToWorld[2][2] = asfloat(d7.z);
+    node.sideband.objectToWorld[2][3] = asfloat(d7.w);
+
+    return node;
+}
+
+//=====================================================================================================================
+static uint32_t FetchInstanceIndex3_0(
+    in uint32_t            bufferOffset,
+    in AccelStructHeader   header,
+    in uint32_t            nodeOffset)
+{
+    const uint32_t sidebandOffset = GetInstanceSidebandOffset(header, nodeOffset);
+    return SrcBuffer.Load(
+        bufferOffset + header.metadataSizeInBytes + sidebandOffset + RTIP3_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET);
+}
+#endif
+
 //=====================================================================================================================
 static uint32_t FetchInstanceIndex(
     in uint32_t            bufferOffset,
@@ -80,6 +154,41 @@ static InstanceDesc DecodeApiInstanceDesc(
     uint64_t gpuVa = 0;
     uint32_t blasMetadataSize = 0;
 
+#if GPURT_BUILD_RTIP3
+    if (header.UsesHardwareInstanceNode())
+    {
+        const HwInstanceNode hwInstanceNode = FetchHwInstanceNode(0, header, nodeOffset);
+
+        apiInstanceDesc.Transform[0].x = hwInstanceNode.sideband.objectToWorld[0][0];
+        apiInstanceDesc.Transform[0].y = hwInstanceNode.sideband.objectToWorld[0][1];
+        apiInstanceDesc.Transform[0].z = hwInstanceNode.sideband.objectToWorld[0][2];
+        apiInstanceDesc.Transform[0].w = hwInstanceNode.sideband.objectToWorld[0][3];
+        apiInstanceDesc.Transform[1].x = hwInstanceNode.sideband.objectToWorld[1][0];
+        apiInstanceDesc.Transform[1].y = hwInstanceNode.sideband.objectToWorld[1][1];
+        apiInstanceDesc.Transform[1].z = hwInstanceNode.sideband.objectToWorld[1][2];
+        apiInstanceDesc.Transform[1].w = hwInstanceNode.sideband.objectToWorld[1][3];
+        apiInstanceDesc.Transform[2].x = hwInstanceNode.sideband.objectToWorld[2][0];
+        apiInstanceDesc.Transform[2].y = hwInstanceNode.sideband.objectToWorld[2][1];
+        apiInstanceDesc.Transform[2].z = hwInstanceNode.sideband.objectToWorld[2][2];
+        apiInstanceDesc.Transform[2].w = hwInstanceNode.sideband.objectToWorld[2][3];
+
+        apiInstanceDesc.InstanceID_and_Mask =
+            (hwInstanceNode.data.userDataAndInstanceMask & 0xff000000) |
+            (hwInstanceNode.sideband.instanceIdAndFlags & 0x00ffffff);
+
+        apiInstanceDesc.InstanceContributionToHitGroupIndex_and_Flags =
+            (hwInstanceNode.data.userDataAndInstanceMask & 0x00ffffff) |
+            (hwInstanceNode.sideband.instanceIdAndFlags & 0xff000000);
+
+        gpuVa = hwInstanceNode.data.childBasePtr;
+
+        // Mask off instance flags in the upper bits of the acceleration structure address.
+        gpuVa = ExtractInstanceAddr(gpuVa);
+
+        blasMetadataSize = hwInstanceNode.sideband.blasMetadataSize;
+    }
+    else
+#endif
     {
         const uint offset = header.metadataSizeInBytes + nodeOffset;
         apiInstanceDesc = SrcBuffer.Load<InstanceDesc>(offset);

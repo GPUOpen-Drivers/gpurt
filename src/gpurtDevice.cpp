@@ -38,6 +38,10 @@
 #include "palHashSetImpl.h"
 #include "palVectorImpl.h"
 
+#if GPURT_BUILD_RTIP3_1
+#include "shared/gpurtShaderConstants.h"
+#endif
+
 #if GPURT_DEVELOPER
 #if defined(__GNUC__)
 #define RGP_PUSH_MARKER(format1, format2, ...) PushRGPMarker(format1, format2, ##__VA_ARGS__)
@@ -57,6 +61,10 @@ namespace GpuRt
 
 #include "pipelines/g_internal_shaders.h"
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 48
+#if GPURT_BUILD_RTIP3_1
+#include "pipelines/g_GpuRtLibraryRtIp31_spv.h"
+#include "pipelines/g_GpuRtLibraryDevRtIp31_spv.h"
+#endif
 #include "pipelines/g_GpuRtLibraryLegacy_spv.h"
 #include "pipelines/g_GpuRtLibraryDevLegacy_spv.h"
 #else
@@ -127,10 +135,77 @@ constexpr const char* FunctionTableRTIP2_0[] =
     "\01?GetRayQuery64BitInstanceNodePtr@@YA_K_KI@Z",
 };
 
+#if GPURT_BUILD_RTIP3
+//=====================================================================================================================
+// Function table for ray tracing IP3.0
+constexpr const char* FunctionTableRTIP3_0[] =
+{
+    "\01?RayQueryProceed3_0@@YA_NURayQueryInternal@@IV?$vector@I$02@@@Z",
+    "\01?TraceRayInline3_0@@YAXURayQueryInternal@@IIIIIURayDesc@@V?$vector@I$02@@@Z",
+    "\01?TraceRay3_0@@YAXIIIIIIIMMMMMMMM@Z",
+    "\01?TraceRayUsingHitToken3_0@@YAXIIIIIIIMMMMMMMMII@Z",
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 37
+    "\01?TraceRay3_0@@YAXIIIIIIIMMMMMMMM@Z",
+#endif
+    "\01?GetInstanceID3_0@@YAI_K@Z",
+    "\01?GetInstanceIndex3_0@@YAI_K@Z",
+    "\01?GetObjectToWorldTransform3_0@@YAM_KII@Z",
+    "\01?GetWorldToObjectTransform3_0@@YAM_KII@Z",
+    "\01?FetchTrianglePositionFromNodePointer@@YA?AUTriangleData@@_KI@Z",
+    "\01?FetchTrianglePositionFromRayQuery@@YA?AUTriangleData@@URayQueryInternal@@_N@Z",
+    "\01?GetRayQuery64BitInstanceNodePtr@@YA_K_KI@Z",
+};
+
+//=====================================================================================================================
+// Function table for ray tracing IP3.0 using BVH8
+constexpr const char* FunctionTableRTIP3_0BVH8[] =
+{
+    "\01?RayQueryProceed3_0BVH8@@YA_NURayQueryInternal@@IV?$vector@I$02@@@Z",
+    "\01?TraceRayInline3_0@@YAXURayQueryInternal@@IIIIIURayDesc@@V?$vector@I$02@@@Z",
+    "\01?TraceRay3_0BVH8@@YAXIIIIIIIMMMMMMMM@Z",
+    "\01?TraceRayUsingHitToken3_0@@YAXIIIIIIIMMMMMMMMII@Z",
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 37
+    "\01?TraceRay3_0BVH8@@YAXIIIIIIIMMMMMMMM@Z",
+#endif
+    "\01?GetInstanceID3_0@@YAI_K@Z",
+    "\01?GetInstanceIndex3_0@@YAI_K@Z",
+    "\01?GetObjectToWorldTransform3_0@@YAM_KII@Z",
+    "\01?GetWorldToObjectTransform3_0@@YAM_KII@Z",
+    "\01?FetchTrianglePositionFromNodePointer@@YA?AUTriangleData@@_KI@Z",
+    "\01?FetchTrianglePositionFromRayQuery@@YA?AUTriangleData@@URayQueryInternal@@_N@Z",
+    "\01?GetRayQuery64BitInstanceNodePtr@@YA_K_KI@Z",
+};
+
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+// Function table for ray tracing IP3.1
+constexpr const char* FunctionTableRTIP3_1[] =
+{
+    "\01?RayQueryProceed3_1@@YA_NURayQueryInternal@@IV?$vector@I$02@@@Z",
+    "\01?TraceRayInline3_1@@YAXURayQueryInternal@@IIIIIURayDesc@@V?$vector@I$02@@@Z",
+    "\01?TraceRay3_1@@YAXIIIIIIIMMMMMMMM@Z",
+    "\01?TraceRayUsingHitToken3_1@@YAXIIIIIIIMMMMMMMMII@Z",
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 37
+    "\01?TraceRay3_1@@YAXIIIIIIIMMMMMMMM@Z",
+#endif
+    "\01?GetInstanceID3_1@@YAI_K@Z",
+    "\01?GetInstanceIndex3_1@@YAI_K@Z",
+    "\01?GetObjectToWorldTransform3_1@@YAM_KII@Z",
+    "\01?GetWorldToObjectTransform3_1@@YAM_KII@Z",
+    "\01?FetchTrianglePositionFromNodePointer3_1@@YA?AUTriangleData@@_KI@Z",
+    "\01?FetchTrianglePositionFromRayQuery3_1@@YA?AUTriangleData@@URayQueryInternal@@_N@Z",
+    "\01?GetRayQuery64BitInstanceNodePtr3_1@@YA_K_KI@Z",
+};
+#endif
+#endif
+
 //=====================================================================================================================
 // Maps Pal::RayTracingIpLevel to the appropriate function table.
 static Pal::Result QueryRayTracingEntryFunctionTableInternal(
     const Pal::RayTracingIpLevel   rayTracingIpLevel,
+#if GPURT_BUILD_RTIP3
+    bool                           bvh8Enable,
+#endif
     EntryFunctionTable* const      pEntryFunctionTable)
 {
     Pal::Result result = Pal::Result::Success;
@@ -145,6 +220,18 @@ static Pal::Result QueryRayTracingEntryFunctionTableInternal(
         case Pal::RayTracingIpLevel::RtIp2_0:
             ppFuncTable = FunctionTableRTIP2_0;
             break;
+#if GPURT_BUILD_RTIP3
+        case Pal::RayTracingIpLevel::RtIp3_0:
+        {
+            ppFuncTable = bvh8Enable ? FunctionTableRTIP3_0BVH8 : FunctionTableRTIP3_0;
+            break;
+        }
+#endif
+#if GPURT_BUILD_RTIP3_1
+        case Pal::RayTracingIpLevel::RtIp3_1:
+            ppFuncTable = FunctionTableRTIP3_1;
+            break;
+#endif
         case Pal::RayTracingIpLevel::None:
         default:
             result = Pal::Result::ErrorInvalidValue;
@@ -262,6 +349,20 @@ PipelineShaderCode GPURT_API_ENTRY GetShaderLibraryCode(
     else
     {
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 48
+#if GPURT_BUILD_RTIP3_1
+        if (rayTracingIpLevel == Pal::RayTracingIpLevel::RtIp3_1)
+        {
+            if (enableDevFeatures)
+            {
+                CHOOSE_SHADER(CsGpuRtLibraryDevRtIp31);
+            }
+            else
+            {
+                CHOOSE_SHADER(CsGpuRtLibraryRtIp31);
+            }
+        }
+        else
+#endif
         if (enableDevFeatures)
         {
             CHOOSE_SHADER(CsGpuRtLibraryDevLegacy);
@@ -290,11 +391,18 @@ PipelineShaderCode GPURT_API_ENTRY GetShaderLibraryCode(
 // Maps Pal::RayTracingIpLevel to the appropriate function table.
 Pal::Result GPURT_API_ENTRY QueryRayTracingEntryFunctionTable(
     const Pal::RayTracingIpLevel   rayTracingIpLevel,
+#if GPURT_BUILD_RTIP3
+    bool                           bvh8Enable,
+#endif
     EntryFunctionTable* const      pEntryFunctionTable)
 {
     GPURT_EXPORT_UNMANGLED_SYMBOL_MSVC
 
+#if GPURT_BUILD_RTIP3
+    return QueryRayTracingEntryFunctionTableInternal(rayTracingIpLevel, bvh8Enable, pEntryFunctionTable);
+#else
     return QueryRayTracingEntryFunctionTableInternal(rayTracingIpLevel, pEntryFunctionTable);
+#endif
 }
 
 //=====================================================================================================================
@@ -318,6 +426,25 @@ uint32 Device::GetStaticPipelineFlags(
     {
         pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::SkipProceduralPrims);
     }
+
+#if GPURT_BUILD_RTIP3
+    if (m_info.deviceSettings.highPrecisionBoxNodeEnable)
+    {
+        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::BvhHighPrecisionBoxNodeEnabled);
+    }
+
+    if (m_info.deviceSettings.bvh8Enable)
+    {
+        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::Bvh8Enabled);
+    }
+
+#if GPURT_BUILD_RTIP3_1
+    if (m_info.deviceSettings.enableOrientedBoundingBoxes)
+    {
+        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::EnableOrientedBoundingBoxes);
+    }
+#endif
+#endif
 
     if (m_info.deviceSettings.enableRebraid)
     {
@@ -411,6 +538,12 @@ Device::~Device()
     }
 #endif
 
+#if GPURT_BUILD_RTIP3_1
+    if (m_lutGpuVa != 0)
+    {
+        m_clientCb.pfnFreeGpuMem(m_info, m_lutGpuMem);
+    }
+#endif
     for (const std::pair<InternalPipelineKey, InternalPipelineMemoryPair>& kv : m_pipelineMap)
     {
         m_clientCb.pfnDestroyInternalComputePipeline(m_info, kv.second.pPipeline, kv.second.pMemory);
@@ -468,6 +601,141 @@ Pal::Result Device::Init()
         m_info.deviceSettings.enableFusedInstanceNode = false;
     }
 
+#if GPURT_BUILD_RTIP3_1
+    // Oriented bounding boxes uses a LUT for building OBBs and apex point refitting for TLAS instance nodes.
+    m_lutGpuMem = nullptr;
+    m_lutGpuVa  = 0;
+
+    bool useRtip31PlusFeatures = false;
+#if GPURT_BUILD_RTIP3_1
+    useRtip31PlusFeatures |= (m_rtIpLevel == Pal::RayTracingIpLevel::RtIp3_1);
+#endif
+    if (useRtip31PlusFeatures == false)
+    {
+        m_info.deviceSettings.instanceMode                = InstanceMode::Passthrough;
+        m_info.deviceSettings.primCompressionFlags        = 0;
+        m_info.deviceSettings.maxPrimRangeSize            = 0;
+        m_info.deviceSettings.boxSplittingFlags           = 0;
+        m_info.deviceSettings.enableOrientedBoundingBoxes = 0;
+    }
+    else
+    {
+#if GPURT_BUILD_RTIP3
+        // Compressed node formats require BVH8
+        m_info.deviceSettings.bvh8Enable = true;
+
+        // Compressed node formats are not compatible with high precision box node format
+        m_info.deviceSettings.highPrecisionBoxNodeEnable = false;
+#endif
+
+        {
+            // Only passthrough and filter nodes are currently supported
+            m_info.deviceSettings.instanceMode =
+                Util::Min(m_info.deviceSettings.instanceMode, InstanceMode::FilterNode);
+
+            // Only size <= 2 is supported for now - a larger wave size or changes in the wave compression algorithm are
+            // required to expand this.
+            if (m_info.deviceSettings.enableParallelBuild == false)
+            {
+                m_info.deviceSettings.maxPrimRangeSize =
+                    Util::Min<uint32>(m_info.deviceSettings.maxPrimRangeSize, PRIM_COMP_MAX_RANGE_SIZE_3_1);
+            }
+        }
+
+        // Box splitting on instance nodes is useless when passthrough mode is used since we rely on the intersectable
+        // instance bounds for box splitting.
+        if (m_info.deviceSettings.instanceMode == InstanceMode::Passthrough)
+        {
+            m_info.deviceSettings.boxSplittingFlags &= ~BoxSplittingFlags::Instance;
+        }
+    }
+
+    if ((m_info.deviceSettings.tlasRefittingMode != TlasRefittingMode::Disabled) ||
+        (m_info.deviceSettings.enableOrientedBoundingBoxes != 0))
+    {
+        ClientGpuMemHandle pGpuMemA = nullptr;
+        ClientGpuMemHandle pGpuMemB = nullptr;
+
+        Pal::gpusize pSrcGpuVa  = 0;
+        Pal::gpusize pDestGpuVa = 0;
+
+        static constexpr uint32 sizeInBytes = Util::Pow2Align(sizeof(ObbDataSource), 256);
+
+        // Create CPU/GPU accessable memory:
+        void* pMappedData;
+        result = m_clientCb.pfnAllocateGpuMemory(m_info,
+                                                 sizeInBytes,
+                                                 &pGpuMemA,
+                                                 &pSrcGpuVa,
+                                                 &pMappedData);
+
+        if (result == Pal::Result::Success)
+        {
+            result = m_clientCb.pfnAllocateGpuMemory(m_info,
+                                                     sizeInBytes,
+                                                     &pGpuMemB,
+                                                     &pDestGpuVa,
+                                                     nullptr);
+
+            if (result == Pal::Result::Success)
+            {
+                ClientCmdContextHandle context   = nullptr;
+                ClientCmdBufferHandle  cmdBuffer = nullptr;
+                Pal::Result            acquireResult = Pal::Result::Success;
+                acquireResult = m_clientCb.pfnAcquireCmdContext(m_info, &context, &cmdBuffer);
+                if (acquireResult != Pal::Result::Success)
+                {
+                    m_info.deviceSettings.enableOrientedBoundingBoxes = 0;
+                    m_info.deviceSettings.tlasRefittingMode = TlasRefittingMode::Disabled;
+                }
+                else
+                {
+                    // Copy OBB LUT into CPU accessible memory:
+                    memcpy(pMappedData, &obbData, sizeof(ObbData));
+                    m_pBackend->CopyGpuMemoryRegion(cmdBuffer,
+                        pSrcGpuVa,
+                        0,
+                        pDestGpuVa,
+                        0,
+                        sizeInBytes);
+                    result = m_clientCb.pfnFlushCmdContext(context);
+                    if (result == Pal::Result::Success)
+                    {
+                        // Save the results.
+                        m_lutGpuMem = pGpuMemB;
+                        m_lutGpuVa = pDestGpuVa;
+                    }
+                }
+            }
+        }
+
+        if (pGpuMemA != nullptr)
+        {
+            m_clientCb.pfnFreeGpuMem(m_info, pGpuMemA);
+        }
+        if ((pGpuMemB != nullptr) && (m_lutGpuVa == 0))
+        {
+            m_clientCb.pfnFreeGpuMem(m_info, pGpuMemB);
+        }
+    }
+#endif
+
+#if GPURT_BUILD_RTIP3
+    // High precision box node or Float32BoxNode BVH8 doesn't support rebraid yet.
+    if (m_info.deviceSettings.bvh8Enable
+#if GPURT_BUILD_RTIP3_1
+        && (m_rtIpLevel < Pal::RayTracingIpLevel::RtIp3_1)
+#endif
+        )
+    {
+        m_info.deviceSettings.enableRebraid = false;
+    }
+
+    if (m_info.deviceSettings.highPrecisionBoxNodeEnable || m_info.deviceSettings.bvh8Enable)
+    {
+        m_info.deviceSettings.fp16BoxNodesInBlasMode = Fp16BoxNodesInBlasMode::NoNodes;
+    }
+#endif
     return result;
 }
 
@@ -520,6 +788,9 @@ Pal::Result Device::QueryRayTracingEntryFunctionTable(
     EntryFunctionTable* const      pEntryFunctionTable)
 {
     return QueryRayTracingEntryFunctionTableInternal(rayTracingIpLevel,
+#if GPURT_BUILD_RTIP3
+                                                     m_info.deviceSettings.bvh8Enable,
+#endif
                                                      pEntryFunctionTable);
 }
 
@@ -686,6 +957,9 @@ ClientPipelineHandle Device::GetInternalPipeline(
             {
                 case InternalRayTracingCsType::BuildParallel:
                 case InternalRayTracingCsType::Rebraid:
+#if GPURT_BUILD_RTIP3|| GPURT_BUILD_RTIP3_1
+                case InternalRayTracingCsType::BuildParallelRtip3x:
+#endif
                     newBuildInfo.hashedCompilerOptionCount = 1;
                     newBuildInfo.pHashedCompilerOptions = wave64Option;
                     break;
@@ -695,6 +969,16 @@ ClientPipelineHandle Device::GetInternalPipeline(
                 case InternalRayTracingCsType::EmitToolVisDesc:
                 case InternalRayTracingCsType::InitAccelerationStructure:
                 case InternalRayTracingCsType::InitExecuteIndirect:
+#if GPURT_BUILD_RTIP3_1
+                case InternalRayTracingCsType::BuildTrivialBvh:
+                case InternalRayTracingCsType::BuildSingleThreadGroup32:
+                case InternalRayTracingCsType::BuildSingleThreadGroup64:
+                case InternalRayTracingCsType::BuildSingleThreadGroup128:
+                case InternalRayTracingCsType::BuildSingleThreadGroup256:
+                case InternalRayTracingCsType::BuildSingleThreadGroup512:
+                case InternalRayTracingCsType::BuildSingleThreadGroup1024:
+                case InternalRayTracingCsType::CompressPrims:
+#endif
                     newBuildInfo.hashedCompilerOptionCount = 1;
                     newBuildInfo.pHashedCompilerOptions = wave32Option;
                     break;
@@ -775,13 +1059,33 @@ ClientPipelineHandle Device::GetInternalPipeline(
                                "_RadixSortLevel_%d",
                                buildSettings.radixSortScanLevel);
 
+#if GPURT_BUILD_RTIP3
+                const char* bvhFormat = "";
+                const char* bvhDegree = "";
+
+#if GPURT_BUILD_RTIP3
+                bvhFormat = buildSettings.highPrecisionBoxNodeEnable ? "_HighPrecisionBoxNode" : bvhFormat;
+                bvhDegree = buildSettings.bvh8Enable ? "_BVH8" : bvhDegree;
+#endif
+#if GPURT_BUILD_RTIP3_1
+                bvhFormat =
+                    (buildSettings.rtIpLevel == uint32(Pal::RayTracingIpLevel::RtIp3_1)) ? "_RTIP3.1" : bvhFormat;
+#endif
+
+                Util::Snprintf(pipelineName, MaxStrLength, "%s%s%s_%s%s%s%s%s%s",
+#else
                 Util::Snprintf(pipelineName, MaxStrLength, "%s%s%s_%s%s%s%s",
+#endif
                                newBuildInfo.pPipelineName,
                                buildSettings.topLevelBuild ? "_TLAS" : "_BLAS",
                                buildSettings.topLevelBuild ? "" : GeometryTypeStr[buildSettings.geometryType],
                                BuildModeStr[buildSettings.buildMode],
                                buildSettings.triangleCompressionMode ? "_TriCompr" : "",
                                buildSettings.enableRebraid ? "_RebraidOn" : "",
+#if GPURT_BUILD_RTIP3
+                               bvhFormat,
+                               bvhDegree,
+#endif
                                buildSettings.enableMergeSort ? "_MergeSort" : radixSortLevelStr);
 
                 newBuildInfo.pPipelineName = &pipelineName[0];
@@ -2197,6 +2501,13 @@ bool Device::ShouldUseGangedAceForBuild(
     const AccelStructBuildInputs buildInputs = OverrideBuildInputs(inputs);
     bool shouldUseGangedAce = Util::TestAnyFlagSet(buildInputs.flags, AccelStructBuildFlagPerformUpdate);
 
+#if GPURT_BUILD_RTIP3_1
+    if (shouldUseGangedAce == false)
+    {
+        shouldUseGangedAce = ShouldUseTrivialBuilderForBuild(buildInputs);
+    }
+#endif
+
     return shouldUseGangedAce;
 }
 
@@ -2240,6 +2551,44 @@ const AccelStructBuildInputs Device::OverrideBuildInputs(
 
     return buildInputs;
 }
+
+#if GPURT_BUILD_RTIP3_1
+// =====================================================================================================================
+bool Device::ShouldUseTrivialBuilderForBuild(
+    const AccelStructBuildInputs& inputs
+    ) const
+{
+    bool shouldUse = ((m_rtIpLevel == Pal::RayTracingIpLevel::RtIp3_1) &&
+                      (m_info.deviceSettings.trivialBuilderMaxPrimThreshold != 0) &&
+                      (inputs.type == AccelStructType::BottomLevel) &&
+                      (m_info.deviceSettings.enableParallelBuild == false));
+
+    if (shouldUse)
+    {
+        // Rebraid doesn't support more than 4 child nodes at the moment, so we have to adjust the max.
+        const uint32 maxPrimitives = Util::Min((m_info.deviceSettings.enableRebraid) ? 8u : 16u,
+                                               uint32(m_info.deviceSettings.trivialBuilderMaxPrimThreshold));
+
+        uint32 numPrimitives = 0;
+        for (uint32 i = 0; i < inputs.inputElemCount; ++i)
+        {
+            const Geometry geometry = m_clientCb.pfnConvertAccelStructBuildGeometry(inputs, i);
+
+            if (geometry.type != GeometryType::Triangles)
+            {
+                shouldUse = false;
+                break;
+            }
+
+            numPrimitives += BvhBuilder::GetGeometryPrimCount(geometry);
+        }
+
+        shouldUse &= (numPrimitives <= maxPrimitives);
+    }
+
+    return shouldUse;
+}
+#endif
 
 #if GPURT_DEVELOPER
 // =====================================================================================================================

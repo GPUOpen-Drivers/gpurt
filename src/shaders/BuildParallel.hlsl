@@ -24,6 +24,20 @@
  **********************************************************************************************************************/
 #define BUILD_PARALLEL 1
 
+#if GPURT_BUILD_RTIP3|| GPURT_BUILD_RTIP3_1
+#if GPURT_BUILD_PARALLEL_ENABLE_RTIP3 == 0
+
+#if GPURT_BUILD_RTIP3
+#undef GPURT_BUILD_RTIP3
+#endif
+
+#if GPURT_BUILD_RTIP3_1
+#undef GPURT_BUILD_RTIP3_1
+#endif
+
+#endif
+#endif
+
 #include "../shadersClean/common/ShaderDefs.hlsli"
 
 #define TASK_COUNTER_BUFFER   ScratchGlobal
@@ -99,6 +113,13 @@ void WaitForEncodeTasksToFinish(
 #include "PairCompression.hlsl"
 #include "Rebraid.hlsl"
 #include "MergeSort.hlsl"
+
+#if GPURT_BUILD_RTIP3_1
+#include "EncodeHwBvh3_1.hlsl"
+#include "PrimitiveStructure3_1.hlsl"
+#include "RefitOrientedBounds3_1.hlsl"
+#include "RefitOrientedBoundsTopLevel3_1.hlsl"
+#endif
 
 //======================================================================================================================
 void GenerateMortonCodes(
@@ -205,6 +226,13 @@ void InitEncodeHwBvh(
     uint globalId,
     uint maxInternalNodeCount)
 {
+#if GPURT_BUILD_RTIP3_1
+    if (Settings.rtIpLevel >= GPURT_RTIP3_1)
+    {
+        ClearStackPtrs(globalId, maxInternalNodeCount, GetNumThreads());
+    }
+    else
+#endif
     {
         InitBuildQBVHImpl(globalId, maxInternalNodeCount, GetNumThreads());
     }
@@ -220,12 +248,84 @@ void EncodeHwBvh(
     uint       numActivePrims,
     uint       maxInternalNodeCount)
 {
+#if GPURT_BUILD_RTIP3_1
+    if (Settings.rtIpLevel == GPURT_RTIP3_1)
+    {
+        const uint numThreads = maxInternalNodeCount * 8;
+
+        BEGIN_TASK(RoundUpQuotient(numThreads, BUILD_THREADGROUP_SIZE));
+        Gfx12::EncodeHwBvhImpl(globalId, localId, numActivePrims);
+        END_TASK(RoundUpQuotient(numThreads, BUILD_THREADGROUP_SIZE));
+    }
+    else
+#endif
     {
         BEGIN_TASK(RoundUpQuotient(maxInternalNodeCount, BUILD_THREADGROUP_SIZE));
         BuildQBVHImpl(globalId, localId, numLeafNodes, numActivePrims);
         END_TASK(RoundUpQuotient(maxInternalNodeCount, BUILD_THREADGROUP_SIZE));
     }
 }
+
+#if GPURT_BUILD_RTIP3_1
+//======================================================================================================================
+void RefitOrientedBounds(
+    inout uint numTasksWait,
+    inout uint waveId,
+    in    uint localId)
+{
+    const uint obbRefitBatchCount =
+        ScratchGlobal.Load(ShaderConstants.offsets.obbRefitStackPtrs + STACK_PTRS_OBB_REFIT_BATCH_COUNT);
+
+    // Note, a group of 8 lanes within a threadgroup works on a single internal node.
+    const uint numThreadGroups = RoundUpQuotient(obbRefitBatchCount, BUILD_THREADGROUP_SIZE / 8);
+
+    BEGIN_TASK(numThreadGroups);
+    if (Settings.topLevelBuild == true)
+    {
+        RefitOrientedBoundsTopLevelImpl(globalId, localId, obbRefitBatchCount);
+    }
+    else
+    {
+        RefitOrientedBoundsImpl(globalId, localId, obbRefitBatchCount);
+    }
+    END_TASK(numThreadGroups);
+}
+
+//======================================================================================================================
+void CompressPrimsPass(
+    inout uint numTasksWait,
+    inout uint waveId,
+    in    uint localId)
+{
+    const uint batchCount = FetchCompressPrimBatchCount(ShaderConstants.offsets.qbvhGlobalStackPtrs);
+
+    const AccelStructHeader header = DstBuffer.Load<AccelStructHeader>(0);
+
+    BEGIN_TASK(batchCount);
+
+    // The primitive compression pass is designed for wave and group size 32
+    if (localId < 32)
+    {
+        const uint rangeBatchOffset = groupId * 8 * sizeof(uint);
+
+        PrimStruct3_1::WaveCompressLeafChildren(
+            header.offsets,
+            header.numActivePrims,
+            rangeBatchOffset);
+    }
+
+    END_TASK(batchCount);
+
+    const uint singlePrimCount  = FetchCompressPrimSingleCount(ShaderConstants.offsets.qbvhGlobalStackPtrs);
+    const uint singlePrimGroups = RoundUpQuotient(RoundUpQuotient(singlePrimCount, 2), BUILD_THREADGROUP_SIZE);
+
+    BEGIN_TASK(singlePrimGroups);
+
+    PrimStruct3_1::CompressSinglePrims(globalId);
+
+    END_TASK(singlePrimGroups);
+}
+#endif
 
 //======================================================================================================================
 void WriteDebugCounter(uint counterStageOffset)
@@ -472,6 +572,19 @@ void BuildBvh(
 
         const uint maxInternalNodeCount = GetMaxInternalNodeCount(numLeafNodes);
 
+#if GPURT_BUILD_RTIP3_1
+        BEGIN_TASK(1)
+        if ((globalId == 0) && (Settings.rtIpLevel >= GPURT_RTIP3_1))
+        {
+            InitStackPtrs();
+            if (Settings.rtIpLevel == GPURT_RTIP3_1)
+            {
+                Gfx12::InitObbRefitStackPtrs();
+            }
+        }
+        END_TASK(1);
+#endif
+
         BEGIN_TASK(ShaderRootConstants.NumThreadGroups());
 
         InitEncodeHwBvh(globalId, maxInternalNodeCount);
@@ -483,6 +596,41 @@ void BuildBvh(
 
         WriteDebugCounter(COUNTER_ENCODEHWBVH_OFFSET);
 
+#if GPURT_BUILD_RTIP3_1
+        if (Gfx12::EnableWaveLeafCompressionPass())
+        {
+            CompressPrimsPass(numTasksWait, waveId, localId);
+        }
+
+        const bool blasWithOBB = (Settings.topLevelBuild == false) && (Settings.enableOrientedBoundingBoxes != 0);
+        if (blasWithOBB)
+        {
+            uint doRebraid;
+
+            if (EnableNonPrioritySortingRebraid())
+            {
+                const uint tempInfo = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_INFO_OFFSET);
+                doRebraid = (tempInfo >> ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_SHIFT) &
+                            ACCEL_STRUCT_HEADER_INFO_REBRAID_FLAGS_MASK;
+            }
+            else
+            {
+                doRebraid = Settings.enableInstanceRebraid;
+            }
+
+            if (doRebraid)
+            {
+                const uint numInternalNodes =
+                    ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP32_NODES_OFFSET);
+
+                BEGIN_TASK(1)
+                InitObbBlasMetadata(globalId, numInternalNodes, BUILD_THREADGROUP_SIZE);
+                END_TASK(1)
+            }
+
+            RefitOrientedBounds(numTasksWait, waveId, localId);
+        }
+#endif
     }
 
     BEGIN_TASK(1);

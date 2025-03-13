@@ -105,6 +105,16 @@ static uint ConvertRtIpLevel(RayTracingIpLevel rtIpLevel)
     case RayTracingIpLevel::RtIp2_0:
         level = GPURT_RTIP2_0;
         break;
+#if GPURT_BUILD_RTIP3 && ((GPURT_RTIP_LEVEL == 30) || (GPURT_RTIP_LEVEL == 0))
+    case RayTracingIpLevel::RtIp3_0:
+        level = GPURT_RTIP3_0;
+        break;
+#endif
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+    case RayTracingIpLevel::RtIp3_1:
+        level = GPURT_RTIP3_1;
+        break;
+#endif
     default:
         break;
     }
@@ -156,12 +166,107 @@ static HitGroupInfo GetHitGroupInfo(
     return GetHitGroupInfoFromRecordIndex(hitGroupRecordIndex);
 }
 
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+static uint64_t UnpackBaseAddrFromInstanceNodePtr3_1(
+    in uint64_t instanceNodePtr)
+{
+    return (instanceNodePtr >> 24) << 7;
+}
+
+//=====================================================================================================================
+static uint64_t GetInstanceNodeBaseAddr3_1(
+    in uint64_t instanceNodePtr)
+{
+    // Unpack 64-bit instance node pointer into the 64-bit base address and 32-bit node offset
+    // See PackInstanceNodePtr3_1().
+    //
+
+    const uint64_t tlasBaseAddr = UnpackBaseAddrFromInstanceNodePtr3_1(instanceNodePtr);
+    const uint32_t nodeOffset = (uint32_t(instanceNodePtr) & 0x00ffffff) << 6;
+
+    return tlasBaseAddr + nodeOffset;
+}
+
+//=====================================================================================================================
+static uint64_t CalculateInstanceSidebandBaseAddr3_1(
+    in uint64_t tlasBaseAddr,
+    const uint32_t nodeOffset
+)
+{
+    // Fetch acceleration structure offsets from header
+    const uint32_t leafNodesOffset =
+        FetchHeaderOffsetField(tlasBaseAddr, ACCEL_STRUCT_OFFSETS_LEAF_NODES_OFFSET);
+
+    const uint32_t sidebandDataOffset =
+        FetchHeaderOffsetField(tlasBaseAddr, ACCEL_STRUCT_OFFSETS_GEOMETRY_INFO_OFFSET);
+
+    const uint32_t sidebandOffset = ComputeInstanceSidebandOffset(nodeOffset, leafNodesOffset, sidebandDataOffset);
+    return tlasBaseAddr + sidebandOffset;
+}
+
+//=====================================================================================================================
+static uint64_t GetInstanceSidebandBaseAddr3_1(
+    in uint64_t instanceNodePtr)
+{
+    // Unpack 64-bit instance node pointer into the 64-bit base address and 32-bit node offset
+    // See PackInstanceNodePtr3_1().
+    //
+    const uint64_t tlasBaseAddr = UnpackBaseAddrFromInstanceNodePtr3_1(instanceNodePtr);
+    const uint32_t nodeOffset = (uint32_t(instanceNodePtr) & 0x00ffffff) << 6;
+
+    return CalculateInstanceSidebandBaseAddr3_1(tlasBaseAddr, nodeOffset);
+}
+
+//=====================================================================================================================
+// unpack instance sideband address given tlas and nodePointer
+static uint64_t GetInstanceSidebandBaseAddr3_1(
+    in uint64_t tlasBaseAddr,
+    in uint     instanceNodePtr)
+{
+    const uint32_t nodeOffset = ExtractNodePointerOffset3_1(instanceNodePtr);
+    return CalculateInstanceSidebandBaseAddr3_1(tlasBaseAddr, nodeOffset);
+}
+
+//=====================================================================================================================
+static uint64_t PackInstanceNodePtr3_1(
+    in uint64_t instanceBaseAddr,
+    in uint32_t instanceNodePtr)
+{
+    // Unpack 64-bit instance node pointer into the 64-bit base address and 32-bit node offset
+    // Our hardware supports 48-bit virtual addressing. The current layout of the acceleration structure ensures that
+    // the base pointer is 128-byte aligned which allows us to pack the node address into 41 bits.
+    //
+    // The ray tracing APIs (DXR/VulkanRT) enforce a 256 byte alignment on the base address of the acceleration
+    // structure memory address. On RTIP3.1+ we do not require metadata section, we should simply change the
+    // data layout such that the acceleration structure header is at the base of the gpu memory. Thus, the base pointer
+    // itself will be 256-aligned and we can pack into 40 bits.
+    //
+    // struct PackedInstanceNodePtr
+    // {
+    //     uint64_t tlasBaseAddr   : 40; // 128-byte aligned acceleration structure base address
+    //     uint64_t instNodeOffset : 24; // 64-byte aligned instance node offset
+    // };
+
+    uint64_t packedNodePtr = (instanceBaseAddr >> 7) << 24;
+    packedNodePtr |= (instanceNodePtr >> 3) & 0x00ffffff;
+
+    return packedNodePtr;
+}
+#endif
+
 //=====================================================================================================================
 static uint64_t CalculateInstanceNodePtr64(
     in uint32_t rtIpLevel,
     in uint64_t instanceBaseAddr,
     in uint32_t instanceNodePtr)
 {
+#if GPURT_BUILD_RTIP3_1
+    if (rtIpLevel >= GPURT_RTIP3_1)
+    {
+        return PackInstanceNodePtr3_1(instanceBaseAddr, instanceNodePtr);
+    }
+#endif
     return CalculateNodeAddr64(instanceBaseAddr, instanceNodePtr);
 }
 
@@ -173,6 +278,14 @@ static uint FetchInstanceIdx(
 {
     uint instNodeIndex = 0;
 
+#if GPURT_BUILD_RTIP3_1
+    if (rtIpLevel == GPURT_RTIP3_1)
+    {
+        GpuVirtualAddress sidebandBaseAddr = GetInstanceSidebandBaseAddr3_1(accelStruct, instNodePtr);
+        instNodeIndex = LoadDwordAtAddr(sidebandBaseAddr + RTIP3_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET);
+    }
+    else
+#endif
     {
         GpuVirtualAddress instanceNodePtr = accelStruct + ExtractNodePointerOffset(instNodePtr);
         instNodeIndex = LoadDwordAtAddr(instanceNodePtr +
@@ -853,6 +966,14 @@ static void UpdateWaveTraversalStatistics(
         const uint activeLaneCount = WaveActiveCountBits(true);
         uint4 laneCnt;
 
+#if GPURT_BUILD_RTIP3_1
+        if (rtIpLevel >= GPURT_RTIP3_1)
+        {
+            laneCnt.x = WaveActiveCountBits(IsBoxNode3_1(nodePtr));
+            laneCnt.y = WaveActiveCountBits(IsTriangleNode3_1(nodePtr));
+        }
+        else
+#endif
         {
             laneCnt.x = WaveActiveCountBits(IsBoxNode1_1(nodePtr));
             laneCnt.y = WaveActiveCountBits(IsTriangleNode1_1(nodePtr));

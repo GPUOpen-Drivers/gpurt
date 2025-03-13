@@ -51,6 +51,9 @@
 #include "BuildCommon.hlsl"
 #include "BuildCommonScratchGlobal.hlsl"
 #include "TaskCounter.hlsl"
+#if GPURT_BUILD_RTIP3_1
+#include "../shadersClean/common/gfx12/primitiveNode.hlsli"
+#endif
 
 //=====================================================================================================================
 void WriteScratchBatchIndex(
@@ -315,6 +318,12 @@ void WriteScratchNodeParent(
     uint nodeIndex,
     uint parent)
 {
+#if GPURT_BUILD_RTIP3_1
+    // Note, for RTIP3.1 primitive ranges, we reuse the scratch node parent field to store the
+    // pointer to the next leaf node in the primitive range. The parent field is only required for RTIP2.0
+    // pair compression logic and should be removed once that code is updated.
+    if (EnableLatePairCompression())
+#endif
     {
         WriteScratchNodeData(baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_PARENT_OFFSET, parent);
     }
@@ -772,6 +781,13 @@ uint GetMinimumNumOfTriangles()
 {
     uint minNumOfTris = 2;
     {
+#if GPURT_BUILD_RTIP3_1
+        if (Settings.maxPrimRangeSize > 1)
+        {
+            minNumOfTris = 2;
+        }
+        else
+#endif
         {
             minNumOfTris = 0;
         }
@@ -785,6 +801,13 @@ float GetTriangleIntersectionCost(uint numTris)
 {
     float Ct;
     {
+#if GPURT_BUILD_RTIP3_1
+        if (Settings.maxPrimRangeSize > 1)
+        {
+            Ct = SAH_COST_PRIM_RANGE_INTERSECTION * numTris;
+        }
+        else
+#endif
         {
             Ct = SAH_COST_TRIANGLE_INTERSECTION * numTris;
         }
@@ -861,6 +884,58 @@ void MergeScratchNodes(
 
         bool isCollapsed = false;
 
+#if GPURT_BUILD_RTIP3_1
+
+        if (Settings.maxPrimRangeSize > 1)
+        {
+            const bool leftLeaf  = IsLeafNode(leftNodeIndex,  numActivePrims);
+            const bool rightLeaf = IsLeafNode(rightNodeIndex, numActivePrims);
+            const bool bothLeaf  = leftLeaf && rightLeaf;
+
+            const uint minNumTris = GetMinimumNumOfTriangles();
+
+            isCollapsed =
+                (numTris <= Settings.maxPrimRangeSize) &&
+                ((numTris <= minNumTris) || (collapseCost <= splitCost)) &&
+                collapseBothSides;
+
+            if (isCollapsed)
+            {
+                if ((UsePrimIndicesArray() == false) && (CollapseAnyPairs() == false))
+                {
+                    const uint newHead = leftLeaf  ? leftNodeIndex  : leftNode.left_or_primIndex_or_instIndex;
+                    const uint newTail = rightLeaf ? rightNodeIndex : rightNode.right_or_geometryIndex;
+
+                    const uint leftTail  = leftLeaf  ? leftNodeIndex  : leftNode.right_or_geometryIndex;
+                    const uint rightHead = rightLeaf ? rightNodeIndex : rightNode.left_or_primIndex_or_instIndex;
+
+                    // Connect the tail of the left and head of the right to merge the lists
+                    WriteScratchNodeData(scratchNodesOffset,
+                                         leftTail,
+                                         SCRATCH_NODE_PARENT_OFFSET,
+                                         rightHead);
+
+                    if (rightLeaf)
+                    {
+                        // Mark the end of the list
+                        WriteScratchNodeData(scratchNodesOffset,
+                                             rightHead,
+                                             SCRATCH_NODE_PARENT_OFFSET,
+                                             INVALID_IDX);
+                    }
+
+                    const uint mergedNodeOffset = CalcScratchNodeOffset(scratchNodesOffset, mergedNodeIndex);
+
+                    // Left and right pointers store the head and tail of the collapsed triangle list
+                    WriteScratchNodeDataAtOffset(mergedNodeOffset, SCRATCH_NODE_LEFT_OFFSET, newHead);
+                    WriteScratchNodeDataAtOffset(mergedNodeOffset, SCRATCH_NODE_RIGHT_OFFSET, newTail);
+                }
+
+                bestCost = collapseCost * mergedBoxSurfaceArea;
+            }
+        }
+        else
+#endif
         if (EnableLatePairCompression()
         )
         {

@@ -52,12 +52,19 @@ enum class BuildPhaseFlags : uint32_t
     BuildPLOC                     = 1 << 7,
     // Unused8                    = 1 << 8,
     PairCompression               = 1 << 9,
+#if GPURT_BUILD_RTIP3_1
+    CompressPrims                 = 1 << 10,
+    RefitOrientedBounds           = 1 << 11,
+#endif
     SeparateEmitPostBuildInfoPass = 1 << 12,
     BuildParallel                 = 1 << 13,
     BuildFastAgglomerativeLbvh    = 1 << 15,
     EncodeQuadPrimitives          = 1 << 16,
     EncodePrimitives              = 1 << 18,
     BuildDumpEvents               = 1 << 19,
+#if GPURT_BUILD_RTIP3_1
+    RefitInstanceBounds           = 1 << 21,
+#endif
 };
 
 static const char* BuildPhaseName(BuildPhaseFlags phase)
@@ -78,6 +85,12 @@ static const char* BuildPhaseName(BuildPhaseFlags phase)
         return "BuildPLOC";
     case GpuRt::BuildPhaseFlags::PairCompression:
         return "PairCompression";
+#if GPURT_BUILD_RTIP3_1
+    case GpuRt::BuildPhaseFlags::CompressPrims:
+        return "CompressPrims";
+    case GpuRt::BuildPhaseFlags::RefitOrientedBounds:
+        return "RefitOrientedBounds";
+#endif
     case GpuRt::BuildPhaseFlags::SeparateEmitPostBuildInfoPass:
         return "SeparateEmitPostBuildInfoPass";
     case GpuRt::BuildPhaseFlags::BuildParallel:

@@ -139,6 +139,13 @@ void DeserializeAS(
 
                     const uint currentInstNodeOffset = ExtractNodePointerOffset(currentInstNodePtr);
 
+#if GPURT_BUILD_RTIP3
+                    if (header.UsesHardwareInstanceNode())
+                    {
+                        apiInstanceIndex = FetchInstanceIndex3_0(serializedHeaderSize, header, currentInstNodeOffset);
+                    }
+                    else
+#endif
                     {
                         apiInstanceIndex = FetchInstanceIndex(serializedHeaderSize, header, currentInstNodeOffset);
                     }
@@ -152,6 +159,29 @@ void DeserializeAS(
 
                     uint64_t childBasePtr = 0;
 
+#if GPURT_BUILD_RTIP3
+                    if (header.UsesHardwareInstanceNode())
+                    {
+                        const HwInstanceNode hwInstanceNode =
+                            FetchHwInstanceNode(serializedHeaderSize, header, currentInstNodeOffset);
+
+                        childBasePtr = hwInstanceNode.data.childBasePtr;
+
+                        // Handle null BLAS address
+                        if (newGpuVa != 0)
+                        {
+                            newGpuVa = newGpuVa + hwInstanceNode.sideband.blasMetadataSize;
+                        }
+
+                        // Preserve the instance flags in the high bits of the address.
+                        const uint64_t newChildBasePtr =
+                            (childBasePtr & ~(INSTANCE_BASE_POINTER_ADDRESS_USED_MASK)) | (newGpuVa >> 3);
+
+                        DstMetadata.Store<uint64_t>(offset + RTIP3_INSTANCE_NODE_CHILD_BASE_PTR_OFFSET,
+                                                    newChildBasePtr);
+                    }
+                    else
+#endif
                     {
                         childBasePtr = SrcBuffer.Load<uint64_t>(
                             serializedHeaderSize + offset + INSTANCE_DESC_VA_LO_OFFSET);
@@ -202,5 +232,31 @@ void DeserializeAS(
             DstMetadata.Store<uint64_t>(ACCEL_STRUCT_METADATA_VA_LO_OFFSET, gpuVa);
             DstMetadata.Store(ACCEL_STRUCT_METADATA_SIZE_OFFSET,  metadataSizeInBytes);
         }
+#if GPURT_BUILD_RTIP3_1
+        if (Settings.rtIpLevel == GPURT_RTIP3_1)
+        {
+            // Store instance node to Dst Buffer.
+            DstMetadata.Store4(ACCEL_STRUCT_METADATA_INSTANCE_NODE_OFFSET,
+            SrcBuffer.Load4(serializedHeaderSize + ACCEL_STRUCT_METADATA_INSTANCE_NODE_OFFSET));
+
+            DstMetadata.Store4(ACCEL_STRUCT_METADATA_INSTANCE_NODE_OFFSET + 16,
+            SrcBuffer.Load4(serializedHeaderSize + ACCEL_STRUCT_METADATA_INSTANCE_NODE_OFFSET +16));
+
+            DstMetadata.Store4(ACCEL_STRUCT_METADATA_INSTANCE_NODE_OFFSET + 32,
+            SrcBuffer.Load4(serializedHeaderSize + ACCEL_STRUCT_METADATA_INSTANCE_NODE_OFFSET + 32));
+
+            DstMetadata.Store4(ACCEL_STRUCT_METADATA_INSTANCE_NODE_OFFSET + 48,
+            SrcBuffer.Load4(serializedHeaderSize + ACCEL_STRUCT_METADATA_INSTANCE_NODE_OFFSET + 48));
+        }
+#endif
+#if GPURT_BUILD_RTIP3_1
+        if (Settings.rtIpLevel >= GPURT_RTIP3_1)
+        {
+            // Copy indirect dispatch group count for updates.
+            const uint3 updateGroupCount =
+                SrcBuffer.Load3(serializedHeaderSize + ACCEL_STRUCT_METADATA_UPDATE_GROUP_COUNT_OFFSET);
+            DstMetadata.Store3(ACCEL_STRUCT_METADATA_UPDATE_GROUP_COUNT_OFFSET, updateGroupCount);
+        }
+#endif
     }
 }

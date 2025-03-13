@@ -53,6 +53,10 @@ struct InputArgs
 #include "CompactCommon.hlsl"
 #include "CompactAS1_1.hlsl"
 
+#if GPURT_BUILD_RTIP3_1
+#include "CompactAS3_1.hlsl"
+#endif
+
 //=====================================================================================================================
 // CompactAS
 //=====================================================================================================================
@@ -64,6 +68,11 @@ void CompactAS(in uint3 globalThreadId : SV_DispatchThreadID)
 
     switch (Settings.rtIpLevel)
     {
+#if GPURT_BUILD_RTIP3_1
+    case GPURT_RTIP3_1:
+        CompactASImpl3_1(globalId);
+        return;
+#endif
     default:
         CompactASImpl1_1(globalId);
         return;

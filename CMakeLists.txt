@@ -1,7 +1,7 @@
 ##
  #######################################################################################################################
  #
- #  Copyright (c) 2020-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ #  Copyright (c) 2020-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  #
  #  Permission is hereby granted, free of charge, to any person obtaining a copy
  #  of this software and associated documentation files (the "Software"), to deal
@@ -84,6 +84,31 @@ target_link_libraries(gpurt_internal PUBLIC pal)
 
 # Default PAL variables are not visible here, but sometimes they are set explicitly by the user or build configuration.
 # Implicitly enable the related RTIPs in this case.
+
+#if PAL_BUILD_GFX12
+if (PAL_BUILD_GFX12)
+    set(GPURT_BUILD_RTIP3_1 ON)
+endif()
+#endif
+
+#if GPURT_BUILD_RTIP3_1
+# RTIP3.1 depends on 3
+if (GPURT_BUILD_RTIP3_1)
+    set(GPURT_BUILD_RTIP3 ON)
+endif()
+#endif
+
+#if GPURT_BUILD_RTIP3
+if (GPURT_BUILD_RTIP3)
+    gpurt_add_compile_definitions(GPURT_BUILD_RTIP3=1)
+endif()
+#endif
+
+#if GPURT_BUILD_RTIP3_1
+if (GPURT_BUILD_RTIP3_1)
+    gpurt_add_compile_definitions(GPURT_BUILD_RTIP3_1=1)
+endif()
+#endif
 
 # Enable gpu developer mode if the client wants it.
 if (GPURT_DEVELOPER_MODE)

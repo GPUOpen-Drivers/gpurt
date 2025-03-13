@@ -41,6 +41,9 @@
 #define DUMMY_FLOAT_FUNC  { return 0; }
 #define DUMMY_FLOAT2_FUNC { return float2(0, 0); }
 #define DUMMY_FLOAT3_FUNC { return float3(0, 0, 0); }
+#if GPURT_BUILD_RTIP3
+#define DUMMY_WIDE_INTERSECT_FUNC { return (DualIntersectResult)0; }
+#endif
 
 #include "../../shared/assert.h"
 
@@ -57,6 +60,9 @@
 #include "../../shared/rayTracingDefs.h"
 
 #define SAH_COST_TRIANGLE_INTERSECTION       1.5
+#if GPURT_BUILD_RTIP3_1
+#define SAH_COST_PRIM_RANGE_INTERSECTION     1.3
+#endif
 #define SAH_COST_AABBB_INTERSECTION          1
 
 typedef uint64_t GpuVirtualAddress;
@@ -76,10 +82,24 @@ enum PrimitiveType : uint
 #define NODE_TYPE_TRIANGLE_2           2
 #define NODE_TYPE_TRIANGLE_3           3
 #define NODE_TYPE_BOX_FLOAT16          4
+#if GPURT_BUILD_RTIP3
+#define NODE_TYPE_BOX_FLOAT32x2        2
+#define NODE_TYPE_BOX_HP64x2           3
+#define NODE_TYPE_BOX_HP64             4
+#if GPURT_BUILD_RTIP3_1
+#define NODE_TYPE_BOX_QUANTIZED_BVH8   5
+#endif
+#endif
 #define NODE_TYPE_BOX_FLOAT32          5
 #define NODE_TYPE_USER_NODE_INSTANCE   6
 // From the HW IP 2.0 spec: '7: User Node 1 (processed as a Procedural Node for culling)'
 #define NODE_TYPE_USER_NODE_PROCEDURAL 7
+#if GPURT_BUILD_RTIP3_1
+#define NODE_TYPE_TRIANGLE_4           8
+#define NODE_TYPE_TRIANGLE_5           9
+#define NODE_TYPE_TRIANGLE_6           10
+#define NODE_TYPE_TRIANGLE_7           11
+#endif
 
 //=====================================================================================================================
 // Acceleration structure type
@@ -135,6 +155,9 @@ enum BoxSortHeuristic : uint
 //=====================================================================================================================
 #define BVH4_NODE_32_STRIDE_SHIFT             7   // Box 32 node
 #define BVH4_NODE_16_STRIDE_SHIFT             6   // Box 16 node
+#if GPURT_BUILD_RTIP3
+#define BVH4_NODE_HIGH_PRECISION_STRIDE_SHIFT 6   // High precision box node
+#endif
 
 #define INVALID_IDX           0xffffffff
 #define INACTIVE_PRIM         0xfffffffe
@@ -202,6 +225,21 @@ static uint ExtractNodePointerOffset(uint nodePointer)
     // fetch_addr0 = T#.base_address*256+node_addr*64
     return ClearNodeType(nodePointer) << 3;
 }
+
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+// Remove the full 4 bit node type in 3.1
+static uint ClearNodeType3_1(uint nodePointer)
+{
+    return nodePointer & ~0xf;
+}
+
+//=====================================================================================================================
+static uint ExtractNodePointerOffset3_1(uint nodePointer)
+{
+    return ClearNodeType3_1(nodePointer) << 3;
+}
+#endif
 
 //=====================================================================================================================
 static uint GetNodePointerExclMsbFlag(uint nodePointer)
@@ -274,9 +312,19 @@ struct GeometryInfo
 #define PIPELINE_FLAG_ENABLE_TRAVERSAL_CTR           0x10000000
 #define PIPELINE_FLAG_RESERVED                       0x08000000
 #define PIPELINE_FLAG_ENABLE_FUSED_INSTANCE          0x04000000
+#if GPURT_BUILD_RTIP3_1
+#define PIPELINE_FLAG_ENABLE_HIGH_PRECISION_BOX_NODE 0x02000000
+#define PIPELINE_FLAG_ENABLE_BVH8                    0x01000000
+#define PIPELINE_FLAG_ENABLE_ORIENTED_BOUNDING_BOXES 0x00800000
+#elif GPURT_BUILD_RTIP3
+#define PIPELINE_FLAG_ENABLE_HIGH_PRECISION_BOX_NODE 0x02000000
+#define PIPELINE_FLAG_ENABLE_BVH8                    0x01000000
+#define PIPELINE_FLAG_RESERVED1                      0x00800000
+#else
 #define PIPELINE_FLAG_RESERVED1                      0x02000000
 #define PIPELINE_FLAG_RESERVED2                      0x01000000
 #define PIPELINE_FLAG_RESERVED3                      0x00800000
+#endif
 #define PIPELINE_FLAG_RESERVED5                      0x00400000
 #ifdef GPURT_ENABLE_GPU_DEBUG
 #define PIPELINE_FLAG_DEBUG_ASSERTS_HALT             0x00200000
@@ -306,6 +354,23 @@ static uint PackGeometryFlagsAndNumPrimitives(uint geometryFlags, uint numPrimit
 {
     return (geometryFlags << 29) | numPrimitives;
 }
+
+#if GPURT_BUILD_RTIP3
+//=====================================================================================================================
+struct HighPrecisionBoxNode
+{
+#ifdef __cplusplus
+    HighPrecisionBoxNode(uint val)
+    {
+        memset(this, val, sizeof(HighPrecisionBoxNode));
+    }
+
+    HighPrecisionBoxNode() : HighPrecisionBoxNode(0)
+    {}
+#endif
+    uint32_t dword[16];
+};
+#endif
 
 //=====================================================================================================================
 static uint64_t PackUint64(uint lowBits, uint highBits)

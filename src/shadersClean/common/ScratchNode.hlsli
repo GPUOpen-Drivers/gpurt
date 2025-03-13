@@ -51,7 +51,15 @@ struct ScratchNode
                                            // BLAS metadata size for instance nodes
     uint   sortedPrimIndex;                // it's the index of the sorted primitive (leaf) or start index of the sorted primitives
     uint   packedFlags;                    // flags [0:7], instanceMask [8:15], quadSwizzle [16:23]
+#if GPURT_BUILD_RTIP3_1
+                                           // Triangle OBB matrix index [24:31]
+#endif
 };
+
+#if GPURT_BUILD_RTIP3_1
+// The upper bits of the rebraided node pointer contain the child index within the BLAS root node
+#define SCRATCH_NODE_POINTER_CHILD_INDEX_SHIFT 30
+#endif
 
 #define SCRATCH_NODE_BBOX_MIN_OFFSET                  0
 #define SCRATCH_NODE_V0_OFFSET                        SCRATCH_NODE_BBOX_MIN_OFFSET
@@ -171,6 +179,16 @@ static uint ExtractScratchNodeInstanceMask(
     // masks together using a AND operation similar to boxNodeFlags.
     return (~packedFlags >> 8) & 0xff;
 }
+
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+// Extract OBB matrix index from scratch node
+static uint ExtractScratchNodeObbMatrixIdx(
+    in uint packedFlags)
+{
+    return (packedFlags >> 24) & 0xFF;
+}
+#endif
 
 //=====================================================================================================================
 // Extract quad swizzle from scratch node

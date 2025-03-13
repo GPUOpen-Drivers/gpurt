@@ -67,6 +67,9 @@ SPIRV_WHITELIST = "strip_whitelist.txt"
 SPV_REMAP_EXECUTABLE = "spirv-remap"
 DXC_EXECUTABLE = "dxc"
 maxLegacyRtIpLevel = 20
+#if GPURT_BUILD_RTIP3
+maxLegacyRtIpLevel = 30
+#endif
 
 class ShaderConfig:
     def __init__(self, path, entryPoint=None, outputName=None, defines=None, includePaths=None):
@@ -102,15 +105,25 @@ traceShaderConfigs = [
 
     ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibraryLegacy", defines=f"USE_HW_INTRINSIC=1,GPURT_RTIP_LEVEL={maxLegacyRtIpLevel},{commonTraceDefines}"),
     ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibraryDevLegacy", defines=f"USE_HW_INTRINSIC=1,DEVELOPER=1,GPURT_RTIP_LEVEL={maxLegacyRtIpLevel},{commonTraceDefines}"),
+#if GPURT_BUILD_RTIP3_1
+    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibraryRtIp31", defines=f"USE_HW_INTRINSIC=1,GPURT_RTIP_LEVEL=31,{commonTraceDefines}"),
+    ShaderConfig(path="GpuRtLibrary.hlsl", outputName="GpuRtLibraryDevRtIp31", defines=f"USE_HW_INTRINSIC=1,DEVELOPER=1,GPURT_RTIP_LEVEL=31,{commonTraceDefines}"),
+#endif
 ]
 
 bvhShaderConfigs = [
     ShaderConfig(path="Update.hlsl", entryPoint="UpdateTriangles"),
     ShaderConfig(path="Update.hlsl", entryPoint="UpdateAabbs"),
+#if GPURT_BUILD_RTIP3_1
+    ShaderConfig(path="Update3_1.hlsl", entryPoint="Update3_1"),
+#endif
     ShaderConfig(path="EncodeNodes.hlsl", entryPoint="EncodeTriangleNodes"),
     ShaderConfig(path="EncodeNodes.hlsl", entryPoint="EncodeAABBNodes"),
     ShaderConfig(path="EncodeNodes.hlsl", entryPoint="EncodeQuadNodes"),
     ShaderConfig(path="EncodeTopLevel.hlsl", entryPoint="EncodeInstances"),
+#if GPURT_BUILD_RTIP3_1
+    ShaderConfig(path="EncodeTopLevel.hlsl", entryPoint="RefitInstanceBounds"),
+#endif
     ShaderConfig(path="BuildParallel.hlsl", entryPoint="BuildBvh", outputName="BuildParallel"),
     ShaderConfig(path="UpdateParallel.hlsl", entryPoint="UpdateParallel"),
     ShaderConfig(path="GenerateMortonCodes.hlsl", entryPoint="GenerateMortonCodes"),
@@ -144,7 +157,27 @@ bvhShaderConfigs = [
     ShaderConfig(path="MergeSort.hlsl", entryPoint="MergeSortCopyLastLevel"),
     ShaderConfig(path="InitAccelerationStructure.hlsl", entryPoint="InitAccelerationStructure"),
     ShaderConfig(path="InitAccelerationStructure.hlsl", entryPoint="InitAccelerationStructure", defines="IS_UPDATE=1", outputName="InitUpdateAccelerationStructure"),
+#if GPURT_BUILD_RTIP3_1
+    ShaderConfig(path="RefitOrientedBounds3_1.hlsl", entryPoint="RefitOrientedBounds"),
+    ShaderConfig(path="RefitOrientedBoundsTopLevel3_1.hlsl", entryPoint="RefitOrientedBoundsTopLevel"),
+    ShaderConfig(path="PrimitiveStructure3_1.hlsl", entryPoint="CompressPrims"),
+#endif
+#if GPURT_BUILD_RTIP3|| GPURT_BUILD_RTIP3_1
+    ShaderConfig(path="BuildParallel.hlsl", entryPoint="BuildBvh", outputName="BuildParallelRtip3x", defines="GPURT_BUILD_PARALLEL_ENABLE_RTIP3=1"),
+#endif
     ShaderConfig(path="BuildFastAgglomerativeLbvh.hlsl", entryPoint="BuildFastAgglomerativeLbvh"),
+#if GPURT_BUILD_RTIP3_1
+    ShaderConfig(path="BuildTrivialBvh.hlsl", entryPoint="BuildTrivialBvh"),
+    ShaderConfig(path="BuildSingleThreadGroup.hlsl", entryPoint="BuildSingleThreadGroup", defines="STGB_THREADGROUP_SIZE=1024", outputName="BuildSingleThreadGroup1024"),
+    ShaderConfig(path="BuildSingleThreadGroup.hlsl", entryPoint="BuildSingleThreadGroup", defines="STGB_THREADGROUP_SIZE=512", outputName="BuildSingleThreadGroup512"),
+    ShaderConfig(path="BuildSingleThreadGroup.hlsl", entryPoint="BuildSingleThreadGroup", defines="STGB_THREADGROUP_SIZE=256", outputName="BuildSingleThreadGroup256"),
+    ShaderConfig(path="BuildSingleThreadGroup.hlsl", entryPoint="BuildSingleThreadGroup", defines="STGB_THREADGROUP_SIZE=128", outputName="BuildSingleThreadGroup128"),
+    ShaderConfig(path="BuildSingleThreadGroup.hlsl", entryPoint="BuildSingleThreadGroup", defines="STGB_THREADGROUP_SIZE=64", outputName="BuildSingleThreadGroup64"),
+    ShaderConfig(path="BuildSingleThreadGroup.hlsl", entryPoint="BuildSingleThreadGroup", defines="STGB_THREADGROUP_SIZE=32", outputName="BuildSingleThreadGroup32"),
+#endif
+#if GPURT_BUILD_RTIP3_1
+    ShaderConfig(path="EncodeHwBvh3_1.hlsl", entryPoint="EncodeHwBvh3_1"),
+#endif
 ]
 
 def getBaseDxcCommandArgs(isBvh:bool, isLibrary:bool, isSpirv:bool):

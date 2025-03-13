@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2024-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -41,6 +41,12 @@
 #define TRIANGLE_NODE_ID_OFFSET 60
 #define TRIANGLE_NODE_SIZE      64
 
+#if GPURT_BUILD_RTIP3
+#define RTIP3_TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET   48
+#define RTIP3_TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET   52
+#define RTIP3_TRIANGLE_NODE_GEOMETRY_INDEX_OFFSET     56
+#endif
+
 //=====================================================================================================================
 // Triangle ID contains 4 1-byte fields, 1 per triangle:
 // Triangle 0 [ 7: 0]
@@ -76,6 +82,21 @@ struct TriangleNode
     uint   primitiveIndex1;         // Primitive index for triangle 1
     uint   triangleId;              // Triangle ID
 };
+
+#if GPURT_BUILD_RTIP3
+//=====================================================================================================================
+struct TriangleNode3_0
+{
+    float3 v0;                      // Vertex 0
+    float3 v1;                      // Vertex 1
+    float3 v2;                      // Vertex 2
+    float3 v3;                      // Vertex 3
+    uint   primitiveIndex0;         // Primitive index for triangle 0
+    uint   primitiveIndex1;         // Primitive index for triangle 1
+    uint   geometryIndex;           // Geometry index for pair of triangles
+    uint   triangleId;              // Triangle ID
+};
+#endif
 
 GPURT_STATIC_ASSERT(TRIANGLE_NODE_SIZE == sizeof(TriangleNode), "TriangleNode structure mismatch");
 

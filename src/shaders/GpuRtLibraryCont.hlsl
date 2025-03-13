@@ -372,6 +372,9 @@ struct _AmdPrimitiveSystemState
 
     uint primitiveIndex;
     uint packedGeometryIndex;           // geometryIndex:        [23 : 0]
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+                                        // isTri0:               [27]
+#endif
                                         // State                 [30 : 28]
                                         // IsOpaque              [31]
 
@@ -401,10 +404,16 @@ struct _AmdPrimitiveSystemState
     // Directly construct packedGeometryIndex when all bit-fields are available
     void PackGeometryIndex(
         uint geometryIndex,
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+        bool isTri0,
+#endif
         uint state,
         bool isOpaque)
     {
         packedGeometryIndex = geometryIndex |
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+                              (isTri0 << 27) |
+#endif
                               (state << 28) |
                               (isOpaque << 31);
     }
@@ -432,6 +441,20 @@ struct _AmdPrimitiveSystemState
         // To pack "State" - packedGeometryIndex |= (state & 7) << 28;
         packedGeometryIndex = bitFieldInsert(packedGeometryIndex, 28, 3, state);
     }
+
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+    bool IsTri0()
+    {
+        // To extract "isTri0" flag - (packedGeometryIndex >> 27) & bits(1);
+        return bitFieldExtract(packedGeometryIndex, 27, 1);
+    }
+
+    void PackIsTri0(uint val)
+    {
+        // To pack "isTri0" flag - packedGeometryIndex |= val << 27;
+        packedGeometryIndex = bitFieldInsert(packedGeometryIndex, 27, 1, val);
+    }
+#endif
 
     uint InstanceContribution()
     {
@@ -542,32 +565,66 @@ struct _AmdTraversalState
                                   // This field currently discarded in non-rebraid mode. Ensure to update that if the
                                   // field becomes re-used for something else in non-rebraid mode.
     uint reservedNodePtr;         // RTIPv2.0 (lastNodePtr)
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+    uint packedInstanceContribution;    // instanceContribution  [23 :  0] RTIP3.1 ( instanceContribution )
+                                        // skipTri0              [31]
+#endif
 
     uint32_t packedReturnAddr; // The address of the function to return to, packed into 32 bits.
 
     uint InstanceContribution()
     {
         uint ret = 0;
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+        GPU_ASSERT(GetRtIpLevel() == RayTracingIpLevel::RtIp3_1);
+
+        // To extract - (packedInstanceContribution & 0x00FFFFFF);
+        ret =  bitFieldExtract(packedInstanceContribution, 0, 24);
+#endif
         return ret;
     }
 
     void PackInstanceContribution(uint instContribution)
     {
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+        GPU_ASSERT(GetRtIpLevel() == RayTracingIpLevel::RtIp3_1);
+
+        // To pack - packedInstanceContribution |= (instContribution & 0x00FFFFFF);
+        packedInstanceContribution = bitFieldInsert(packedInstanceContribution, 0, 24, instContribution);
+#endif
     }
 
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+#endif
     bool SkipTri0()
     {
         uint ret = 0;
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+        GPU_ASSERT(GetRtIpLevel() == RayTracingIpLevel::RtIp3_1);
+
+        // To extract - (packedInstanceContribution >> 31);
+        ret = bitFieldExtract(packedInstanceContribution, 31, 1);
+#endif
         return ret;
     }
 
     void PackSkipTri0(bool val)
     {
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+        GPU_ASSERT(GetRtIpLevel() == RayTracingIpLevel::RtIp3_1);
+
+        // To pack - packedInstanceContribution |= (val & bits(1)) << 31;
+        packedInstanceContribution = bitFieldInsert(packedInstanceContribution, 31, 1, val);
+#endif
     }
 
     // Combined setter for instContribution and skipTri0 that prevents a dependency on the old value.
     void PackInstanceContributionAndSkipTri0(uint instContribution, bool skipTri0)
     {
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+        GPU_ASSERT(GetRtIpLevel() == RayTracingIpLevel::RtIp3_1);
+        packedInstanceContribution = instContribution | (uint(skipTri0) << 31);
+#endif
     }
 
     void PackStackPtrTop(uint ptr)
@@ -587,12 +644,18 @@ struct _AmdTraversalState
 
     void PackParentPointer(uint ptr)
     {
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+        GPU_ASSERT(GetRtIpLevel() == RayTracingIpLevel::RtIp3_1);
+#endif
         packedStackTopOrParentPointer = ptr;
     }
 
     uint ParentPointer()
     {
         uint ptr = 0;
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+        GPU_ASSERT(GetRtIpLevel() == RayTracingIpLevel::RtIp3_1);
+#endif
         ptr = packedStackTopOrParentPointer;
         return ptr;
     }
@@ -821,6 +884,8 @@ static Vpc32 GetVpcFromShaderIdTable(
 
 //=====================================================================================================================
 // Returns the 32-bit part of the hit group shader id containing the AHS shader id.
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+#endif
 static Vpc32 GetAnyHit32BitShaderId(
     uint hitGroupRecordIndex)
 {
@@ -864,6 +929,20 @@ static float3x4 ObjectToWorld3x4(in uint64_t tlasBaseAddr, in uint instNodePtr)
 {
     float3x4 transform;
 
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+    if (GetRtIpLevel() == RayTracingIpLevel::RtIp3_1)
+    {
+        const uint64_t instSidebandBaseAddr = GetInstanceSidebandBaseAddr3_1(tlasBaseAddr,
+                                                                             instNodePtr);
+        const uint offset = RTIP3_INSTANCE_SIDEBAND_OBJECT2WORLD_TRANSFORM_OFFSET;
+
+        transform[0] = asfloat(ConstantLoadDwordAtAddrx4(instSidebandBaseAddr + offset + 0));
+        transform[1] = asfloat(ConstantLoadDwordAtAddrx4(instSidebandBaseAddr + offset + 16));
+        transform[2] = asfloat(ConstantLoadDwordAtAddrx4(instSidebandBaseAddr + offset + 32));
+
+    }
+    else
+#endif
     {
         const uint offset = RTIP1_1_INSTANCE_SIDEBAND_OBJECT2WORLD_OFFSET + INSTANCE_NODE_EXTRA_OFFSET;
 
@@ -1116,6 +1195,18 @@ export uint _cont_InstanceIndex(HIT_OBJECT_ARG, in _AmdPrimitiveSystemState prim
 {
     GET_HIT_OBJECT(data);
 
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+    if (GetRtIpLevel() == RayTracingIpLevel::RtIp3_1)
+    {
+        const uint64_t instSidebandBaseAddr =
+            GetInstanceSidebandBaseAddr3_1(
+                hitObject.ray.AccelStruct(),
+                primitive.instNodePtr);
+
+        return ConstantLoadDwordAtAddr(instSidebandBaseAddr + RTIP3_INSTANCE_SIDEBAND_INSTANCE_INDEX_OFFSET);
+    }
+#endif
+
     return ConstantLoadDwordAtAddr(
         GetInstanceNodeAddr(
             hitObject.ray.AccelStruct(),
@@ -1126,6 +1217,20 @@ export uint _cont_InstanceIndex(HIT_OBJECT_ARG, in _AmdPrimitiveSystemState prim
 export uint _cont_InstanceID(HIT_OBJECT_ARG, in _AmdPrimitiveSystemState primitive)
 {
     GET_HIT_OBJECT(data);
+
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+    if (GetRtIpLevel() == RayTracingIpLevel::RtIp3_1)
+    {
+        const uint64_t instSidebandBaseAddr = GetInstanceSidebandBaseAddr3_1(
+            hitObject.ray.AccelStruct(),
+            primitive.instNodePtr);
+
+        const uint instanceIdAndMask =
+            ConstantLoadDwordAtAddr(instSidebandBaseAddr + RTIP3_INSTANCE_SIDEBAND_INSTANCE_ID_AND_FLAGS_OFFSET);
+
+        return (instanceIdAndMask & 0x00ffffff);
+    }
+#endif
 
     return ConstantLoadDwordAtAddr(
         GetInstanceNodeAddr(
@@ -1167,6 +1272,16 @@ export float4x3 _cont_WorldToObject4x3(HIT_OBJECT_ARG, in _AmdPrimitiveSystemSta
 export TriangleData _cont_TriangleVertexPositions(in _AmdSystemData data, in _AmdPrimitiveSystemState primitive)
 {
     const GpuVirtualAddress instanceAddr = GetInstanceNodeAddr(data.hitObject.ray.AccelStruct(), primitive.instNodePtr);
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+    if (GetRtIpLevel() == RayTracingIpLevel::RtIp3_1)
+    {
+        // node.childBasePtr
+        const uint2 d3 = LoadDwordAtAddrx2(instanceAddr + RTIP3_INSTANCE_NODE_CHILD_BASE_PTR_OFFSET);
+        const GpuVirtualAddress currBasePtr = PackUint64(d3.x, d3.y);
+        return FetchTriangleFromNode3_1(currBasePtr, primitive.currNodePtr, primitive.IsTri0());
+    }
+    else
+#endif
     {
         return FetchTriangleFromNode(GetInstanceAddr(FetchInstanceDescAddr(instanceAddr)), primitive.currNodePtr);
     }
@@ -1396,6 +1511,13 @@ export bool _cont_ReportHit(inout_param(_AmdAnyHitSystemData) data, float THit, 
         PrimitiveData primitiveData;
         InstanceDesc desc;
 
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+        if (GetRtIpLevel() == RayTracingIpLevel::RtIp3_1)
+        {
+            isOpaque = data.candidate.IsOpaque();
+        }
+        else
+#endif
         {
             // Get primitive nodes to process based on candidate or committed hit
             const uint tlasNodePtr = data.candidate.instNodePtr;
@@ -1886,6 +2008,9 @@ static void TraversalCounterWriteCounter(_AmdSystemData data)
 // separate HLSL
 #include "Continuations1_1.hlsl"
 #include "Continuations2_0.hlsl"
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+#include "Continuations3_1.hlsl"
+#endif
 
 //=====================================================================================================================
 // Calls traversal for the current rtip.
@@ -1903,6 +2028,11 @@ static void TraversalInternal(
         break;
     case RayTracingIpLevel::RtIp2_0:
         TraversalInternal2_0(data, state, candidate, candidateBarycentrics);
+        break;
+#endif
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+    case RayTracingIpLevel::RtIp3_1:
+        TraversalInternal3_1(data, state, candidate, candidateBarycentrics);
         break;
 #endif
     default:
@@ -2067,6 +2197,12 @@ export void _cont_TraceRay(
         traversal = InitTraversalState2_0(instanceInclusionMask, rayDesc, isValid);
         traversal.nextNodePtr = isValid ? CreateRootNodePointer1_1() : TERMINAL_NODE;
         break;
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+    case RayTracingIpLevel::RtIp3_1:
+        traversal = InitTraversalState3_1(instanceInclusionMask, rayDesc, isValid);
+        traversal.nextNodePtr = isValid ? CreateRootNodePointer3_1() : INVALID_NODE;
+        break;
+#endif
     default:
         break;
     }
@@ -2403,6 +2539,9 @@ static IntersectionResult TraceRayInternalCPSDebug(
     in RayDesc           rayDesc,                 // Ray to be traced
     in uint              rayId,                   // Ray ID for profiling
     in uint              rtIpLevel                // HW version to determine TraceRay implementation
+#if GPURT_BUILD_RTIP3
+    , in bool            isBVH8                   // is BVH8
+#endif
 #if DEVELOPER
     , in uint            dynamicId                // dynamic ID
 #endif
@@ -2441,6 +2580,14 @@ static IntersectionResult TraceRayInternalCPSDebug(
                                           isValid);
         traversal.nextNodePtr = isValid ? CreateRootNodePointer1_1() : TERMINAL_NODE;
         break;
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+    case GPURT_RTIP3_1:
+        traversal = InitTraversalState3_1(0,
+                                          rayDesc,
+                                          isValid);
+        traversal.nextNodePtr = isValid ? CreateRootNodePointer3_1() : INVALID_NODE;
+        break;
+#endif
     default:
         break;
     }
@@ -2473,6 +2620,15 @@ static IntersectionResult TraceRayInternalCPSDebug(
             uint instanceContribution = 0;
             uint anyHitCallType       = 0;
 
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+            if (rtIpLevel == GPURT_RTIP3_1)
+            {
+                geometryIndex        = ret.candidate.GeometryIndex();
+                instanceContribution = ret.candidate.InstanceContribution();
+                anyHitCallType       = ret.candidate.AnyHitCallType();
+            }
+            else
+#endif
             {
                 // Fetch primitive node addresses
                 const GpuVirtualAddress tlasAddr = topLevelBvh + ExtractNodePointerOffset(tlasNodePtr);
@@ -2602,6 +2758,15 @@ static IntersectionResult TraceRayInternalCPSDebug(
         uint geometryIndex = INVALID_IDX;
         uint instanceContribution = 0;
 
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+        if (rtIpLevel == GPURT_RTIP3_1)
+        {
+            primitiveIndex       = sysData.traversal.committed.primitiveIndex;
+            geometryIndex        = sysData.traversal.committed.GeometryIndex();
+            instanceContribution = sysData.traversal.committed.InstanceContribution();
+        }
+        else
+#endif
         {
             const GpuVirtualAddress tlasAddr = topLevelBvh + ExtractNodePointerOffset(sysData.traversal.committed.instNodePtr);
             InstanceDesc desc = FetchInstanceDescAddr(tlasAddr);
@@ -2623,6 +2788,14 @@ static IntersectionResult TraceRayInternalCPSDebug(
         AmdTraceRaySetHitTokenData(sysData.traversal.committed.currNodePtr, sysData.traversal.committed.instNodePtr);
 
         bool handleTriangleNode = false;
+#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
+        if (rtIpLevel == GPURT_RTIP3_1)
+        {
+            handleTriangleNode = (IsTriangleNode3_1(sysData.traversal.committed.currNodePtr) &&
+                                  (sysData.traversal.committed.IsProcedural() == false));
+        }
+        else
+#endif
         {
             handleTriangleNode = CheckHandleTriangleNode(sysData.traversal.committed.currNodePtr);
         }

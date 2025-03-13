@@ -32,6 +32,9 @@ void UpdateFloat32BoxNode1_1(
     inout_param(uint)        boxNodeFlags)
 {
     const Float32BoxNode boxNode = FetchFloat32BoxNode(
+#if GPURT_BUILD_RTIP3
+                                                       false,
+#endif
                                                        boxNodeOffset);
 
     // Initialise bounds and node flags from fp32 node

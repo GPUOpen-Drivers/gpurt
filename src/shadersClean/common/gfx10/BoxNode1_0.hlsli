@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2024-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -44,8 +44,13 @@
 #define FLOAT32_BOX_NODE_BB3_MAX_OFFSET        100
 #define FLOAT32_BOX_NODE_FLAGS_OFFSET          112
 #define FLOAT32_BOX_NODE_NUM_PRIM_OFFSET       116
+#if GPURT_BUILD_RTIP3_1
+#define FLOAT32_BOX_NODE_INSTANCE_MASK_OFFSET  120
+#define FLOAT32_BOX_NODE_OBB_OFFSET            124
+#else
 #define FLOAT32_BOX_NODE_UNUSED2_OFFSET        120
 #define FLOAT32_BOX_NODE_UNUSED3_OFFSET        124
+#endif
 #define FLOAT32_BOX_NODE_SIZE                  128
 
 //=====================================================================================================================
@@ -62,6 +67,10 @@
 // Only Procedural [  3]
 // Unused          [7:4]
 #define BOX_NODE_FLAGS_BIT_STRIDE 8
+
+#if GPURT_BUILD_RTIP3
+#define HPB64_BOX_NODE_FLAGS_BIT_STRIDE 4
+#endif
 
 #define BOX_NODE_FLAGS_ONLY_OPAQUE_SHIFT     0
 #define BOX_NODE_FLAGS_ONLY_NON_OPAQUE_SHIFT 1
@@ -90,8 +99,13 @@ struct Float32BoxNode
 
     uint   flags;          /// Reserved for RTIP 2.0
     uint   numPrimitives;  /// Padding for 64-byte alignment
+#if GPURT_BUILD_RTIP3_1
+    uint   instanceMask;   /// Packed instance masks of all children
+    uint   obbMatrixIndex; /// Discretized OBB matrix index.
+#else
     uint   padding2;       /// Padding for 64-byte alignment
     uint   padding3;       /// Padding for 64-byte alignment
+#endif
 
 };
 

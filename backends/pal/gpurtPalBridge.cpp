@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -104,6 +104,9 @@ PipelineShaderCode GPURT_API_ENTRY GetShaderLibraryCode(
 // =====================================================================================================================
 Pal::Result GPURT_API_ENTRY QueryRayTracingEntryFunctionTable(
     const Pal::RayTracingIpLevel   rayTracingIpLevel,
+#if GPURT_BUILD_RTIP3
+    bool                           bvh8Enable,
+#endif
     EntryFunctionTable* const      pEntryFunctionTable)
 {
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 40
@@ -112,6 +115,9 @@ Pal::Result GPURT_API_ENTRY QueryRayTracingEntryFunctionTable(
 
     return Internal::QueryRayTracingEntryFunctionTable(
         rayTracingIpLevel,
+#if GPURT_BUILD_RTIP3
+        bvh8Enable,
+#endif
         pEntryFunctionTable
     );
 }

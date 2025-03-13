@@ -120,6 +120,9 @@ void PostHwBvhBuild(
                  (Settings.triangleCompressionMode != PAIR_TRIANGLE_COMPRESSION))
         {
             bool compressionEnabled = false;
+#if GPURT_BUILD_RTIP3_1
+            compressionEnabled |= (Settings.rtIpLevel == GPURT_RTIP3_1);
+#endif
             if (compressionEnabled == false)
             {
                 // When compression is disabled, the final leaf node count is the active prim count.
@@ -150,8 +153,68 @@ void PostHwBvhBuild(
             EmitBuffer.Store2(0, uint2(compactedSize, 0));
         }
 
+#if GPURT_BUILD_RTIP3_1
+        if (Settings.rtIpLevel == GPURT_RTIP3_1)
+        {
+            WriteUpdateGroupCount(RTIP3_1_UPDATE_THREADS_PER_FAT_LEAF);
+        }
+#endif
     }
 }
+
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+// Returns stack entry at index
+uint2 StackPop(
+    uint stackIndex)
+{
+    return ScratchGlobal.Load2(ShaderConstants.offsets.qbvhGlobalStack + (stackIndex * sizeof(uint2)));
+}
+
+//=====================================================================================================================
+uint NumLeafsDoneOffset()
+{
+    return (Settings.topLevelBuild == 0) ? STACK_PTRS_NUM_LEAFS_DONE_OFFSET : STACK_PTRS_DST_PTR_OFFSET;
+}
+
+//======================================================================================================================
+void InitStackPtrs()
+{
+    StackPtrs stackPtrs = (StackPtrs)0;
+
+    // Nodes are allocated in 128 byte chunks with first chunk reserved for root node
+    stackPtrs.stackPtrSrcNodeId = 1;
+
+    // NumLeafsDone for TLAS is counted in stackPtrNodeDest and is initialised to 0. While for BLAS, stackPtrNodeDest
+    // is used as global stack counter.
+    if (Settings.topLevelBuild == 0)
+    {
+        stackPtrs.stackPtrNodeDest = 1;
+    }
+
+    stackPtrs.primCompGroupCountY = 1;
+    stackPtrs.primCompGroupCountZ = 1;
+
+    const uint32_t rootNodeIndex = GetBvh2RootNodeIndex();
+
+    ScratchGlobal.Store<StackPtrs>(ShaderConstants.offsets.qbvhGlobalStackPtrs, stackPtrs);
+    ScratchGlobal.Store<uint2>(ShaderConstants.offsets.qbvhGlobalStack, uint2(rootNodeIndex, 0));
+}
+
+//======================================================================================================================
+void ClearStackPtrs(
+    in uint globalId,
+    in uint maxInternalNodeCount,
+    in uint numThreads)
+{
+    // Note the first entry is initialized below. Skip initializing it to invalid.
+    for (uint stackIndex = globalId + 1; stackIndex < maxInternalNodeCount; stackIndex += numThreads)
+    {
+        const uint qbvhStackOffset = ShaderConstants.offsets.qbvhGlobalStack + (stackIndex * sizeof(uint2));
+        ScratchGlobal.Store<uint2>(qbvhStackOffset, uint2(INVALID_IDX, INVALID_IDX));
+    }
+}
+#endif
 
 //=====================================================================================================================
 //

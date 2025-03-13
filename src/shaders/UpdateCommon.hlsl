@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2024-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -29,6 +29,66 @@
 
 #include "BuildCommon.hlsl"
 
+#if GPURT_BUILD_RTIP3
+//=====================================================================================================================
+// Computes index in update scratch memory for a given node pointer.
+uint ComputeUpdateScratchBoundingBoxIndex(
+    in uint nodePointer,
+    in uint childIdx)
+{
+    // Note, internal nodes start at a 128-byte offset (past the header). Subtract the size here to compute absolute
+    // internal node index
+    const uint nodeOffset = ExtractNodePointerOffset(nodePointer) - sizeof(AccelStructHeader);
+
+    // The index is computed as follows for the node formats that support it (i.e. HPB64 and BVH8 box)
+    //
+    // HPB64:    index = (offset / 64)  * 4
+
+    uint index = nodeOffset >> 4;
+
+#if GPURT_BUILD_RTIP3_1
+    // 128bBVH8: index = (offset / 128) * 8
+#endif
+
+    if ((Settings.rtIpLevel == GPURT_RTIP3_0) &&
+        Settings.bvh8Enable)
+    {
+        // HPB64x2:  index = (offset / 64) * 8
+        index = (nodeOffset >> 6) << 3;
+    }
+
+    return childIdx + index;
+}
+
+//=====================================================================================================================
+void WriteUpdateScratchBoundingBox(
+    uint           boxNodePointer,
+    uint           childIdx,
+    in BoundingBox boundingBox)
+{
+    const uint scratchBoundsIdx = ComputeUpdateScratchBoundingBoxIndex(boxNodePointer, childIdx);
+    const uint scratchOffset = ShaderConstants.offsets.bvhNodeData + (scratchBoundsIdx * sizeof(BoundingBox));
+    ScratchBuffer.Store<BoundingBox>(scratchOffset, boundingBox);
+}
+
+//=====================================================================================================================
+BoundingBox ReadUpdateScratchBoundingBoxAtIndex(
+    uint scratchBoundsIdx)
+{
+    const uint scratchOffset = ShaderConstants.offsets.bvhNodeData + (scratchBoundsIdx * sizeof(BoundingBox));
+    return ScratchBuffer.Load<BoundingBox>(scratchOffset);
+}
+
+//=====================================================================================================================
+BoundingBox ReadUpdateScratchBoundingBox(
+    uint boxNodePointer,
+    uint childIdx)
+{
+    const uint scratchBoundsIdx = ComputeUpdateScratchBoundingBoxIndex(boxNodePointer, childIdx);
+    return ReadUpdateScratchBoundingBoxAtIndex(scratchBoundsIdx);
+}
+#endif
+
 //=====================================================================================================================
 uint GetUpdateStackOffset(
     uint stackIdx)
@@ -54,6 +114,30 @@ void CopyChildPointersAndFlags(
     uint metadataSize)
 {
     const uint nodeOffset = metadataSize + ExtractNodePointerOffset(nodePointer);
+#if GPURT_BUILD_RTIP3_1
+    if (EnableCompressedFormat())
+    {
+        // For RTIP3.1 this is already done in UpdateQuantizedBoxNode() skip copying
+    }
+    else
+#endif
+#if GPURT_BUILD_RTIP3
+    if (Settings.highPrecisionBoxNodeEnable)
+    {
+        // For high precision box node, the child pointers and flags are packed in the first 8 bytes
+        const uint2 packedChildPointersAndFlags = SrcBuffer.Load<uint2>(nodeOffset);
+        DstMetadata.Store<uint2>(nodeOffset, packedChildPointersAndFlags);
+
+        if (Settings.bvh8Enable)
+        {
+            const uint nodeOffset2 = nodeOffset + sizeof(HighPrecisionBoxNode);
+
+            const uint2 packedChildPointersAndFlags = SrcBuffer.Load<uint2>(nodeOffset2);
+            DstMetadata.Store<uint2>(nodeOffset2, packedChildPointersAndFlags);
+        }
+    }
+    else
+#endif
     {
         const uint4 childPointers = SrcBuffer.Load<uint4>(nodeOffset);
         DstMetadata.Store<uint4>(nodeOffset, childPointers);
@@ -64,6 +148,18 @@ void CopyChildPointersAndFlags(
             DstMetadata.Store(nodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, sourceFlags);
         }
 
+#if GPURT_BUILD_RTIP3
+        if (Settings.bvh8Enable)
+        {
+            const uint nodeOffset2 = nodeOffset + sizeof(Float32BoxNode);
+
+            const uint4 childPointers2 = SrcBuffer.Load<uint4>(nodeOffset2);
+            DstMetadata.Store<uint4>(nodeOffset2, childPointers2);
+
+            const uint sourceFlags2 = SrcBuffer.Load(nodeOffset2 + FLOAT32_BOX_NODE_FLAGS_OFFSET);
+            DstMetadata.Store(nodeOffset2 + FLOAT32_BOX_NODE_FLAGS_OFFSET, sourceFlags2);
+        }
+#endif
     }
 }
 
@@ -71,7 +167,21 @@ void CopyChildPointersAndFlags(
 uint4 LoadBoxNodeChildPointers(
     in uint nodeOffset)
 {
+#if GPURT_BUILD_RTIP3
+    uint4 childPointers = uint4(INVALID_NODE, INVALID_NODE, INVALID_NODE, INVALID_NODE);
+    if (Settings.highPrecisionBoxNodeEnable)
+    {
+        childPointers = DecodeHighPrecisionBoxNodeChildPointers(nodeOffset);
+    }
+    else
+    {
+        childPointers = SrcBuffer.Load<uint4>(nodeOffset);
+    }
+
+    return childPointers;
+#else
     return SrcBuffer.Load<uint4>(nodeOffset);
+#endif
 }
 
 //=====================================================================================================================
@@ -81,6 +191,15 @@ uint ComputeChildIndexAndValidBoxCount(
     in uint         childNodePointer,
     out_param(uint) boxNodeCount)
 {
+#if GPURT_BUILD_RTIP3_1
+    if (EnableCompressedFormat())
+    {
+        return ComputeQuantizedBoxChildIndexAndValidBoxCount(metadataSize,
+                                                             parentNodePointer,
+                                                             childNodePointer,
+                                                             boxNodeCount);
+    }
+#endif
 
     const uint parentNodeOffset = metadataSize + ExtractNodePointerOffset(parentNodePointer);
     const uint4 childPointers = LoadBoxNodeChildPointers(parentNodeOffset);
@@ -108,6 +227,41 @@ uint ComputeChildIndexAndValidBoxCount(
     boxNodeCount += IsBoxNode(childPointers.y) ? 1 : 0;
     boxNodeCount += IsBoxNode(childPointers.z) ? 1 : 0;
     boxNodeCount += IsBoxNode(childPointers.w) ? 1 : 0;
+
+#if GPURT_BUILD_RTIP3
+    if (Settings.bvh8Enable)
+    {
+        const uint internalNodeSize =
+            Settings.highPrecisionBoxNodeEnable ? sizeof(HighPrecisionBoxNode) : sizeof(Float32BoxNode);
+
+        const uint4 childPointers = LoadBoxNodeChildPointers(parentNodeOffset + internalNodeSize);
+
+        if (childNodePointer == childPointers.x)
+        {
+            childIdx = 4;
+        }
+
+        if (childNodePointer == childPointers.y)
+        {
+            childIdx = 5;
+        }
+
+        if (childNodePointer == childPointers.z)
+        {
+            childIdx = 6;
+        }
+
+        if (childNodePointer == childPointers.w)
+        {
+            childIdx = 7;
+        }
+
+        boxNodeCount += IsBoxNode(childPointers.x) ? 1 : 0;
+        boxNodeCount += IsBoxNode(childPointers.y) ? 1 : 0;
+        boxNodeCount += IsBoxNode(childPointers.z) ? 1 : 0;
+        boxNodeCount += IsBoxNode(childPointers.w) ? 1 : 0;
+    }
+#endif
 
     return childIdx;
 }
@@ -146,6 +300,50 @@ void PushNodeForUpdate(
 
     const uint parentNodeOffset = metadataSize + ExtractNodePointerOffset(parentNodePointer);
 
+#if GPURT_BUILD_RTIP3
+#if GPURT_BUILD_RTIP3_1
+    if (Settings.highPrecisionBoxNodeEnable || EnableCompressedFormat())
+#else
+    if (Settings.highPrecisionBoxNodeEnable)
+#endif
+    {
+        // Optionally, decode bounding box from parent node and check for redundant box update. Note, this requires
+        // a full decode of the destination node. For now, always perform updates
+
+        // If we want to reduce scratch usage, we can explore using the result buffer to store the full precision leaf
+        // bounds at the expense of larger result buffer size.
+        performUpdate = true;
+
+        // Write leaf bounding box to update scratch memory
+        WriteUpdateScratchBoundingBox(parentNodePointer, childIdx, boundingBox);
+
+#if GPURT_BUILD_RTIP3_1
+        if (EnableCompressedFormat())
+        {
+            UpdateQuantizedBoxInstanceMask(parentNodeOffset, childIdx, instanceMask);
+        }
+#endif
+    }
+    else if (Settings.bvh8Enable)
+    {
+        // IsBoxNode32x2()
+        boxOffset = (childIdx % 4) * FLOAT32_BBOX_STRIDE;
+        const uint fp32BoxNodeOffset = (childIdx > 3) ? parentNodeOffset + sizeof(Float32BoxNode) : parentNodeOffset;
+
+        BoundingBox originalBox;
+        originalBox.min = DstMetadata.Load<float3>(fp32BoxNodeOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET + boxOffset);
+        originalBox.max = DstMetadata.Load<float3>(fp32BoxNodeOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET + boxOffset);
+
+        if (any(originalBox.min != boundingBox.min) ||
+            any(originalBox.max != boundingBox.max))
+        {
+            DstMetadata.Store<float3>(fp32BoxNodeOffset + FLOAT32_BOX_NODE_BB0_MIN_OFFSET + boxOffset, boundingBox.min);
+            DstMetadata.Store<float3>(fp32BoxNodeOffset + FLOAT32_BOX_NODE_BB0_MAX_OFFSET + boxOffset, boundingBox.max);
+            performUpdate = true;
+        }
+    }
+    else
+#endif
     {
         if (IsBoxNode32(parentNodePointer))
         {

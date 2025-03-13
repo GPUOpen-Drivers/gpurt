@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -98,6 +98,10 @@ void UpdateNodeFlagsTopLevel(
     DstMetadata.Store(parentNodeOffset + FLOAT32_BOX_NODE_FLAGS_OFFSET, parentNodeFlags);
 }
 
+#if GPURT_BUILD_RTIP3
+#include "UpdateQBVH3_0.hlsl"
+#endif
+
 #include "UpdateQBVH1_1.hlsl"
 
 //=====================================================================================================================
@@ -108,6 +112,11 @@ void UpdateQBVHImpl(
 {
     switch (Settings.rtIpLevel)
     {
+#if GPURT_BUILD_RTIP3
+        case GPURT_RTIP3_0:
+            UpdateQBVHImpl3_0(globalID, numWorkItems, numThreads);
+            return;
+#endif
         default:
             UpdateQBVHImpl1_1(globalID, numWorkItems, numThreads);
             return;

@@ -158,6 +158,12 @@ void FastAgglomerativeLbvhImpl(
         if (primitiveIndex == 0)
         {
             const uint rootIndex = FetchSortedPrimIndex(args.sortedPrimIndicesOffset, 0);
+#if GPURT_BUILD_RTIP3_1
+            // Note, for RTIP3.1 primitive ranges, we reuse the scratch node parent field to store the
+            // pointer to the next leaf node in the primitive range. The parent field is only required for RTIP2.0
+            // pair compression logic and should be removed once that code is updated.
+            if (EnableLatePairCompression())
+#endif
             {
                 // Store invalid index as parent of root
                 WriteScratchNodeData(args.baseScratchNodesOffset, rootIndex, SCRATCH_NODE_PARENT_OFFSET, 0xffffffff);
@@ -208,6 +214,12 @@ void FastAgglomerativeLbvhImpl(
             // Make the parent node point to the current child
             WriteScratchNodeData(args.baseScratchNodesOffset, parentNodeIndex, childOffset, currentNodeIndex);
 
+#if GPURT_BUILD_RTIP3_1
+            // Note, for RTIP3.1 primitive ranges, we reuse the scratch node parent field to store the
+            // pointer to the next leaf node in the primitive range. The parent field is only required for RTIP2.0
+            // pair compression logic and should be removed once that code is updated.
+            if (EnableLatePairCompression())
+#endif
             {
                 // Link the child to its parent
                 WriteScratchNodeData(args.baseScratchNodesOffset, currentNodeIndex, SCRATCH_NODE_PARENT_OFFSET, parentNodeIndex);
@@ -244,6 +256,12 @@ void FastAgglomerativeLbvhImpl(
         // the root node index and remove this conditional
         if (parentNodeIndex == numInternalNodes)
         {
+#if GPURT_BUILD_RTIP3_1
+            // Note, for RTIP3.1 primitive ranges, we reuse the scratch node parent field to store the
+            // pointer to the next leaf node in the primitive range. The parent field is only required for RTIP2.0
+            // pair compression logic and should be removed once that code is updated.
+            if (EnableLatePairCompression())
+#endif
             {
                 // Store invalid index as parent of root
                 WriteScratchNodeData(args.baseScratchNodesOffset, currentNodeIndex, SCRATCH_NODE_PARENT_OFFSET, 0xffffffff);

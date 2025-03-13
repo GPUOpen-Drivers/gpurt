@@ -41,6 +41,11 @@
 #define IS_LEAF(i) ((i) >= (numActivePrims - 1))
 #define LEAF_OFFSET(i) ((i) - (numActivePrims - 1))
 
+#if GPURT_BUILD_RTIP3_1
+#define RTIP3_1_UPDATE_THREADS_PER_FAT_LEAF 8
+#define UPDATE3_1_THREADGROUP_SIZE          32
+#endif
+
 //=====================================================================================================================
 struct RefitArgs
 {
@@ -123,6 +128,13 @@ uint CalcQbvhInternalNodeIndex(
     // Node offset includes header size
     offset -= sizeof(AccelStructHeader);
 
+#if GPURT_BUILD_RTIP3
+    if (Settings.highPrecisionBoxNodeEnable)
+    {
+        return (offset >> BVH4_NODE_HIGH_PRECISION_STRIDE_SHIFT);
+    }
+    else
+#endif
     {
         return useFp16BoxNodesInBlas ? (offset >> BVH4_NODE_16_STRIDE_SHIFT)
                                      : (offset >> BVH4_NODE_32_STRIDE_SHIFT);
@@ -329,10 +341,43 @@ static uint32_t GetNumInternalNodeCount(
     uint32_t minPrimsPerLastInternalNode = 2u;
 
     {
+#if GPURT_BUILD_RTIP3
+#if GPURT_BUILD_RTIP3_1
+        // When pairs are enabled (range size at least 2), there are at least 3 primitives (one pair and one single
+        // triangle) in a last level internal node.
+        minPrimsPerLastInternalNode = (Settings.maxPrimRangeSize >= 2) ? 3u : 2u;
+#endif
+        maxNumChildren = Settings.bvh8Enable ? 8u : 4u;
+#endif
     }
 
     return CalcAccelStructInternalNodeCount(primitiveCount, maxNumChildren, minPrimsPerLastInternalNode);
 }
+
+#if GPURT_BUILD_RTIP3
+//=====================================================================================================================
+static bool IsBoxNode(uint pointer)
+{
+    return IsBoxNode(pointer,
+                     Settings.highPrecisionBoxNodeEnable,
+                     Settings.bvh8Enable
+#if GPURT_BUILD_RTIP3_1
+                   , EnableCompressedFormat()
+#endif
+                    );
+}
+
+//=====================================================================================================================
+static uint CreateRootNodePointer()
+{
+    return CreateRootNodePointer(Settings.highPrecisionBoxNodeEnable,
+                                 Settings.bvh8Enable
+#if GPURT_BUILD_RTIP3_1
+                               , EnableCompressedFormat()
+#endif
+                                );
+}
+#endif
 
 //=====================================================================================================================
 uint ReadParentPointer(
@@ -362,7 +407,17 @@ uint GetBlasRebraidChildCount(
 
     uint count = 0;
 
+#if GPURT_BUILD_RTIP3_1
+    if (EnableCompressedFormat())
+    {
+        count = GetQuantizedBoxRebraidChildCount(blasBaseAddr, nodePointer);
+    }
+    else
+#endif
     if (
+#if GPURT_BUILD_RTIP3
+        !Settings.highPrecisionBoxNodeEnable &&
+#endif
         IsBoxNode16(nodePointer))
     {
         const Float16BoxNode node = FetchFloat16BoxNode(blasBaseAddr, nodePointer);
@@ -371,6 +426,9 @@ uint GetBlasRebraidChildCount(
     else
     {
         const Float32BoxNode node = FetchFloat32BoxNode(blasBaseAddr,
+#if GPURT_BUILD_RTIP3
+                                                        Settings.highPrecisionBoxNodeEnable,
+#endif
                                                         nodePointer);
         count = 1 + (node.child1 != INVALID_IDX) + (node.child2 != INVALID_IDX) + (node.child3 != INVALID_IDX);
     }
@@ -381,13 +439,70 @@ uint GetBlasRebraidChildCount(
 //=====================================================================================================================
 uint GetInternalNodeType()
 {
+#if GPURT_BUILD_RTIP3
+    uint nodeType;
+
+#if GPURT_BUILD_RTIP3_1
+    if (EnableCompressedFormat())
+    {
+        nodeType = NODE_TYPE_BOX_QUANTIZED_BVH8;
+    }
+    else
+#endif
+    {
+        nodeType = Settings.highPrecisionBoxNodeEnable ? NODE_TYPE_BOX_HP64 : NODE_TYPE_BOX_FLOAT32;
+
+        if (Settings.bvh8Enable)
+        {
+            nodeType = Settings.highPrecisionBoxNodeEnable ? NODE_TYPE_BOX_HP64x2 : NODE_TYPE_BOX_FLOAT32x2;
+        }
+    }
+
+    return nodeType;
+#else
     return NODE_TYPE_BOX_FLOAT32;
+#endif
 }
 
 //=====================================================================================================================
 static Float32BoxNode FetchFloat32BoxNode(
+#if GPURT_BUILD_RTIP3
+    bool                highPrecisionBoxNodeEnable,
+#endif
     in uint             offset)
 {
+#if GPURT_BUILD_RTIP3
+    if (highPrecisionBoxNodeEnable)
+    {
+
+        HighPrecisionBoxNode hpBoxNode = (HighPrecisionBoxNode)0;
+
+        uint4 d0, d1, d2, d3;
+        d0 = DstMetadata.Load4(offset);
+        d1 = DstMetadata.Load4(offset + 0x10);
+        d2 = DstMetadata.Load4(offset + 0x20);
+        d3 = DstMetadata.Load4(offset + 0x30);
+
+        hpBoxNode.dword[0] = d0.x;
+        hpBoxNode.dword[1] = d0.y;
+        hpBoxNode.dword[2] = d0.z;
+        hpBoxNode.dword[3] = d0.w;
+        hpBoxNode.dword[4] = d1.x;
+        hpBoxNode.dword[5] = d1.y;
+        hpBoxNode.dword[6] = d1.z;
+        hpBoxNode.dword[7] = d1.w;
+        hpBoxNode.dword[8] = d2.x;
+        hpBoxNode.dword[9] = d2.y;
+        hpBoxNode.dword[10] = d2.z;
+        hpBoxNode.dword[11] = d2.w;
+        hpBoxNode.dword[12] = d3.x;
+        hpBoxNode.dword[13] = d3.y;
+        hpBoxNode.dword[14] = d3.z;
+        hpBoxNode.dword[15] = d3.w;
+
+        return DecodeHighPrecisionBoxNode(hpBoxNode);
+    }
+#endif
     ///
 
     uint4 d0, d1, d2, d3, d4, d5, d6, d7;
@@ -415,8 +530,14 @@ static Float32BoxNode FetchFloat32BoxNode(
     fp32BoxNode.bbox3_max = asfloat(uint3(d6.y, d6.z, d6.w));
     fp32BoxNode.flags         = d7.x;
     fp32BoxNode.numPrimitives = d7.y;
+#if GPURT_BUILD_RTIP3_1
+    // RTIP3.1 also implies RTIP3.0. These bits are not used but are needed for compiling when RTIP3_1 is enabled.
+    fp32BoxNode.instanceMask  = d7.z;
+    fp32BoxNode.obbMatrixIndex = d7.w;
+#else
     fp32BoxNode.padding2      = d7.z;
     fp32BoxNode.padding3      = d7.w;
+#endif
 
     return fp32BoxNode;
 }
@@ -426,6 +547,325 @@ uint GetInstanceMask(InstanceDesc desc)
 {
     return desc.InstanceID_and_Mask >> 24;
 }
+
+#if GPURT_BUILD_RTIP3
+//=====================================================================================================================
+void WriteInstanceNode3_0(
+    in InstanceDesc instanceDesc,
+    in uint         geometryType,
+    in uint         instanceIndex,
+    in uint         instNodePtr,
+    in uint         blasRootNodePointer,
+    in uint         blasMetadataSize,
+    in uint         tlasMetadataSize)
+{
+    GpuVirtualAddress blasBaseAddr = MakeGpuVirtualAddress(instanceDesc.accelStructureAddressLo,
+                                                           instanceDesc.accelStructureAddressHiAndFlags);
+    blasBaseAddr += blasMetadataSize;
+
+    const uint64_t childBasePtr =
+        PackInstanceBasePointer(blasBaseAddr,
+                                instanceDesc.InstanceContributionToHitGroupIndex_and_Flags >> 24,
+                                geometryType);
+
+    const uint instanceNodeOffset = tlasMetadataSize + ExtractNodePointerOffset(instNodePtr);
+
+    HwInstanceTransformNode hwInstanceNode = (HwInstanceTransformNode)0;
+
+    hwInstanceNode.childBasePtr = childBasePtr;
+    hwInstanceNode.childRootNodeOrParentPtr = blasRootNodePointer;
+    hwInstanceNode.userDataAndInstanceMask =
+        (instanceDesc.InstanceContributionToHitGroupIndex_and_Flags & 0x00FFFFFF) |
+        (instanceDesc.InstanceID_and_Mask & 0xFF000000);
+
+    // Invert instance to world matrix
+    float3x4 temp = CreateMatrix(instanceDesc.Transform);
+    float3x4 inverse = Inverse3x4(temp);
+
+    hwInstanceNode.worldToObject[0][0] = inverse[0].x;
+    hwInstanceNode.worldToObject[0][1] = inverse[0].y;
+    hwInstanceNode.worldToObject[0][2] = inverse[0].z;
+    hwInstanceNode.worldToObject[0][3] = inverse[0].w;
+    hwInstanceNode.worldToObject[1][0] = inverse[1].x;
+    hwInstanceNode.worldToObject[1][1] = inverse[1].y;
+    hwInstanceNode.worldToObject[1][2] = inverse[1].z;
+    hwInstanceNode.worldToObject[1][3] = inverse[1].w;
+    hwInstanceNode.worldToObject[2][0] = inverse[2].x;
+    hwInstanceNode.worldToObject[2][1] = inverse[2].y;
+    hwInstanceNode.worldToObject[2][2] = inverse[2].z;
+    hwInstanceNode.worldToObject[2][3] = inverse[2].w;
+
+    DstMetadata.Store<HwInstanceTransformNode>(instanceNodeOffset, hwInstanceNode);
+
+    InstanceSidebandData sideband = (InstanceSidebandData)0;
+    sideband.instanceIndex      = instanceIndex;
+    sideband.instanceIdAndFlags =
+        (instanceDesc.InstanceID_and_Mask & 0x00FFFFFF) |
+        (instanceDesc.InstanceContributionToHitGroupIndex_and_Flags & 0xFF000000);
+    sideband.blasMetadataSize = blasMetadataSize;
+
+    sideband.objectToWorld[0][0] = instanceDesc.Transform[0].x;
+    sideband.objectToWorld[0][1] = instanceDesc.Transform[0].y;
+    sideband.objectToWorld[0][2] = instanceDesc.Transform[0].z;
+    sideband.objectToWorld[0][3] = instanceDesc.Transform[0].w;
+    sideband.objectToWorld[1][0] = instanceDesc.Transform[1].x;
+    sideband.objectToWorld[1][1] = instanceDesc.Transform[1].y;
+    sideband.objectToWorld[1][2] = instanceDesc.Transform[1].z;
+    sideband.objectToWorld[1][3] = instanceDesc.Transform[1].w;
+    sideband.objectToWorld[2][0] = instanceDesc.Transform[2].x;
+    sideband.objectToWorld[2][1] = instanceDesc.Transform[2].y;
+    sideband.objectToWorld[2][2] = instanceDesc.Transform[2].z;
+    sideband.objectToWorld[2][3] = instanceDesc.Transform[2].w;
+
+    const uint sidebandOffset = instanceNodeOffset + sizeof(HwInstanceTransformNode);
+    DstMetadata.Store<InstanceSidebandData>(sidebandOffset, sideband);
+}
+#endif
+
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+// Load internal node child info from the specified node address
+static ChildInfo LoadChildInfo(
+    uint64_t nodeAddr,
+    uint     childIndex,
+    uint     validChildCount)
+{
+    const uint childOffset = GetChildInfoOffset(childIndex);
+    const uint3 packedChildInfo = LoadDwordAtAddrx3(nodeAddr + childOffset);
+    ChildInfo childInfo;
+    if (childIndex < validChildCount)
+    {
+        childInfo.Load(packedChildInfo);
+    }
+    else
+    {
+        childInfo.Invalidate();
+    }
+    return childInfo;
+}
+
+#define PACKED_SOURCE_BOX_BIT_SHIFT 16u
+#define PACKED_SOURCE_BOX_BIT_MASK  (0xffu << PACKED_SOURCE_BOX_BIT_SHIFT)
+
+//=====================================================================================================================
+uint PackObbMatrixIndexBits(
+    uint obbMatrixIdx,
+    uint packedSourceBoxes)
+{
+    // Store the source box bitfield in the upper bits of the OBB DWORD (unused by HW). This is used to construct
+    // four filter boxes for instances.
+    return obbMatrixIdx | ((packedSourceBoxes >> 8) << PACKED_SOURCE_BOX_BIT_SHIFT);
+}
+
+//=====================================================================================================================
+// Returns unpacked OBB matrix index and packedSourceBoxes field.
+uint ExtractPackedSourceBoxBits(
+    uint packedObbMatrixIdx)
+{
+    return (packedObbMatrixIdx & PACKED_SOURCE_BOX_BIT_MASK) >> PACKED_SOURCE_BOX_BIT_SHIFT;
+}
+
+//=====================================================================================================================
+void WriteRebraidFilterNode3_1(
+    uint64_t blasBaseAddr,
+    uint     blasRootNodePointer,
+    uint     boxNodeDstOffset)
+{
+    const uint64_t nodeAddr = GetBlasAabbNodeAddr(blasBaseAddr, blasRootNodePointer);
+
+    // Load original origin
+    const uint3 origin = LoadDwordAtAddrx3(nodeAddr + QUANTIZED_BVH8_NODE_OFFSET_ORIGIN);
+
+    // Load original exponents
+    uint expChildIndxAndCount = LoadDwordAtAddr(nodeAddr + QUANTIZED_BVH8_NODE_OFFSET_EXP_CHILD_IDX_AND_VALID_COUNT);
+
+    const uint validChildCount = ExtractValidChildCount(expChildIndxAndCount);
+
+    // Set instance child count to 4
+    expChildIndxAndCount = bitFieldInsert(expChildIndxAndCount, 28, 3, 4 - 1);
+
+    DstMetadata.Store4(boxNodeDstOffset + QUANTIZED_BVH4_NODE_OFFSET_ORIGIN,
+                       uint4(origin, expChildIndxAndCount));
+
+    // Repurposed bits [23:16] of the OBB DWORD specify which of the 4 leftmost boxes shares a common parent with each
+    // of the 4 rightmost boxes. The bitfield contains 2 bits per child 4-7 in the node.
+    //
+    // To constuct the 4 filter node boxes, all boxes with the same source box index should be merged.
+    const uint packedSourceBoxes =
+        ExtractPackedSourceBoxBits(LoadDwordAtAddr(nodeAddr + QUANTIZED_BVH8_NODE_OFFSET_OBB_MATRIX_INDEX));
+
+    [unroll]
+    for (uint i = 0; i < 4; ++i)
+    {
+        const ChildInfo childInfo0 = LoadChildInfo(nodeAddr, i, validChildCount);
+
+        uint3 quantizedMin = childInfo0.Min();
+        uint3 quantizedMax = childInfo0.Max();
+
+        // Find the children sharing the same parent as the ith child and merge their boxes
+        [unroll]
+        for (uint j = 0; j < 4; ++j)
+        {
+            if (((packedSourceBoxes >> (j * 2)) & 0b11) == i)
+            {
+                const ChildInfo childInfo = LoadChildInfo(nodeAddr, j + 4, validChildCount);
+
+                quantizedMin = min(quantizedMin, childInfo.Min());
+                quantizedMax = max(quantizedMax, childInfo.Max());
+            }
+        }
+
+        const uint3 mergedChildInfo = GetInstanceChildInfo(i, blasRootNodePointer, quantizedMin, quantizedMax);
+        DstMetadata.Store3(boxNodeDstOffset + GetBvh4ChildInfoOffset(i), mergedChildInfo);
+    }
+}
+
+//=====================================================================================================================
+void WriteInstanceNode3_1(
+    in InstanceDesc       instanceDesc,
+    in uint               geometryType,
+    in uint               instanceIndex,
+    in uint               instNodePtr,
+    in uint               blasRootNodePointer,
+    in uint               blasMetadataSize,
+    in AccelStructOffsets offsets,
+    in uint               parentNodePointer)
+{
+    GpuVirtualAddress blasBaseAddr = MakeGpuVirtualAddress(instanceDesc.accelStructureAddressLo,
+                                                           instanceDesc.accelStructureAddressHiAndFlags);
+    blasBaseAddr += blasMetadataSize;
+
+    const uint64_t childBasePtr =
+        PackInstanceBasePointer(blasBaseAddr,
+                                instanceDesc.InstanceContributionToHitGroupIndex_and_Flags >> 24,
+                                geometryType);
+
+    const uint instanceNodeOffset = ExtractNodePointerOffset(instNodePtr);
+
+    uint tlasMetadataSize = 0;
+    if (IsUpdate())
+    {
+        tlasMetadataSize = SrcBuffer.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
+    }
+
+    HwInstanceTransformNode hwInstanceNode = (HwInstanceTransformNode)0;
+
+    hwInstanceNode.childBasePtr             = childBasePtr;
+    hwInstanceNode.childRootNodeOrParentPtr = parentNodePointer;
+    hwInstanceNode.userDataAndInstanceMask  =
+        (instanceDesc.InstanceContributionToHitGroupIndex_and_Flags & 0x00FFFFFF) |
+        (instanceDesc.InstanceID_and_Mask & 0xFF000000);
+
+    // Invert instance to world matrix
+    float3x4 temp = CreateMatrix(instanceDesc.Transform);
+    float3x4 inverse = Inverse3x4(temp);
+
+    hwInstanceNode.worldToObject[0][0] = inverse[0].x;
+    hwInstanceNode.worldToObject[0][1] = inverse[0].y;
+    hwInstanceNode.worldToObject[0][2] = inverse[0].z;
+    hwInstanceNode.worldToObject[0][3] = inverse[0].w;
+    hwInstanceNode.worldToObject[1][0] = inverse[1].x;
+    hwInstanceNode.worldToObject[1][1] = inverse[1].y;
+    hwInstanceNode.worldToObject[1][2] = inverse[1].z;
+    hwInstanceNode.worldToObject[1][3] = inverse[1].w;
+    hwInstanceNode.worldToObject[2][0] = inverse[2].x;
+    hwInstanceNode.worldToObject[2][1] = inverse[2].y;
+    hwInstanceNode.worldToObject[2][2] = inverse[2].z;
+    hwInstanceNode.worldToObject[2][3] = inverse[2].w;
+
+    if (IsUpdate())
+    {
+        DstMetadata.Store<HwInstanceTransformNode>(tlasMetadataSize + instanceNodeOffset, hwInstanceNode);
+    }
+    else
+    {
+        DstBuffer.Store<HwInstanceTransformNode>(instanceNodeOffset, hwInstanceNode);
+    }
+
+    InstanceSidebandData sideband = (InstanceSidebandData)0;
+    sideband.instanceIndex      = instanceIndex;
+    sideband.instanceIdAndFlags =
+        (instanceDesc.InstanceID_and_Mask & 0x00FFFFFF) |
+        (instanceDesc.InstanceContributionToHitGroupIndex_and_Flags & 0xFF000000);
+    sideband.blasMetadataSize = blasMetadataSize;
+
+    sideband.objectToWorld[0][0] = instanceDesc.Transform[0].x;
+    sideband.objectToWorld[0][1] = instanceDesc.Transform[0].y;
+    sideband.objectToWorld[0][2] = instanceDesc.Transform[0].z;
+    sideband.objectToWorld[0][3] = instanceDesc.Transform[0].w;
+    sideband.objectToWorld[1][0] = instanceDesc.Transform[1].x;
+    sideband.objectToWorld[1][1] = instanceDesc.Transform[1].y;
+    sideband.objectToWorld[1][2] = instanceDesc.Transform[1].z;
+    sideband.objectToWorld[1][3] = instanceDesc.Transform[1].w;
+    sideband.objectToWorld[2][0] = instanceDesc.Transform[2].x;
+    sideband.objectToWorld[2][1] = instanceDesc.Transform[2].y;
+    sideband.objectToWorld[2][2] = instanceDesc.Transform[2].z;
+    sideband.objectToWorld[2][3] = instanceDesc.Transform[2].w;
+
+    // Add additional buffer offset here to account for Update.
+    // Note, leafNodes and geometryInfo offsets do not account for
+    // metadata size
+    const uint sidebandOffset = ComputeInstanceSidebandOffset(instanceNodeOffset,
+                                                              offsets.leafNodes,
+                                                              offsets.geometryInfo);
+
+    if (IsUpdate())
+    {
+        DstMetadata.Store<InstanceSidebandData>(tlasMetadataSize + sidebandOffset, sideband);
+    }
+    else
+    {
+        DstBuffer.Store<InstanceSidebandData>(sidebandOffset, sideband);
+    }
+
+    const uint boxNodeOffset = instanceNodeOffset + sizeof(HwInstanceTransformNode);
+    if ((Settings.enableRebraid == false) || (blasRootNodePointer == CreateRootNodePointer()))
+    {
+        // Copy pre-built intersectable instance node data from BLAS metadata to TLAS
+        const uint64_t blasMetadataBaseAddr = blasBaseAddr - blasMetadataSize;
+        uint4 d0 = LoadDwordAtAddrx4(blasMetadataBaseAddr + ACCEL_STRUCT_METADATA_INSTANCE_NODE_OFFSET);
+        uint4 d1 = LoadDwordAtAddrx4(blasMetadataBaseAddr + ACCEL_STRUCT_METADATA_INSTANCE_NODE_OFFSET + 16);
+        uint4 d2 = LoadDwordAtAddrx4(blasMetadataBaseAddr + ACCEL_STRUCT_METADATA_INSTANCE_NODE_OFFSET + 32);
+        uint4 d3 = LoadDwordAtAddrx4(blasMetadataBaseAddr + ACCEL_STRUCT_METADATA_INSTANCE_NODE_OFFSET + 48);
+
+        if (IsUpdate())
+        {
+            DstMetadata.Store4(tlasMetadataSize + boxNodeOffset,      d0);
+            DstMetadata.Store4(tlasMetadataSize + boxNodeOffset + 16, d1);
+            DstMetadata.Store4(tlasMetadataSize + boxNodeOffset + 32, d2);
+            DstMetadata.Store4(tlasMetadataSize + boxNodeOffset + 48, d3);
+        }
+        else
+        {
+            DstBuffer.Store4(boxNodeOffset,      d0);
+            DstBuffer.Store4(boxNodeOffset + 16, d1);
+            DstBuffer.Store4(boxNodeOffset + 32, d2);
+            DstBuffer.Store4(boxNodeOffset + 48, d3);
+        }
+    }
+    else if ((Settings.instanceMode == InstanceMode::Passthrough) || IsTriangleNode3_1(blasRootNodePointer))
+    {
+        if (IsUpdate() == false)
+        {
+            tlasMetadataSize = DstMetadata.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
+        }
+
+        // Compute instance bounds from rebraided child
+        const BoundingBox instanceBounds = DecodeRebraidChildBoundsBVH4(blasBaseAddr, blasRootNodePointer);
+
+        WriteInstancePassthrough(blasRootNodePointer, instanceBounds, tlasMetadataSize + boxNodeOffset);
+    }
+    else if (Settings.instanceMode == InstanceMode::FilterNode)
+    {
+        if (IsUpdate() == false)
+        {
+            tlasMetadataSize = DstMetadata.Load(ACCEL_STRUCT_METADATA_SIZE_OFFSET);
+        }
+
+        WriteRebraidFilterNode3_1(blasBaseAddr, blasRootNodePointer, tlasMetadataSize + boxNodeOffset);
+    }
+}
+#endif
 
 //=====================================================================================================================
 void WriteInstanceNode1_1(
@@ -481,6 +921,9 @@ void WriteInstanceNode1_1(
         if (IsBoxNode32(blasRootNodePointer))
         {
             blasRootNode = FetchFloat32BoxNode(blasBaseAddr,
+#if GPURT_BUILD_RTIP3
+                                               false,
+#endif
                                                blasRootNodePointer);
         }
         else if (IsBoxNode16(blasRootNodePointer))
@@ -494,6 +937,9 @@ void WriteInstanceNode1_1(
             // Note, we only rebraid one level of the BLAS, the parent pointer is guaranteed to be the
             // root node pointer.
             blasRootNode = FetchFloat32BoxNode(blasBaseAddr,
+#if GPURT_BUILD_RTIP3
+                                               false,
+#endif
                                                CreateRootNodePointer());
 
             // Copy triangle box data from root node
@@ -651,6 +1097,27 @@ static uint ReadAccelStructHeaderField(
     return DstBuffer.Load(offset);
 }
 
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+// Write the indirect dispatch group count for Updates.
+static void WriteUpdateGroupCount(
+    uint updateThreadsPerFatLeaf)
+{
+    if (IsUpdateAllowed())
+    {
+        const uint updateThreadGroupSize = (Settings.rtIpLevel == GPURT_RTIP3_1) ? UPDATE3_1_THREADGROUP_SIZE :
+                                                                                   BUILD_THREADGROUP_SIZE;
+
+        const uint numFatLeafNodes = ReadAccelStructHeaderField(ACCEL_STRUCT_HEADER_NUM_INTERNAL_FP16_NODES_OFFSET);
+
+        const uint numWorkItems    = numFatLeafNodes * updateThreadsPerFatLeaf;
+        const uint numThreadGroups = RoundUpQuotient(numWorkItems, updateThreadGroupSize);
+        const uint3 dispatchCount  = uint3(numThreadGroups, 1, 1);
+        DstMetadata.Store3(ACCEL_STRUCT_METADATA_UPDATE_GROUP_COUNT_OFFSET, dispatchCount);
+    }
+}
+#endif
+
 //======================================================================================================================
 bool EnableLatePairCompression()
 {
@@ -662,6 +1129,13 @@ bool EnableLatePairCompression()
 //=====================================================================================================================
 bool UsePrimIndicesArray()
 {
+#if GPURT_BUILD_RTIP3_1
+    if (
+        0)
+    {
+        return true;
+    }
+#endif
 
     return false;
 }
@@ -669,7 +1143,11 @@ bool UsePrimIndicesArray()
 //=====================================================================================================================
 bool CollapseAnyPairs()
 {
+#if GPURT_BUILD_RTIP3_1 && (BUILD_PARALLEL == 0)
+    return Settings.maxPrimRangeSize == 2;
+#else
     return false;
+#endif
 }
 
 //=====================================================================================================================
