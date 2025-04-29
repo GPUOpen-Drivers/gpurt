@@ -38,7 +38,7 @@
 
 #include "../shadersClean/common/Common.hlsli"
 #include "IntersectCommon.hlsl"
-#include "BuildCommonScratch.hlsl"
+#include "../shadersClean/build/BuildCommonScratch.hlsli"
 #include "CompactCommon.hlsl"
 
 // 64-bytes per thread. Each lane group of 8 threads shares a group shared block of 512-bytes

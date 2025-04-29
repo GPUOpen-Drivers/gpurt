@@ -27,7 +27,11 @@
 #ifndef _UPDATECOMMON_HLSL
 #define _UPDATECOMMON_HLSL
 
-#include "BuildCommon.hlsl"
+#include "../shadersClean/build/BuildCommon.hlsli"
+
+#if GPURT_BUILD_RTIP3_1
+#include "../shadersClean/common/gfx12/QuantizedBVH8BoxNode.hlsli"
+#endif
 
 #if GPURT_BUILD_RTIP3
 //=====================================================================================================================
@@ -87,6 +91,79 @@ BoundingBox ReadUpdateScratchBoundingBox(
     const uint scratchBoundsIdx = ComputeUpdateScratchBoundingBoxIndex(boxNodePointer, childIdx);
     return ReadUpdateScratchBoundingBoxAtIndex(scratchBoundsIdx);
 }
+
+#if GPURT_BVH_BUILD_SHADER
+//=====================================================================================================================
+static void UpdateHighPrecisionBoxNodeFlags(
+    in uint             nodeOffset,
+    in uint             childIdx,
+    in uint             boxNodeFlags)
+{
+    const uint bitMask = GetHighPrecisionBoxChildFlagsBitMask(childIdx);
+    const uint fieldMask = bitMask << (childIdx * HPB64_BOX_NODE_FLAGS_BIT_STRIDE);
+    const uint fieldData = (boxNodeFlags & bitMask) << (childIdx * HPB64_BOX_NODE_FLAGS_BIT_STRIDE);
+
+    // Compute DWORD aligned byte offset and bit offset within compressed node
+    const uint boxNodeFlagsOffset = (HPB64_BOX_NODE_FLAGS_BIT_OFFSET / 32) * sizeof(uint32_t);
+    const uint packedFlagsBitOffset = (HPB64_BOX_NODE_FLAGS_BIT_OFFSET % 32);
+
+    const uint boxNodeFlagsClearBits = ~(fieldMask << packedFlagsBitOffset);
+    const uint boxNodeFlagsSetBits = (fieldData << packedFlagsBitOffset);
+
+    DstMetadata.InterlockedAnd(nodeOffset + boxNodeFlagsOffset, boxNodeFlagsClearBits);
+    DstMetadata.InterlockedOr(nodeOffset + boxNodeFlagsOffset, boxNodeFlagsSetBits);
+}
+
+//=====================================================================================================================
+static uint4 DecodeHighPrecisionBoxNodeChildPointers(
+    uint                nodeOffset)
+{
+    uint childBasePtr = SrcBuffer.Load(nodeOffset);
+    const uint childTypeAndBoxFlags = LoadBits(SrcBuffer, nodeOffset, 32, 24);
+
+    // Decode child node pointer types
+    uint4 type;
+    type[0] = (childBasePtr >> 29);
+    type[1] = (childTypeAndBoxFlags) & bits(3);
+    type[2] = (childTypeAndBoxFlags >> 3) & bits(3);
+    type[3] = (childTypeAndBoxFlags >> 6) & bits(3);
+
+    // Decode child base pointer
+    childBasePtr = childBasePtr & bits(29);
+
+    // Decode 64-byte aligned child offsets. Note, only instance node is 128 bytes. All other nodes are 64-bytes
+
+    uint4 offset;
+    offset[0] = childBasePtr;
+    offset[1] = offset[0] +
+        (((type[0] == NODE_TYPE_USER_NODE_INSTANCE) || (type[0] == NODE_TYPE_BOX_HP64x2)) ? 2 : 1);
+    offset[2] = offset[1] +
+        (((type[1] == NODE_TYPE_USER_NODE_INSTANCE) || (type[1] == NODE_TYPE_BOX_HP64x2)) ? 2 : 1);
+    offset[3] = offset[2] +
+        (((type[2] == NODE_TYPE_USER_NODE_INSTANCE) || (type[2] == NODE_TYPE_BOX_HP64x2)) ? 2 : 1);
+
+    // Convert to absolute offset
+    offset[0] = offset[0] << 6;
+    offset[1] = offset[1] << 6;
+    offset[2] = offset[2] << 6;
+    offset[3] = offset[3] << 6;
+
+    // Exclude children with inverted bounding boxes while calculating max exponent
+    uint4 childPointers;
+
+    childPointers.x =
+        (type[0] == INVALID_TYPE_OF_HP) ? INVALID_NODE : PackNodePointer(type[0], offset[0]);
+    childPointers.y =
+        (type[1] == INVALID_TYPE_OF_HP) ? INVALID_NODE : PackNodePointer(type[1], offset[1]);
+    childPointers.z =
+        (type[2] == INVALID_TYPE_OF_HP) ? INVALID_NODE : PackNodePointer(type[2], offset[2]);
+    childPointers.w =
+        (type[3] == INVALID_TYPE_OF_HP) ? INVALID_NODE : PackNodePointer(type[3], offset[3]);
+
+    return childPointers;
+}
+
+#endif
 #endif
 
 //=====================================================================================================================

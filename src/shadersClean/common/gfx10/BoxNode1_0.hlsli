@@ -25,6 +25,7 @@
 #ifndef BOX_NODE_1_1_HLSLI
 #define BOX_NODE_1_1_HLSLI
 
+#include "../ShaderDefs.hlsli"
 #include "../../../shared/assert.h"
 
 //=====================================================================================================================
@@ -112,6 +113,10 @@ struct Float32BoxNode
 GPURT_STATIC_ASSERT(FLOAT32_BOX_NODE_SIZE == sizeof(Float32BoxNode), "Float32BoxNode structure mismatch");
 
 //=====================================================================================================================
+// Get internal BVH node size in bytes
+static uint GetBvhNodeSizeInternal();
+
+//=====================================================================================================================
 // Hardware 16-bit box node format and offsets
 #define FLOAT16_BBOX_STRIDE                 12
 #define FLOAT16_BOX_NODE_CHILD0_OFFSET      0
@@ -147,5 +152,25 @@ struct Float16BoxNode
 };
 
 GPURT_STATIC_ASSERT(FLOAT16_BOX_NODE_SIZE == sizeof(Float16BoxNode), "Float16BoxNode structure mismatch");
+
+//=====================================================================================================================
+static uint FetchFloat32BoxNodeNumPrimitives(in GpuVirtualAddress bvhAddress, in uint nodePointer);
+
+//=====================================================================================================================
+static Float32BoxNode FetchFloat32BoxNode(in GpuVirtualAddress bvhAddress,
+#if GPURT_BUILD_RTIP3
+                                          in bool              highPrecisionBoxNodeEnable,
+#endif
+                                          in uint              nodePointer);
+
+//=====================================================================================================================
+static Float32BoxNode FetchFloat16BoxNodeAsFp32(in GpuVirtualAddress bvhAddress, in uint nodePointer);
+
+//=====================================================================================================================
+static Float16BoxNode FetchFloat16BoxNode(in GpuVirtualAddress bvhAddress, in uint nodePointer);
+
+#ifndef LIBRARY_COMPILATION
+#include "BoxNode1_0.hlsl"
+#endif
 
 #endif

@@ -28,12 +28,19 @@
 //
 // uint numActivePrims
 
-#ifndef _BUILDCOMMON_HLSL
-#define _BUILDCOMMON_HLSL
+#ifndef BUILD_COMMON_HLSLI
+#define BUILD_COMMON_HLSLI
+#include "BuildRootSignature.hlsli"
+#include "../common/Math.hlsli"
+#include "../common/ObbCommon.hlsli"
+#include "../common/gfx10/BoxNode1_0.hlsli"
+#include "../common/gfx10/InstanceNode1_0.hlsli"
 
-#include "IntersectCommon.hlsl"
-#include "MortonCodes.hlsl"
-#include "../shadersClean/common/Math.hlsli"
+#if GPURT_BUILD_RTIP3_1
+#include "../common/gfx12/QuantizedBVH8BoxNode.hlsli"
+#include "../common/gfx12/HighPrecisionBoxNode.hlsli"
+#include "gfx12/QuantizedBVH8BoxNode.hlsli"
+#endif
 
 //=====================================================================================================================
 #define LEAFIDX(i) ((numActivePrims-1) + (i))
@@ -354,6 +361,20 @@ static uint32_t GetNumInternalNodeCount(
     return CalcAccelStructInternalNodeCount(primitiveCount, maxNumChildren, minPrimsPerLastInternalNode);
 }
 
+#if GPURT_BUILD_RTIP3_1
+//=====================================================================================================================
+static bool EnableCompressedFormat()
+{
+    return (Settings.rtIpLevel >= GPURT_RTIP3_1);
+}
+
+//=====================================================================================================================
+static bool EnableNonPrioritySortingRebraid()
+{
+    return (Settings.rtIpLevel == GPURT_RTIP3_1);
+}
+#endif
+
 #if GPURT_BUILD_RTIP3
 //=====================================================================================================================
 static bool IsBoxNode(uint pointer)
@@ -483,22 +504,22 @@ static Float32BoxNode FetchFloat32BoxNode(
         d2 = DstMetadata.Load4(offset + 0x20);
         d3 = DstMetadata.Load4(offset + 0x30);
 
-        hpBoxNode.dword[0] = d0.x;
-        hpBoxNode.dword[1] = d0.y;
-        hpBoxNode.dword[2] = d0.z;
-        hpBoxNode.dword[3] = d0.w;
-        hpBoxNode.dword[4] = d1.x;
-        hpBoxNode.dword[5] = d1.y;
-        hpBoxNode.dword[6] = d1.z;
-        hpBoxNode.dword[7] = d1.w;
-        hpBoxNode.dword[8] = d2.x;
-        hpBoxNode.dword[9] = d2.y;
-        hpBoxNode.dword[10] = d2.z;
-        hpBoxNode.dword[11] = d2.w;
-        hpBoxNode.dword[12] = d3.x;
-        hpBoxNode.dword[13] = d3.y;
-        hpBoxNode.dword[14] = d3.z;
-        hpBoxNode.dword[15] = d3.w;
+        hpBoxNode.dwords[0] = d0.x;
+        hpBoxNode.dwords[1] = d0.y;
+        hpBoxNode.dwords[2] = d0.z;
+        hpBoxNode.dwords[3] = d0.w;
+        hpBoxNode.dwords[4] = d1.x;
+        hpBoxNode.dwords[5] = d1.y;
+        hpBoxNode.dwords[6] = d1.z;
+        hpBoxNode.dwords[7] = d1.w;
+        hpBoxNode.dwords[8] = d2.x;
+        hpBoxNode.dwords[9] = d2.y;
+        hpBoxNode.dwords[10] = d2.z;
+        hpBoxNode.dwords[11] = d2.w;
+        hpBoxNode.dwords[12] = d3.x;
+        hpBoxNode.dwords[13] = d3.y;
+        hpBoxNode.dwords[14] = d3.z;
+        hpBoxNode.dwords[15] = d3.w;
 
         return DecodeHighPrecisionBoxNode(hpBoxNode);
     }

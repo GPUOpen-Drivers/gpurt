@@ -44,7 +44,8 @@ static uint ProcessTriangleNode(
     uint                           tlasNodePtr,
     uint                           blasNodePtr,
     uint                           rayFlags,
-    bool                           tri0)
+    bool                           tri0,
+    float                          tMin)
 {
     const bool rayForceOpaque    = (rayFlags & RAY_FLAG_FORCE_OPAQUE);
     const bool raySkipProcedural = (rayFlags & RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES);
@@ -54,9 +55,10 @@ static uint ProcessTriangleNode(
 
     float tHit = result.T(tri0);
 
-    uint status = (tHit < intersection.t) ? HIT_STATUS_ACCEPT : HIT_STATUS_IGNORE;
+    bool triangleHit = EvaluateTriangleHit(tMin, tHit, intersection.t);
+    uint status = triangleHit ? HIT_STATUS_ACCEPT : HIT_STATUS_IGNORE;
 
-    if ((tHit < intersection.t) || isProcedural)
+    if (triangleHit || isProcedural)
     {
         uint hitKind        = result.HitKind(tri0);
         uint primitiveIndex = result.PrimitiveIndex(tri0);
@@ -177,7 +179,7 @@ static IntersectionResult TraceRayImpl3_1(
 
     // Temporary locals for traversal
     RayDesc localRay = ray;
-    localRay.Origin += localRay.TMin * localRay.Direction;
+    localRay.Origin += ApplyTMinBias(localRay.TMin) * localRay.Direction;
     RayDesc topLevelRay = localRay;
 
     uint stackAddr = RtIp3LdsStackInit();
@@ -189,7 +191,7 @@ static IntersectionResult TraceRayImpl3_1(
     uint lastInstanceNode = INVALID_NODE;
     uint parentNodePtr    = INVALID_NODE;
 
-    const float tMax = ray.TMax - ray.TMin;
+    const float tMax = ray.TMax - ApplyTMinBias(ray.TMin);
 
     // Committed traversal state
     IntersectionState intersection;
@@ -305,13 +307,14 @@ static IntersectionResult TraceRayImpl3_1(
                                                   instNodePtr,
                                                   nodePtr,
                                                   rayFlags,
-                                                  closestTri0);
+                                                  closestTri0,
+                                                  ray.TMin);
 
                 if (status != HIT_STATUS_IGNORE)
                 {
                     tlasNodePtr = instNodePtr;
                     blasBaseAddr = currBaseAddr;
-                    blasNodePtr = nodePtr;
+                    blasNodePtr = nodePtr | (closestTri0 ? 0x0u : TRI1_NODE_FLAG);
 
                     if (rayFlags & RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH)
                     {
@@ -321,7 +324,7 @@ static IntersectionResult TraceRayImpl3_1(
             }
             else
             {
-                // Process Tri0 first
+                // Process closestTri0 first
                 uint status = ProcessTriangleNode(rayId,
                                                   intersection,
                                                   result,
@@ -332,13 +335,14 @@ static IntersectionResult TraceRayImpl3_1(
                                                   instNodePtr,
                                                   nodePtr,
                                                   rayFlags,
-                                                  closestTri0);
+                                                  closestTri0,
+                                                  ray.TMin);
 
                 if (status != HIT_STATUS_IGNORE)
                 {
-                    tlasNodePtr = instNodePtr;
+                    tlasNodePtr  = instNodePtr;
                     blasBaseAddr = currBaseAddr;
-                    blasNodePtr = nodePtr;
+                    blasNodePtr  = nodePtr | (closestTri0 ? 0x0u : TRI1_NODE_FLAG);
 
                     if ((status == HIT_STATUS_ACCEPT_AND_END_SEARCH) ||
                         (rayFlags & RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH))
@@ -347,7 +351,7 @@ static IntersectionResult TraceRayImpl3_1(
                     }
                 }
 
-                // Process Tri1
+                // Process !closestTri0 next
                 status = ProcessTriangleNode(rayId,
                                              intersection,
                                              result,
@@ -358,13 +362,14 @@ static IntersectionResult TraceRayImpl3_1(
                                              instNodePtr,
                                              nodePtr,
                                              rayFlags,
-                                             !closestTri0);
+                                             !closestTri0,
+                                             ray.TMin);
 
                 if (status != HIT_STATUS_IGNORE)
                 {
                     tlasNodePtr  = instNodePtr;
                     blasBaseAddr = currBaseAddr;
-                    blasNodePtr  = nodePtr | TRI1_NODE_FLAG;
+                    blasNodePtr  = nodePtr | (!closestTri0 ? 0x0u : TRI1_NODE_FLAG);
 
                     if ((status == HIT_STATUS_ACCEPT_AND_END_SEARCH) ||
                         (rayFlags & RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH))
@@ -495,14 +500,14 @@ static IntersectionResult IntersectRayImpl3_1(
     in uint              rayId)         ///< Ray ID for profiling
 {
     IntersectionResult result = (IntersectionResult)0;
-    result.t           = ray.TMax - ray.TMin;
+    result.t           = ray.TMax - ApplyTMinBias(ray.TMin);
     result.nodeIndex   = blasNodePtr;
     result.instNodePtr = tlasNodePtr;
 
     if ((blasNodePtr != INVALID_NODE) && (tlasNodePtr != INVALID_NODE))
     {
         RayDesc localRay = ray;
-        localRay.Origin += localRay.TMin * localRay.Direction;
+        localRay.Origin += ApplyTMinBias(localRay.TMin) * localRay.Direction;
         RayDesc topLevelRay = localRay;
 
         // Initialise hardware node pointer. Note, we do not need to encode flags here since all flags have been

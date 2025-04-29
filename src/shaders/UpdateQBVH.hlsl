@@ -32,6 +32,8 @@
                 "CBV(b255),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
 
+#define DISABLE_BUILD_ROOT_SIGNATURE
+
 #define TASK_COUNTER_BUFFER   ScratchBuffer
 #define TASK_COUNTER_OFFSET   UPDATE_SCRATCH_TASK_COUNT_OFFSET
 #define NUM_TASKS_DONE_OFFSET UPDATE_SCRATCH_TASKS_DONE_OFFSET

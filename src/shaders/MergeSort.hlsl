@@ -37,7 +37,7 @@
 #define NUM_TASKS_DONE_OFFSET (ShaderConstants.offsets.taskLoopCounters + TASK_LOOP_MERGE_SORT_TASKS_DONE_OFFSET)
 #include "TaskMacros.hlsl"
 
-#include "BuildCommonScratch.hlsl"
+#include "../shadersClean/build/BuildCommonScratch.hlsli"
 
 // Max number of elements
 #define GROUP_CAPACITY         (2 * BUILD_THREADGROUP_SIZE)

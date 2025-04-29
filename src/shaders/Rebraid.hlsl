@@ -43,8 +43,8 @@ T LoadInstanceDescBuffer(uint offset)
     return InstanceDescBuffer.Load<T>(offset);
 }
 #include "IndirectArgBufferUtils.hlsl"
-#include "BuildCommonScratch.hlsl"
-#include "EncodeTopLevelCommon.hlsl"
+#include "../shadersClean/build/BuildCommonScratch.hlsli"
+#include "../shadersClean/build/EncodeTopLevelCommon.hlsli"
 
 #define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
 groupshared uint SharedMem[MAX_LDS_ELEMENTS];

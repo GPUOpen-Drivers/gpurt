@@ -87,7 +87,7 @@ void EncodeInstancesBuild(
         if (numActivePrims != 0)
         {
 #if GPURT_BUILD_RTIP3_1
-            if ((Settings.tlasRefittingMode == TlasRefittingMode::Early) && (geometryType == GEOMETRY_TYPE_TRIANGLES))
+            if ((Settings.tlasRefittingMode == TlasRefittingMode::Early) && (geometryType != GEOMETRY_TYPE_AABBS))
             {
                 // Compute instance bounds using BLAS KDOP
                 const uint64_t blasBaseAddr = PackUint64(desc.accelStructureAddressLo, desc.accelStructureAddressHiAndFlags);

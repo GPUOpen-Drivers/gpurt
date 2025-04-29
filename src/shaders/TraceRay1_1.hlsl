@@ -138,13 +138,13 @@ static IntersectionResult TraceRayImpl1_1(
 
     // Temporary locals for traversal
     RayDesc localRay = ray;
-    localRay.Origin += localRay.TMin * localRay.Direction;
+    localRay.Origin += ApplyTMinBias(localRay.TMin) * localRay.Direction;
     RayDesc topLevelRay = localRay;
     GpuVirtualAddress currentBvh = topLevelBvh;
 
     // Initialise intersection result
     IntersectionResult intersection = (IntersectionResult)0;
-    intersection.t                  = ray.TMax - ray.TMin;
+    intersection.t                  = ray.TMax - ApplyTMinBias(ray.TMin);
     intersection.nodeIndex          = INVALID_IDX;
 
     // Start from root node which follows acceleration structure header
@@ -281,7 +281,7 @@ static IntersectionResult TraceRayImpl1_1(
             const float t_denom = asfloat(intersectionResult.y);
             float candidateT  = (t_num / t_denom);
 
-            if (candidateT < intersection.t)
+            if (EvaluateTriangleHit(ray.TMin, candidateT, intersection.t))
             {
                 uint status = HIT_STATUS_ACCEPT;
 
@@ -684,11 +684,11 @@ static IntersectionResult IntersectRayImpl1_1(
     in uint              rayId)         ///< Ray ID for profiling
 {
     RayDesc localRay = ray;
-    localRay.Origin += localRay.TMin * localRay.Direction;
+    localRay.Origin += ApplyTMinBias(localRay.TMin) * localRay.Direction;
     RayDesc topLevelRay = localRay;
 
     IntersectionResult result = (IntersectionResult)0;
-    result.t         = ray.TMax - ray.TMin;
+    result.t         = ray.TMax - ApplyTMinBias(ray.TMin);
     result.nodeIndex = INVALID_IDX;
 
     if ((blasPointer != INVALID_NODE) && (tlasPointer != INVALID_NODE))

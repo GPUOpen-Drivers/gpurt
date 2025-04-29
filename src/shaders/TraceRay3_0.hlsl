@@ -37,7 +37,8 @@ static uint ProcessTriangleNode(
     uint64_t                       blasBaseAddr,
     uint                           tlasNodePtr,
     uint                           blasNodePtr,
-    uint                           rayFlags)
+    uint                           rayFlags,
+    float                          tMin)
 {
     const bool rayForceOpaque    = (rayFlags & RAY_FLAG_FORCE_OPAQUE);
     const bool raySkipProcedural = (rayFlags & RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES);
@@ -53,10 +54,11 @@ static uint ProcessTriangleNode(
     attr.barycentrics.x = abs(asfloat(result.z) / tDenom);
     attr.barycentrics.y = abs(asfloat(result.w) / tDenom);
 
-    uint status = (tHit < intersection.t) ? HIT_STATUS_ACCEPT : HIT_STATUS_IGNORE;
+    bool triangleHit = EvaluateTriangleHit(tMin, tHit, intersection.t);
+    uint status = triangleHit ? HIT_STATUS_ACCEPT : HIT_STATUS_IGNORE;
 
     uint kind = 0;
-    if ((tHit < intersection.t) || isProcedural)
+    if (triangleHit || isProcedural)
     {
         // On real hardware, we'd pass in the intersection parameters to the HitGroup shader and have it
         // determine the hitKind from tDenom as below
@@ -167,7 +169,7 @@ static IntersectionResult TraceRayImpl3_0(
 
     // Temporary locals for traversal
     RayDesc localRay = ray;
-    localRay.Origin += localRay.TMin * localRay.Direction;
+    localRay.Origin += ApplyTMinBias(localRay.TMin) * localRay.Direction;
     RayDesc topLevelRay = localRay;
 
     uint stackAddr = RtIp3LdsStackInit();
@@ -183,7 +185,7 @@ static IntersectionResult TraceRayImpl3_0(
 
     // Committed traversal state
     IntersectionState intersection;
-    intersection.t              = ray.TMax - ray.TMin;
+    intersection.t              = ray.TMax - ApplyTMinBias(ray.TMin);
     intersection.barycentrics.x = 0.0f;
     intersection.barycentrics.y = 0.0f;
     intersection.hitKind        = 0u;
@@ -283,7 +285,8 @@ static IntersectionResult TraceRayImpl3_0(
                                                         currBaseAddr,
                                                         instNodePtr,
                                                         nodePtr.y,
-                                                        rayFlags);
+                                                        rayFlags,
+                                                        ray.TMin);
 
                 if (status != HIT_STATUS_IGNORE)
                 {
@@ -321,7 +324,8 @@ static IntersectionResult TraceRayImpl3_0(
                                                         currBaseAddr,
                                                         instNodePtr,
                                                         nodePtr.x,
-                                                        rayFlags);
+                                                        rayFlags,
+                                                        ray.TMin);
 
                 if (status != HIT_STATUS_IGNORE)
                 {
@@ -448,7 +452,7 @@ static IntersectionResult TraceRayImpl3_0BVH8(
 
     // Temporary locals for traversal
     RayDesc localRay = ray;
-    localRay.Origin += localRay.TMin * localRay.Direction;
+    localRay.Origin += ApplyTMinBias(localRay.TMin) * localRay.Direction;
     RayDesc topLevelRay = localRay;
 
     uint stackAddr = RtIp3LdsStackInit();
@@ -462,7 +466,7 @@ static IntersectionResult TraceRayImpl3_0BVH8(
 
     // Committed traversal state
     IntersectionState intersection;
-    intersection.t = ray.TMax - ray.TMin;
+    intersection.t = ray.TMax - ApplyTMinBias(ray.TMin);
     intersection.barycentrics.x = 0.0f;
     intersection.barycentrics.y = 0.0f;
     intersection.hitKind = 0u;
@@ -544,7 +548,8 @@ static IntersectionResult TraceRayImpl3_0BVH8(
                                                   currBaseAddr,
                                                   instNodePtr,
                                                   tri0NodePtr,
-                                                  rayFlags);
+                                                  rayFlags,
+                                                  ray.TMin);
 
                 if (status != HIT_STATUS_IGNORE)
                 {
@@ -572,7 +577,8 @@ static IntersectionResult TraceRayImpl3_0BVH8(
                                                              currBaseAddr,
                                                              instNodePtr,
                                                              nodePtr,
-                                                             rayFlags);
+                                                             rayFlags,
+                                                             ray.TMin);
 
                     if (status2 != HIT_STATUS_IGNORE)
                     {
@@ -687,14 +693,14 @@ static IntersectionResult IntersectRayImpl3_0(
     in uint              rayId)         ///< Ray ID for profiling
 {
     IntersectionResult result = (IntersectionResult)0;
-    result.t           = ray.TMax - ray.TMin;
+    result.t           = ray.TMax - ApplyTMinBias(ray.TMin);
     result.nodeIndex   = blasNodePtr;
     result.instNodePtr = tlasNodePtr;
 
     if ((blasNodePtr != INVALID_NODE) && (tlasNodePtr != INVALID_NODE))
     {
         RayDesc localRay = ray;
-        localRay.Origin += localRay.TMin * localRay.Direction;
+        localRay.Origin += ApplyTMinBias(localRay.TMin) * localRay.Direction;
         RayDesc topLevelRay = localRay;
 
         // Initialise hardware node pointer. Note, we do not need to encode flags here since all flags have been

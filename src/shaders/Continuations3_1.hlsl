@@ -33,7 +33,7 @@ static void InitCommittedState(
     float tMin,
     float tMax)
 {
-    committed.rayTCurrent = tMax - tMin;
+    committed.rayTCurrent = tMax - ApplyTMinBias(tMin);
     committed.instNodePtr = INVALID_NODE;
     committed.primitiveIndex = INVALID_NODE;
     committed.PackInstanceContribution(0);
@@ -59,7 +59,7 @@ static _AmdTraversalState InitTraversalState3_1(
     _AmdTraversalState traversal = (_AmdTraversalState)0;
 
 #ifndef REMAT_INSTANCE_RAY
-    traversal.candidateRayOrigin    = ray.Origin + (ray.TMin * ray.Direction);
+    traversal.candidateRayOrigin    = ray.Origin + (ApplyTMinBias(ray.TMin) * ray.Direction);
     traversal.candidateRayDirection = ray.Direction;
 #endif
 
@@ -138,7 +138,7 @@ static void TraversalInternal3_1(
     candidateBarycentrics              = float2(0.0f, 0.0f);
 
     uint   nextNodePtr             = data.traversal.nextNodePtr;   // starting with rootNodePtr
-    float3 candidateRayOrigin      = data.hitObject.ray.origin  + (data.hitObject.ray.tMin * data.hitObject.ray.direction);
+    float3 candidateRayOrigin      = data.hitObject.ray.origin + (ApplyTMinBias(data.hitObject.ray.tMin) * data.hitObject.ray.direction);
     float3 candidateRayDirection   = data.hitObject.ray.direction;
     state                          = TRAVERSAL_STATE_COMMITTED_NOTHING;
 
@@ -272,7 +272,7 @@ static void TraversalInternal3_1(
                         // For procedural nodes, the HW returns tHit = 0, and the Intersection shader could report a hit at tHit = 0.
                         // Procedural hits with matching tHit must be processed, and thus we can't check (tHit < committed.rayTCurrent)
                         // for procedural hits.
-                        if ((tHit < committed.rayTCurrent) || isProcedural)
+                        if (EvaluateTriangleHit(data.hitObject.ray.tMin, tHit, committed.rayTCurrent) || isProcedural)
                         {
                             RayHistorySetCandidateTCurrent(data, tHit);
 
@@ -400,7 +400,7 @@ static void TraversalInternal3_1(
                         // For procedural nodes, the HW returns tHit = 0, and the Intersection shader could report a hit at tHit = 0.
                         // Procedural hits with matching tHit must be processed, and thus we can't check (tHit < committed.rayTCurrent)
                         // for procedural hits.
-                        if ((tHit < committed.rayTCurrent) || isProcedural)
+                        if (EvaluateTriangleHit(data.hitObject.ray.tMin, tHit, committed.rayTCurrent) || isProcedural)
                         {
                             RayHistorySetCandidateTCurrent(data, tHit);
 
@@ -530,7 +530,7 @@ static void TraversalInternal3_1(
                         isTri0 = false;
                     }
 
-                    if (tHit < committed.rayTCurrent)
+                    if (EvaluateTriangleHit(data.hitObject.ray.tMin, tHit, committed.rayTCurrent))
                     {
                         committed.instNodePtr = data.traversal.instNodePtr;
                         committed.primitiveIndex = result.PrimitiveIndex(isTri0);
@@ -617,7 +617,7 @@ static void TraversalInternal3_1(
                 // Intentionally recompute the original origin, instead of computing it once before the loop and reusing.
                 // This recomputation is quite cheap, only occurs on a BLAS to TLAS transition, and can save 3 VGPRs.
                 candidateRayDirection = data.hitObject.ray.direction;
-                candidateRayOrigin    = data.hitObject.ray.origin + (data.hitObject.ray.tMin * candidateRayDirection);
+                candidateRayOrigin    = data.hitObject.ray.origin + (ApplyTMinBias(data.hitObject.ray.tMin) * candidateRayDirection);
                 currBasePtr           = tlasBasePtr;
 
                 data.traversal.instNodePtr   = INVALID_NODE;

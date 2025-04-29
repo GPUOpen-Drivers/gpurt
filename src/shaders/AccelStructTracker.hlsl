@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2025 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -22,7 +22,6 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-
 #ifndef __cplusplus
 
 #define ACCEL_STRUCT_TRACKER_LIST_SIZE 16
@@ -38,7 +37,7 @@ struct AccelStructTracker
     uint64_t accelStructAddrs[ACCEL_STRUCT_TRACKER_LIST_SIZE];
 };
 
-globallycoherent RWStructuredBuffer<AccelStructTracker> AccelStructTrackerBuf : register(u1, SPACEID);
+globallycoherent RWStructuredBuffer<AccelStructTracker> AccelStructTrackerBuf : register(u1, DISPATCH_RAYS_CONSTANTS_SPACE_ID);
 
 //======================================================================================================================
 static bool SearchAccelStructTrackerBufList(

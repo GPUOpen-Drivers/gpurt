@@ -60,6 +60,7 @@ enum class BuildPhaseFlags : uint32_t
     BuildParallel                 = 1 << 13,
     BuildFastAgglomerativeLbvh    = 1 << 15,
     EncodeQuadPrimitives          = 1 << 16,
+    BuildHPLOC                    = 1 << 17,
     EncodePrimitives              = 1 << 18,
     BuildDumpEvents               = 1 << 19,
 #if GPURT_BUILD_RTIP3_1
@@ -99,6 +100,8 @@ static const char* BuildPhaseName(BuildPhaseFlags phase)
         return "BuildFastAgglomerativeLbvh";
     case GpuRt::BuildPhaseFlags::EncodeQuadPrimitives:
         return "EncodeQuadPrimitives";
+    case GpuRt::BuildPhaseFlags::BuildHPLOC:
+        return "BuildHPLOC";
     case GpuRt::BuildPhaseFlags::EncodePrimitives:
         return "EncodePrimitives";
     case GpuRt::BuildPhaseFlags::BuildDumpEvents:

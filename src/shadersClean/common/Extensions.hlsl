@@ -22,7 +22,6 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "Common.hlsli"
 #include "Math.hlsli"
 #include "Bits.hlsli"
 
@@ -55,8 +54,7 @@ __decl uint4 AmdExtD3DShaderIntrinsics_IntersectInternal(
     in uint   flags,
     in uint   expansion)
 {
-    INIT_VAR(uint4, dummy);
-
+    uint4 dummy = (uint4)0;
     return dummy;
 }
 

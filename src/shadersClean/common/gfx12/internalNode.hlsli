@@ -28,6 +28,8 @@
 #include "../ShaderDefs.hlsli"
 #include "../Common.hlsli"
 #include "childInfo.hlsli"
+#include "../Bits.hlsli"
+#include "../gfx10/BoxNode1_0.hlsli"
 
 static const uint ObbDisabled = 0x7f;
 

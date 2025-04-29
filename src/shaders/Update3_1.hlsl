@@ -55,11 +55,11 @@ T LoadInstanceDescBuffer(uint offset)
 
 //======================================================================================================================
 // Note, these headers must be included after all resource bindings have been defined. Also, there is a strict naming
-// requirement for resources and variables. See BuildCommon.hlsl for details.
+// requirement for resources and variables. See BuildCommon.hlsli for details.
 #include "IndirectArgBufferUtils.hlsl"
-#include "BuildCommon.hlsl"
+#include "../shadersClean/build/BuildCommon.hlsli"
 #include "EncodeCommon.hlsl"
-#include "EncodeTopLevelCommon.hlsl"
+#include "../shadersClean/build/EncodeTopLevelCommon.hlsli"
 #include "../shadersClean/common/LaneGroup.hlsli"
 
 //======================================================================================================================

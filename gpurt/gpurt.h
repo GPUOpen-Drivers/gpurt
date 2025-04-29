@@ -84,7 +84,7 @@ enum class StaticPipelineFlag : uint32
 {
     SkipTriangles                  = 0x100,        // Always skip triangle node intersections
     SkipProceduralPrims            = 0x200,        // Always skip procedural node intersections
-    Unused                         = (1u << 31),   // Available for use
+    UseUnbiasedOrigin              = (1u << 31),   // Avoid biasing the origin by TMin
     UseTreeRebraid                 = (1u << 30),   // Use Tree Rebraid for TraceRays
     EnableAccelStructTracking      = (1u << 29),   // Enable logging of TLAS addresses using AccelStructTracker
     EnableTraversalCounter         = (1u << 28),   // Enable Traversal counters
@@ -277,9 +277,10 @@ struct NodeMapping
 // Structure containing shader code in various intermediate forms.
 struct PipelineShaderCode
 {
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 55
     const void* pAmdilCode; // Code in AMD intermediate language form
     size_t      amdilSize;  // Size in bytes of AMDIL code
-
+#endif
     const void* pDxilCode;  // Code in DXIL form
     size_t      dxilSize;   // Size in bytes of DXIL code
 
@@ -354,6 +355,7 @@ enum class InternalRayTracingCsType : uint32
 #endif
     BuildFastAgglomerativeLbvh,
     EncodeQuadNodes,
+    BuildHPLOC,
 #if GPURT_BUILD_RTIP3_1
     BuildTrivialBvh,
     BuildSingleThreadGroup32,
@@ -366,6 +368,8 @@ enum class InternalRayTracingCsType : uint32
     Update3_1,
     RefitInstanceBounds,
 #endif
+    EncodeDGF,
+    PrepareShadowSbtForReplay,
     Count
 };
 
@@ -509,8 +513,10 @@ typedef uint32 GeometryFlags;
 // Type of geometry node
 enum class GeometryType : uint32
 {
-    Triangles = 0,      // Triangle geometry.  Geometry::triangles is valid.
-    Aabbs               // Procedural bounding box geometry.  Geometry::aabbs is valid.
+    Triangles              = 0, // Triangle geometry.  Geometry::triangles is valid.
+    Aabbs                  = 1, // Procedural bounding box geometry.  Geometry::aabbs is valid.
+    CompressedTriangles    = 2, // Compressed triangle geometry.  Geometry::compressedTriangles is valid.
+    CompressedTrianglesOmm = 3, // Compressed triangle geometry with OMM.  Geometry::compressedTriangles is valid.
 };
 
 // Index format for triangle geometry.
@@ -540,6 +546,11 @@ enum class VertexFormat : uint32
     R8G8_Unorm          // 8-bit fixed-point unsigned normalized R8G8 X,Y,0 format
 };
 
+enum class CompressedTriangleFormat : uint32
+{
+    Dgf1, // Dense Geometry Format version 1
+};
+
 // Geometry node triangle data
 struct GeometryTriangles
 {
@@ -561,6 +572,18 @@ struct GeometryAabbs
     gpusize         aabbByteStride; // Stride in bytes between consecutive bounding boxes
 };
 
+// Geometry node compressed triangle data
+struct GeometryCompressedTriangles
+{
+    gpusize                  compressedDataAddr;
+    gpusize                  compressedDataSize;
+    uint32                   numTriangles;
+    uint32                   numVertices;
+    uint32                   maxPrimitiveIndex;
+    uint32                   maxGeometryIndex;
+    CompressedTriangleFormat format;
+};
+
 // Bottom-level geometry node information (analogous to D3D12DDI_RAYTRACING_GEOMETRY_DESC).
 // This API-independent structure does not match D3D12 or Vulkan. The client must convert the API version to the
 // GPURT version through ClientConvertAccelStructBuildGeometry().
@@ -570,8 +593,10 @@ struct Geometry
     GeometryFlags flags;                // Geometry flags
     union
     {
-        GeometryTriangles triangles;    // Triangle geometry.  Valid if type is Triangles.
-        GeometryAabbs     aabbs;        // Procedural AABB geometry.  Valid if type is Aabbs.
+        GeometryTriangles           triangles;           // Triangle geometry.  Valid if type is Triangles.
+        GeometryAabbs               aabbs;               // Procedural AABB geometry.  Valid if type is Aabbs.
+        GeometryCompressedTriangles compressedTriangles; // Compressed triangle geometry.
+                                                         // Valid if type is CompressedTriangles.
     };
 };
 
@@ -600,14 +625,14 @@ enum class InputElementLayout : uint32
 enum class BvhBuildMode : uint32
 {
     Linear   = 0, // Linear BVH builder
-    Reserved = 1, // Formerly agglomerative clustering BVH builder
+    HPLOC    = 1, // Hierarchical PLOC
     PLOC     = 2, // Parallel locally-ordered clustering BVH builder
     Auto     = 4, // Used in override build to fall back to regular build options
     Count
 };
 
 static_assert(uint32(BvhBuildMode::Linear)   == 0, "Enums encoded in the acceleration structure must not change.");
-static_assert(uint32(BvhBuildMode::Reserved) == 1, "Enums encoded in the acceleration structure must not change.");
+static_assert(uint32(BvhBuildMode::HPLOC)    == 1, "Enums encoded in the acceleration structure must not change.");
 static_assert(uint32(BvhBuildMode::PLOC)     == 2, "Enums encoded in the acceleration structure must not change.");
 
 // BVH CPU builder modes
@@ -789,6 +814,7 @@ struct DeviceSettings
 #endif
 
     uint32                      plocRadius;                           // PLOC nearest neighbor search adius
+    uint32                      hplocRadius;                          // HPLOC nearest neighbor search radius
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 54
     uint32                      maxTopDownBuildInstances;             // Max instances allowed for top down build
 #endif
@@ -863,6 +889,7 @@ struct DeviceSettings
         uint32 disableRdfCompression : 1;                   // Disable compression in RDF chunks
         uint32 enableRebraid : 1;                           // Enable tree rebraid in TLAS
         uint32 cullIllegalInstances : 1;
+        uint32 useUnbiasedOrigin : 1;                       // Avoids offsetting by tMin in traversal
     };
 
     uint64                      accelerationStructureUUID;  // Acceleration Structure UUID
@@ -1741,6 +1768,16 @@ public:
     virtual bool ShouldUseGangedAceForBuild(const AccelStructBuildInputs& inputs) const = 0;
 
     virtual uint32 CalculateBvhPrimitiveCount(const AccelStructBuildInputs& inputs) const = 0;
+
+    // Prepares shadow shader binding table for replay (Vulkan capture replay feature)
+    //
+    // @param cmdBuffer            [in/out] Opaque handle to command buffer where commands will be written
+    // @param userData             [in] Addresses of input/output buffers
+    // @param totalSbtEntryCount   Total number of SBT entries
+    virtual void PrepareShadowSbtForReplay(
+        ClientCmdBufferHandle                    cmdBuffer,
+        const PrepareShadowSbtForReplayUserData& userData,
+        uint32                                   totalSbtEntryCount) = 0;
 
 protected:
 

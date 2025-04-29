@@ -286,6 +286,9 @@ private:
     GeometryType GetGeometryType(
         const AccelStructBuildInputs inputs);
 
+    bool IsTriangleBuild() const;
+    bool IsCompressedTriangleBuild() const;
+
     bool UpdateAllowed() const
     {
         return Util::TestAnyFlagSet(m_buildArgs.inputs.flags, AccelStructBuildFlagAllowUpdate);
@@ -363,6 +366,8 @@ private:
     void BuildPLOC(uint32 wavesPerSimd);
 
     void BuildFastAgglomerativeLbvh();
+
+    void BuildHPLOC();
 
     void UpdateQBVH();
 
@@ -532,6 +537,10 @@ private:
 
     BufferViewInfo SetupAabbBuffer(
         const GeometryAabbs& desc,
+        uint32* pStride) const;
+
+    BufferViewInfo SetupCompressedGeometryBuffer(
+        const GeometryCompressedTriangles& desc,
         uint32* pStride) const;
 
     uint32 GetNumInternalNodeCount() const;

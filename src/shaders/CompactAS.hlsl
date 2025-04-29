@@ -28,6 +28,7 @@
                 "UAV(u1, visibility=SHADER_VISIBILITY_ALL),"\
                 "CBV(b255),"\
 
+#define DISABLE_BUILD_ROOT_SIGNATURE
 //=====================================================================================================================
 // 32 bit constants
 struct InputArgs
@@ -49,7 +50,7 @@ struct InputArgs
 [[vk::binding(4, 0)]] RWByteAddressBuffer                     EmitBuffer    : register(u4);
 
 #include "../shadersClean/common/Common.hlsli"
-#include "BuildCommon.hlsl"
+#include "../shadersClean/build/BuildCommon.hlsli"
 #include "CompactCommon.hlsl"
 #include "CompactAS1_1.hlsl"
 

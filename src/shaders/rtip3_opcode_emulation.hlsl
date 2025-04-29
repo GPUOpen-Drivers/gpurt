@@ -28,7 +28,7 @@
 
 #if GPURT_BUILD_RTIP3_1
 #include "rtip3_1.hlsli"
-#include "ObbCommon.hlsl"
+#include "../shadersClean/common/ObbCommon.hlsli"
 #endif
 
 //=====================================================================================================================

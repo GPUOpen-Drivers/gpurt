@@ -22,14 +22,13 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#ifndef _HPB64_HLSL
-#define _HPB64_HLSL
+#include "HighPrecisionBoxNode.hlsli"
 
-#include "../shadersClean/common/Common.hlsli"
+#include "../Common.hlsli"
+#include "../ObbCommon.hlsli"
+#include "../Bits.hlsli"
+#include "../gfx10/BoxNode1_0.hlsli"
 
-#define HPB64_BOX_NODE_FLAGS_BIT_OFFSET 41
-#define HPB64_BOX_NODE_FLAGS_BIT_COUNT  15
-#define INVALID_TYPE_OF_HP              NODE_TYPE_BOX_FLOAT32x2
 //=====================================================================================================================
 static uint GetHighPrecisionBoxChildFlagsBitMask(in uint childIdx)
 {
@@ -133,7 +132,7 @@ static HighPrecisionBoxNode EncodeHighPrecisionBoxNode(
     // Encode 29-bits of child base pointer. Note, child node pointers are expected to be contiguous in memory
     //
     // [00:28] childBasePtr, [29:31] childType0
-    result.dword[0] = (node.child0 >> 3) | (childPtr.x << 29);
+    result.dwords[0] = (node.child0 >> 3) | (childPtr.x << 29);
 
     // Exclude children with inverted bounding boxes (degenerate triangles) while calculating max exponent
     node.child0 = (node.bbox0_min.x > node.bbox0_max.x) ? INVALID_NODE : node.child0;
@@ -239,38 +238,38 @@ static HighPrecisionBoxNode EncodeHighPrecisionBoxNode(
     // [32:34] childType1, [35:37] childType2, [38:40] childType3
     // [41:55] boxFlags
     // [56:63] commonExp.x
-    result.dword[1] = (childPtr.y) | (childPtr.z << 3) | (childPtr.w << 6) | (packedFlags << 9) | (commonExp.x << 24);
+    result.dwords[1] = (childPtr.y) | (childPtr.z << 3) | (childPtr.w << 6) | (packedFlags << 9) | (commonExp.x << 24);
 
     // [64:71] commonExp.y
     // [72:79] commonExp.z
     // b0[00:15]
-    result.dword[2] = (commonExp.y) | (commonExp.z << 8) | ((encodedBlocks[0] & bits(16)) << 16);
+    result.dwords[2] = (commonExp.y) | (commonExp.z << 8) | ((encodedBlocks[0] & bits(16)) << 16);
     // b0[16:17],  b1[00:17], b2[00:11]
-    result.dword[3] = (encodedBlocks[0] >> 16)  | (encodedBlocks[1] << 2)   | (encodedBlocks[2] << 20);
+    result.dwords[3] = (encodedBlocks[0] >> 16)  | (encodedBlocks[1] << 2)   | (encodedBlocks[2] << 20);
     // b2[12:17],  b3[00:17], b4[00:07]
-    result.dword[4] = (encodedBlocks[2] >> 12)  | (encodedBlocks[3] << 6)   | (encodedBlocks[4] << 24);
+    result.dwords[4] = (encodedBlocks[2] >> 12)  | (encodedBlocks[3] << 6)   | (encodedBlocks[4] << 24);
     // b4[08:17],  b5[00:17], b6[00:03]
-    result.dword[5] = (encodedBlocks[4] >> 8)   | (encodedBlocks[5] << 10)  | (encodedBlocks[6] << 28);
+    result.dwords[5] = (encodedBlocks[4] >> 8)   | (encodedBlocks[5] << 10)  | (encodedBlocks[6] << 28);
     // b6[04:17],  b7[00:17]
-    result.dword[6] = (encodedBlocks[6] >> 4)   | (encodedBlocks[7] << 14);
+    result.dwords[6] = (encodedBlocks[6] >> 4)   | (encodedBlocks[7] << 14);
     // b8[04:17],  b9[00:13]
-    result.dword[7] = (encodedBlocks[8] >> 0)   | (encodedBlocks[9] << 18);
+    result.dwords[7] = (encodedBlocks[8] >> 0)   | (encodedBlocks[9] << 18);
     // b9[14:17],  b10[00:17], b11[00,09]
-    result.dword[8] = (encodedBlocks[9] >> 14)  | (encodedBlocks[10] << 4)  | (encodedBlocks[11] << 22);
+    result.dwords[8] = (encodedBlocks[9] >> 14)  | (encodedBlocks[10] << 4)  | (encodedBlocks[11] << 22);
     // b11[10:17], b12[00:17], b13[00:05]
-    result.dword[9] = (encodedBlocks[11] >> 10) | (encodedBlocks[12] << 8)  | (encodedBlocks[13] << 26);
+    result.dwords[9] = (encodedBlocks[11] >> 10) | (encodedBlocks[12] << 8)  | (encodedBlocks[13] << 26);
     // b13[06:17], b14[00:17], b15[00:01]
-    result.dword[10] = (encodedBlocks[13] >> 6)  | (encodedBlocks[14] << 12) | (encodedBlocks[15] << 30);
+    result.dwords[10] = (encodedBlocks[13] >> 6)  | (encodedBlocks[14] << 12) | (encodedBlocks[15] << 30);
     // b15[02:17], b16[00:15]
-    result.dword[11] = (encodedBlocks[15] >> 2)  | (encodedBlocks[16] << 16);
+    result.dwords[11] = (encodedBlocks[15] >> 2)  | (encodedBlocks[16] << 16);
     // b16[16:17], b17[00:17], b18[00:11]
-    result.dword[12] = (encodedBlocks[16] >> 16) | (encodedBlocks[17] << 2)  | (encodedBlocks[18] << 20);
+    result.dwords[12] = (encodedBlocks[16] >> 16) | (encodedBlocks[17] << 2)  | (encodedBlocks[18] << 20);
     // b18[12:17], b19[00:17], b20[00:07]
-    result.dword[13] = (encodedBlocks[18] >> 12) | (encodedBlocks[19] << 6)  | (encodedBlocks[20] << 24);
+    result.dwords[13] = (encodedBlocks[18] >> 12) | (encodedBlocks[19] << 6)  | (encodedBlocks[20] << 24);
     // b20[08:17], b21[00:17], b22[00:03]
-    result.dword[14] = (encodedBlocks[20] >> 8)  | (encodedBlocks[21] << 10) | (encodedBlocks[22] << 28);
+    result.dwords[14] = (encodedBlocks[20] >> 8)  | (encodedBlocks[21] << 10) | (encodedBlocks[22] << 28);
     // b22[04:17], b23[00:17]
-    result.dword[15] = (encodedBlocks[22] >> 4)  | (encodedBlocks[23] << 14);
+    result.dwords[15] = (encodedBlocks[22] >> 4)  | (encodedBlocks[23] << 14);
 
     return result;
 }
@@ -348,18 +347,18 @@ static float DecodeBlock(
 static Float32BoxNode DecodeHighPrecisionBoxNode(
     in HighPrecisionBoxNode node)
 {
-    uint childBase  = (node.dword[0] & bits(29));
-    uint childType0 = (node.dword[0] >> 29);
-    uint childType1 = (node.dword[1] >> 0) & bits(3);
-    uint childType2 = (node.dword[1] >> 3) & bits(3);
-    uint childType3 = (node.dword[1] >> 6) & bits(3);
+    uint childBase  = (node.dwords[0] & bits(29));
+    uint childType0 = (node.dwords[0] >> 29);
+    uint childType1 = (node.dwords[1] >> 0) & bits(3);
+    uint childType2 = (node.dwords[1] >> 3) & bits(3);
+    uint childType3 = (node.dwords[1] >> 6) & bits(3);
 
-    uint flags = (node.dword[1] >> 9) & bits(15);
+    uint flags = (node.dwords[1] >> 9) & bits(15);
 
     uint3 commonExp;
-    commonExp.x = (node.dword[1] >> 24);
-    commonExp.y = (node.dword[2] >> 0) & bits(8);
-    commonExp.z = (node.dword[2] >> 8) & bits(8);
+    commonExp.x = (node.dwords[1] >> 24);
+    commonExp.y = (node.dwords[2] >> 0) & bits(8);
+    commonExp.z = (node.dwords[2] >> 8) & bits(8);
 
     Float32BoxNode box32 = (Float32BoxNode)0;
     // Decode child node pointers. Note, only instance node is 128 bytes. All other nodes are 64-bytes
@@ -379,58 +378,58 @@ static Float32BoxNode DecodeHighPrecisionBoxNode(
     box32.flags |= ((flags >> 8) & bits(4)) << 16;
     box32.flags |= ((flags >> 12) & bits(3)) << 24;
 
-    uint bbox0_min_x_sign_mantissa = (node.dword[2] >> 16) | ((node.dword[3] & 0x3) << 16);
-    uint bbox0_min_y_sign_mantissa = (node.dword[3] >> 2) & 0x3FFFF;
-    uint bbox0_min_z_sign_mantissa = (node.dword[3] >> 20) | ((node.dword[4] & 0x3F) << 12);
+    uint bbox0_min_x_sign_mantissa = (node.dwords[2] >> 16) | ((node.dwords[3] & 0x3) << 16);
+    uint bbox0_min_y_sign_mantissa = (node.dwords[3] >> 2) & 0x3FFFF;
+    uint bbox0_min_z_sign_mantissa = (node.dwords[3] >> 20) | ((node.dwords[4] & 0x3F) << 12);
     box32.bbox0_min.x = DecodeBlock(bbox0_min_x_sign_mantissa, commonExp.x, false);
     box32.bbox0_min.y = DecodeBlock(bbox0_min_y_sign_mantissa, commonExp.y, false);
     box32.bbox0_min.z = DecodeBlock(bbox0_min_z_sign_mantissa, commonExp.z, false);
 
-    uint bbox0_max_x_sign_mantissa = (node.dword[4] >> 6) & 0x3FFFF;
-    uint bbox0_max_y_sign_mantissa = (node.dword[4] >> 24) | ((node.dword[5] & 0x3FF) << 8);
-    uint bbox0_max_z_sign_mantissa = (node.dword[5] >> 10) & 0x3FFFF;
+    uint bbox0_max_x_sign_mantissa = (node.dwords[4] >> 6) & 0x3FFFF;
+    uint bbox0_max_y_sign_mantissa = (node.dwords[4] >> 24) | ((node.dwords[5] & 0x3FF) << 8);
+    uint bbox0_max_z_sign_mantissa = (node.dwords[5] >> 10) & 0x3FFFF;
     box32.bbox0_max.x = DecodeBlock(bbox0_max_x_sign_mantissa, commonExp.x, true);
     box32.bbox0_max.y = DecodeBlock(bbox0_max_y_sign_mantissa, commonExp.y, true);
     box32.bbox0_max.z = DecodeBlock(bbox0_max_z_sign_mantissa, commonExp.z, true);
 
-    uint bbox1_min_x_sign_mantissa = (node.dword[5] >> 28) | ((node.dword[6] & 0x3FFF) << 4);
-    uint bbox1_min_y_sign_mantissa = (node.dword[6] >> 14);
-    uint bbox1_min_z_sign_mantissa = (node.dword[7] & 0x3FFFF);
+    uint bbox1_min_x_sign_mantissa = (node.dwords[5] >> 28) | ((node.dwords[6] & 0x3FFF) << 4);
+    uint bbox1_min_y_sign_mantissa = (node.dwords[6] >> 14);
+    uint bbox1_min_z_sign_mantissa = (node.dwords[7] & 0x3FFFF);
     box32.bbox1_min.x = DecodeBlock(bbox1_min_x_sign_mantissa, commonExp.x, false);
     box32.bbox1_min.y = DecodeBlock(bbox1_min_y_sign_mantissa, commonExp.y, false);
     box32.bbox1_min.z = DecodeBlock(bbox1_min_z_sign_mantissa, commonExp.z, false);
 
-    uint bbox1_max_x_sign_mantissa = (node.dword[7] >> 18) | ((node.dword[8] & 0xF) << 14);
-    uint bbox1_max_y_sign_mantissa = (node.dword[8] >> 4) & 0x3FFFF;
-    uint bbox1_max_z_sign_mantissa = (node.dword[8] >> 22) | ((node.dword[9] & 0xFF) << 10);
+    uint bbox1_max_x_sign_mantissa = (node.dwords[7] >> 18) | ((node.dwords[8] & 0xF) << 14);
+    uint bbox1_max_y_sign_mantissa = (node.dwords[8] >> 4) & 0x3FFFF;
+    uint bbox1_max_z_sign_mantissa = (node.dwords[8] >> 22) | ((node.dwords[9] & 0xFF) << 10);
     box32.bbox1_max.x = DecodeBlock(bbox1_max_x_sign_mantissa, commonExp.x, true);
     box32.bbox1_max.y = DecodeBlock(bbox1_max_y_sign_mantissa, commonExp.y, true);
     box32.bbox1_max.z = DecodeBlock(bbox1_max_z_sign_mantissa, commonExp.z, true);
 
-    uint bbox2_min_x_sign_mantissa = (node.dword[9] >> 8) & 0x3FFFF;
-    uint bbox2_min_y_sign_mantissa = (node.dword[9] >> 26) | ((node.dword[10] & 0xFFF) << 6);
-    uint bbox2_min_z_sign_mantissa = (node.dword[10] >> 12) & 0x3FFFF;
+    uint bbox2_min_x_sign_mantissa = (node.dwords[9] >> 8) & 0x3FFFF;
+    uint bbox2_min_y_sign_mantissa = (node.dwords[9] >> 26) | ((node.dwords[10] & 0xFFF) << 6);
+    uint bbox2_min_z_sign_mantissa = (node.dwords[10] >> 12) & 0x3FFFF;
     box32.bbox2_min.x = DecodeBlock(bbox2_min_x_sign_mantissa, commonExp.x, false);
     box32.bbox2_min.y = DecodeBlock(bbox2_min_y_sign_mantissa, commonExp.y, false);
     box32.bbox2_min.z = DecodeBlock(bbox2_min_z_sign_mantissa, commonExp.z, false);
 
-    uint bbox2_max_x_sign_mantissa = (node.dword[10] >> 30) | ((node.dword[11] & 0xFFFF) << 2);
-    uint bbox2_max_y_sign_mantissa = (node.dword[11] >> 16) | ((node.dword[12] & 0x3) << 16);
-    uint bbox2_max_z_sign_mantissa = (node.dword[12] >> 2) & 0x3FFFF;
+    uint bbox2_max_x_sign_mantissa = (node.dwords[10] >> 30) | ((node.dwords[11] & 0xFFFF) << 2);
+    uint bbox2_max_y_sign_mantissa = (node.dwords[11] >> 16) | ((node.dwords[12] & 0x3) << 16);
+    uint bbox2_max_z_sign_mantissa = (node.dwords[12] >> 2) & 0x3FFFF;
     box32.bbox2_max.x = DecodeBlock(bbox2_max_x_sign_mantissa, commonExp.x, true);
     box32.bbox2_max.y = DecodeBlock(bbox2_max_y_sign_mantissa, commonExp.y, true);
     box32.bbox2_max.z = DecodeBlock(bbox2_max_z_sign_mantissa, commonExp.z, true);
 
-    uint bbox3_min_x_sign_mantissa = (node.dword[12] >> 20) | ((node.dword[13] & 0x3F) << 12);
-    uint bbox3_min_y_sign_mantissa = (node.dword[13] >> 6) & 0x3FFFF;
-    uint bbox3_min_z_sign_mantissa = (node.dword[13] >> 24) | ((node.dword[14] & 0x3FF) << 8);
+    uint bbox3_min_x_sign_mantissa = (node.dwords[12] >> 20) | ((node.dwords[13] & 0x3F) << 12);
+    uint bbox3_min_y_sign_mantissa = (node.dwords[13] >> 6) & 0x3FFFF;
+    uint bbox3_min_z_sign_mantissa = (node.dwords[13] >> 24) | ((node.dwords[14] & 0x3FF) << 8);
     box32.bbox3_min.x = DecodeBlock(bbox3_min_x_sign_mantissa, commonExp.x, false);
     box32.bbox3_min.y = DecodeBlock(bbox3_min_y_sign_mantissa, commonExp.y, false);
     box32.bbox3_min.z = DecodeBlock(bbox3_min_z_sign_mantissa, commonExp.z, false);
 
-    uint bbox3_max_x_sign_mantissa = (node.dword[14] >> 10) & 0x3FFFF;
-    uint bbox3_max_y_sign_mantissa = (node.dword[14] >> 28) | ((node.dword[15] & 0x3FFF) << 4);
-    uint bbox3_max_z_sign_mantissa = (node.dword[15] >> 14);
+    uint bbox3_max_x_sign_mantissa = (node.dwords[14] >> 10) & 0x3FFFF;
+    uint bbox3_max_y_sign_mantissa = (node.dwords[14] >> 28) | ((node.dwords[15] & 0x3FFF) << 4);
+    uint bbox3_max_z_sign_mantissa = (node.dwords[15] >> 14);
     box32.bbox3_max.x = DecodeBlock(bbox3_max_x_sign_mantissa, commonExp.x, true);
     box32.bbox3_max.y = DecodeBlock(bbox3_max_y_sign_mantissa, commonExp.y, true);
     box32.bbox3_max.z = DecodeBlock(bbox3_max_z_sign_mantissa, commonExp.z, true);
@@ -540,75 +539,6 @@ static int GetChildPlaneMaxBitOffset(
 }
 
 #if GPURT_BVH_BUILD_SHADER
-//=====================================================================================================================
-static void UpdateHighPrecisionBoxNodeFlags(
-    in uint             nodeOffset,
-    in uint             childIdx,
-    in uint             boxNodeFlags)
-{
-    const uint bitMask = GetHighPrecisionBoxChildFlagsBitMask(childIdx);
-    const uint fieldMask = bitMask << (childIdx * HPB64_BOX_NODE_FLAGS_BIT_STRIDE);
-    const uint fieldData = (boxNodeFlags & bitMask) << (childIdx * HPB64_BOX_NODE_FLAGS_BIT_STRIDE);
-
-    // Compute DWORD aligned byte offset and bit offset within compressed node
-    const uint boxNodeFlagsOffset = (HPB64_BOX_NODE_FLAGS_BIT_OFFSET / 32) * sizeof(uint32_t);
-    const uint packedFlagsBitOffset = (HPB64_BOX_NODE_FLAGS_BIT_OFFSET % 32);
-
-    const uint boxNodeFlagsClearBits = ~(fieldMask << packedFlagsBitOffset);
-    const uint boxNodeFlagsSetBits = (fieldData << packedFlagsBitOffset);
-
-    DstMetadata.InterlockedAnd(nodeOffset + boxNodeFlagsOffset, boxNodeFlagsClearBits);
-    DstMetadata.InterlockedOr(nodeOffset + boxNodeFlagsOffset, boxNodeFlagsSetBits);
-}
-
-//=====================================================================================================================
-static uint4 DecodeHighPrecisionBoxNodeChildPointers(
-    uint                nodeOffset)
-{
-    uint childBasePtr = SrcBuffer.Load(nodeOffset);
-    const uint childTypeAndBoxFlags = LoadBits(SrcBuffer, nodeOffset, 32, 24);
-
-    // Decode child node pointer types
-    uint4 type;
-    type[0] = (childBasePtr >> 29);
-    type[1] = (childTypeAndBoxFlags) & bits(3);
-    type[2] = (childTypeAndBoxFlags >> 3) & bits(3);
-    type[3] = (childTypeAndBoxFlags >> 6) & bits(3);
-
-    // Decode child base pointer
-    childBasePtr = childBasePtr & bits(29);
-
-    // Decode 64-byte aligned child offsets. Note, only instance node is 128 bytes. All other nodes are 64-bytes
-
-    uint4 offset;
-    offset[0] = childBasePtr;
-    offset[1] = offset[0] +
-        (((type[0] == NODE_TYPE_USER_NODE_INSTANCE) || (type[0] == NODE_TYPE_BOX_HP64x2)) ? 2 : 1);
-    offset[2] = offset[1] +
-        (((type[1] == NODE_TYPE_USER_NODE_INSTANCE) || (type[1] == NODE_TYPE_BOX_HP64x2)) ? 2 : 1);
-    offset[3] = offset[2] +
-        (((type[2] == NODE_TYPE_USER_NODE_INSTANCE) || (type[2] == NODE_TYPE_BOX_HP64x2)) ? 2 : 1);
-
-    // Convert to absolute offset
-    offset[0] = offset[0] << 6;
-    offset[1] = offset[1] << 6;
-    offset[2] = offset[2] << 6;
-    offset[3] = offset[3] << 6;
-
-    // Exclude children with inverted bounding boxes while calculating max exponent
-    uint4 childPointers;
-
-    childPointers.x =
-        (type[0] == INVALID_TYPE_OF_HP) ? INVALID_NODE : PackNodePointer(type[0], offset[0]);
-    childPointers.y =
-        (type[1] == INVALID_TYPE_OF_HP) ? INVALID_NODE : PackNodePointer(type[1], offset[1]);
-    childPointers.z =
-        (type[2] == INVALID_TYPE_OF_HP) ? INVALID_NODE : PackNodePointer(type[2], offset[2]);
-    childPointers.w =
-        (type[3] == INVALID_TYPE_OF_HP) ? INVALID_NODE : PackNodePointer(type[3], offset[3]);
-
-    return childPointers;
-}
 
 //=====================================================================================================================
 // Count valid children in high precision box node
@@ -675,4 +605,3 @@ void Decode(
 }
 #endif
 
-#endif

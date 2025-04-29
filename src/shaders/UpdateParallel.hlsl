@@ -32,6 +32,8 @@
                 "CBV(b255),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
 
+#define DISABLE_BUILD_ROOT_SIGNATURE
+
 #define TASK_COUNTER_BUFFER   ScratchBuffer
 #define TASK_COUNTER_OFFSET   UPDATE_SCRATCH_TASK_COUNT_OFFSET
 #define NUM_TASKS_DONE_OFFSET UPDATE_SCRATCH_TASKS_DONE_OFFSET
@@ -69,7 +71,7 @@ struct RootConstants
 
 //=====================================================================================================================
 // Note, these headers must be included after all resource bindings have been defined. Also, there is a strict naming
-// requirement for resources and variables. See BuildCommon.hlsl for details.
+// requirement for resources and variables. See BuildCommon.hlsli for details.
 #include "IntersectCommon.hlsl"
 #include "UpdateCommon.hlsl"
 #include "UpdateQBVHImpl.hlsl"

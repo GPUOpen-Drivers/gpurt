@@ -25,7 +25,7 @@
 #ifndef _ENCODE_HW_BVH_COMMON_HLSL
 #define _ENCODE_HW_BVH_COMMON_HLSL
 
-#include "BuildCommonScratch.hlsl"
+#include "../shadersClean/build/BuildCommonScratch.hlsli"
 #include "CompactCommon.hlsl"
 
 //=====================================================================================================================

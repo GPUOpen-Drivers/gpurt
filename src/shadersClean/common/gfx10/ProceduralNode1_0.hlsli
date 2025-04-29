@@ -26,6 +26,7 @@
 #define PROCEDURAL_NODE_1_1_HLSLI
 
 #include "../../../shared/assert.h"
+#include "../ShaderDefs.hlsli"
 
 //=====================================================================================================================
 #define USER_NODE_PROCEDURAL_MIN_OFFSET 0
@@ -72,6 +73,17 @@ struct ProceduralNode3_0
 };
 
 GPURT_STATIC_ASSERT(USER_NODE_PROCEDURAL_SIZE == sizeof(ProceduralNode3_0), "ProceduralNode structure mismatch");
+#endif
+
+//=====================================================================================================================
+static ProceduralNode FetchProceduralNode(in GpuVirtualAddress bvhAddress, in uint nodePointer);
+
+//=====================================================================================================================
+// Get leaf AABB node size in bytes
+static uint GetBvhNodeSizeProcedural();
+
+#ifndef LIBRARY_COMPILATION
+#include "ProceduralNode1_0.hlsl"
 #endif
 
 #endif

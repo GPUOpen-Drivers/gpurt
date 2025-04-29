@@ -55,6 +55,13 @@ static uint64_t RoundUpQuotient(
 }
 
 //=====================================================================================================================
+static uint CeilLog2(uint value)
+{
+    return firstbithigh(value) == firstbitlow(value) ?
+           firstbithigh(value) : firstbithigh(value) + 1;
+}
+
+//=====================================================================================================================
 //https://github.com/Microsoft/DirectX-Graphics-Samples/blob/master/Libraries/D3D12RaytracingFallback/src/RayTracingHelper.hlsli
 // The MIT License (MIT)
 //
@@ -156,6 +163,16 @@ static uint32_t ScanReverse(uint32_t value)
 }
 
 //=====================================================================================================================
+static uint32_t ScanReverse64(uint64_t value)
+{
+    // This function is different than "clz"
+    // if the input value is 0, this function needs to return 64 instaed.
+    uint32_t ret = (value > 0) ? (63u - firstbithigh(value)) : 64u;
+
+    return ret;
+}
+
+//=====================================================================================================================
 static uint32_t CommonTrailingZeroBits(uint32_t unions)
 {
     uint32_t scanSuffix = ScanForward(unions);
@@ -184,6 +201,12 @@ static uint3 CommonPrefixBits(uint3 diffs)
 static uint32_t LeadingZeroBits(uint32_t u)
 {
     return ScanReverse(u);
+}
+
+//=====================================================================================================================
+static uint32_t LeadingZeroBits64(uint64_t u)
+{
+    return ScanReverse64(u);
 }
 
 //=====================================================================================================================
@@ -311,14 +334,6 @@ static uint3 ComputeQuantizedMin(
     const uint3 quantMin = clamp(fquantMin, float3(0., 0., 0.), float3(maxFloat, maxFloat, maxFloat));
     return quantMin;
 }
-
-//=====================================================================================================================
-// Decode a quantized integer into float
-static float Dequantize(
-    float origin,
-    uint  exponent,
-    uint  plane,
-    uint  numQuantBits);
 
 #endif
 

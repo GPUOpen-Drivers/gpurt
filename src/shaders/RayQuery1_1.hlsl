@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2018-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -165,12 +165,12 @@ static void TraceRayInlineImpl1_1(
     rayQuery.committedStatus       = COMMITTED_NOTHING;
 
     rayQuery.rayTMin               = rayDesc.TMin;
-    rayQuery.committed.rayTCurrent = rayDesc.TMax - rayDesc.TMin;
+    rayQuery.committed.rayTCurrent = rayDesc.TMax - ApplyTMinBias(rayDesc.TMin);
     rayQuery.candidate.rayTCurrent = rayQuery.committed.rayTCurrent;
 
-    rayQuery.rayDesc.TMax          = rayDesc.TMax - rayDesc.TMin;
-    rayQuery.rayDesc.TMin          = 0.0f;
-    rayQuery.rayDesc.Origin        = mad(rayDesc.Direction, rayDesc.TMin, rayDesc.Origin);
+    rayQuery.rayDesc.TMax          = rayDesc.TMax - ApplyTMinBias(rayDesc.TMin);
+    rayQuery.rayDesc.TMin          = rayDesc.TMin - ApplyTMinBias(rayDesc.TMin);
+    rayQuery.rayDesc.Origin        = rayDesc.Origin + (ApplyTMinBias(rayDesc.TMin) * rayDesc.Direction);
     rayQuery.rayDesc.Direction     = rayDesc.Direction;
 
     rayQuery.candidate.origin      = rayQuery.rayDesc.Origin;
@@ -414,7 +414,7 @@ static bool RayQueryProceedImpl1_1(
             const float t_denom = asfloat(intersectionResult.y);
             const float candidateT = (t_num / t_denom);
 
-            if (candidateT < rayQuery.committed.rayTCurrent)
+            if (EvaluateTriangleHit(rayQuery.rayDesc.TMin, candidateT, rayQuery.committed.rayTCurrent))
             {
                 uint status = HIT_STATUS_ACCEPT;
 

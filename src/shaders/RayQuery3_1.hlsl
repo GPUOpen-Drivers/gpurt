@@ -74,12 +74,12 @@ static void TraceRayInlineImpl3_1(
     rayQuery.committedStatus       = COMMITTED_NOTHING;
 
     rayQuery.rayTMin               = rayDesc.TMin;
-    rayQuery.committed.rayTCurrent = rayDesc.TMax - rayDesc.TMin;
+    rayQuery.committed.rayTCurrent = rayDesc.TMax - ApplyTMinBias(rayDesc.TMin);
     rayQuery.candidate.rayTCurrent = rayQuery.committed.rayTCurrent;
 
-    rayQuery.rayDesc.TMax          = rayDesc.TMax - rayDesc.TMin;
-    rayQuery.rayDesc.TMin          = 0.0f;
-    rayQuery.rayDesc.Origin        = mad(rayDesc.Direction, rayDesc.TMin, rayDesc.Origin);
+    rayQuery.rayDesc.TMax          = rayDesc.TMax - ApplyTMinBias(rayDesc.TMin);
+    rayQuery.rayDesc.TMin          = rayDesc.TMin - ApplyTMinBias(rayDesc.TMin);
+    rayQuery.rayDesc.Origin        = rayDesc.Origin + (ApplyTMinBias(rayDesc.TMin) * rayDesc.Direction);
     rayQuery.rayDesc.Direction     = rayDesc.Direction;
 
     rayQuery.candidate.origin      = rayQuery.rayDesc.Origin;
@@ -156,7 +156,7 @@ static uint ProcessPrimitiveNode3_1(
 
     const bool isTriangle = (haveProceduralNodes == false) || (result.IsProcedural(tri0) == false);
 
-    if ((tHit < rayQuery.committed.rayTCurrent) || (isTriangle == false))
+    if (EvaluateTriangleHit(rayQuery.rayDesc.TMin, tHit, rayQuery.committed.rayTCurrent) || (isTriangle == false))
     {
         rayQuery.candidate.currNodePtr          = nodePointer;
         rayQuery.candidate.instanceContribution = rayQuery.instanceHitContributionAndFlags; // No flags in 3.1 path

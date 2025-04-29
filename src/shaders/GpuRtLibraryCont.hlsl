@@ -29,8 +29,17 @@
 #include "../../gpurt/gpurtCounter.h"
 #endif
 
+#include "../shadersClean/traversal/TraversalCounter.hlsli"
+
 #include "../shadersClean/common/Math.hlsli"
 #include "../shadersClean/common/InstanceDesc.hlsli"
+
+#include "../shadersClean/traversal/DispatchRaysConstants.hlsli"
+#include "../shadersClean/traversal/RayPipelineFlags.hlsli"
+#include "../shadersClean/traversal/RayState.hlsli"
+#include "../shadersClean/traversal/RtIp.hlsli"
+#include "../shadersClean/traversal/Traits.hlsli"
+#include "../shadersClean/traversal/Vpc.hlsli"
 
 // Do not use ~0 as an invalid stack pointer, to leave it free to use as a sentinel value
 #define CPS_STACK_PTR_STACKLESS_DEAD_LANE (~uint32_t(1))
@@ -41,111 +50,9 @@
 
 #define DEAD_SHADER_ADDR (~uint32_t(0))
 
-// The total w * h * d of the dispatch must be <= 2^30.
-// For DX, this is explicitly stated in the documentation of ID3D12GraphicsCommandList4::DispatchRays.
-// For Vulkan, it is set in VkPhysicalDeviceRayTracingPipelinePropertiesKHR, which itself is set
-// to RayTraceRayGenShaderThreads = 0x40000000, defined in gpurt.h.
-// We bit-pack the dispatch id into a 32 bit integer. It can be shown that all 32-bit integers with one or
-// less not-set bits do not yield a valid dispatch id (i.e. they imply a dispatch size > 2^30).
-// So ~0 and ~0 - (1 << n) are all free to use.
-//
-// Note: when adding/changing sentinel values, make sure to update _AmdDispatchSystemData::IsDead.
-#define DISPATCHID_DEAD_STACKFUL  0xffffffff
-#define DISPATCHID_DEAD_STACKLESS 0xfffffffe
-
-static bool RtIpIsAtLeast(RayTracingIpLevel level)
-{
-    return ((uint32_t)GetRtIpLevel()) >= ((uint32_t)level);
-}
-
 #ifndef __cplusplus
 #include "../shadersClean/traversal/StackCommon.hlsli"
 #endif
-
-#define REMAT_INSTANCE_RAY 1
-
-//=====================================================================================================================
-// Alternate encoding of state bits (TODO: See impact on generated ISA)
-//
-// 0: procedural
-// 1: opaque
-// 2: committed
-// 3: no-duplicate anyhit
-//
-// 0: non_opaque_triangle
-// 1: non_opaque_procedural
-// 2: opaque_triangle
-// 3: opaque_procedural
-// 4: committed_non_opaque_triangle
-// 5: committed_non_opaque_procedural
-// 6: committed_opaque_triangle
-// 7: committed_opaque_procedural
-//
-//=====================================================================================================================
-// CANDIDATE_STATUS = (TRAVERSAL_STATE - 1)
-#define TRAVERSAL_STATE_CANDIDATE_NON_OPAQUE_TRIANGLE 0
-#define TRAVERSAL_STATE_CANDIDATE_PROCEDURAL_PRIMITIVE 1
-#define TRAVERSAL_STATE_CANDIDATE_NON_OPAQUE_PROCEDURAL_PRIMITIVE 2
-#define TRAVERSAL_STATE_CANDIDATE_NO_DUPLICATE_ANYHIT_PROCEDURAL_PRIMITIVE 3
-
-// COMMITTED_STATUS = (TRAVERSAL_STATE - 4)
-#define TRAVERSAL_STATE_COMMITTED_NOTHING 4
-#define TRAVERSAL_STATE_COMMITTED_TRIANGLE_HIT 5
-#define TRAVERSAL_STATE_COMMITTED_PROCEDURAL_PRIMITIVE_HIT 6
-
-#if PASS_HIT_OBJECT_ARG
-#define GET_HIT_OBJECT(data)
-#define HIT_OBJECT_ARG inout_param(_AmdDispatchSystemData) data, inout_param(_AmdHitObject) hitObject
-#else
-#define GET_HIT_OBJECT(data) _AmdHitObject hitObject = data.hitObject
-#define HIT_OBJECT_ARG inout_param(_AmdSystemData) data
-#endif
-
-// Forward declaration for _AmdDispatchSystemData.PackDispatchId() and _AmdDispatchSystemData.DispatchId()
-static uint3 GetDispatchRaysDimensions();
-
-//=====================================================================================================================
-// Apply the known set/unset bits
-static uint ApplyKnownFlags(
-    uint incomingFlags)
-{
-    uint flags = incomingFlags;
-
-#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION  >= 41
-    // Apply known bits common to all TraceRay calls
-    flags = ((flags & ~AmdTraceRayGetKnownUnsetRayFlags()) | AmdTraceRayGetKnownSetRayFlags());
-#endif
-
-    // Apply options overrides
-    flags &= ~Options::getRayFlagsOverrideForceDisableMask();
-    flags |=  Options::getRayFlagsOverrideForceEnableMask();
-
-    return flags;
-}
-
-//=====================================================================================================================
-// Apply compile time pipeline config flags only, it does not apply known common flags from TraceRay call sites
-static uint ApplyCompileTimePipelineConfigFlags(
-    uint incomingFlags)
-{
-    uint flags = incomingFlags;
-
-    flags |= (AmdTraceRayGetStaticFlags() & (PIPELINE_FLAG_SKIP_PROCEDURAL_PRIMITIVES | PIPELINE_FLAG_SKIP_TRIANGLES));
-#if DEVELOPER
-    flags |= DispatchRaysConstBuf.profileRayFlags;
-#endif
-
-    return flags;
-}
-
-//=====================================================================================================================
-// Apply all static known flags, include both compile time pipeline config flags and known set/unset bits
-static uint ApplyAllStaticallyKnownFlags(
-    uint incomingFlags)     // The flags from TraceRay call sites,
-                            // 0 means get Pipeline flags for all shaders in this pipeline
-{
-    return ApplyCompileTimePipelineConfigFlags(ApplyKnownFlags(incomingFlags));
-}
 
 //=====================================================================================================================
 // Get the box sort heuristic mode according to the pipeline flags
@@ -161,648 +68,6 @@ static uint GetBoxHeuristicMode()
     return boxHeuristicMode;
 }
 
-//=====================================================================================================================
-// The VPC (vector program counter) is an opaque compiler-controlled 32-bit value.
-// The low 6 bits are used for storing metadata, the high 26 bits store a function address.
-struct Vpc32 {
-    uint32_t vpc;
-
-#if defined(__cplusplus)
-    Vpc32(uint32_t value) : vpc(value) {}
-#endif
-
-    uint32_t GetU32()
-    {
-        return vpc;
-    }
-
-    uint32_t GetFunctionAddr()
-    {
-        return (uint32_t)(vpc & 0xFFFFFFC0);
-    }
-
-    bool IsValid()
-    {
-        return vpc != 0;
-    }
-};
-
-//=====================================================================================================================
-// Traits used to abstract away the combination of flags that toggle a feature. Currently used for dead lanes.
-namespace Traits
-{
-
-static bool HasStacklessDeadLanes()
-{
-    return false;
-}
-
-static bool HasStackfulDeadLanes()
-{
-    return Options::getPersistentLaunchEnabled();
-}
-
-static bool HasDeadLanes()
-{
-    return HasStackfulDeadLanes() || HasStacklessDeadLanes();
-}
-
-} // namespace Traits
-
-//=====================================================================================================================
-// Dispatch system data. This data is shared between all shader stages and is initialized at the raygeneration shader
-// stage e.g. remapping rays to threads
-struct _AmdDispatchSystemData
-{
-#if defined(__cplusplus)
-    _AmdDispatchSystemData(int val) : dispatchLinearId(val)
-    {
-    }
-
-    _AmdDispatchSystemData() : _AmdDispatchSystemData(0)
-    {
-    }
-#endif
-
-    // Pack dispatch id (x, y) into the linear id (1 DWORD)
-    void PackDispatchId(in uint3 dispatchId)
-    {
-        const uint3 dims            = GetDispatchRaysDimensions();
-        const uint widthBitOffsets  = firstbithigh(dims.x - 1) + 1;
-        const uint heightBitOffsets = firstbithigh(dims.y - 1) + 1;
-
-        // Explicit bit operation is more straight forward, and produces better ISA code than bitFieldInsert.
-        dispatchLinearId =
-            dispatchId.x | (dispatchId.y << widthBitOffsets) | (dispatchId.z << (widthBitOffsets + heightBitOffsets));
-
-        GPU_ASSERT(dispatchLinearId != DISPATCHID_DEAD_STACKFUL && dispatchLinearId != DISPATCHID_DEAD_STACKLESS);
-        GPU_ASSERT(all(DispatchId() == dispatchId));
-    }
-
-    // Extract (x, y) of dispatch id from the linear id, and (z) from the y of DispatchDims.
-    uint3 DispatchId()
-    {
-        const uint3 dims            = GetDispatchRaysDimensions();
-        const uint widthBitOffsets  = firstbithigh(dims.x - 1) + 1;
-        const uint heightBitOffsets = firstbithigh(dims.y - 1) + 1;
-
-        uint3 dispatchId;
-        dispatchId.x = dispatchLinearId & ((1u << widthBitOffsets) - 1);
-        dispatchId.y = (dispatchLinearId >> widthBitOffsets) & ((1u << heightBitOffsets) - 1);
-        dispatchId.z = dispatchLinearId >> (widthBitOffsets + heightBitOffsets);
-
-        return dispatchId;
-    }
-
-    void SetDead(bool withStack)
-    {
-        dispatchLinearId = withStack ? DISPATCHID_DEAD_STACKFUL : DISPATCHID_DEAD_STACKLESS;
-    }
-
-    bool IsDeadStackless()
-    {
-        return Traits::HasStacklessDeadLanes() && dispatchLinearId == DISPATCHID_DEAD_STACKLESS;
-    }
-
-    bool IsDeadStackful()
-    {
-        return Traits::HasStackfulDeadLanes() && dispatchLinearId == DISPATCHID_DEAD_STACKFUL;
-    }
-
-    bool IsDead()
-    {
-        // Note: this saves quite a few instructions compared to IsDeadStackless() || IsDeadStackful(),
-        // however it relies on DISPATCHID_DEAD_STACKLESS being the lowest of all sentinel values, and
-        // these being consecutive (which is not necessarily the case if more sentinel values are added).
-        return (Traits::HasStacklessDeadLanes() || Traits::HasStackfulDeadLanes()) && dispatchLinearId >= DISPATCHID_DEAD_STACKLESS;
-    }
-
-    uint  dispatchLinearId;   // Packed dispatch linear id. Combine x/y/z into 1 DWORD.
-
-#if DEVELOPER
-    uint  parentId;     // Record the parent's dynamic Id for ray history counter, -1 for RayGen shader.
-    uint  staticId;     // Record the static Id of current trace ray call site.
-#endif
-};
-
-//=====================================================================================================================
-// Ray system state required for HLSL intrinsics
-//
-struct _AmdRaySystemState
-{
-#if defined(__cplusplus)
-    _AmdRaySystemState(int val)
-    {
-        memset(this, val, sizeof(_AmdRaySystemState));
-    }
-#endif
-
-    void PackAccelStructAndRayflags(in uint64_t accelStruct, in uint rayFlags)
-    {
-        GPU_ASSERT((accelStruct & ~((1u << 48) - 1)) == 0);
-        packedAccelStruct = bitFieldInsert64(packedAccelStruct, 0, 48, accelStruct);
-        GPU_ASSERT((rayFlags & ~((1u << 12) - 1)) == 0);
-        packedAccelStruct = bitFieldInsert64(packedAccelStruct, 48, 12, rayFlags);
-    }
-
-    uint64_t AccelStruct()
-    {
-        return bitFieldExtract64(packedAccelStruct, 0, 48);
-    }
-
-    // Incoming flags are the flags passed by TraceRay call
-    uint IncomingFlags()
-    {
-        return uint(bitFieldExtract64(packedAccelStruct, 48, 12));
-    }
-
-    uint Flags()
-    {
-        return ApplyAllStaticallyKnownFlags(IncomingFlags());
-    }
-
-    void SetAnyHitDidAccept(bool value)
-    {
-        packedAccelStruct = bitFieldInsert64(packedAccelStruct, 60, 1, value);
-    }
-
-    bool AnyHitDidAccept()
-    {
-        return bitFieldExtract64(packedAccelStruct, 60, 1) != 0;
-    }
-
-    uint64_t packedAccelStruct;      // Packed accel struct with ray flags
-                                     // bits format:
-                                     //  0 - 47 : Base address of the top level acceleration structure
-                                     // 48 - 59 : Ray flags, only 12-bits are valid.
-                                     // 60 - 60 : AnyHitDidAccept. This is used to communicate between IS and AHS.
-                                     // 61 - 63 : Reserved
-    uint     traceParameters;        // Packed instanceMask, rayContribution, geometryMultiplier, missShaderIndex
-    float3   origin;                 // World space ray origin
-    float3   direction;              // World space ray direction
-    float    tMin;                   // Minimum ray bounds
-    float    tMax;
-};
-
-//=====================================================================================================================
-// Data required for primitive system value intrinsics
-//
-struct _AmdPrimitiveSystemState
-{
-#if defined(__cplusplus)
-    _AmdPrimitiveSystemState()
-    {
-    }
-
-    _AmdPrimitiveSystemState(int val) :
-        rayTCurrent(val),
-        instNodePtr(val),
-        primitiveIndex(INVALID_IDX),
-        packedGeometryIndex(0),
-        packedInstanceContribution(0)
-      , currNodePtr(INVALID_IDX)
-#if GPURT_DEBUG_CONTINUATION_TRAVERSAL
-      , packedType(0)
-#endif
-    {
-    }
-#endif
-    float  rayTCurrent;   // AMD Gpu shifts the origin, so 0 <= rayTCurrent <= (tMaxApp - tMinApp).
-    uint   instNodePtr;   // Current node pointer in top level acceleration structure
-
-    uint primitiveIndex;
-    uint packedGeometryIndex;           // geometryIndex:        [23 : 0]
-#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
-                                        // isTri0:               [27]
-#endif
-                                        // State                 [30 : 28]
-                                        // IsOpaque              [31]
-
-    // For procedural primitives, it is a user-defined 8-bit value.
-    // For triangles, it is HIT_KIND_TRIANGLE_FRONT_FACE (254) or HIT_KIND_TRIANGLE_BACK_FACE (255)
-    uint packedInstanceContribution;    // instanceContribution [23 :  0]
-                                        // hitKind              [31 : 24]
-
-    uint currNodePtr;
-    void SetCurrNodePtr(uint p)
-    {
-        currNodePtr = p;
-    }
-
-    uint GeometryIndex()
-    {
-        // To extract "GeometryIndex" - (packedGeometryIndex >> 0) & bits(24);
-        return bitFieldExtract(packedGeometryIndex, 0, 24);
-    }
-
-    void PackGeometryIndex(uint geometryIndex)
-    {
-        // To pack "GeometryIndex" - packedGeometryIndex |= (geometryIndex & 0x00FFFFFF);
-        packedGeometryIndex = bitFieldInsert(packedGeometryIndex, 0, 24, geometryIndex);
-    }
-
-    // Directly construct packedGeometryIndex when all bit-fields are available
-    void PackGeometryIndex(
-        uint geometryIndex,
-#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
-        bool isTri0,
-#endif
-        uint state,
-        bool isOpaque)
-    {
-        packedGeometryIndex = geometryIndex |
-#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
-                              (isTri0 << 27) |
-#endif
-                              (state << 28) |
-                              (isOpaque << 31);
-    }
-
-    bool IsOpaque()
-    {
-        // To extract "IsOpaque" flag - (packedGeometryIndex >> 31) & bits(1);
-        return bitFieldExtract(packedGeometryIndex, 31, 1);
-    }
-
-    void PackIsOpaque(uint val)
-    {
-        // To pack "IsOpaque" flag - packedGeometryIndex |= val << 31;
-        packedGeometryIndex = bitFieldInsert(packedGeometryIndex, 31, 1, val);
-    }
-
-    uint State()
-    {
-        // To extract "State" - (packedGeometryIndex >> 28) & 7;
-        return bitFieldExtract(packedGeometryIndex, 28, 3);
-    }
-
-    void PackState(uint state)
-    {
-        // To pack "State" - packedGeometryIndex |= (state & 7) << 28;
-        packedGeometryIndex = bitFieldInsert(packedGeometryIndex, 28, 3, state);
-    }
-
-#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
-    bool IsTri0()
-    {
-        // To extract "isTri0" flag - (packedGeometryIndex >> 27) & bits(1);
-        return bitFieldExtract(packedGeometryIndex, 27, 1);
-    }
-
-    void PackIsTri0(uint val)
-    {
-        // To pack "isTri0" flag - packedGeometryIndex |= val << 27;
-        packedGeometryIndex = bitFieldInsert(packedGeometryIndex, 27, 1, val);
-    }
-#endif
-
-    uint InstanceContribution()
-    {
-        // To extract "instanceContribution" - (packedInstanceContribution & 0x00FFFFFF)
-        return bitFieldExtract(packedInstanceContribution, 0, 24);
-    }
-
-    void PackInstanceContribution(uint instContribution)
-    {
-        // To pack "instanceContribution" - packedInstanceContribution |= (instContribution & 0x00FFFFFF);
-        packedInstanceContribution = bitFieldInsert(packedInstanceContribution, 0, 24, instContribution);
-    }
-
-    // Directly construct packedInstanceContribution when all bit-fields are available
-    void PackInstanceContribution(uint instContribution, uint hitKind)
-    {
-        packedInstanceContribution = instContribution | (hitKind << 24);
-    }
-
-    uint HitKind()
-    {
-        // To extract -  (packedInstanceContribution >> 24);
-        return bitFieldExtract(packedInstanceContribution, 24, 8);
-    }
-
-    void PackHitKind(uint hitKind)
-    {
-        // To Pack - packedInstanceContribution |= ((hitKind & 0xFF) << 24);
-        packedInstanceContribution = bitFieldInsert(packedInstanceContribution, 24, 8, hitKind);
-    }
-
-#if GPURT_DEBUG_CONTINUATION_TRAVERSAL
-    // The following member data are only used in DEBUG
-    uint packedType;        // IsProcedural:   [31]    - 1 bit
-                            // AnyhitCallType: [1 : 0] - 2 bits
-
-    bool IsProcedural()
-    {
-        // To extract -  (packedType >> 31) & bits(1);
-        return bitFieldExtract(packedType, 31, 1);
-    }
-
-    void PackIsProcedural(bool isProceralNode)
-    {
-        // To Pack - packedType |= ((isProceralNode & bits(1)) << 31);
-        packedType = bitFieldInsert(packedType, 31, 1, isProceralNode);
-    }
-
-    uint AnyHitCallType()
-    {
-        // To extract -  (packedType >> 0) & bits(2);
-        return bitFieldExtract(packedType, 0, 2);
-    }
-
-    void PackAnyHitCallType(uint anyHitType)
-    {
-        // To Pack - packedType |= (anyHitType & bits(2));
-        packedType = bitFieldInsert(packedType, 0, 2, anyHitType);
-    }
-#endif
-};
-
-//=====================================================================================================================
-// Traversal state required for resumable traversal loop implementation and for various HLSL system/ray/primitive
-// intrinsics
-struct _AmdTraversalState
-{
-#if defined(__cplusplus)
-    _AmdTraversalState(int val)
-    {
-        memset(this, val, sizeof(_AmdTraversalState));
-    }
-#endif
-
-    // The committed state stores the final hit information for closestHit/Miss shaders.
-    _AmdPrimitiveSystemState committed;
-
-    // The following state is used for triangle hits and procedural geometry. Note, this state can be moved into the
-    // register space reserved for ray attributes in general
-    float2 committedBarycentrics;
-
-    uint nextNodePtr;   // Next node pointer
-    uint instNodePtr;
-
-    // Traversal stack state. Note, on some hardware this data represents a packed stack pointer that will
-    // be unpacked at the beginning of the traversal routine
-
-    // In RTIP2_0, stackPtr is packed with both stack ptr and stack ptr top.
-    // bits format:
-    // 0 - 15:  stack_base
-    // 16 - 23: stack_index
-    // 24 - 31: stack_index_top
-    uint stackPtr;
-    uint packedStackTopOrParentPointer;     // stackPtrTop (RTIP1.1, 2.0)
-
-#if REMAT_INSTANCE_RAY == 0
-    // Following state represents the transformed ray in object space for resuming from a candidate
-    // hit inside a bottom level acceleration structure. This state can be in local registers if
-    // no anyHit/intersection shaders are involved. Optionally, this can be rematerialized from the
-    // instance node by retransforming the world space ray on every resumption. This can be quite expensive
-    // on existing hardware.
-    float3 candidateRayOrigin;
-    float3 candidateRayDirection;
-#endif
-
-    // Optional state for advanced features/optimizations
-    uint lastInstanceRootNodePtr; // Only for rebraid mode.
-                                  // This field currently discarded in non-rebraid mode. Ensure to update that if the
-                                  // field becomes re-used for something else in non-rebraid mode.
-    uint reservedNodePtr;         // RTIPv2.0 (lastNodePtr)
-#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
-    uint packedInstanceContribution;    // instanceContribution  [23 :  0] RTIP3.1 ( instanceContribution )
-                                        // skipTri0              [31]
-#endif
-
-    uint32_t packedReturnAddr; // The address of the function to return to, packed into 32 bits.
-
-    uint InstanceContribution()
-    {
-        uint ret = 0;
-#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
-        GPU_ASSERT(GetRtIpLevel() == RayTracingIpLevel::RtIp3_1);
-
-        // To extract - (packedInstanceContribution & 0x00FFFFFF);
-        ret =  bitFieldExtract(packedInstanceContribution, 0, 24);
-#endif
-        return ret;
-    }
-
-    void PackInstanceContribution(uint instContribution)
-    {
-#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
-        GPU_ASSERT(GetRtIpLevel() == RayTracingIpLevel::RtIp3_1);
-
-        // To pack - packedInstanceContribution |= (instContribution & 0x00FFFFFF);
-        packedInstanceContribution = bitFieldInsert(packedInstanceContribution, 0, 24, instContribution);
-#endif
-    }
-
-#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
-#endif
-    bool SkipTri0()
-    {
-        uint ret = 0;
-#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
-        GPU_ASSERT(GetRtIpLevel() == RayTracingIpLevel::RtIp3_1);
-
-        // To extract - (packedInstanceContribution >> 31);
-        ret = bitFieldExtract(packedInstanceContribution, 31, 1);
-#endif
-        return ret;
-    }
-
-    void PackSkipTri0(bool val)
-    {
-#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
-        GPU_ASSERT(GetRtIpLevel() == RayTracingIpLevel::RtIp3_1);
-
-        // To pack - packedInstanceContribution |= (val & bits(1)) << 31;
-        packedInstanceContribution = bitFieldInsert(packedInstanceContribution, 31, 1, val);
-#endif
-    }
-
-    // Combined setter for instContribution and skipTri0 that prevents a dependency on the old value.
-    void PackInstanceContributionAndSkipTri0(uint instContribution, bool skipTri0)
-    {
-#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
-        GPU_ASSERT(GetRtIpLevel() == RayTracingIpLevel::RtIp3_1);
-        packedInstanceContribution = instContribution | (uint(skipTri0) << 31);
-#endif
-    }
-
-    void PackStackPtrTop(uint ptr)
-    {
-        GPU_ASSERT((GetRtIpLevel() == RayTracingIpLevel::RtIp1_1) ||
-                   (GetRtIpLevel() == RayTracingIpLevel::RtIp2_0));
-
-        packedStackTopOrParentPointer = ptr;
-    }
-
-    uint StackPtrTop()
-    {
-        GPU_ASSERT((GetRtIpLevel() == RayTracingIpLevel::RtIp1_1) ||
-                   (GetRtIpLevel() == RayTracingIpLevel::RtIp2_0));
-        return packedStackTopOrParentPointer;
-    }
-
-    void PackParentPointer(uint ptr)
-    {
-#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
-        GPU_ASSERT(GetRtIpLevel() == RayTracingIpLevel::RtIp3_1);
-#endif
-        packedStackTopOrParentPointer = ptr;
-    }
-
-    uint ParentPointer()
-    {
-        uint ptr = 0;
-#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
-        GPU_ASSERT(GetRtIpLevel() == RayTracingIpLevel::RtIp3_1);
-#endif
-        ptr = packedStackTopOrParentPointer;
-        return ptr;
-    }
-
-    uint CommittedState()
-    {
-        return committed.State();
-    }
-
-    void SetReturnAddress(Vpc32 returnAddr)
-    {
-        packedReturnAddr = returnAddr.GetU32();
-    }
-
-    Vpc32 ReturnAddress()
-    {
-        return Vpc32(packedReturnAddr);
-    }
-};
-
-#if DEVELOPER
-//=====================================================================================================================
-struct _AmdRayHistoryCounter
-{
-    void SetCallerShaderType(DXILShaderKind type)
-    {
-        packedCallerShaderType = bitFieldInsert(packedCallerShaderType, 0, 31, (uint)type);
-    }
-
-    DXILShaderKind CallerShaderType()
-    {
-        return (DXILShaderKind)bitFieldExtract(packedCallerShaderType, 0, 31);
-    }
-
-    void SetWriteTokenTopLevel(bool value)
-    {
-        packedCallerShaderType = bitFieldInsert(packedCallerShaderType, 31, 1, value);
-    }
-
-    bool WriteTokenTopLevel()
-    {
-        return bitFieldExtract(packedCallerShaderType, 31, 1) != 0;
-    }
-
-    uint64_t timerBegin;
-    uint     dynamicId;
-    float    candidateTCurrent;
-    uint     packedCallerShaderType;    // bit 0~30: caller shader type
-                                        // bit 31: flag to write TLAS
-    uint     numRayBoxTest;
-    uint     numRayTriangleTest;
-    uint     numIterations;
-    uint     maxStackDepth;
-    uint     numAnyHitInvocation;
-    uint     shaderIdLow;
-    uint     shaderRecIdx;
-    uint     timer;
-    uint     numCandidateHits;
-    uint     instanceIntersections;
-};
-#endif
-
-//=====================================================================================================================
-struct _AmdHitObject
-{
-#if defined(__cplusplus)
-    _AmdHitObject() : ray(val)
-    {
-    }
-#endif
-
-    _AmdRaySystemState ray;
-};
-
-//=====================================================================================================================
-struct _AmdSystemData
-{
-#if defined(__cplusplus)
-    _AmdSystemData(int val) : dispatch(val), hitObject(val), traversal(val)
-    {
-    }
-#endif
-
-    bool IsTraversal()
-    {
-        GPU_ASSERT(!dispatch.IsDead());
-        return IsValidNode(traversal.nextNodePtr);
-    }
-
-    bool IsChsOrMiss(in uint state)
-    {
-        GPU_ASSERT(!dispatch.IsDead());
-        return (state >= TRAVERSAL_STATE_COMMITTED_NOTHING);
-    }
-
-    bool IsMiss(in uint state)
-    {
-        GPU_ASSERT(!dispatch.IsDead());
-        return IsChsOrMiss(state) && !IsValidNode(traversal.committed.instNodePtr);
-    }
-
-    bool IsAhs(in uint state)
-    {
-        GPU_ASSERT(!dispatch.IsDead());
-        return (state == TRAVERSAL_STATE_CANDIDATE_NON_OPAQUE_TRIANGLE);
-    }
-
-    bool IsIs(in uint state)
-    {
-        GPU_ASSERT(!dispatch.IsDead());
-        return ((state == TRAVERSAL_STATE_CANDIDATE_PROCEDURAL_PRIMITIVE) ||
-                (state == TRAVERSAL_STATE_CANDIDATE_NON_OPAQUE_PROCEDURAL_PRIMITIVE));
-    }
-
-    bool IsChs(in uint state)
-    {
-        GPU_ASSERT(!dispatch.IsDead());
-        return IsChsOrMiss(state) && IsValidNode(traversal.committed.instNodePtr);
-    }
-
-    // Note: _AmdDispatchSystemData must be the first member of _AmdSystemData. This allows us to save some VGPRs if
-    //       we need to call a function that takes _AmdSystemData but doesn't actually need ray or traversal data.
-    _AmdDispatchSystemData dispatch;
-    _AmdHitObject          hitObject;
-    _AmdTraversalState     traversal;
-#if DEVELOPER
-    _AmdRayHistoryCounter  counter;
-#endif
-};
-
-//=====================================================================================================================
-struct _AmdAnyHitSystemData
-{
-#if defined(__cplusplus)
-    _AmdAnyHitSystemData(int val) : base(val), candidate(val)
-    {
-    }
-#endif
-
-    _AmdSystemData base;
-
-    // The candidate state holds temporary candidate hit information for AnyHit/Intersection shaders. Required for
-    // resuming traversal from AnyHit/Intersection shader calls. Also holds intermediate traversal data
-    _AmdPrimitiveSystemState candidate;
-};
-
-//=====================================================================================================================
 // Used in the debug path. Contains the minimum data not covered by _AmdSystemData.
 struct _AmdTraversalResultData
 {
@@ -862,43 +127,6 @@ inline _AmdSystemData _AmdGetUninitializedSystemData()
     return (_AmdSystemData)0;
 }
 #endif
-
-//=====================================================================================================================
-static Vpc32 GetVpcFromShaderIdAddr(GpuVirtualAddress addr)
-{
-#ifdef __cplusplus
-    return 1;
-#else
-    return Vpc32(ConstantLoadDwordAtAddr(addr));
-#endif
-}
-
-//=====================================================================================================================
-static Vpc32 GetVpcFromShaderIdTable(
-    GpuVirtualAddress tableAddress,
-    uint index,
-    uint stride)
-{
-    return GetVpcFromShaderIdAddr(tableAddress + stride * index);
-}
-
-//=====================================================================================================================
-// Returns the 32-bit part of the hit group shader id containing the AHS shader id.
-#if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
-#endif
-static Vpc32 GetAnyHit32BitShaderId(
-    uint hitGroupRecordIndex)
-{
-    const uint offset = DispatchRaysConstBuf.hitGroupTableStrideInBytes * hitGroupRecordIndex;
-
-    const GpuVirtualAddress tableVa =
-        PackUint64(DispatchRaysConstBuf.hitGroupTableBaseAddressLo, DispatchRaysConstBuf.hitGroupTableBaseAddressHi);
-    if (tableVa == 0)
-    {
-       return Vpc32(0);
-    }
-    return Vpc32(ConstantLoadDwordAtAddr(tableVa + offset + 8));
-}
 
 //=====================================================================================================================
 // Returns whether the corresponding AHS is non-null.
@@ -979,36 +207,6 @@ static float4x3 WorldToObject4x3(in uint64_t tlasBaseAddr, in uint instNodePtr)
 }
 
 //=====================================================================================================================
-// Load dispatch dimensions from constant buffer.
-static uint3 GetDispatchRaysDimensions()
-{
-    const uint width  = DispatchRaysConstBuf.rayDispatchWidth;
-    const uint height = DispatchRaysConstBuf.rayDispatchHeight;
-    const uint depth  = DispatchRaysConstBuf.rayDispatchDepth;
-
-    return uint3(width, height, depth);
-}
-
-//=====================================================================================================================
-// Persistent dispatch size (1D).
-static uint GetPersistentDispatchSize()
-{
-    // Groups needed to cover the dispatch if each thread only processes 1 ray
-    const uint3 rayDispatch   = GetDispatchRaysDimensions();
-    const uint  threadsNeeded = rayDispatch.x * rayDispatch.y * rayDispatch.z;
-    const uint3 groupDim      = AmdExtGroupDimCompute();
-    const uint  groupsNeeded  = RoundUpQuotient(threadsNeeded, groupDim.x * groupDim.y * groupDim.z);
-
-    // Dispatch size is the lesser of rayDispatchMaxGroups and groupsNeeded
-    // rayDispatchMaxGroups would mean threads handle >= 1 ray, groupsNeeded would mean threads handle <= 1 ray
-    return min(DispatchRaysConstBuf.rayDispatchMaxGroups, groupsNeeded);
-}
-
-// Split the 2D plane into 8 x 4 tiles
-#define DISPATCH_RAYS_TILE_WIDTH 8
-#define DISPATCH_RAYS_TILE_HEIGHT 4
-
-//=====================================================================================================================
 // Map a linear id (within a plane, including 1D plane) to a ray located at (x, y).
 static uint2 LinearTo2D(uint width, uint height, uint linearId)
 {
@@ -1025,29 +223,58 @@ static uint2 LinearTo2D(uint width, uint height, uint linearId)
     }
     else
     {
+        const uint DispatchRaysTileWidth  = 8;
+        const uint DispatchRaysTileHeight = 64;
+        const uint DispatchRaysTileSize   = DispatchRaysTileHeight * DispatchRaysTileWidth;
         /*
-        Sample: D3D12_DISPATCH_RAYS_DESC::(w x h x d) = (18, 6, 1). Divided into 8x4 tiles(boxes).
-        A number in a box is the tileId.
-        ___________________________
-        |   0    |   1    |   2    |
-        |________|________|________|
-        |   3    |   4    |   5    |
-        |________|________|________|
+            Sample: D3D12_DISPATCH_RAYS_DESC::(w x h x d) = (18, 130, 1). The number in a box is the linearId.
+            The plane is filled by rows of tiles
+              - rays within a tile is filled horizontally. (example: 0 ~ 511, 512 ~ 1023)
+              - The padding area to the right of each row is filled by rays vertically. (example: 1024 ~ 1151)
+            The remaining area is filled by rays horizontally. (example: 2304 ~ 2321)
+
+            This design ensures
+            - most rays (or all if the plane can be covered by tiles perfectly) get the same swizzling as the old way.
+            - the mapping is seamless which avoids some waves being started with partial lanes dead.
+            - the mapping computation only has one integer divide that cannot be optimized, compared with three in the
+              old way. It makes this high-traffic code short and fast.
+
+                0                           16      17
+               _______________________________________
+            0  |0    ..     7|512  ..   519|1024      |
+            :  |             |             | :        |
+            63 |__________511|_________1023|1087__1151|
+            64 |1152 ..  1159|1664 ..  1671|2176      |
+            :  |             |             | :        |
+            127|_________1663|_________2175|2239__2303|
+            128|2304          ..                  2321|
+            129|__________________________________2339|
         */
 
-        const uint tileId = linearId / (DISPATCH_RAYS_TILE_WIDTH * DISPATCH_RAYS_TILE_HEIGHT);
+        const uint heightDownAlign = height & (~(DispatchRaysTileHeight - 1));
+        const uint y = linearId / width;
 
-        //id inside the tailing tile = linearId % (DISPATCH_RAYS_TILE_WIDTH * DISPATCH_RAYS_TILE_HEIGHT);
-        const uint remainder = linearId & ((DISPATCH_RAYS_TILE_WIDTH * DISPATCH_RAYS_TILE_HEIGHT) - 1);
+        if (y < heightDownAlign)
+        {
+            const uint yDownAlign = y & (~(DispatchRaysTileHeight - 1));
+            linearId -= yDownAlign * width;
 
-        // in unit of DISPATCH_RAYS_TILE_WIDTH
-        const uint alignedWidthInTile = Pow2Align(width, DISPATCH_RAYS_TILE_WIDTH) / DISPATCH_RAYS_TILE_WIDTH;
-        const uint xTile = tileId % alignedWidthInTile;
-        const uint yTile = tileId / alignedWidthInTile;
+            const uint xTile = linearId / DispatchRaysTileSize;
+            linearId -= xTile * DispatchRaysTileSize;
 
-         //                                          (remainder % DISPATCH_RAYS_TILE_WIDTH)
-        coord.x = xTile * DISPATCH_RAYS_TILE_WIDTH + (remainder & (DISPATCH_RAYS_TILE_WIDTH - 1));
-        coord.y = yTile * DISPATCH_RAYS_TILE_HEIGHT + remainder / DISPATCH_RAYS_TILE_WIDTH;
+            const bool partial = width < (xTile + 1) * DispatchRaysTileWidth;
+            const uint divisor = partial ? DispatchRaysTileHeight : DispatchRaysTileWidth;
+            const uint quotient  = linearId / divisor;
+            const uint remainder = linearId % divisor;
+
+            coord.x = xTile * DispatchRaysTileWidth + (partial ? quotient : remainder);
+            coord.y = yDownAlign + (partial ? remainder : quotient);
+        }
+        else
+        {
+            coord.y = y;
+            coord.x = linearId - y * width;
+        }
     }
 
     return coord;
@@ -1061,13 +288,38 @@ static uint3 GetDispatchId()
     const uint3 threadIdInGroup = AmdExtThreadIdInGroupCompute();
     const uint3 groupId         = AmdExtGroupIdCompute();
     const uint3 dims            = GetDispatchRaysDimensions();
-    const uint  threadGroupSize = AmdExtGroupDimCompute().x* AmdExtGroupDimCompute().y* AmdExtGroupDimCompute().z;
+    const uint  threadGroupSize = AmdExtGroupDimCompute().x * AmdExtGroupDimCompute().y * AmdExtGroupDimCompute().z;
 
     uint3 dispatchId;
     dispatchId.z = groupId.y;
+    if ((dims.x > 1) && (dims.y > 1))
+    {
+        // Use 8 x (threadGroupSize / 8) tiles.
+        /*
+        Sample: D3D12_DISPATCH_RAYS_DESC::(w x h x d) = (18, 6, 1). Divided into 8x4 tiles(boxes).
+        A number in a box is the group id.
+        ___________________________
+        |   0    |   1    |   2    |
+        |________|________|________|
+        |   3    |   4    |   5    |
+        |________|________|________|
+        */
 
-    const uint linearId = threadIdInGroup.x + threadGroupSize * groupId.x;
-    dispatchId.xy = LinearTo2D(dims.x, dims.y, linearId);
+        const uint wTile = (dims.x + 7) / 8;
+        const uint xTile = groupId.x % wTile;
+        const uint yTile = groupId.x / wTile;
+
+        dispatchId.x = xTile * 8 + (threadIdInGroup.x % 8);
+        dispatchId.y = yTile * (threadGroupSize / 8) + (threadIdInGroup.x / 8);
+    }
+    else
+    {
+        // Do a naive 1:1 simple map.
+        const uint id = threadIdInGroup.x + threadGroupSize * groupId.x;
+        const uint gridSize = dims.x * dims.y; // width x height
+        dispatchId.y = id / dims.x;
+        dispatchId.x = id - (dispatchId.y * dims.x);
+    }
 
     return dispatchId;
 }
@@ -1080,9 +332,7 @@ static uint3 GetDispatchId(uint width, uint height, uint depth, uint linearId)
     if (depth > 1)
     {
         // Determine the Z index - divide by size of the 2D plane
-        uint alignedWidth = Pow2Align(width, DISPATCH_RAYS_TILE_WIDTH);
-        uint alignedHeight = Pow2Align(height, DISPATCH_RAYS_TILE_HEIGHT);
-        const uint planeSize = alignedWidth * alignedHeight;
+        const uint planeSize = width * height;
         z = linearId / planeSize;
         linearId -= z * planeSize; // get the id within a 2D plane
     }
@@ -1137,64 +387,64 @@ export _AmdPrimitiveSystemState _cont_GetCommittedState(in _AmdSystemData data)
 }
 
 //=====================================================================================================================
-export float3 _cont_WorldRayOrigin3(HIT_OBJECT_ARG)
+export float3 _cont_WorldRayOrigin3(
+    inout_param(_AmdDispatchSystemData) data,
+    inout_param(_AmdHitObject)          hitObject)
 {
-    GET_HIT_OBJECT(data);
     return hitObject.ray.origin;
 }
 
 //=====================================================================================================================
-export float3 _cont_WorldRayDirection3(HIT_OBJECT_ARG)
+export float3 _cont_WorldRayDirection3(
+    inout_param(_AmdDispatchSystemData) data,
+    inout_param(_AmdHitObject)          hitObject)
 {
-    GET_HIT_OBJECT(data);
     return hitObject.ray.direction;
 }
 
 //=====================================================================================================================
-export float _cont_RayTMin(HIT_OBJECT_ARG)
+export float _cont_RayTMin(
+    inout_param(_AmdDispatchSystemData) data,
+    inout_param(_AmdHitObject)          hitObject)
 {
-    GET_HIT_OBJECT(data);
     return hitObject.ray.tMin;
 }
 
 //=====================================================================================================================
-export uint _cont_RayFlags(HIT_OBJECT_ARG)
+export uint _cont_RayFlags(
+    inout_param(_AmdDispatchSystemData) data,
+    inout_param(_AmdHitObject)          hitObject)
 {
     // Get the flags passed by TraceRay call and apply the known set/unset bits.
-    GET_HIT_OBJECT(data);
     return ApplyKnownFlags(hitObject.ray.IncomingFlags());
 }
 
 //=====================================================================================================================
-export uint _cont_InstanceInclusionMask(HIT_OBJECT_ARG)
+export uint _cont_InstanceInclusionMask(
+    inout_param(_AmdDispatchSystemData) data,
+    inout_param(_AmdHitObject)          hitObject)
 {
-    GET_HIT_OBJECT(data);
     return ExtractInstanceInclusionMask(hitObject.ray.traceParameters);
 }
 
 //=====================================================================================================================
-export float _cont_RayTCurrent(HIT_OBJECT_ARG, in _AmdPrimitiveSystemState primitive)
+export float _cont_RayTCurrent(
+    inout_param(_AmdDispatchSystemData) data,
+    inout_param(_AmdHitObject)          hitObject,
+    in _AmdPrimitiveSystemState         primitive)
 {
-    GET_HIT_OBJECT(data);
-
-    if (_AmdGetShaderKind() == DXILShaderKind::Intersection)
-    {
-        // The intersection shader is an exception. While the system data is usually about the candidate hit, the
-        // current t must be from the committed hit.
-        primitive = _cont_GetCommittedState(data);
-    }
-
     float tCurrentHw = primitive.rayTCurrent;
 
     // AMD Gpu shifts the origin, so rayTCurrent is between 0 and (tMaxApp - tMinApp). Add tMinApp back for App's use.
-    return tCurrentHw + hitObject.ray.tMin;
+    return tCurrentHw + ApplyTMinBias(hitObject.ray.tMin);
 }
 
 //=====================================================================================================================
-export uint _cont_InstanceIndex(HIT_OBJECT_ARG, in _AmdPrimitiveSystemState primitive)
+export uint _cont_InstanceIndex(
+    inout_param(_AmdDispatchSystemData) data,
+    inout_param(_AmdHitObject)          hitObject,
+    in _AmdPrimitiveSystemState         primitive)
 {
-    GET_HIT_OBJECT(data);
-
 #if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
     if (GetRtIpLevel() == RayTracingIpLevel::RtIp3_1)
     {
@@ -1214,10 +464,11 @@ export uint _cont_InstanceIndex(HIT_OBJECT_ARG, in _AmdPrimitiveSystemState prim
 }
 
 //=====================================================================================================================
-export uint _cont_InstanceID(HIT_OBJECT_ARG, in _AmdPrimitiveSystemState primitive)
+export uint _cont_InstanceID(
+    inout_param(_AmdDispatchSystemData) data,
+    inout_param(_AmdHitObject)          hitObject,
+    in _AmdPrimitiveSystemState         primitive)
 {
-    GET_HIT_OBJECT(data);
-
 #if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
     if (GetRtIpLevel() == RayTracingIpLevel::RtIp3_1)
     {
@@ -1239,39 +490,51 @@ export uint _cont_InstanceID(HIT_OBJECT_ARG, in _AmdPrimitiveSystemState primiti
 }
 
 //=====================================================================================================================
-export uint _cont_GeometryIndex(in _AmdSystemData data, in _AmdPrimitiveSystemState primitive)
+export uint _cont_GeometryIndex(
+    inout_param(_AmdDispatchSystemData) data,
+    inout_param(_AmdHitObject)          hitObject,
+    in _AmdPrimitiveSystemState         primitive)
 {
     return primitive.GeometryIndex();
 }
 
 //=====================================================================================================================
-export uint _cont_PrimitiveIndex(in _AmdSystemData data, in _AmdPrimitiveSystemState primitive)
+export uint _cont_PrimitiveIndex(
+    inout_param(_AmdDispatchSystemData) data,
+    inout_param(_AmdHitObject)          hitObject,
+    in _AmdPrimitiveSystemState         primitive)
 {
     return primitive.primitiveIndex;
 }
 
 //=====================================================================================================================
-export float4x3 _cont_ObjectToWorld4x3(HIT_OBJECT_ARG, in _AmdPrimitiveSystemState primitive)
+export float4x3 _cont_ObjectToWorld4x3(
+    inout_param(_AmdDispatchSystemData) data,
+    inout_param(_AmdHitObject)          hitObject,
+    in _AmdPrimitiveSystemState         primitive)
 {
-    GET_HIT_OBJECT(data);
-
     return ObjectToWorld4x3(
         hitObject.ray.AccelStruct(),
         primitive.instNodePtr);
 }
 
 //=====================================================================================================================
-export float4x3 _cont_WorldToObject4x3(HIT_OBJECT_ARG, in _AmdPrimitiveSystemState primitive)
+export float4x3 _cont_WorldToObject4x3(
+    inout_param(_AmdDispatchSystemData) data,
+    inout_param(_AmdHitObject)          hitObject,
+    in _AmdPrimitiveSystemState         primitive)
 {
-    GET_HIT_OBJECT(data);
 
     return WorldToObject4x3(hitObject.ray.AccelStruct(), primitive.instNodePtr);
 }
 
 //=====================================================================================================================
-export TriangleData _cont_TriangleVertexPositions(in _AmdSystemData data, in _AmdPrimitiveSystemState primitive)
+export TriangleData _cont_TriangleVertexPositions(
+    inout_param(_AmdDispatchSystemData) data,
+    inout_param(_AmdHitObject)          hitObject,
+    in _AmdPrimitiveSystemState         primitive)
 {
-    const GpuVirtualAddress instanceAddr = GetInstanceNodeAddr(data.hitObject.ray.AccelStruct(), primitive.instNodePtr);
+    const GpuVirtualAddress instanceAddr = GetInstanceNodeAddr(hitObject.ray.AccelStruct(), primitive.instNodePtr);
 #if GPURT_BUILD_RTIP3_1 && ((GPURT_RTIP_LEVEL == 31) || (GPURT_RTIP_LEVEL == 0))
     if (GetRtIpLevel() == RayTracingIpLevel::RtIp3_1)
     {
@@ -1288,24 +551,31 @@ export TriangleData _cont_TriangleVertexPositions(in _AmdSystemData data, in _Am
 }
 
 //=====================================================================================================================
-export float3 _cont_ObjectRayOrigin3(HIT_OBJECT_ARG, in _AmdPrimitiveSystemState primitive)
+export float3 _cont_ObjectRayOrigin3(
+    inout_param(_AmdDispatchSystemData) data,
+    inout_param(_AmdHitObject)          hitObject,
+    in _AmdPrimitiveSystemState         primitive)
 {
-    GET_HIT_OBJECT(data);
 
     return mul(float4(hitObject.ray.origin, 1.0), WorldToObject4x3(hitObject.ray.AccelStruct(), primitive.instNodePtr));
 }
 
 //=====================================================================================================================
-export float3 _cont_ObjectRayDirection3(HIT_OBJECT_ARG, in _AmdPrimitiveSystemState primitive)
+export float3 _cont_ObjectRayDirection3(
+    inout_param(_AmdDispatchSystemData) data,
+    inout_param(_AmdHitObject)          hitObject,
+    in _AmdPrimitiveSystemState         primitive)
 {
-    GET_HIT_OBJECT(data);
 
     return mul(float4(hitObject.ray.direction, 0.0), WorldToObject4x3(hitObject.ray.AccelStruct(), primitive.instNodePtr));
 }
 
 //=====================================================================================================================
 // This intrinsic is called in response to HitKind() intrinsic called from an AnytHit or ClosestHit shader.
-export uint _cont_HitKind(in _AmdSystemData data, in _AmdPrimitiveSystemState primitive)
+export uint _cont_HitKind(
+    inout_param(_AmdDispatchSystemData) data,
+    inout_param(_AmdHitObject)          hitObject,
+    in _AmdPrimitiveSystemState         primitive)
 {
     return primitive.HitKind();
 }
@@ -1318,7 +588,6 @@ export BuiltInTriangleIntersectionAttributes _cont_GetTriangleHitAttributes(in _
     BuiltInTriangleIntersectionAttributes attr;
     attr.barycentrics.x = data.traversal.committedBarycentrics.x;
     attr.barycentrics.y = data.traversal.committedBarycentrics.y;
-
     return attr;
 }
 
@@ -1416,18 +685,9 @@ export uint64_t _cont_GetContinuationStackGlobalMemBase()
 }
 
 //=====================================================================================================================
-static Vpc32 GetTraversalVpc32()
+export bool _cont_option_persistentLaunchEnabled()
 {
-    // NOTE: DXCP uses a table for TraceRay, thus a load to traceRayGpuVa retrieves the actual traversal function
-    // address. But Vulkan does not use the table so far, traceRayGpuVa is already the traversal function address.
-    return Vpc32(DispatchRaysConstBuf.traceRayGpuVaLo);
-}
-
-//=====================================================================================================================
-static Vpc32 GetRayGenVpc32()
-{
-    return GetVpcFromShaderIdAddr(PackUint64(DispatchRaysConstBuf.rayGenerationTableAddressLo,
-                                             DispatchRaysConstBuf.rayGenerationTableAddressHi));
+    return Options::getPersistentLaunchEnabled();
 }
 
 //=====================================================================================================================
@@ -1488,13 +748,14 @@ export bool _cont_ReportHit(inout_param(_AmdAnyHitSystemData) data, float THit, 
     // TODO Reuse shader record index computed in Traversal
     // TODO Check for closest hit and duplicate anyHit calling
 
-    THit -= data.base.hitObject.ray.tMin;
+    THit -= ApplyTMinBias(data.base.hitObject.ray.tMin);
     float tCurrentCommitted = 0.f;
     {
         tCurrentCommitted = data.base.traversal.committed.rayTCurrent;
     }
 
-    if ((THit < 0.f) || (THit > tCurrentCommitted))
+    const float hitLowerBound = data.base.hitObject.ray.tMin - ApplyTMinBias(data.base.hitObject.ray.tMin);
+    if ((THit < hitLowerBound) || (THit > tCurrentCommitted))
     {
         // Discard the hit candidate and hint the compiler to not keep the
         // values alive, which will remove redundant moves.
@@ -1826,7 +1087,7 @@ static void RayHistoryWriteEnd(inout_param(_AmdSystemData) data, uint state)
                                 data.counter.numIterations,
                                 data.counter.instanceIntersections,
                                 uint(~0),
-                                (data.hitObject.ray.tMax - data.hitObject.ray.tMin));
+                                data.hitObject.ray.tMax - ApplyTMinBias(data.hitObject.ray.tMin));
     }
 #endif
 }
@@ -2047,7 +1308,7 @@ static uint64_t GetDispatchIdAddr()
 }
 
 //=====================================================================================================================
-static void LaunchRayGen(bool setupStack)
+static void LaunchRayGen(_AmdDispatchSystemData previousDispatch, bool setupStack)
 {
     uint3 dispatchId;
     bool  valid;
@@ -2077,7 +1338,7 @@ static void LaunchRayGen(bool setupStack)
         const uint3 rayDims = GetDispatchRaysDimensions();
 
         dispatchId = GetDispatchId(rayDims.x, rayDims.y, rayDims.z, flatDispatchId);
-        valid      = (dispatchId.x < rayDims.x) && (dispatchId.y < rayDims.y) && (dispatchId.z < rayDims.z);
+        valid      = flatDispatchId < (rayDims.x * rayDims.y * rayDims.z);
     }
 
     // With persistent launch every lane gets a stack
@@ -2114,7 +1375,7 @@ static void LaunchRayGen(bool setupStack)
 // KernelEntry is entry function of the RayTracing continuation mode
 export void _cont_KernelEntry()
 {
-    LaunchRayGen(true);
+    LaunchRayGen(_AmdGetUninitializedDispatchSystemData(), true);
 }
 
 //=====================================================================================================================
@@ -2236,6 +1497,7 @@ static Vpc32 GetNextHitMissPc(
     out_param(uint32_t) nextShaderRecIdx
 )
 {
+    nextShaderRecIdx = _AmdGetUninitializedI32();
     // MS
     if (data.IsMiss(state))
     {
@@ -2364,7 +1626,7 @@ static void ScheduleDeadWave(_AmdSystemData data, Vpc32 traversalAddr)
             if (WaveActiveCountBits(true) == AmdExtLaneCount())
             {
                 // If the whole wave is dead, get ready to start a new dispatch
-                LaunchRayGen(false);
+                LaunchRayGen(data.dispatch, false);
             }
             // Passthrough these stackful dead lanes
         }
@@ -2456,12 +1718,14 @@ export void _cont_Traversal(
             if (data.IsAhs(state))
             {
                 const Vpc32 anyHitAddr = Vpc32(hitInfo.anyHitId.x);
-                RayHistoryWriteFunctionCall(anyHitData.base,
-                                            RayHistoryGetIdentifierFromVPC(anyHitAddr),
-                                            hitInfo.tableIndex,
-                                            DXILShaderKind::AnyHit);
+                {
+                    RayHistoryWriteFunctionCall(anyHitData.base,
+                                                RayHistoryGetIdentifierFromVPC(anyHitAddr),
+                                                hitInfo.tableIndex,
+                                                DXILShaderKind::AnyHit);
 
-                _AmdEnqueueAnyHit(anyHitAddr.GetU32(), hitInfo.tableIndex, _AmdGetCurrentFuncAddr(), anyHitData, candidateBarycentrics);
+                    _AmdEnqueueAnyHit(anyHitAddr.GetU32(), hitInfo.tableIndex, _AmdGetCurrentFuncAddr(), anyHitData, candidateBarycentrics);
+                }
             }
             else
             {
@@ -2831,3 +2095,5 @@ export _AmdHitObject _cont_GlobalHitObject(
 {
     return data.hitObject;
 }
+
+#undef GPURT_HAS_SRID

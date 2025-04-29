@@ -41,6 +41,10 @@
 #define TRIANGLE_NODE_ID_OFFSET 60
 #define TRIANGLE_NODE_SIZE      64
 
+//=====================================================================================================================
+// Get leaf triangle node size in bytes
+static uint GetBvhNodeSizeTriangle();
+
 #if GPURT_BUILD_RTIP3
 #define RTIP3_TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET   48
 #define RTIP3_TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET   52
@@ -99,5 +103,9 @@ struct TriangleNode3_0
 #endif
 
 GPURT_STATIC_ASSERT(TRIANGLE_NODE_SIZE == sizeof(TriangleNode), "TriangleNode structure mismatch");
+
+#ifndef LIBRARY_COMPILATION
+#include "TriangleNode1_0.hlsl"
+#endif
 
 #endif

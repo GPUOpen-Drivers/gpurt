@@ -375,4 +375,34 @@ constexpr NodeMapping InitUpdateAccelerationStructureMapping[] =
     { NodeType::UavTable, 1 },
 };
 
+constexpr NodeMapping EncodeDGFMapping[] =
+{
+    { NodeType::Constant, BuildBVH::NumEntries }, // BuildShaderRootConstants
+    { NodeType::ConstantBuffer, 2 },              // BuildShaderConstants
+    { NodeType::ConstantBuffer, 2 },              // LutBuffer
+    { NodeType::Uav, 2 },                         // SrcBuffer
+    { NodeType::Uav, 2 },                         // DstBuffer
+    { NodeType::Uav, 2 },                         // DstMetadata
+    { NodeType::Uav, 2 },                         // ScratchBuffer
+    { NodeType::Uav, 2 },                         // ScratchGlobal
+    { NodeType::Uav, 2 },                         // InstanceDescBuffer
+    { NodeType::Uav, 2 },                         // EmitBuffer
+    { NodeType::Uav, 2 },                         // IndirectArgBuffer
+#if GPURT_ENABLE_GPU_DEBUG
+    { NodeType::Uav, 2 },                         // DebugBuffer
+#endif
+    { NodeType::ConstantBufferTable, 1 },         // GeometryConstants
+    { NodeType::SrvTable, 1 },                    // DGF Buffer Table
+};
+
+constexpr NodeMapping PrepareShadowSbtForReplayMapping[] =
+{
+    { NodeType::ConstantBuffer, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+    { NodeType::Uav, 2 },
+};
+
 } // namespace GpuRt

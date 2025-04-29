@@ -39,17 +39,17 @@ namespace GpuRt
 #endif
 
 // Helper macro used to set up the pipeline build info array
-#if GPURT_GENERATED_AMDIL_AVAILABLE
-#define PIPELINE_BUILD_MAP_INFO(m, x) { 0, \
-                                 m ## Mapping, ArraySize(m ## Mapping), \
-                                 PipelineShaderCode{ Cs ## x, sizeof(Cs ## x), nullptr, 0, Cs ## x ## _spv, sizeof(Cs ## x ## _spv) }, \
-                                 InternalRayTracingCsType::x, \
-                                 COMPILER_OPTION_INIT, \
-                                 #x }
-#else // GPURT_GENERATED_AMDIL_AVAILABLE
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 55
 #define PIPELINE_BUILD_MAP_INFO(m, x) { 0, \
                                  m ## Mapping, ArraySize(m ## Mapping), \
                                  PipelineShaderCode{ nullptr, 0, nullptr, 0, Cs ## x ## _spv, sizeof(Cs ## x ## _spv) }, \
+                                 InternalRayTracingCsType::x, \
+                                 COMPILER_OPTION_INIT, \
+                                 #x }
+#else // GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 55 amdil support
+#define PIPELINE_BUILD_MAP_INFO(m, x) { 0, \
+                                 m ## Mapping, ArraySize(m ## Mapping), \
+                                 PipelineShaderCode{ nullptr, 0, Cs ## x ## _spv, sizeof(Cs ## x ## _spv) }, \
                                  InternalRayTracingCsType::x, \
                                  COMPILER_OPTION_INIT, \
                                  #x }
@@ -109,6 +109,7 @@ const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsTyp
 #endif
     PIPELINE_BUILD_BVH_INFO(BuildFastAgglomerativeLbvh),
     PIPELINE_BUILD_BVH_INFO(EncodeQuadNodes),
+    PIPELINE_BUILD_BVH_INFO(BuildHPLOC),
 #if GPURT_BUILD_RTIP3_1
     PIPELINE_BUILD_INFO(BuildTrivialBvh),
     PIPELINE_BUILD_INFO(BuildSingleThreadGroup32),
@@ -121,6 +122,8 @@ const PipelineBuildInfo InternalPipelineBuildInfo[size_t(InternalRayTracingCsTyp
     PIPELINE_BUILD_BVH_INFO(Update3_1),
     PIPELINE_BUILD_BVH_INFO(RefitInstanceBounds),
 #endif
+    PIPELINE_BUILD_INFO(EncodeDGF),
+    PIPELINE_BUILD_INFO(PrepareShadowSbtForReplay),
 };
 
 #undef PIPELINE_BUILD_INFO

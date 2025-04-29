@@ -30,7 +30,7 @@
 #include "../shadersClean/build/BuildRootSignature.hlsli"
 
 #include "../shadersClean/common/Common.hlsli"
-#include "BuildCommonScratch.hlsl"
+#include "../shadersClean/build/BuildCommonScratch.hlsli"
 #endif
 
 struct FastLBVHArgs

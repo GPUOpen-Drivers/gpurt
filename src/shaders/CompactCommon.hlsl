@@ -26,7 +26,7 @@
 #define _COMPACTCOMMON_HLSL
 
 #if GPURT_BUILD_RTIP3_1
-#include "QuantizedBVH8BoxNode.hlsl"
+#include "../shadersClean/common/gfx12/QuantizedBVH8BoxNode.hlsli"
 #include "rtip3_1.hlsli"
 #endif
 

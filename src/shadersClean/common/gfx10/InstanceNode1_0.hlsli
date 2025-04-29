@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2024-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -68,5 +68,13 @@ struct InstanceNode
 #define FUSED_INSTANCE_NODE_ROOT_OFFSET INSTANCE_NODE_SIZE
 #define FUSED_INSTANCE_NODE_SIZE        256
 GPURT_STATIC_ASSERT(INSTANCE_NODE_SIZE == sizeof(InstanceNode), "InstanceNode structure mismatch");
+
+//=====================================================================================================================
+// Get leaf instance node size in bytes
+static uint GetBvhNodeSizeInstance(uint enableFusedInstanceNode);
+
+#ifndef LIBRARY_COMPILATION
+#include "InstanceNode1_0.hlsl"
+#endif
 
 #endif

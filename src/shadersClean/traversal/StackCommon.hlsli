@@ -62,6 +62,17 @@ static void ContStackPopPayload()
 }
 
 //=================================================================================================================
+// Discards from the continuation stack an amount of memory equal to the size of the payload.
+// This method does not check whether the stack actually contains payload data, the caller is responsible for
+// matching ContStackPushPayload calls with ContStackDiscardPayload calls.
+static void ContStackDiscardPayload()
+{
+    const uint32_t payloadDwordCount = _AmdContPayloadRegistersI32Count();
+    const uint32_t payloadByteCount = payloadDwordCount * sizeof(uint32_t);
+    _AmdContStackFree(payloadByteCount);
+}
+
+//=================================================================================================================
 // Allocates and pushes a single dword onto the continuation stack.
 static void ContStackPushDword(uint32_t value)
 {
@@ -75,6 +86,13 @@ static uint32_t ContStackPopDword()
     const uint32_t value = _AmdContStackLoadU32(_AmdContStackGetPtr() - sizeof(uint32_t));
     _AmdContStackFree(sizeof(uint32_t));
     return value;
+}
+
+//=================================================================================================================
+// Discards a single dword of data from the continuation stack.
+static void ContStackDiscardDword()
+{
+    _AmdContStackFree(sizeof(uint32_t));
 }
 
 //=================================================================================================================
@@ -121,6 +139,20 @@ static void ContStackPop##StructTy(inout_param(StructTy) object)           \
 }
 
 //=================================================================================================================
+// Defines a `ContStackDiscardStructTy` method (e.g. for `Foo`, `ContStackDiscardFoo`) that takes no argument.
+// This method discards from the stack an amount of memory equal to the size of the structure StructTy.
+// This method does not check whether the data in the continuation stack actually contains StructTy data, therefore
+// the caller is responsible for matching ContStackPushStructTy with ContStackDiscardStructTy calls.
+#define DECLARE_DISCARD_STRUCT(StructTy)                                   \
+static void ContStackDiscard##StructTy()                                   \
+{                                                                          \
+    const StructTy object = (StructTy)0;                                   \
+    const uint32_t dwordCount = _AmdValueI32Count##StructTy(object);       \
+    const uint32_t byteCount = dwordCount * sizeof(uint32_t);              \
+    _AmdContStackFree(byteCount);                                          \
+}
+
+//=================================================================================================================
 // Defines a pair of `ContStackPush/PopStructTy` methods (e.g. for `Foo`, `ContStackPushFoo` and `ContStackPopFoo`)
 // that take an instance of StructTy as unique argument (as in-out parameter). The push variant allocates memory
 // onto the continuation stack and pushes the content of the StructTy instance onto it. The pop variant does the
@@ -130,11 +162,14 @@ static void ContStackPop##StructTy(inout_param(StructTy) object)           \
 //
 // Note: this macro also defines the auxiliary methods _AmdValueI32CountStructTy, _AmdValueGetI32StructTy and
 // _AmdValueSetI32StructTy via the DECLARE_VALUE_I32_COUNT, DECLARE_VALUE_GET_I32 and DECLARE_VALUE_SET_I32 macros.
-#define DECLARE_PUSHPOP_STRUCT(StructTy)               \
-    DECLARE_VALUE_I32_COUNT(StructTy, StructTy object) \
-    DECLARE_VALUE_GET_I32(StructTy, StructTy object)   \
-    DECLARE_VALUE_SET_I32(StructTy, StructTy object)   \
-    DECLARE_PUSH_STRUCT(StructTy)                      \
-    DECLARE_POP_STRUCT(StructTy)                       \
+
+// TODO: Temporarily declare _AmdValue intrinsics manually without using DECLARE_VALUE_* macros, until LLPC is updated
+#define DECLARE_PUSHPOP_STRUCT(StructTy)                                                                                \
+    GPURT_DECL uint32_t _AmdValueI32Count##StructTy(StructTy object) DUMMY_GENERIC_FUNC(0)                              \
+    GPURT_DECL uint32_t _AmdValueGetI32##StructTy(StructTy object, uint32_t i) DUMMY_GENERIC_FUNC(0)                    \
+    GPURT_DECL void _AmdValueSetI32##StructTy(inout_param(StructTy) object, uint32_t value, uint32_t i) DUMMY_VOID_FUNC \
+    DECLARE_PUSH_STRUCT(StructTy)                                                                                       \
+    DECLARE_POP_STRUCT(StructTy)                                                                                        \
+    DECLARE_DISCARD_STRUCT(StructTy)                                                                                    \
 
 #endif

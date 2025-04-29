@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2025 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2019-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -22,6 +22,11 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
+#ifndef _RAYQUERY_HLSL_
+#define _RAYQUERY_HLSL_
+
+#include "../shadersClean/traversal/RayQueryCommon.hlsli"
+#include "../shadersClean/traversal/TraversalCounter.hlsli"
 
 #include "RayQuery1_1.hlsl"
 #include "RayQuery2_0.hlsl"
@@ -192,3 +197,5 @@ static bool RayQueryProceedCommon(
 
     return continueTraversal;
 }
+
+#endif

@@ -140,12 +140,23 @@ struct LaneGroup
         return AmdExtD3DShaderIntrinsics_WaveClusterBitOr(val, clusterSize);
     }
 
+    uint64_t BitOr64(uint64_t val)
+    {
+        return PackUint64(BitOr(LowPart(val)), BitOr(HighPart(val)));
+    }
+
     template<typename T>
     T BitAnd(T val)
     {
         const uint clusterSize = log2(groupSize) + 1;
 
         return AmdExtD3DShaderIntrinsics_WaveClusterBitAnd(val, clusterSize);
+    }
+
+    bool AnyTrue(bool val)
+    {
+        // TODO: What produces better ISA (BitOr > 0), or (Ballot > 0), or can we make a bool version of BitOr?
+        return BitOr((uint)val) > 0;
     }
 
     template<typename T>

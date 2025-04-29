@@ -36,13 +36,14 @@
                 "CBV(b255)"
 #endif
 
-#include "../shadersClean/common/Common.hlsli"
-
 [[vk::binding(0, 3)]] RWByteAddressBuffer       BatchScratchGlobals[]   : register(u0, space1);
 #ifdef IS_UPDATE
 [[vk::binding(0, 4)]] RWByteAddressBuffer       BatchSrcHeaderBuffers[] : register(u0, space2);
 [[vk::binding(0, 5)]] RWByteAddressBuffer       BatchDstHeaderBuffers[] : register(u0, space3);
 #else
+
+#include "../../gpurt/gpurtAccelStruct.h"
+
 struct Constants
 {
     uint maxNumPrimitives;
@@ -85,6 +86,10 @@ void ResetCounters(
         }
     }
 }
+#include "../shared/rayTracingDefs.h"
+#include "../shadersClean/build/BuildSettings.hlsli"
+#include "../shadersClean/common/Bits.hlsli"
+#include "../shadersClean/common/Common.hlsli"
 
 // =====================================================================================================================
 [RootSignature(RootSig)]

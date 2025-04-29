@@ -30,13 +30,13 @@
 #define SORT(childA,childB,distA,distB) if((childB!=INVALID_NODE&&distB<distA)||childA==INVALID_NODE){  float t0 = distA; uint t1 = childA;  childA = childB; distA = distB;  childB=t1; distB=t0; }
 
 #if GPURT_BUILD_RTIP3_1
-#include "ObbCommon.hlsl"
+#include "../shadersClean/common/ObbCommon.hlsli"
 #endif
 
 #if GPURT_BUILD_RTIP3
-#include "HighPrecisionBoxNode.hlsl"
+#include "../shadersClean/common/gfx12/HighPrecisionBoxNode.hlsli"
 #if GPURT_BUILD_RTIP3_1
-#include "QuantizedBVH8BoxNode.hlsl"
+#include "../shadersClean/common/gfx12/QuantizedBVH8BoxNode.hlsli"
 #include "rtip3_1.hlsli"
 #endif
 #endif
@@ -89,21 +89,6 @@ static bool IsValidTrace(
     }
 
     return valid;
-}
-
-//=====================================================================================================================
-static bool IsBoxNode1_1(
-    uint nodePtr)
-{
-    return IsBoxNode(nodePtr
-#if GPURT_BUILD_RTIP3
-                   , IsBvhHighPrecisionBoxNodeEnabled(),
-                     IsBvh8()
-#if GPURT_BUILD_RTIP3_1
-                   , false
-#endif
-#endif
-                    );
 }
 
 //=====================================================================================================================
@@ -215,7 +200,7 @@ static bool CheckInstanceCulling(in InstanceDesc desc, const uint rayFlags, cons
     const uint geomType = (desc.accelStructureAddressHiAndFlags >> (NODE_POINTER_SKIP_TRIANGLES_SHIFT - 32)) & 0x1;
 
     bool isTriangleInstanceCulled =
-        ((geomType == GEOMETRY_TYPE_TRIANGLES) &&
+        ((geomType != GEOMETRY_TYPE_AABBS) &&
            ((rayFlags         & RAY_FLAG_SKIP_TRIANGLES) ||
             (pipelineRayFlags & PIPELINE_FLAG_SKIP_TRIANGLES)));
 
@@ -298,198 +283,26 @@ static HighPrecisionBoxNode FetchHighPrecisionBoxNode(
     uint4 d2 = LoadDwordAtAddrx4(nodeAddr + 0x20);
     uint4 d3 = LoadDwordAtAddrx4(nodeAddr + 0x30);
 
-    node.dword[0]  = d0.x;
-    node.dword[1]  = d0.y;
-    node.dword[2]  = d0.z;
-    node.dword[3]  = d0.w;
-    node.dword[4]  = d1.x;
-    node.dword[5]  = d1.y;
-    node.dword[6]  = d1.z;
-    node.dword[7]  = d1.w;
-    node.dword[8]  = d2.x;
-    node.dword[9]  = d2.y;
-    node.dword[10] = d2.z;
-    node.dword[11] = d2.w;
-    node.dword[12] = d3.x;
-    node.dword[13] = d3.y;
-    node.dword[14] = d3.z;
-    node.dword[15] = d3.w;
+    node.dwords[0]  = d0.x;
+    node.dwords[1]  = d0.y;
+    node.dwords[2]  = d0.z;
+    node.dwords[3]  = d0.w;
+    node.dwords[4]  = d1.x;
+    node.dwords[5]  = d1.y;
+    node.dwords[6]  = d1.z;
+    node.dwords[7]  = d1.w;
+    node.dwords[8]  = d2.x;
+    node.dwords[9]  = d2.y;
+    node.dwords[10] = d2.z;
+    node.dwords[11] = d2.w;
+    node.dwords[12] = d3.x;
+    node.dwords[13] = d3.y;
+    node.dwords[14] = d3.z;
+    node.dwords[15] = d3.w;
 
     return node;
 }
 #endif
-
-//=====================================================================================================================
-static uint FetchFloat32BoxNodeNumPrimitives(in GpuVirtualAddress bvhAddress, in uint nodePointer)
-{
-    const uint byteOffset = ExtractNodePointerOffset(nodePointer);
-    const GpuVirtualAddress nodeAddr = bvhAddress + byteOffset + FLOAT32_BOX_NODE_NUM_PRIM_OFFSET;
-
-    return LoadDwordAtAddr(nodeAddr);
-}
-
-//=====================================================================================================================
-static Float32BoxNode FetchFloat32BoxNode(in GpuVirtualAddress bvhAddress,
-#if GPURT_BUILD_RTIP3
-                                          in bool              highPrecisionBoxNodeEnable,
-#endif
-                                          in uint              nodePointer)
-
-{
-    const uint byteOffset = ExtractNodePointerOffset(nodePointer);
-    const GpuVirtualAddress nodeAddr = bvhAddress + byteOffset;
-
-    uint4 d0, d1, d2, d3, d4, d5, d6;
-    d0 = LoadDwordAtAddrx4(nodeAddr);
-    d1 = LoadDwordAtAddrx4(nodeAddr + 0x10);
-    d2 = LoadDwordAtAddrx4(nodeAddr + 0x20);
-    d3 = LoadDwordAtAddrx4(nodeAddr + 0x30);
-
-#if GPURT_BUILD_RTIP3
-    if (highPrecisionBoxNodeEnable)
-    {
-        HighPrecisionBoxNode hpBoxNode = (HighPrecisionBoxNode)0;
-
-        hpBoxNode.dword[0] = d0.x;
-        hpBoxNode.dword[1] = d0.y;
-        hpBoxNode.dword[2] = d0.z;
-        hpBoxNode.dword[3] = d0.w;
-        hpBoxNode.dword[4] = d1.x;
-        hpBoxNode.dword[5] = d1.y;
-        hpBoxNode.dword[6] = d1.z;
-        hpBoxNode.dword[7] = d1.w;
-        hpBoxNode.dword[8] = d2.x;
-        hpBoxNode.dword[9] = d2.y;
-        hpBoxNode.dword[10] = d2.z;
-        hpBoxNode.dword[11] = d2.w;
-        hpBoxNode.dword[12] = d3.x;
-        hpBoxNode.dword[13] = d3.y;
-        hpBoxNode.dword[14] = d3.z;
-        hpBoxNode.dword[15] = d3.w;
-
-        const Float32BoxNode node = DecodeHighPrecisionBoxNode(hpBoxNode);
-
-        return node;
-    }
-#endif
-    d4 = LoadDwordAtAddrx4(nodeAddr + 0x40);
-    d5 = LoadDwordAtAddrx4(nodeAddr + 0x50);
-    d6 = LoadDwordAtAddrx4(nodeAddr + 0x60);
-
-    Float32BoxNode node;
-
-    node.child0 = d0.x;
-    node.child1 = d0.y;
-    node.child2 = d0.z;
-    node.child3 = d0.w;
-
-    node.bbox0_min = asfloat(d1.xyz);
-    node.bbox0_max = float3(asfloat(d1.w), asfloat(d2.xy));
-    node.bbox1_min = float3(asfloat(d2.zw), asfloat(d3.x));
-    node.bbox1_max = asfloat(d3.yzw);
-    node.bbox2_min = asfloat(d4.xyz);
-    node.bbox2_max = float3(asfloat(d4.w), asfloat(d5.xy));
-    node.bbox3_min = float3(asfloat(d5.zw), asfloat(d6.x));
-    node.bbox3_max = asfloat(d6.yzw);
-
-    node.flags = LoadDwordAtAddr(nodeAddr + FLOAT32_BOX_NODE_FLAGS_OFFSET);
-
-#if GPURT_BUILD_RTIP3_1
-    node.obbMatrixIndex = LoadDwordAtAddr(nodeAddr + FLOAT32_BOX_NODE_OBB_OFFSET);
-#endif
-
-    return node;
-}
-
-//=====================================================================================================================
-static Float32BoxNode FetchFloat16BoxNodeAsFp32(in GpuVirtualAddress bvhAddress, in uint nodePointer)
-{
-    const uint byteOffset = ExtractNodePointerOffset(nodePointer);
-    const GpuVirtualAddress nodeAddr = bvhAddress + byteOffset;
-
-    uint4 d0, d1, d2, d3;
-    d0 = LoadDwordAtAddrx4(nodeAddr);
-    d1 = LoadDwordAtAddrx4(nodeAddr + 0x10);
-    d2 = LoadDwordAtAddrx4(nodeAddr + 0x20);
-    d3 = LoadDwordAtAddrx4(nodeAddr + 0x30);
-
-    Float32BoxNode node;
-
-    node.child0 = d0.x;
-    node.child1 = d0.y;
-    node.child2 = d0.z;
-    node.child3 = d0.w;
-
-    const BoundingBox b0 = UncompressBBoxFromUint3(d1.xyz);
-    const BoundingBox b1 = UncompressBBoxFromUint3(uint3(d1.w,  d2.xy));
-    const BoundingBox b2 = UncompressBBoxFromUint3(uint3(d2.zw, d3.x ));
-    const BoundingBox b3 = UncompressBBoxFromUint3(d3.yzw);
-
-    node.bbox0_min = b0.min;
-    node.bbox0_max = b0.max;
-    node.bbox1_min = b1.min;
-    node.bbox1_max = b1.max;
-    node.bbox2_min = b2.min;
-    node.bbox2_max = b2.max;
-    node.bbox3_min = b3.min;
-    node.bbox3_max = b3.max;
-
-#if GPURT_BUILD_RTIP3_1
-    node.obbMatrixIndex = INVALID_OBB;
-#endif
-
-    // fp16 node does not have space to store flags,
-    // initialize the field to 0.
-    node.flags = 0;
-
-    return node;
-}
-
-//=====================================================================================================================
-static Float16BoxNode FetchFloat16BoxNode(in GpuVirtualAddress bvhAddress, in uint nodePointer)
-{
-    const uint byteOffset = ExtractNodePointerOffset(nodePointer);
-    const GpuVirtualAddress nodeAddr = bvhAddress + byteOffset;
-
-    uint4 d0, d1, d2, d3;
-    d0 = LoadDwordAtAddrx4(nodeAddr);
-    d1 = LoadDwordAtAddrx4(nodeAddr + 0x10);
-    d2 = LoadDwordAtAddrx4(nodeAddr + 0x20);
-    d3 = LoadDwordAtAddrx4(nodeAddr + 0x30);
-
-    Float16BoxNode node;
-
-    node.child0 = d0.x;
-    node.child1 = d0.y;
-    node.child2 = d0.z;
-    node.child3 = d0.w;
-
-    node.bbox0 = d1.xyz;
-    node.bbox1 = uint3(d1.w,  d2.xy);
-    node.bbox2 = uint3(d2.zw, d3.x );
-    node.bbox3 = d3.yzw;
-
-    return node;
-}
-
-//=====================================================================================================================
-static ProceduralNode FetchProceduralNode(in GpuVirtualAddress bvhAddress, in uint nodePointer)
-{
-    const uint byteOffset = ExtractNodePointerOffset(nodePointer);
-    const GpuVirtualAddress nodeAddr = bvhAddress + byteOffset;
-
-    uint4 d0, d1;
-
-    d0 = LoadDwordAtAddrx4(nodeAddr);
-    d1 = LoadDwordAtAddrx4(nodeAddr + 0x10);
-
-    ProceduralNode node;
-
-    node.bbox_min = asfloat(d0.xyz);
-    node.bbox_max = float3(asfloat(d0.w), asfloat(d1.xy));
-
-    return node;
-}
 
 //=====================================================================================================================
 static bool IsOpaque(uint geometryFlags, uint instanceFlags, uint rayFlags)

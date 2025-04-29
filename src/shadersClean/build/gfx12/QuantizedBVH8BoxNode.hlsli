@@ -22,54 +22,13 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#ifndef _QUANTIZEDBVH8BOXNODE_HLSL
-#define _QUANTIZEDBVH8BOXNODE_HLSL
+#ifndef BUILD_QUANTIZED_BVH8_BOX_NODE_HLSLI
+#define BUILD_QUANTIZED_BVH8_BOX_NODE_HLSLI
 
-#include "../shadersClean/common/Common.hlsli"
+#include "../BuildRootSignature.hlsli"
+#include "../../common/gfx12/QuantizedBVH8BoxNode.hlsli"
+#include "../../common/ScratchNode.hlsli"
 
-#include "../shadersClean/common/gfx12/internalNode.hlsli"
-
-//=====================================================================================================================
-static uint GetChildInfoOffset(
-    in uint childIdx)
-{
-    return QUANTIZED_BVH8_NODE_OFFSET_CHILD_INFO_0 + (childIdx * QUANTIZED_NODE_CHILD_INFO_STRIDE);
-}
-
-//=====================================================================================================================
-static uint ExtractValidChildCount(
-    uint packedData)
-{
-    return  1 + bitFieldExtract(packedData, 28, 3);
-}
-
-//=====================================================================================================================
-static uint GetBvh4ChildInfoOffset(
-    in uint childIdx)
-{
-    return QUANTIZED_BVH4_NODE_OFFSET_CHILD_INFO_0 + (childIdx * QUANTIZED_NODE_CHILD_INFO_STRIDE);
-}
-
-//=====================================================================================================================
-static uint ExtractBvh4ValidChildCount(
-    uint packedData)
-{
-    return  1 + bitFieldExtract(packedData, 28, 2);
-}
-
-//=====================================================================================================================
-static uint3 ExtractPackedExponents(
-    uint packedData)
-{
-    uint3 exponents;
-    exponents.x = bitFieldExtract(packedData, 0, 8);
-    exponents.y = bitFieldExtract(packedData, 8, 8);
-    exponents.z = bitFieldExtract(packedData, 16, 8);
-
-    return exponents;
-}
-
-#if GPURT_BVH_BUILD_SHADER
 //=====================================================================================================================
 // Get the address of the AABB node at the specified BLAS address and node pointer.
 // With OBBs enabled, the AABB must be loaded from a separate data section.
@@ -457,8 +416,6 @@ static BoundingBox DecodeRebraidChildBoundsBVH4(
 
     return childInfo.DecodeBounds(origin, exponents);
 }
-
-#endif
 
 #if defined(GPURT_DEVELOPER) && defined(__cplusplus)
 static_assert(offsetof(QuantizedBVH8BoxNode, childInfos[0]) == 32, "Alignment Issue");

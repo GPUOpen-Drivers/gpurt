@@ -57,7 +57,7 @@ T LoadInstanceDescBuffer(uint offset)
 }
 #include "IndirectArgBufferUtils.hlsl"
 #define SrcBuffer InstanceDescBuffer
-#include "BuildCommonScratch.hlsl"
+#include "../shadersClean/build/BuildCommonScratch.hlsli"
 #include "CompactCommon.hlsl"
 #undef SrcBuffer
 
@@ -103,7 +103,7 @@ void WaitForEncodeTasksToFinish(
 // Include implementations for each pass without shader entry points and resource declarations
 #define NO_SHADER_ENTRYPOINT 1
 
-#include "EncodeTopLevelCommon.hlsl"
+#include "../shadersClean/build/EncodeTopLevelCommon.hlsli"
 #include "GenerateMortonCodes.hlsl"
 #include "RadixSort/ScanExclusiveInt4DLBCommon.hlsl"
 #include "RadixSort/RadixSortParallel.hlsl"

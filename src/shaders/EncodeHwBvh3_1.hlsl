@@ -58,7 +58,7 @@ void SetSharedMem(uint index, uint value)
     SharedMem[index] = value;
 }
 
-#include "BuildCommonScratch.hlsl"
+#include "../shadersClean/build/BuildCommonScratch.hlsli"
 #endif
 
 #if GPURT_BUILD_RTIP3_1
@@ -77,8 +77,7 @@ namespace Gfx12
 // Returns true to enable a separate leaf compression pass over all children of one internal node.
 bool EnableLeafCompressionPass()
 {
-    return (Settings.topLevelBuild == false) &&
-           (Settings.geometryType == GEOMETRY_TYPE_TRIANGLES) &&
+    return (IsTrianglePrimitiveBuild() || IsCompressedTrianglePrimitiveBuild()) &&
            ((Settings.primCompressionFlags & PrimCompFlags::MultiPrim) ||
             (Settings.maxPrimRangeSize > 2));
 }
@@ -1635,7 +1634,7 @@ static void EncodeCompressedBoxNode(
                 }
 
                 packedFlags =
-                    FETCH_SCRATCH_NODE_DATA(uint, scratchNodesScratchOffset, triNodeIdx, SCRATCH_NODE_FLAGS_OFFSET);
+                    FetchScratchNodeData<uint>(scratchNodesScratchOffset, triNodeIdx, SCRATCH_NODE_FLAGS_OFFSET);
             }
 
             bestObbMatrixIdx = ExtractScratchNodeObbMatrixIdx(packedFlags);

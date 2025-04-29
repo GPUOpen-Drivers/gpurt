@@ -43,7 +43,7 @@ T LoadInstanceDescBuffer(uint offset)
 }
 #include "IndirectArgBufferUtils.hlsl"
 #include "IntersectCommon.hlsl"
-#include "BuildCommonScratch.hlsl"
+#include "../shadersClean/build/BuildCommonScratch.hlsli"
 #include "CompactCommon.hlsl"
 
 #endif

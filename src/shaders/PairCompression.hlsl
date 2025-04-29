@@ -33,7 +33,7 @@
 #include "../shadersClean/build/BuildRootSignature.hlsli"
 
 #include "../shadersClean/common/Common.hlsli"
-#include "BuildCommonScratch.hlsl"
+#include "../shadersClean/build/BuildCommonScratch.hlsli"
 #include "EncodeCommon.hlsl"
 
 #define MAX_LDS_ELEMENTS (16 * BUILD_THREADGROUP_SIZE)
@@ -206,15 +206,13 @@ bool CompareVertices(
     const uint scratchVertexStride = SCRATCH_NODE_V1_OFFSET;
 
     float3 vertex0 =
-        FETCH_SCRATCH_NODE_DATA(
-            float3,
+        FetchScratchNodeData<float3>(
             scratchNodesScratchOffset,
             scratchIndex0,
             scratchVertex0 * scratchVertexStride);
 
     float3 vertex1 =
-        FETCH_SCRATCH_NODE_DATA(
-            float3,
+        FetchScratchNodeData<float3>(
             scratchNodesScratchOffset,
             scratchIndex1,
             scratchVertex1 * scratchVertexStride);

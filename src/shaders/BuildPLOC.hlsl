@@ -84,7 +84,6 @@ struct BuildPlocArgs
 #define INIT_CLUSTER_LIST_LDS    0xfffffffe
 
 #if NO_SHADER_ENTRYPOINT == 0
-#include "../shadersClean/common/Common.hlsli"
 
 //=====================================================================================================================
 #include "../shadersClean/common/ShaderDefs.hlsli"
@@ -92,8 +91,9 @@ struct BuildPlocArgs
 #define GC_DSTMETADATA
 #define GC_SCRATCHBUFFER
 #include "../shadersClean/build/BuildRootSignature.hlsli"
+#include "../shadersClean/common/Common.hlsli"
 
-#include "BuildCommonScratch.hlsl"
+#include "../shadersClean/build/BuildCommonScratch.hlsli"
 
 groupshared int SharedMem[(2 * PLOC_RADIUS_MAX + BUILD_THREADGROUP_SIZE) * LDS_AABB_STRIDE];
 

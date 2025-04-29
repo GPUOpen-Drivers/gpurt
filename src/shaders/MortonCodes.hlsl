@@ -24,6 +24,8 @@
  **********************************************************************************************************************/
 //
 // For morton code functions based on libmorton:
+// MIT License
+//
 // Copyright(c) 2016 Jeroen Baert
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -44,27 +46,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-#ifndef _MORTONCODES_HLSL
-#define _MORTONCODES_HLSL
-
-#include "../shadersClean/common/Common.hlsli"
-
-//=====================================================================================================================
-// Expands 10 bits unsigned into into 30 bits unsigned int
-static uint ExpandBits(in uint ui)
-{
-    const uint factors[4] = { 0x00010001u, 0x00000101u, 0x00000011u, 0x00000005u };
-    const uint bitMasks[4] = { 0xFF0000FFu , 0x0F00F00Fu, 0xC30C30C3u, 0x49249249u };
-
-    ui = (ui * factors[0]) & bitMasks[0];
-    ui = (ui * factors[1]) & bitMasks[1];
-    ui = (ui * factors[2]) & bitMasks[2];
-    ui = (ui * factors[3]) & bitMasks[3];
-
-    return ui;
-}
-
-//=====================================================================================================================
+// For 32 bit morton code functions based on inkblot-sdnbhd
 //https://github.com/inkblot-sdnbhd/Morton-Z-Code-C-library/blob/master/MZC2D32.h
 // The MIT License(MIT)
 //
@@ -85,14 +67,589 @@ static uint ExpandBits(in uint ui)
 // COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 // IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 // CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-static uint ExpandBits2D(uint w)
+
+#ifndef _MORTONCODES_HLSL
+#define _MORTONCODES_HLSL
+
+#include "../shadersClean/common/Common.hlsli"
+
+//=====================================================================================================================
+uint Expand2D32(uint x)
 {
-    w &= 0x0000ffff;                  /* w = ---- ---- ---- ---- fedc ba98 7654 3210 */
-    w = (w ^ (w << 8)) & 0x00ff00ff;  /* w = ---- ---- fedc ba98 ---- ---- 7654 3210 */
-    w = (w ^ (w << 4)) & 0x0f0f0f0f;  /* w = ---- fedc ---- ba98 ---- 7654 ---- 3210 */
-    w = (w ^ (w << 2)) & 0x33333333;  /* w = --fe --dc --ba --98 --76 --54 --32 --10 */
-    w = (w ^ (w << 1)) & 0x55555555;  /* w = -f-e -d-c -b-a -9-8 -7-6 -5-4 -3-2 -1-0 */
-    return w;
+    // 32 bit function to expand an axiscode to 2D bits
+    // For an input : xxxxxxxxxxxxxxx...
+    // The output is: _x_x_x_x_x_x_x_...
+
+    // Use 16 bits
+    x = x >> 16U;
+
+    // [8]8[8]8
+    x = (x | (x << 8U)) & 0x00FF00FFU;
+
+    // [4]4[4]4[4]4[4]4
+    x = (x | (x << 4U)) & 0x0F0F0F0FU;
+
+    // [2]2[2]2[2]2[2]2[2]2[2]2[2]2[2]2
+    x = (x | (x << 2U)) & 0x33333333U;
+
+    // [1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1
+    x = (x | (x << 1U)) & 0x55555555U;
+
+    // Note: Initial bit is empty
+    return x;
+}
+
+//=====================================================================================================================
+uint64_t Expand2D64(uint code)
+{
+    // 64 bit function to expand an axiscode to 2D bits
+    // For an input : xxxxxxxxxxxxxxx...
+    // The output is: _x_x_x_x_x_x_x_...
+
+    uint64_t x = (uint64_t) code;
+
+    // [16]16[16]16
+    x = (x | (x << 16ULL)) & 0x0000FFFF0000FFFFULL;
+
+    // [8]8[8]8[8]8[8]8
+    x = (x | (x << 8ULL)) & 0x00FF00FF00FF00FFULL;
+
+    // [4]4[4]4[4]4[4]4[4]4[4]4[4]4[4]4
+    x = (x | (x << 4ULL)) & 0x0F0F0F0F0F0F0F0FULL;
+
+    // [2]2[2]2[2]2[2]2[2]2[2]2[2]2[2]2[2]2[2]2[2]2[2]2[2]2[2]2[2]2[2]2
+    x = (x | (x << 2ULL)) & 0x3333333333333333ULL;
+
+    // [1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1....
+    x = (x | (x << 1ULL)) & 0x5555555555555555ULL;
+
+    // Note: Initial bit is empty
+    return x;
+}
+
+//=====================================================================================================================
+uint ExpandFor2DBits32(uint x)
+{
+    // 32 bit function to expand an existing code for insertion of 2D bits
+    // For an input : xxxxxxxxxxxxxxx...
+    // The output is: x_x_x_x_x_x_x_x..
+
+    // input is 16 bits, at the top
+    x &= 0xFFFF0000U;
+
+    // 8[8]8[8]
+    x = (x | (x >> 8U)) & 0xFF00FF00U;
+
+    // 4[4]4[4]4[4]4[4]
+    x = (x | (x >> 4U)) & 0xF0F0F0F0U;
+
+    // 2[2]2[2]2[2]2[2]2[2]2[2]2[2]2[2]
+    x = (x | (x >> 2U)) & 0xCCCCCCCCU;
+
+    // 1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]
+    x = (x | (x >> 1U)) & 0xAAAAAAAAU;
+    return x;
+}
+
+//=====================================================================================================================
+uint64_t ExpandFor2DBits64(uint64_t value)
+{
+    // 64 bit function to expand an existing code for insertion of 2D bits
+    // For an input : xxxxxxxxxxxxxxx...
+    // The output is: x_x_x_x_x_x_x_x...
+
+    // input is 32 bits, at the top
+    value &= 0xFFFFFFFF00000000ULL;
+
+    // 16[16]16[16]
+    value = (value | (value >> 16ULL)) & 0xFFFF0000FFFF0000ULL;
+
+    // 8[8]8[8]8[8]8[8]
+    value = (value | (value >> 8ULL)) & 0xFF00FF00FF00FF00ULL;
+
+    // 4[4]4[4]4[4]4[4]4[4]4[4]4[4]4[4]
+    value = (value | (value >> 4ULL)) & 0xF0F0F0F0F0F0F0F0ULL;
+
+    // 2[2]2[2]2[2]2[2]2[2]2[2]2[2]2[2]2[2]2[2]2[2]2[2]2[2]2[2]2[2]2[2]
+    value = (value | (value >> 2ULL)) & 0xCCCCCCCCCCCCCCCCULL;
+
+    // 1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]1[1]....
+    value = (value | (value >> 1ULL)) & 0xAAAAAAAAAAAAAAAAULL;
+    return value;
+}
+
+//=====================================================================================================================
+uint Expand3D32(uint code)
+{
+    // 32 bit function to expand an axiscode to 3D bits
+    // For an input : xxxxxxxxxxxxxxx...
+    // The output is: x__x__x__x__x__....
+
+    // we only look at the first 11 bits
+    uint x = code & 0xFFE00000U;
+
+    // 6[12]5[9]
+    x = (x | x >> 12U) & 0xFC003E00U;
+
+    // 3[6]3[6]3[6]2[3]
+    x = (x | x >> 6U) & 0xE0703818U;
+
+    // 1[2]2[4]1[2]2[4]1[2]2[4]2[3]
+    x = (x | x >> 2U) & 0x984C2618U;
+
+    // 1[2]1[2]1[2]1[2]1[2]1[2]1[2]1[2]1[2]1[2]1[1]
+    x = (x | x >> 2U) & 0x92492492U;
+
+    return x;
+}
+
+//=====================================================================================================================
+uint64_t Expand3D64(uint code)
+{
+    // 64 bit function to expand an axiscode to 3D bits
+    // For an input : xxxxxxxxxxxxxxx...
+    // The output is: x__x__x__x__x__....
+
+    // we only look at the first 22 bits
+    uint64_t x = (uint64_t) (code) << 32ULL;
+
+    // 11[22]11[20]
+    x = (x | x >> 22ULL) & 0xFFE000007FF00000ULL;
+
+    // 6[12]5 [10]6[12]5[8]
+    x = (x | x >> 12ULL) & 0xFC003E007E001F00ULL;
+
+    // 3[6]3[6]3[6]2[4] 3[6]3[6]3[6]2[2]
+    x = (x | x >> 6ULL) & 0xE070381870381C0CULL;
+
+    // 1[2]2[4]1[2]2[4]1[2]2[4]2[4] 1[2]2[4]1[2]2[4]1[2]2[4]2[2]
+    x = (x | x >> 2ULL) & 0x984C26184C26130CULL;
+
+    // 1[2]1[2]1[2]1[2]1[2]1[2]1[2]1[2]1[2]1[2]1[2]1[2]1[2]1[2]1[2]1
+    x = (x | x >> 2ULL) & 0x9249249249249249ULL;
+
+    return x;
+}
+
+//=====================================================================================================================
+uint ExpandFor3DBits32(uint x)
+{
+    // 32 bit function to expand an existing code for insertion of 3D bits
+    // For an input : xyxyxyxyxyxyxy...
+    // The output is: xy_xy_xy_xy_xy_....
+
+    // input is 22 bits, at the top
+    x &= 0xFFFFFC00U;
+
+    // 12[6]10[4]
+    uint mask = 0x000FFC00U;
+    x = ((x & mask) >> 6U) | (x & ~mask);
+
+    // 6[3]6[3]6[3]4[1]
+    mask = 0x03F000F0U;
+    x = ((x & mask) >> 3U) | (x & ~mask);
+
+    // 4[2]2[1]4[2]2[1]4[2]2[1]4[1]
+    mask = 0x0C060300U;
+    x = ((x & mask) >> 2U) | (x & ~mask);
+
+    // 2[1]2[1]2[1]2[1]2[1]2[1]2[1]2[1]2[1]2[1]2
+    mask = 0x30180C06U;
+    x = ((x & mask) >> 1U) | (x & ~mask);
+
+    return x;
+}
+
+//=====================================================================================================================
+uint64_t ExpandFor3DBits64(uint64_t value)
+{
+    // 64 bit function to expand an existing code for insertion of 3D bits
+    // For an input : xyxyxyxyxyxyxy...
+    // The output is: xy_xy_xy_xy_xy_....
+
+    // input is 43 bits, at the top
+    value &= 0xFFFFFFFFFFE00000ULL;
+
+    // 22[11]21[10]
+    uint64_t mask = 0x000003FFFFE00000ULL;
+    value = ((value & mask) >> 11ULL) | (value & ~mask);
+
+    // 12[6]10[5] 12[6]9[4]
+    mask = 0x000FFC000007FC00ULL;
+    value = ((value & mask) >> 6ULL) | (value & ~mask);
+
+    // 6[3]6[3]6[3]4[2] 6[3]6[3]6[3]3[1]
+    mask = 0x03F000F001F80070ULL;
+    value = ((value & mask) >> 3ULL) | (value & ~mask);
+
+    // 4[2]2[1]4[2]2[1]4[2]2[1]4[2] 4[2]2[1]4[2]2[1]4[2]2[1]3[1]
+    mask = 0x0C06030006030180ULL;
+    value = ((value & mask) >> 2ULL) | (value & ~mask);
+
+    // 2[1]2[1]2[1]2[1]2[1]2[1]2[1]2[1]2[1]2[1]2[1]2[1]2[1]2[1]2[1]2[1]2[1]2[1]2[1]2[1]2[1]1
+    mask = 0x30180C06180C0602ULL;
+    value = ((value & mask) >> 1ULL) | (value & ~mask);
+
+    return value;
+}
+
+//=====================================================================================================================
+uint MortonCode3D32(uint x, uint y, uint z)
+{
+    // Generates a 32 bit regular morton code in xyzxyz...
+
+    // x__x__x__x__x__x__x...
+    const uint xx = Expand3D32(x);
+
+    // y__y__y__y__y__y__y...
+    const uint yy = Expand3D32(y);
+
+    // z__z__z__z__z__z__z...
+    const uint zz = Expand3D32(z);
+
+    // Shift and or to obtain xyzxyzxyzxyz....
+    return (xx) | (yy >> 1U) | (zz >> 2U);
+}
+
+//=====================================================================================================================
+uint64_t MortonCode3D64(uint x, uint y, uint z)
+{
+    // Generates a 64 bit regular morton code in xyzxyz..
+
+    // x__x__x__x__x__x__x...
+    const uint64_t xx = Expand3D64(x);
+
+    // y__y__y__y__y__y__y...
+    const uint64_t yy = Expand3D64(y);
+
+    // z__z__z__z__z__z__z...
+    const uint64_t zz = Expand3D64(z);
+
+    // Shift and or to obtain xyzxyzxyzxyz....
+    return (xx) | (yy >> 1ULL) | (zz >> 2ULL);
+}
+
+//=====================================================================================================================
+uint CreatePrebitMask32(uint prebits)
+{
+    // Generates a 32 bit mask for the given number of prebits
+    // E.G. Input = 4
+    //     Output = 111100000....
+    return prebits > 0U ? 0xFFFFFFFFU << (32U - prebits) : 0U;
+}
+
+//=====================================================================================================================
+uint64_t CreatePrebitMask64(uint prebits)
+{
+    // Generates a 64 bit mask for the given number of prebits
+    // E.G. Input = 6
+    //     Output = 111111000....
+    return prebits > 0U ? 0xFFFFFFFFFFFFFFFFULL << (uint64_t) (64U - prebits) : 0U;
+}
+
+//=====================================================================================================================
+uint FastVariableBitMorton32(uint3 codes, float3 extents)
+{
+    // Generates a 32-bit variable bit morton code
+
+    // Sort codes and extents
+    if (extents.x < extents.y)
+    {
+        if (extents.y < extents.z)
+        {
+            // z y x
+            extents = extents.zyx;
+            codes = codes.zyx;
+        }
+        else if (extents.x < extents.z)
+        {
+            // y z x
+            extents = extents.yzx;
+            codes = codes.yzx;
+        }
+        else
+        {
+            // y x z
+            extents = extents.yxz;
+            codes = codes.yxz;
+        }
+    }
+    else
+    {
+        if (extents.x < extents.z)
+        {
+            // z x y
+            extents = extents.zxy;
+            codes = codes.zxy;
+        }
+        else if (extents.y < extents.z)
+        {
+            // x z y
+            extents = extents.xzy;
+            codes = codes.xzy;
+        }
+        // other case is xyz, but extents is already in that order
+    }
+
+    // NOTE: all comments here will assume the order is xyz of largest to smallest axis
+
+    uint mortonCode;
+
+    // if there are no prebits between the largest and smallest axis, there will also not
+    // be any prebits between x and y, and y and z
+    const uint prebitsXZ = log2(extents.x / extents.z);
+    if (prebitsXZ == 0U)
+    {
+        // There are no prebits in this code, so early exit preventing 1 expansion
+        mortonCode = MortonCode3D32(codes.x, codes.y, codes.z);
+    }
+    else
+    {
+        // This code has prebits
+
+        // Start with only x bits
+        mortonCode = codes.x;
+
+        // Fetch the prebits from different axes
+        // This calculation computes the number of bits required BEFORE x becomes smaller than z to prevent resorting
+        const uint prebitsXY = log2(extents.x / extents.y);
+        const uint prebitsYZ = log2(extents.y / extents.z);
+        const uint prebits1D = prebitsXY;
+
+        // < 31, as we'd first insert x again, but that is already present in the current code
+        if (prebits1D < 31U)
+        {
+            const uint prebitMask1D = CreatePrebitMask32(prebits1D);
+            const uint prebits2D = prebitsXZ + prebitsYZ;
+
+            // Check if there are no 2D prebits
+            if (prebits1D == prebits2D)
+            {
+                // Short circuit from 1D to 3D bits, prevents 1 expansion
+
+                // regular tail: xyzxyzxyz
+                uint tail = MortonCode3D32(codes.x << prebits1D, codes.y, codes.z);
+
+                // E.G. 1D prebits = 4:
+                //      1D mask = xxxx________...
+                //      tail    = ____xyzxyzxy... (shifted by prebits1D)
+                //      Or op   = xxxxxyzxyzxy...
+                mortonCode = (mortonCode & prebitMask1D) | (tail >> prebits1D);
+            }
+            else
+            {
+                // Default case with 1D and 2D prebits
+
+                // Mask out 1D prebits and 'weave' in 2D tail
+                // ExpandFor2DBits = x_x_x_x_x_x_...
+                // Expand2D        = _y_y_y_y_y_y...
+                // Or op           = xyxyxyxyxyxy...
+                uint tail2D = ExpandFor2DBits32(mortonCode << (prebits1D)) | (Expand2D32(codes.y));
+
+                // E.G. 1D prebits = 6:
+                //      1D mask = xxxxxx______...
+                //      tail2D  = ______xyxyxy... (shifted by prebits1D)
+                //      Or op   = xxxxxxxyxyxy...
+                mortonCode = (mortonCode & prebitMask1D) | (tail2D >> prebits1D);
+
+                // Check to prevent overshifting, 30 as we'd first insert xy again, but that already is currently in the code
+                if (prebits2D < 30U)
+                {
+                    // Contains all 1D and 2D prebits
+                    const uint prebitMask2D = CreatePrebitMask32(prebits2D);
+
+                    // Mask out 1D and 2D prebits and 'weave' in 3D tail
+                    // ExpandFor3DBits = xy_xy_xy_xy_...
+                    // Expand3D        = __z__z__z__z... (shifted by 2U)
+                    // Or op           = xyzxyzxyzxyz...
+                    uint tail3D = ExpandFor3DBits32(mortonCode << (prebits2D)) | (Expand3D32(codes.z) >> 2U);
+
+                    // E.G. 2D prebits = 6 (Includes 1D prebits)
+                    //      2D mask = xxxyxy______... (2 1D bits + 4 2D bits)
+                    //      tail3D  = ______xyzxyz... (shifted by prebits2D)
+                    //      Or op   = xxxyxyxyzxyz...
+                    // OR (in case of uneven 2D prebits)
+                    //      2D prebits = 5 (Includes 1D prebits)
+                    //      2D mask = xxxyx_______... (2 1D bits + 3 2D bits)
+                    //      tail3D  = _____yxzyxzy... (shifted by prebits2D)
+                    //      Or op   = xxxyxyxzyxzy...
+                    mortonCode = (mortonCode & prebitMask2D) | (tail3D >> prebits2D);
+                }
+            }
+        }
+    }
+
+    return mortonCode;
+}
+
+//=====================================================================================================================
+uint64_t FastVariableBitMorton64(uint3 codes, float3 extents)
+{
+    // Generates a 64-bit variable bit morton code
+
+    // Sort codes and extents
+    if (extents.x < extents.y)
+    {
+        if (extents.y < extents.z)
+        {
+            // z y x
+            extents = extents.zyx;
+            codes = codes.zyx;
+        }
+        else if (extents.x < extents.z)
+        {
+            // y z x
+            extents = extents.yzx;
+            codes = codes.yzx;
+        }
+        else
+        {
+            // y x z
+            extents = extents.yxz;
+            codes = codes.yxz;
+        }
+    }
+    else
+    {
+        if (extents.x < extents.z)
+        {
+            // z x y
+            extents = extents.zxy;
+            codes = codes.zxy;
+        }
+        else if (extents.y < extents.z)
+        {
+            // x z y
+            extents = extents.xzy;
+            codes = codes.xzy;
+        }
+        // other case is xyz, but extents is already in that order
+    }
+
+    // NOTE: all comments here will assume the order is xyz of largest to smallest axis
+
+    uint64_t mortonCode;
+
+    // if there are no prebits between the largest and smallest axis, there will also not
+    // be any prebits between x and y, and y and z
+    const uint prebitsXZ = log2(extents.x / extents.z);
+    if (prebitsXZ == 0U)
+    {
+        // There are no prebits in this code, so early exit preventing 1 expansion
+        mortonCode = MortonCode3D64(codes.x, codes.y, codes.z);
+    }
+    else
+    {
+        // This code has prebits
+
+        // Start with only x bits
+        mortonCode = ((uint64_t)(codes.x) << 32ULL);
+
+        // Fetch the prebits from different axes
+        // This calculation computes the number of bits required BEFORE x becomes smaller than z to prevent resorting
+        const uint prebitsXY = log2(extents.x / extents.y);
+        const uint prebitsYZ = log2(extents.y / extents.z);
+        const uint prebits1D = prebitsXY;
+
+        // < 31 because if we have 31 prebits, the 32nd bit would be an x as well
+        if (prebits1D < 31U)
+        {
+            const uint64_t prebitMask1D = CreatePrebitMask64(prebits1D);
+            const uint prebits2D = prebitsXZ + prebitsYZ;
+
+            // Check if there are no 2D prebits
+            if (prebits1D == prebits2D)
+            {
+                // Short circuit, 1D to 3D, prevents 1 expansion
+
+                // regular tail: xyzxyzxyz
+                const uint64_t tail3D = MortonCode3D64(codes.x << prebits1D, codes.y, codes.z);
+
+                // E.G. 1D prebits = 4:
+                //      1D mask = xxxx________...
+                //      tail    = ____xyzxyzxy... (shifted by prebits1D)
+                //      Or op   = xxxxxyzxyzxy...
+                mortonCode = (mortonCode & prebitMask1D) | (tail3D >> prebits1D);
+            }
+            else
+            {
+                // Default case of 1D and 2D prebits
+
+                // Mask out 1D prebits and 'weave' in 2D tail
+                // ExpandFor2DBits = x_x_x_x_x_x_...
+                // Expand2D        = _y_y_y_y_y_y...
+                // Or op           = xyxyxyxyxyxy...
+                const uint64_t tail2D = ExpandFor2DBits64(mortonCode << ((uint64_t)prebits1D)) | (Expand2D64(codes.y));
+
+                // E.G. 1D prebits = 6:
+                //      1D mask = xxxxxx______...
+                //      tail2D  = ______xyxyxy... (shifted by prebits1D)
+                //      Or op   = xxxxxxxyxyxy...
+                mortonCode = (mortonCode & prebitMask1D) | (tail2D >> prebits1D);
+
+                // Check to prevent overshifting, 62 as we'd first insert xy again, but that already is currently in the code
+                if (prebits2D < 62U)
+                {
+                    // Contains all 1D and 2D prebits
+                    const uint64_t prebitMask2D = CreatePrebitMask64(prebits2D);
+
+                    // Mask out 1D and 2D prebits and 'weave' in 3D tail
+
+                    // ExpandFor3DBits = xy_xy_xy_xy_...
+                    // Expand3D        = __z__z__z__z... (shifted by 2U)
+                    // Or op           = xyzxyzxyzxyz...
+                    const uint64_t tail3D = ExpandFor3DBits64(mortonCode << ((uint64_t)prebits2D)) | (Expand3D64(codes.z) >> 2ULL);
+
+                    // E.G. 2D prebits = 6 (Includes 1D prebits)
+                    //      2D mask = xxxyxy______... (2 1D bits + 4 2D bits)
+                    //      tail3D  = ______xyzxyz... (shifted by prebits2D)
+                    //      Or op   = xxxyxyxyzxyz...
+                    // OR (in case of uneven 2D prebits)
+                    //      2D prebits = 5 (Includes 1D prebits)
+                    //      2D mask = xxxyx_______... (2 1D bits + 3 2D bits)
+                    //      tail3D  = _____yxzyxzy... (shifted by prebits2D)
+                    //      Or op   = xxxyxyxzyxzy...
+                    mortonCode = (mortonCode & prebitMask2D) | (tail3D >> prebits2D);
+                }
+            }
+        }
+        else if (prebitsYZ < 31U)
+        {
+            // Edge case where more 1D bits are required than possible
+            // Prevents 4 64 bit expansions for 2 32 bit expansions
+
+            // 1D part of tail
+            // E.G. prebitsYZ = 4
+            //           tail = yyyy______
+            uint tail = codes.y & CreatePrebitMask32(prebitsYZ);
+
+            // ExpandFor2DBits = y_y_y_y_y_y_...
+            // Expand2D        = _z_z_z_z_z_z...
+            // Or op           = yzyzyzyzyzyz...
+            const uint tail2D = ExpandFor2DBits32(codes.y << prebitsYZ) | Expand2D32(codes.z);
+
+            // E.G. prebitsYZ = 3:
+            //      1D mask = yyy_________...
+            //      tail2D  = ___yzyzyzyzy... (shifted by prebitsYZ)
+            //      Or op   = yyyyzyzyzyzy...
+            tail = tail | (tail2D >> prebitsYZ);
+
+            // Combines the 32 bit tail with the existing 1D prebits
+            // E.G.  tail = ________________________________yyyyyzyzyzy...
+            // mortonCode = xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx___________...
+            // Or op      = xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxyyyyyzyzyzy...
+            mortonCode = mortonCode | ((uint64_t)tail);
+        }
+        else
+        {
+            // All bits in the tail are y's
+            //       tail = ________________________________yyyyyyyyyyy...
+            // mortonCode = xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx___________...
+            // Or op      = xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxyyyyyyyyyyy...
+            mortonCode = mortonCode | ((uint64_t) codes.y);
+        }
+    }
+    return mortonCode;
 }
 
 //=====================================================================================================================
@@ -138,323 +695,6 @@ static uint64_t ExpandBits4D(uint a)
 }
 
 //=====================================================================================================================
-// Expands 21 bits into 63 bits
-// The following two functions are based on functions from
-// https://github.com/Forceflow/libmorton/blob/main/libmorton/morton3D.h
-// MIT License
-//
-// Copyright(c) 2016 Jeroen Baert
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files(the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and / or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions :
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-static uint64_t ExpandBits64(in uint64_t a)
-{
-    uint64_t x = a & 0x1fffff; // we only look at the first 21 bits
-
-    uint64_t temp = 0x1f00000000ffffull;
-    x = (x | x << 32) & temp;
-
-    temp = 0x1f0000ff0000ffull;
-    x = (x | x << 16) & temp;
-
-    temp = 0x100f00f00f00f00full;
-    x = (x | x << 8) & temp;
-
-    temp = 0x10c30c30c30c30c3ull;
-    x = (x | x << 4) & temp;
-
-    temp = 0x1249249249249249ull;
-    x = (x | x << 2) & temp;
-
-    return x;
-}
-
-//=====================================================================================================================
-// Calculates a 30-bit Morton code for the
-// given 3D point located within the unit cube [0,1].
-static uint CalculateRegularMortonCode32(in float3 p)
-{
-    const float x = min(max(p.x * 1024.0, 0.0), 1023.0);
-    const float y = min(max(p.y * 1024.0, 0.0), 1023.0);
-    const float z = min(max(p.z * 1024.0, 0.0), 1023.0);
-    const uint xx = ExpandBits(uint(x));
-    const uint yy = ExpandBits(uint(y));
-    const uint zz = ExpandBits(uint(z));
-    return xx * 4 + yy * 2 + zz;
-}
-
-//=====================================================================================================================
-static uint64_t ExpandBits2D64(uint64_t w)
-{
-    w &= 0x00000000ffffffff;
-    w = (w ^ (w << 16)) & 0x0000ffff0000ffff;
-    w = (w ^ (w << 8)) & 0x00ff00ff00ff00ff;
-    w = (w ^ (w << 4)) & 0x0f0f0f0f0f0f0f0f;
-    w = (w ^ (w << 2)) & 0x3333333333333333;
-    w = (w ^ (w << 1)) & 0x5555555555555555;
-    return w;
-}
-
-//=====================================================================================================================
-uint CalculateVariableBitsMortonCode32(
-    float3 sceneExtent,
-    float3 normalizedPos)
-{
-    const uint numMortonBits = 30;
-    int3 numBits = uint3(0, 0, 0);
-
-    int i;
-
-    int3 numPrebits;
-    int3 startAxis;
-
-    // find the largest start axis
-    // and how many prebits are needed between largest and two other axes
-    if (sceneExtent.x < sceneExtent.y)
-    {
-        if (sceneExtent.x < sceneExtent.z)
-        {
-            if (sceneExtent.y < sceneExtent.z)
-            {
-                // z, y, x
-                startAxis[0] = 2;
-                numPrebits[0] = log2(sceneExtent.z / sceneExtent.y);
-
-                startAxis[1] = 1;
-                numPrebits[1] = log2(sceneExtent.y / sceneExtent.x);
-
-                startAxis[2] = 0;
-                numPrebits[2] = log2(sceneExtent.z / sceneExtent.x);
-            }
-            else
-            {
-                // y, z, x
-                startAxis[0] = 1;
-                numPrebits[0] = log2(sceneExtent.y / sceneExtent.z);
-
-                startAxis[1] = 2;
-                numPrebits[1] = log2(sceneExtent.z / sceneExtent.x);
-
-                startAxis[2] = 0;
-                numPrebits[2] = log2(sceneExtent.y / sceneExtent.x);
-            }
-        }
-        else
-        {
-            // y, x, z
-            startAxis[0] = 1;
-            numPrebits[0] = log2(sceneExtent.y / sceneExtent.x);
-
-            startAxis[1] = 0;
-            numPrebits[1] = log2(sceneExtent.x / sceneExtent.z);
-
-            startAxis[2] = 2;
-            numPrebits[2] = log2(sceneExtent.y / sceneExtent.z);
-        }
-    }
-    else
-    {
-        if (sceneExtent.y < sceneExtent.z)
-        {
-            if (sceneExtent.x < sceneExtent.z)
-            {
-                // z, x, y
-                startAxis[0] = 2;
-                numPrebits[0] = log2(sceneExtent.z / sceneExtent.x);
-
-                startAxis[1] = 0;
-                numPrebits[1] = log2(sceneExtent.x / sceneExtent.y);
-
-                startAxis[2] = 1;
-                numPrebits[2] = log2(sceneExtent.z / sceneExtent.y);
-            }
-            else
-            {
-                // x, z, y
-                startAxis[0] = 0;
-                numPrebits[0] = log2(sceneExtent.x / sceneExtent.z);
-
-                startAxis[1] = 2;
-                numPrebits[1] = log2(sceneExtent.z / sceneExtent.y);
-
-                startAxis[2] = 1;
-                numPrebits[2] = log2(sceneExtent.x / sceneExtent.y);
-            }
-        }
-        else
-        {
-            // x, y, z
-            startAxis[0] = 0;
-            numPrebits[0] = log2(sceneExtent.x / sceneExtent.y);
-
-            startAxis[1] = 1;
-            numPrebits[1] = log2(sceneExtent.y / sceneExtent.z);
-
-            startAxis[2] = 2;
-            numPrebits[2] = log2(sceneExtent.x / sceneExtent.z);
-        }
-    }
-
-    // say x > y > z
-    // prebits[0] = 3
-    // prebits[1] = 2
-    // if swap == 1
-    // xxx xy xy x yxz yxz ...
-    // if swap == 0
-    // xxx xy xy xyz xyz ...
-    int swap = numPrebits[2] - (numPrebits[0] + numPrebits[1]);
-
-    numPrebits[0] = min(numPrebits[0], numMortonBits);
-    numPrebits[1] = min(numPrebits[1] * 2, numMortonBits - numPrebits[0]) / 2;
-
-    int numPrebitsSum = numPrebits[0] + numPrebits[1] * 2;
-
-    if (numPrebitsSum != numMortonBits)
-    {
-        numPrebitsSum += swap;
-    }
-    else
-    {
-        swap = 0;
-    }
-
-    // the scene might be 2D so check for the smallest axis
-    numBits[2] = (sceneExtent[startAxis[2]] != 0) ? max(0, (numMortonBits - numPrebitsSum) / 3) : 0;
-
-    if (swap > 0)
-    {
-        numBits[0] = max(0, (numMortonBits - numBits[2] - numPrebitsSum) / 2 + numPrebits[1] + numPrebits[0] + 1);
-        numBits[1] = numMortonBits - numBits[0] - numBits[2];
-    }
-    else
-    {
-        numBits[1] = max(0, (numMortonBits - numBits[2] - numPrebitsSum) / 2 + numPrebits[1]);
-        numBits[0] = numMortonBits - numBits[1] - numBits[2];
-    }
-
-    uint mortonCode = 0;
-    uint3 axisCode;
-
-    // based on the number of bits, calculate each code per axis
-#if !__cplusplus
-    [unroll]
-#endif
-    for (uint a = 0; a < 3; a++)
-    {
-        axisCode[a] = min(max(normalizedPos[startAxis[a]] * (1U << numBits[a]), 0.0), (1U << numBits[a]) - 1);
-    }
-
-    uint delta0 = 0;
-    uint delta1 = 0;
-
-    // if there are prebits, set them in the morton code:
-    // if swap == 1
-    // [xxx xy xy x] yxz yxz ...
-    // if swap == 0
-    // [xxx xy xy xyz] xyz ...
-    if (numPrebitsSum > 0)
-    {
-        numBits[0] -= numPrebits[0];
-        mortonCode = axisCode[0] & (((1U << numPrebits[0]) - 1) << numBits[0]);
-        mortonCode >>= numBits[0];
-
-        mortonCode <<= numPrebits[1] * 2;
-        numBits[0] -= numPrebits[1];
-        numBits[1] -= numPrebits[1];
-        uint temp0 = axisCode[0] & (((1U << numPrebits[1]) - 1) << numBits[0]);
-        temp0 >>= numBits[0];
-        temp0 = ExpandBits2D(temp0);
-
-        uint temp1 = axisCode[1] & (((1U << numPrebits[1]) - 1) << numBits[1]);
-        temp1 >>= numBits[1];
-        temp1 = ExpandBits2D(temp1);
-
-        mortonCode |= temp0 * 2 + temp1;
-
-        if (swap > 0)
-        {
-            mortonCode <<= 1;
-            numBits[0] -= 1;
-            uint temp = axisCode[0] & (1U << numBits[0]);
-            temp >>= numBits[0];
-            mortonCode |= temp;
-        }
-
-        mortonCode <<= numBits[0] + numBits[1] + numBits[2];
-
-        axisCode[0] &= ((1U << numBits[0]) - 1);
-        axisCode[1] &= ((1U << numBits[1]) - 1);
-
-        if (swap > 0)
-        {
-            delta0 = (numBits[1] - numBits[0]);
-            axisCode[0] <<= delta0;
-
-            delta1 = (numBits[1] - numBits[2]);
-            axisCode[2] <<= delta1;
-        }
-        else
-        {
-            delta0 = (numBits[0] - numBits[1]);
-            axisCode[1] <<= delta0;
-
-            delta1 = (numBits[0] - numBits[2]);
-            axisCode[2] <<= delta1;
-        }
-    }
-
-    // 2D case, just use xy xy xy...
-    if (numBits[2] == 0)
-    {
-#if !__cplusplus
-        [unroll]
-#endif
-        for (int r = 0; r < 2; r++)
-        {
-            axisCode[r] = ExpandBits2D(axisCode[r]);
-        }
-
-        mortonCode |= axisCode[0] * 2 + axisCode[1];
-    }
-    else // 3D case, just use if swap == 0 xyz xyz xyz..., if swap == 1 yxz yxz yxz...
-    {
-#if !__cplusplus
-        [unroll]
-#endif
-        for (int i = 0; i < 3; i++)
-        {
-            axisCode[i] = (axisCode[i] > 0) ? ExpandBits(axisCode[i]) : 0;
-        }
-
-        if (swap > 0)
-        {
-            mortonCode |= (axisCode[1] * 4 + axisCode[0] * 2 + axisCode[2]) >> (delta0 + delta1);
-        }
-        else
-        {
-            mortonCode |= (axisCode[0] * 4 + axisCode[1] * 2 + axisCode[2]) >> (delta0 + delta1);
-        }
-    }
-
-    return mortonCode;
-}
-
-//=====================================================================================================================
 uint ExpandForSizeBits(uint value)
 {
     // input is 24 bits
@@ -482,348 +722,6 @@ uint ExpandForSizeBits(uint value)
 }
 
 //=====================================================================================================================
-static uint64_t CalculateVariableBitsMortonCode64(
-    float3 sceneExtent,
-    uint3 axisCodes,
-    float surfaceArea,
-    uint numSizeBits,
-    float2 sizeMinMax,
-    out uint numAxisBits)
-{
-    uint3 values;
-    uint4 numMortonBitsPerAxis;
-
-    int numMortonBits = 62;
-
-    if (numSizeBits > 0)
-    {
-        numMortonBits -= numSizeBits;
-    }
-
-    numMortonBitsPerAxis = uint4(0, 0, 0, numSizeBits);
-    int3 numBits = int3(0,0,0);
-    int3 numPrebits;
-    int3 startAxis;
-
-    // find the largest start axis
-    // and how many prebits are needed between largest and two other axes
-    if (sceneExtent.x < sceneExtent.y)
-    {
-        if (sceneExtent.x < sceneExtent.z)
-        {
-            if (sceneExtent.y < sceneExtent.z)
-            {
-                // z, y, x
-                startAxis[0] = 2;
-                numPrebits[0] = log2(sceneExtent.z / sceneExtent.y);
-
-                startAxis[1] = 1;
-                numPrebits[1] = log2(sceneExtent.y / sceneExtent.x);
-
-                startAxis[2] = 0;
-                numPrebits[2] = log2(sceneExtent.z / sceneExtent.x);
-            }
-            else
-            {
-                // y, z, x
-                startAxis[0] = 1;
-                numPrebits[0] = log2(sceneExtent.y / sceneExtent.z);
-
-                startAxis[1] = 2;
-                numPrebits[1] = log2(sceneExtent.z / sceneExtent.x);
-
-                startAxis[2] = 0;
-                numPrebits[2] = log2(sceneExtent.y / sceneExtent.x);
-            }
-        }
-        else
-        {
-            // y, x, z
-            startAxis[0] = 1;
-            numPrebits[0] = log2(sceneExtent.y / sceneExtent.x);
-
-            startAxis[1] = 0;
-            numPrebits[1] = log2(sceneExtent.x / sceneExtent.z);
-
-            startAxis[2] = 2;
-            numPrebits[2] = log2(sceneExtent.y / sceneExtent.z);
-        }
-    }
-    else
-    {
-        if (sceneExtent.y < sceneExtent.z)
-        {
-            if (sceneExtent.x < sceneExtent.z)
-            {
-                // z, x, y
-                startAxis[0] = 2;
-                numPrebits[0] = log2(sceneExtent.z / sceneExtent.x);
-
-                startAxis[1] = 0;
-                numPrebits[1] = log2(sceneExtent.x / sceneExtent.y);
-
-                startAxis[2] = 1;
-                numPrebits[2] = log2(sceneExtent.z / sceneExtent.y);
-            }
-            else
-            {
-                // x, z, y
-                startAxis[0] = 0;
-                numPrebits[0] = log2(sceneExtent.x / sceneExtent.z);
-
-                startAxis[1] = 2;
-                numPrebits[1] = log2(sceneExtent.z / sceneExtent.y);
-
-                startAxis[2] = 1;
-                numPrebits[2] = log2(sceneExtent.x / sceneExtent.y);
-            }
-        }
-        else
-        {
-            // x, y, z
-            startAxis[0] = 0;
-            numPrebits[0] = log2(sceneExtent.x / sceneExtent.y);
-
-            startAxis[1] = 1;
-            numPrebits[1] = log2(sceneExtent.y / sceneExtent.z);
-
-            startAxis[2] = 2;
-            numPrebits[2] = log2(sceneExtent.x / sceneExtent.z);
-        }
-    }
-
-    if (sceneExtent[startAxis[2]] == 0)
-    {
-        numPrebits[1] = 0;
-        numPrebits[2] = 0;
-    }
-
-    // say x > y > z
-    // prebits[0] = 3
-    // prebits[1] = 2
-    // if swap == 1
-    // xxx xy xy x yxz yxz ...
-    // if swap == 0
-    // xxx xy xy xyz xyz ...
-    int swap = numPrebits[2] > (numPrebits[0] + numPrebits[1]) ? 1 : 0;
-
-    numPrebits[0] = min(numPrebits[0], numMortonBits);
-    numPrebits[1] = min(numPrebits[1] * 2, numMortonBits - numPrebits[0]) / 2;
-
-    int numPrebitsSum = numPrebits[0] + numPrebits[1] * 2;
-
-    if (numPrebitsSum != numMortonBits)
-    {
-        numPrebitsSum += swap;
-    }
-    else
-    {
-        swap = 0;
-    }
-
-    // the scene might be 2D so check for the smallest axis
-    numBits[2] = (sceneExtent[startAxis[2]] != 0) ? max(0, (numMortonBits - numPrebitsSum) / 3) : 0;
-
-    if (swap > 0)
-    {
-        numBits[0] = max(0, (numMortonBits - numBits[2] - numPrebitsSum) / 2 + numPrebits[1] + numPrebits[0] + 1);
-        numBits[1] = numMortonBits - numBits[0] - numBits[2];
-    }
-    else
-    {
-        numBits[1] = max(0, (numMortonBits - numBits[2] - numPrebitsSum) / 2 + numPrebits[1]);
-        numBits[0] = numMortonBits - numBits[1] - numBits[2];
-    }
-
-    const int delta = numBits[0] - 31; // clamp axis values to avoid overflow of a uint
-
-    if (delta > 0)
-    {
-        numBits[0] -= delta;
-
-        numPrebits[0] = min(numPrebits[0], numBits[0]);
-
-        if (numBits[0] == numPrebits[0])
-            swap = 0;
-
-        numBits[1] = max(0, numBits[1] - delta);
-
-        numPrebits[1] = min(numPrebits[1], numBits[1]);
-
-        numBits[2] = max(0, numBits[2] - delta);
-
-        numPrebitsSum = numPrebits[0] + numPrebits[1] * 2 + swap;
-    }
-
-    numAxisBits = numBits[2] + numBits[1] + numBits[0];
-
-    uint64_t mortonCode = 0;
-    uint64_t3 axisCode;
-
-    // based on the number of bits, shift out each code per axis
-#if !__cplusplus
-    [unroll]
-#endif
-    for (uint a = 0; a < 3; a++)
-    {
-        axisCode[a] = axisCodes[startAxis[a]] >> (32U - numBits[a]);
-        numMortonBitsPerAxis[startAxis[a]] = numBits[a];
-    }
-
-    values[startAxis[0]] = uint(axisCode[0]);
-    values[startAxis[1]] = uint(axisCode[1]);
-    values[startAxis[2]] = uint(axisCode[2]);
-
-    uint delta0 = 0;
-    uint delta1 = 0;
-
-    // if there are prebits, set them in the morton code:
-    // if swap == 1
-    // [xxx xy xy x] yxz yxz ...
-    // if swap == 0
-    // [xxx xy xy xyz] xyz ...
-    if (numPrebitsSum > 0)
-    {
-        numBits[0] -= numPrebits[0];
-        mortonCode = axisCode[0] & (((1ULL << numPrebits[0]) - 1) << numBits[0]);
-        mortonCode >>= numBits[0];
-
-        mortonCode <<= numPrebits[1] * 2;
-        numBits[0] -= numPrebits[1];
-        numBits[1] -= numPrebits[1];
-        uint64_t temp0 = axisCode[0] & (((1ULL << numPrebits[1]) - 1) << numBits[0]);
-        temp0 >>= numBits[0];
-        temp0 = ExpandBits2D64(temp0);
-
-        uint64_t temp1 = axisCode[1] & (((1ULL << numPrebits[1]) - 1) << numBits[1]);
-        temp1 >>= numBits[1];
-        temp1 = ExpandBits2D64(temp1);
-
-        mortonCode |= temp0 * 2 + temp1;
-
-        if (swap > 0)
-        {
-            mortonCode <<= 1;
-            numBits[0] -= 1;
-            uint64_t temp = axisCode[0] & (1ULL << numBits[0]);
-            temp >>= numBits[0];
-            mortonCode |= temp;
-        }
-
-        mortonCode <<= numBits[0] + numBits[1] + numBits[2];
-
-        axisCode[0] &= ((1ULL << numBits[0]) - 1);
-        axisCode[1] &= ((1ULL << numBits[1]) - 1);
-
-        if (swap > 0)
-        {
-            uint64_t temp = axisCode[0];
-            axisCode[0] = axisCode[1];
-            axisCode[1] = temp;
-
-            uint temp2 = numBits[0];
-            numBits[0] = numBits[1];
-            numBits[1] = temp2;
-        }
-    }
-
-    // 2D case, just use xy xy xy...
-    if (numBits[2] == 0)
-    {
-#if !__cplusplus
-        [unroll]
-#endif
-        for (int r = 0; r < 2; r++)
-        {
-            axisCode[r] = ExpandBits2D64(axisCode[r]);
-        }
-
-        uint delta = numBits[0] - numBits[1];
-
-        mortonCode |= (axisCode[0] << (1 - delta)) + (axisCode[1] << delta);
-    }
-    else // 3D case, just use if swap == 0 xyz xyz xyz..., if swap == 1 yxz yxz yxz...
-    {
-#if !__cplusplus
-        [unroll]
-#endif
-        for (int i = 0; i < 3; i++)
-        {
-            axisCode[i] = (axisCode[i] > 0) ? ExpandBits64(axisCode[i]) : 0;
-        }
-
-        uint delta = numBits[0] - numBits[1];
-        uint delta2 = numBits[0] - numBits[2];
-
-        mortonCode |= (((axisCode[0] << (1 - delta)) + (axisCode[1] << (2 * delta))) << (1 - delta2)) +
-                      (axisCode[2] << ((1 + (1 - delta)) * delta2));
-    }
-
-    return mortonCode;
-}
-
-//=====================================================================================================================
-uint64_t Expand2D64(uint code)
-{
-    uint64_t x = (uint64_t) code;
-
-    x = (x | (x << 16ULL)) & 0x0000FFFF0000FFFFULL;
-    x = (x | (x << 8ULL)) & 0x00FF00FF00FF00FFULL;
-    x = (x | (x << 4ULL)) & 0x0F0F0F0F0F0F0F0FULL;
-    x = (x | (x << 2ULL)) & 0x3333333333333333ULL;
-    x = (x | (x << 1ULL)) & 0x5555555555555555ULL;
-    return x;
-}
-
-//=====================================================================================================================
-uint64_t MortonCode2D64(uint2 codes)
-{
-    // Creates a 63-bit 2D code
-    uint64_t c1 = Expand2D64(codes.x);
-    uint64_t c2 = Expand2D64(codes.y);
-    return (c1) | (c2 >> 1ULL);
-}
-
-//=====================================================================================================================
-uint64_t Expand3D64(uint code)
-{
-    // we only look at the first 21 bits
-    uint64_t x = (uint64_t) (code >> 11ULL);
-
-    x = (x | x << 32) & 0x1f00000000ffffull;
-    x = (x | x << 16) & 0x1f0000ff0000ffull;
-    x = (x | x << 8) & 0x100f00f00f00f00full;
-    x = (x | x << 4) & 0x10c30c30c30c30c3ull;
-    x = (x | x << 2) & 0x1249249249249249ull;
-    return x;
-}
-
-//=====================================================================================================================
-// Calculates a 63-bit Morton code for the
-// given 3D point located within the unit cube [0,1].
-static uint64_t MortonCode3D64(in uint3 axisCodes)
-{
-    const uint64_t xx = Expand3D64(axisCodes.x);
-    const uint64_t yy = Expand3D64(axisCodes.y);
-    const uint64_t zz = Expand3D64(axisCodes.z);
-
-    return (xx << 2U) | (yy << 1U) | zz;
-}
-
-//=====================================================================================================================
-uint32_t CalculateMortonCode32(
-    float3 normalizedPos,
-    float3 sceneExtents)
-{
-    const bool regularCodes = IsRegularMortonCodeEnabled();
-
-    const uint32_t mortonCode = regularCodes ? CalculateRegularMortonCode32(normalizedPos) :
-                                               CalculateVariableBitsMortonCode32(sceneExtents, normalizedPos);
-
-    return mortonCode;
-}
-
-//=====================================================================================================================
 uint3 CalculateAxisCodes(
     float3 boundsMin,
     float3 boundsExtent,
@@ -834,6 +732,30 @@ uint3 CalculateAxisCodes(
     float3 normalizedPos = isDegenerate ? float3(0.5f, 0.5f, 0.5f) : clamp((position - boundsMin) / boundsExtent, 0.0f, 0.99999994f);
 
     return uint3(normalizedPos * float(0xFFFFFFFFU));
+}
+
+//=====================================================================================================================
+uint32_t CalculateMortonCode32(
+    float3 boundsMin,
+    float3 boundsExtent,
+    float3 position,
+    uint isDegenerate)
+{
+    const uint3 axisCodes = CalculateAxisCodes(
+        boundsMin,
+        boundsExtent,
+        position,
+        isDegenerate
+    );
+
+    bool regularCodes = IsRegularMortonCodeEnabled();
+
+    const uint32_t mortonCode = regularCodes ? MortonCode3D32(axisCodes.x, axisCodes.y, axisCodes.z) :
+                                               FastVariableBitMorton32(axisCodes, boundsExtent);
+
+    // TODO: make 32 bit morton codes actually 32 bit, they are now used as ints everywhere
+    //       which disables the msb
+    return mortonCode >> 1U;
 }
 
 //=====================================================================================================================
@@ -855,15 +777,14 @@ uint64_t CalculateMortonCode64(
     );
 
     uint64_t mortonCode = 0;
-    uint numAxisBits = 64U;
 
     if (IsRegularMortonCodeEnabled())
     {
-        mortonCode = MortonCode3D64(axisCodes);
+        mortonCode = MortonCode3D64(axisCodes.x, axisCodes.y, axisCodes.z);
     }
     else
     {
-        mortonCode = CalculateVariableBitsMortonCode64(boundsExtent, axisCodes, surfaceArea, numSizeBits, sizeMinMax, numAxisBits);
+        mortonCode = FastVariableBitMorton64(axisCodes, boundsExtent);
     }
 
     if (numSizeBits > 0)
@@ -878,7 +799,7 @@ uint64_t CalculateMortonCode64(
 
         const uint numAxisBitsWithSize = numSizeBits * 3;
 
-        const uint numAxisBitsWithNoSize = numAxisBits - numAxisBitsWithSize;
+        const uint numAxisBitsWithNoSize = 64U - numAxisBitsWithSize;
 
         const uint bitsToExpand = uint(mortonCodeTemp >> numAxisBitsWithNoSize);
 

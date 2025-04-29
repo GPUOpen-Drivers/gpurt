@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2024-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -158,9 +158,22 @@ static uint32_t Pow2Align(
 }
 
 //=====================================================================================================================
+// The uint64 overload for countbits() as DXC does not generate spirv's OpBitCount with uint64
 inline uint countbits64(uint64_t val)
 {
     return countbits(LowPart(val)) + countbits(HighPart(val));
+}
+
+//=====================================================================================================================
+static uint FloatToUint(float v)
+{
+    const uint bitShift = 31;
+    const uint bitMask = 0x80000000;
+
+    uint ui = uint(asuint(v));
+    ui ^= (1 + ~(ui >> bitShift) | bitMask);
+
+    return ui;
 }
 
 #endif

@@ -521,6 +521,16 @@ public:
     virtual DataDriverMatchingIdentifierStatus CheckSerializedAccelStructVersion(
         const DataDriverMatchingIdentifier* identifier) override;
 
+    // Prepares shadow shader binding table for replay (Vulkan capture replay feature)
+    //
+    // @param cmdBuffer            [in/out] Opaque handle to command buffer where commands will be written
+    // @param userData             [in] Addresses of input/output buffers
+    // @param  totalSbtEntryCount  Total number of SBT entries
+    virtual void PrepareShadowSbtForReplay(
+        ClientCmdBufferHandle                    cmdBuffer,
+        const PrepareShadowSbtForReplayUserData& userData,
+        uint32                                   totalSbtEntryCount) override;
+
     // Returns true if the acceleration structure trace source is currently enabled.
     virtual bool AccelStructTraceEnabled() const override
     {

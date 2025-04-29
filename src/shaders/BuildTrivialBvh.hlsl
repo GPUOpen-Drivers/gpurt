@@ -51,6 +51,8 @@
                 "CBV(b255),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
 
+#define DISABLE_BUILD_ROOT_SIGNATURE
+
 #if GPURT_BUILD_RTIP3_1
 
 struct RootConstants
@@ -83,7 +85,7 @@ static RWByteAddressBuffer IndirectArgBuffer;
 static BuildShaderConstants ShaderConstants;
 
 #define SrcBuffer NullBuffer
-#include "BuildCommonScratch.hlsl"
+#include "../shadersClean/build/BuildCommonScratch.hlsli"
 #include "CompactCommon.hlsl"
 #undef SrcBuffer
 
@@ -110,7 +112,7 @@ InstanceDesc LoadInstanceDesc(uint instanceId, uint offsetInBytes);
 // Include implementations for each pass without shader entry points and resource declarations
 #define NO_SHADER_ENTRYPOINT 1
 
-#include "EncodeTopLevelCommon.hlsl"
+#include "../shadersClean/build/EncodeTopLevelCommon.hlsli"
 #include "BuildQBVH.hlsl"
 
 #include "QBVH8Common.hlsl"

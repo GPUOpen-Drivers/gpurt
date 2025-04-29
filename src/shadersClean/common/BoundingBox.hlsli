@@ -34,6 +34,18 @@ struct BoundingBox // matches D3D12_RAYTRACING_AABB
 };
 
 //=====================================================================================================================
+// FLT_MAX defined here again due to include issues with common.hlsli
+#ifndef FLT_MAX
+#define FLT_MAX 3.402823466e+38F
+#endif
+
+static const BoundingBox InvalidBoundingBox =
+{
+    float3(FLT_MAX, FLT_MAX, FLT_MAX),
+    float3(-FLT_MAX, -FLT_MAX, -FLT_MAX)
+};
+
+//=====================================================================================================================
 struct MortonBoundingBox
 {
     float3 min;
@@ -72,12 +84,35 @@ struct PackedUintBoundingBox4
 //=====================================================================================================================
 static BoundingBox CombineAABB(
     BoundingBox b0,
-    BoundingBox b1)
-{
-    BoundingBox bbox;
-    bbox.min = min(b0.min, b1.min);
-    bbox.max = max(b0.max, b1.max);
-    return bbox;
-}
+    BoundingBox b1);
+
+//=====================================================================================================================
+// Calculate an AABB from the 3 points of the triangle.
+static BoundingBox GenerateTriangleBoundingBox(float3 v0, float3 v1, float3 v2);
+
+//=====================================================================================================================
+// Compresses a single bounding box into a uint3 representing each bounding plane using half floats
+static uint3 CompressBBoxToUint3(in BoundingBox box);
+
+//=====================================================================================================================
+// Uncompresses a single bounding box from uint3
+// Intended for software path only
+static BoundingBox UncompressBBoxFromUint3(in uint3 box);
+
+//=====================================================================================================================
+static bool IsInvalidBoundingBox(BoundingBox box);
+
+//=====================================================================================================================
+static bool IsCorruptBox(BoundingBox box);
+
+//=====================================================================================================================
+static float ComputeBoxSurfaceArea(BoundingBox aabb);
+
+//=====================================================================================================================
+static float ComputeBoxSurfaceArea(const uint3 aabb);
+
+#ifndef LIBRARY_COMPILATION
+#include "BoundingBox.hlsl"
+#endif
 
 #endif

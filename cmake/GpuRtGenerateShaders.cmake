@@ -1,7 +1,7 @@
 ##
  #######################################################################################################################
  #
- #  Copyright (c) 2022-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+ #  Copyright (c) 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  #
  #  Permission is hereby granted, free of charge, to any person obtaining a copy
  #  of this software and associated documentation files (the "Software"), to deal
@@ -66,6 +66,13 @@ set(gpurtBvhShaders "${gpurtOutputDir}/g_internal_shaders.h")
 set(gpurtTraceShadersSpirv "${gpurtOutputDir}/g_GpuRtLibrary_spv.h")
 
 set(gpurtDebugInfoFile "${CMAKE_CURRENT_BINARY_DIR}/g_gpurtDebugInfo.h")
+
+    # Find binaries in PATH
+    find_program(gpurtDxcCompiler dxc REQUIRED)
+    find_program(gpurtSpirvRemap spirv-remap REQUIRED)
+    # Find dxcompiler library.
+    get_filename_component(gpurtDxcCompilerDirectory "${gpurtDxcCompiler}" DIRECTORY)
+    find_library(gpurtDxcompilerLib dxcompiler HINTS ${gpurtDxcCompilerDirectory} /usr/lib/dxc REQUIRED)
 
 set(originalShaderSourceDir "${GPU_RAY_TRACING_SOURCE_DIR}/src/shaders/")
 set(originalShaderSource ${GPURT_SHADER_SOURCE_FILES})
@@ -136,6 +143,7 @@ if(GPURT_CLIENT_API STREQUAL "VULKAN")
             ${gpurtStripWhitelist}
             ${gpurtDxcCompiler}
             ${gpurtSpirvRemap}
+
         COMMAND ${RT_SHADER_VALIDATION_COMMAND}
 
         COMMAND Python3::Interpreter "${gpurtCompileScript}"

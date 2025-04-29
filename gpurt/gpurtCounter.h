@@ -433,6 +433,23 @@ GPURT_STATIC_ASSERT(INSTANCE_INPUTS_INSTANCES_OFFSET == offsetof(InstanceInputHe
 GPURT_STATIC_ASSERT(sizeof(InstanceInputHeader) == INSTANCE_INPUTS_HEADER_SIZE, "Instance inputs header mismatch.");
 
 // ====================================================================================================================
+struct BuildInputDescHeader
+{
+    uint32_t type;  // Triangles, AABBs or Instances
+    uint32_t flags; // Geometry flags
+    union
+    {
+        TriangleInputHeader triangles;
+        AABBInputHeader     aabbs;
+        InstanceInputHeader instances;
+    };
+};
+
+#define BUILD_INPUT_DESC_TYPE_TRIANGLES         0
+#define BUILD_INPUT_DESC_TYPE_AABBS             1
+#define BUILD_INPUT_DESC_TYPE_INSTANCES         2
+
+// ====================================================================================================================
 // 32-bit unique ray identifier calculated as below.
 //      uint32_t id = threadID.x + (threadID.y * dim.x) + (threadID.z * dim.x * dim.y);
 struct RayID

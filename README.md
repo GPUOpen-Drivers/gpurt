@@ -1,24 +1,43 @@
-### GPU Ray Tracing Library
+# GPU Ray Tracing Library
 
 The GPU Ray Tracing (GPURT) library is a static library (source deliverable) that provides ray tracing related functionalities for AMD drivers supporting DXR (DirectX 12&reg;) and the Vulkan&reg; RT API. The GPURT library is built on top of AMD's Platform Abstraction Library (PAL). Refer to PAL documentation for information regarding interfaces used by GPURT for various operations including command generation, memory allocation etc.
 
-GPURT uses a C++ interface. The public interface is defined in .../gpurt/gpurt, and clients must only include headers from that directory. The interface is divided into multiple header files based on their dependencies and usage.
-
-* gpurt/gpurt.h
-  * Provides definiton of the public GPURT device interface used to perform various ray tracing operations and querying traversal shader code.
-* gpurt/gpurtAccelStruct.h
-  * Provides definition of the GPURT acceleration structure produced by the GPURT acceleration structure builder.
-* gpurt/gpurtCounter.h
-  * Shared header file between C++ and HLSL code that provides the definitions of GPURT counters and related data structures.
+GPURT provides the majority of non-compiler functionality required to support DX12 and Vulkan raytracing APIs.
 
 The primary functionality provided by GPURT includes the following:
 
 * Building acceleration structures.
 * Traversal loop and associated intrinsic functions written in HLSL.
+  * Ray tracing traversal counter and ray history data capture.
 * Acceleration structure capture and decode.
-* Ray tracing traversal counter and ray history data capture.
+
+## Code Style
 
 GPURT follows [PAL Coding Standards](https://github.com/GPUOpen-Drivers/pal/blob/dev/doc/process/palCodingStandards.md) whenever possible.
+
+## Code Organization
+
+We are moving code from the unorganized src/shaders/ directory to the src/shadersClean/ directory. Within src/shadersClean the code is organized as follows:
+
+| Directory | Description |
+| --------- | ----------- |
+| _build_ | Code related to BuildRaytracingAccelerationStructure and vkCmdBuildAccelerationStructuresKHR |
+| _traversal_ | Code related to DispatchRays & vkCmdTraceRaysKHR. |
+| _common_ | Code common to build and traversal. |
+| _debug_ | Code related to implementing GPU_ASSERT. |
+
+Code in the src/shadersClean directory undergoes validation. Before compiling shader entrypoints, each HLSL file in src/shadersClean is compiled separately (results are discarded) to check if it has no implicit dependencies. HLSL files can only include HLSLI files (or C++ Interfaces) and HLSLI files can only include other HLSLI files (or C++ Interfaces).
+
+### C++ Interfaces
+
+GPURT uses a C++ interface. The public interface is defined in .../gpurt/gpurt, and clients must only include headers from that directory. The interface is divided into multiple header files based on their dependencies and usage.
+
+* gpurt/gpurt.h
+  * Provides definition of the public GPURT device interface used to perform various ray tracing operations and querying traversal shader code.
+* gpurt/gpurtAccelStruct.h
+  * Shared header file between C++ and HLSL that provides the definition of the GPURT acceleration structure produced by the GPURT acceleration structure builder.
+* gpurt/gpurtCounter.h
+  * Shared header file between C++ and HLSL code that provides the definitions of GPURT counters and related data structures.
 
 ## Acceleration Structure
 

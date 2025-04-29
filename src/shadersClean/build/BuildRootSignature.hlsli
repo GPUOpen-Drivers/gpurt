@@ -22,6 +22,14 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
+// Some update and compact files include BuildCommon (which operates on DstMetadata thus requires RootSig)
+// while also defining their own RootSig and bindings.
+// Define DISABLE_BUILD_ROOT_SIGNATURE macro to prevent transitive inclusion and redefinition of RootSig.
+#ifndef DISABLE_BUILD_ROOT_SIGNATURE
+
+#ifndef BUILD_ROOT_SIGNATURE_HLSLI
+#define BUILD_ROOT_SIGNATURE_HLSLI
+
 #include "../common/ShaderDefs.hlsli"
 
 // DebugBuffer
@@ -33,6 +41,12 @@
 #define DEBUG_BUFFER "UAV(" xstr(DEBUG_BUFFER_SLOT) ", visibility=SHADER_VISIBILITY_ALL),"
 #else
 #define DEBUG_BUFFER
+#endif
+
+#if USES_DGF_BUFFER
+#define DGF_DATA_BUFFER "DescriptorTable(SRV(t0, numDescriptors = 4294967295, space = 1)),"
+#else
+#define DGF_DATA_BUFFER
 #endif
 
 // Note, CBV(b255) must be the last used binding in the root signature.
@@ -49,6 +63,7 @@
                 "UAV(u7, visibility=SHADER_VISIBILITY_ALL),"\
                 DEBUG_BUFFER\
                 "DescriptorTable(CBV(b0, numDescriptors = 4294967295, space = 1)),"\
+                DGF_DATA_BUFFER\
                 "DescriptorTable(UAV(u0, numDescriptors = 4294967295, space = 1)),"\
                 "CBV(b255),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
@@ -88,4 +103,12 @@
 // Debug Buffer
 
 [[vk::binding(0, 3)]] ConstantBuffer<BuildShaderGeometryConstants> GeometryConstants[] : register(b0, space1);
+
+#if USES_DGF_BUFFER
+[[vk::binding(0, 2)]] ByteAddressBuffer                            DGFBuffer[]         : register(t0, space1);
+// GeometryBuffer Must be defined, but is unused by the DGF shaders
+#endif
 [[vk::binding(0, 4)]] RWBuffer<float3>                             GeometryBuffer[]    : register(u0, space1);
+
+#endif
+#endif

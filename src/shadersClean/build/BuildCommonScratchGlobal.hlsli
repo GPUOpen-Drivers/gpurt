@@ -22,6 +22,15 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
+#ifndef BUILD_COMMON_SCRATCH_GLOBAL_HLSLI
+#define BUILD_COMMON_SCRATCH_GLOBAL_HLSLI
+
+#include "BuildRootSignature.hlsli"
+#include "../common/ShaderDefs.hlsli"
+#include "../common/ScratchNode.hlsli"
+#include "../common/BoundingBox.hlsli"
+
+//=====================================================================================================================
 ScratchNode FetchScratchNode(
     uint baseScratchNodesOffset,
     uint nodeIndex)
@@ -56,44 +65,39 @@ void WriteScratchNodeAtOffset(
 }
 
 //=====================================================================================================================
-#define FETCH_SCRATCH_NODE_DATA(T, baseScratchNodesOffset, nodeIndex, dataOffset) \
-    (ScratchGlobal.Load<T>(CalcScratchNodeOffset((baseScratchNodesOffset), (nodeIndex)) + (dataOffset)))
 
-//=====================================================================================================================
-#define WRITE_SCRATCH_NODE_DATA_DEF(T) \
-void WriteScratchNodeData( \
-    uint baseScratchNodesOffset, \
-    uint nodeIndex, \
-    uint dataOffset, \
-    T data) \
-{ \
-    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex); \
-    ScratchGlobal.Store<T>(nodeOffset + dataOffset, data); \
+template <typename T>
+T FetchScratchNodeData(
+    uint baseScratchNodesOffset,
+    uint nodeIndex,
+    uint dataOffset)
+{
+    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
+    return ScratchGlobal.Load<T>(nodeOffset + dataOffset);
 }
 
 //=====================================================================================================================
-#define WRITE_SCRATCH_NODE_DATA_AT_OFFSET_DEF(T) \
-void WriteScratchNodeDataAtOffset( \
-    uint nodeOffset, \
-    uint dataOffset, \
-    T data) \
-{ \
-    ScratchGlobal.Store<T>(nodeOffset + dataOffset, data); \
+template <typename T>
+void WriteScratchNodeData(
+    uint baseScratchNodesOffset,
+    uint nodeIndex,
+    uint dataOffset,
+    T data)
+{
+    const uint nodeOffset = CalcScratchNodeOffset(baseScratchNodesOffset, nodeIndex);
+    ScratchGlobal.Store<T>(nodeOffset + dataOffset, data);
 }
 
 //=====================================================================================================================
-// overloading functions
-WRITE_SCRATCH_NODE_DATA_DEF(uint)
-WRITE_SCRATCH_NODE_DATA_DEF(float)
 
-WRITE_SCRATCH_NODE_DATA_AT_OFFSET_DEF(uint)
-WRITE_SCRATCH_NODE_DATA_AT_OFFSET_DEF(uint2)
-WRITE_SCRATCH_NODE_DATA_AT_OFFSET_DEF(uint3)
-WRITE_SCRATCH_NODE_DATA_AT_OFFSET_DEF(uint4)
-WRITE_SCRATCH_NODE_DATA_AT_OFFSET_DEF(float)
-WRITE_SCRATCH_NODE_DATA_AT_OFFSET_DEF(float2)
-WRITE_SCRATCH_NODE_DATA_AT_OFFSET_DEF(float3)
-WRITE_SCRATCH_NODE_DATA_AT_OFFSET_DEF(float4)
+template <typename T>
+void WriteScratchNodeDataAtOffset(
+    uint nodeOffset,
+    uint dataOffset,
+    T data)
+{
+    ScratchGlobal.Store<T>(nodeOffset + dataOffset, data);
+}
 
 //=====================================================================================================================
 // Update node flags from child in parent scratch node
@@ -186,4 +190,6 @@ uint FetchCompressPrimSingleCount(uint stackPtrsScratchOffset)
 {
     return ScratchGlobal.Load(stackPtrsScratchOffset + STACK_PTRS_PRIM_COMP_SINGLE_COUNT);
 }
+#endif
+
 #endif

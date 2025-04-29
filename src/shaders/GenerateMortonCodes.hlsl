@@ -27,7 +27,12 @@
 #include "../shadersClean/common/ShaderDefs.hlsli"
 
 #include "../shadersClean/build/BuildRootSignature.hlsli"
+#endif
 
+//=====================================================================================================================
+#include "MortonCodes.hlsl"
+
+#if NO_SHADER_ENTRYPOINT == 0
 template<typename T>
 T LoadInstanceDescBuffer(uint offset)
 {
@@ -36,7 +41,7 @@ T LoadInstanceDescBuffer(uint offset)
 #include "IndirectArgBufferUtils.hlsl"
 #endif
 
-#include "BuildCommonScratch.hlsl"
+#include "../shadersClean/build/BuildCommonScratch.hlsli"
 #if GPURT_BUILD_RTIP3_1
 #include "OrientedBoundingBoxes.hlsl"
 #endif
@@ -66,15 +71,12 @@ void GenerateMortonCodesImpl(
 
             const float3 position = 0.5f * (primitiveBounds.max + primitiveBounds.min);
 
-            float3 normalizedPos = clamp((position - boundsMin) / boundsExtent, 0.0f, 1.0f);
-
-            // TODO: optimize degenerates based on instance transform or primitive centroid
-            if (IsInvalidBoundingBox(primitiveBounds))
-            {
-                normalizedPos = float3(0.5f, 0.5f, 0.5f);
-            }
-
-            mortonCode = CalculateMortonCode32(normalizedPos, boundsExtent);
+            mortonCode = CalculateMortonCode32(
+                boundsMin,
+                boundsExtent,
+                position,
+                IsInvalidBoundingBox(primitiveBounds)
+            );
 
             // If we generated an invalid morton, make it "valid" so we don't lose the primitive
             if (mortonCode == UINT32_MAX)

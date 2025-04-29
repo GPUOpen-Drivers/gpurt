@@ -25,7 +25,7 @@
 #ifndef _ORIENTED_BOUNDING_BOXES_HLSL
 #define _ORIENTED_BOUNDING_BOXES_HLSL
 
-#include "ObbCommon.hlsl"
+#include "../shadersClean/common/ObbCommon.hlsli"
 #include "KDOP.hlsl"
 
 #define TWO_PIS 6.283185306

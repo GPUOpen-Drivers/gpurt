@@ -46,7 +46,7 @@ void SetSharedMem(uint index, uint value)
 #include "../shadersClean/common/ShaderDefs.hlsli"
 #include "../shadersClean/common/Common.hlsli"
 #include "IntersectCommon.hlsl"
-#include "BuildCommonScratch.hlsl"
+#include "../shadersClean/build/BuildCommonScratch.hlsli"
 #include "rtip3_1.hlsli"
 #include "PrimitiveStructureEncoder3_1.hlsl"
 

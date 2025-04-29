@@ -36,8 +36,8 @@ T LoadInstanceDescBuffer(uint offset)
 }
 #include "IndirectArgBufferUtils.hlsl"
 #include "../shadersClean/common/Common.hlsli"
-#include "BuildCommon.hlsl"
-#include "BuildCommonScratch.hlsl"
+#include "../shadersClean/build/BuildCommon.hlsli"
+#include "../shadersClean/build/BuildCommonScratch.hlsli"
 #include "EncodeCommon.hlsl"
 #include "TaskMacros.hlsl"
 #include "EncodePairedTriangleImpl.hlsl"
@@ -426,10 +426,19 @@ void EncodeQuadNodes(
                                  ENCODE_TASK_COUNTER_NUM_PRIMITIVES_OFFSET,
                                  ShaderConstants.numPrimitives);
 
-            uint buildBlockCount;
+            uint buildBlockCount = INVALID_IDX;
 
-            const uint threadGroupSize = 64u;
-            buildBlockCount = Pow2Align(globalCount, threadGroupSize) / threadGroupSize;
+            // TODO: The non-HPLOC thread group size can vary. Pass in downstream group size via constant buffer
+            if (Settings.buildMode == BUILD_MODE_HPLOC)
+            {
+                const uint threadGroupSize = 32u;
+                buildBlockCount = Pow2Align(globalCount, threadGroupSize) / threadGroupSize;
+            }
+            if (buildBlockCount == INVALID_IDX)
+            {
+                const uint threadGroupSize = 64u;
+                buildBlockCount = Pow2Align(globalCount, threadGroupSize) / threadGroupSize;
+            }
 
             WriteTaskCounterData(ShaderConstants.offsets.encodeTaskCounter,
                                  ENCODE_TASK_COUNTER_INDIRECT_ARGS,

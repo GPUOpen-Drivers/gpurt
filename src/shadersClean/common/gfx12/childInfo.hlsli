@@ -26,8 +26,6 @@
 #define _GFX12_CHILD_INFO_H
 
 #include "../BoundingBox.hlsli"
-#include "../Bits.hlsli"
-#include "../Math.hlsli"
 
 //=====================================================================================================================
 // Quantized child node information
@@ -131,165 +129,13 @@ static_assert(sizeof(ChildInfo) == 12);
 
 //=====================================================================================================================
 #if __cplusplus
-inline const uint3 ChildInfo::Invalid = uint3(0xFFFFFFFF, 0x00000FFF, 0);
+const uint3 ChildInfo::Invalid = uint3(0xFFFFFFFF, 0x00000FFF, 0);
 #else
 const uint3 ChildInfo::Invalid = uint3(0xFFFFFFFF, 0x00000FFF, 0);
 #endif
 
-//=====================================================================================================================
-inline uint3 ChildInfo::BuildPacked(
-    uint3 quantMin,
-    uint3 quantMax,
-    uint  boxNodeFlags,
-    uint  instanceMask,
-    uint  nodeType,
-    uint  nodeRangeLength)
-{
-    uint3 childInfo = uint3(0, 0, 0);
-    childInfo.x = bitFieldInsert(childInfo.x,  0, 12, quantMin.x);
-    childInfo.x = bitFieldInsert(childInfo.x, 12, 12, quantMin.y);
-    childInfo.x = bitFieldInsert(childInfo.x, 24,  4, boxNodeFlags);
-    childInfo.y = bitFieldInsert(childInfo.y,  0, 12, quantMin.z);
-    childInfo.y = bitFieldInsert(childInfo.y, 12, 12, quantMax.x);
-    childInfo.y = bitFieldInsert(childInfo.y, 24,  8, instanceMask);
-    childInfo.z = bitFieldInsert(childInfo.z,  0, 12, quantMax.y);
-    childInfo.z = bitFieldInsert(childInfo.z, 12, 12, quantMax.z);
-    childInfo.z = bitFieldInsert(childInfo.z, 24,  4, nodeType);
-    childInfo.z = bitFieldInsert(childInfo.z, 28,  4, nodeRangeLength);
-
-    return childInfo;
-}
-
-//=====================================================================================================================
-inline void ChildInfo::Load(
-    uint3 packedData)
-{
-    minXMinYAndCullingFlags = packedData.x;
-    minZMaxXAndInstanceMask = packedData.y;
-    maxYMaxZNodeTypeAndNodeRange = packedData.z;
-}
-
-//=====================================================================================================================
-inline void ChildInfo::Init()
-{
-    minXMinYAndCullingFlags = 0;
-    minZMaxXAndInstanceMask = 0;
-    maxYMaxZNodeTypeAndNodeRange = 0;
-}
-
-//=====================================================================================================================
-inline void ChildInfo::Invalidate()
-{
-    minXMinYAndCullingFlags = 0xffffffff;
-    minZMaxXAndInstanceMask = 0x00000fff;
-    maxYMaxZNodeTypeAndNodeRange = 0;
-}
-
-//=====================================================================================================================
-inline uint3 ChildInfo::Min()
-{
-    uint3 min;
-    min.x = bitFieldExtract(minXMinYAndCullingFlags, 0, 12);
-    min.y = bitFieldExtract(minXMinYAndCullingFlags, 12, 12);
-    min.z = bitFieldExtract(minZMaxXAndInstanceMask, 0, 12);
-    return min;
-}
-
-//=====================================================================================================================
-inline uint3 ChildInfo::Max()
-{
-    uint3 max;
-    max.x = bitFieldExtract(minZMaxXAndInstanceMask, 12, 12);
-    max.y = bitFieldExtract(maxYMaxZNodeTypeAndNodeRange, 0, 12);
-    max.z = bitFieldExtract(maxYMaxZNodeTypeAndNodeRange, 12, 12);
-    return max;
-}
-
-//=====================================================================================================================
-inline void ChildInfo::SetMin(uint3 min)
-{
-    minXMinYAndCullingFlags = bitFieldInsert(minXMinYAndCullingFlags, 0, 12, min.x);
-    minXMinYAndCullingFlags = bitFieldInsert(minXMinYAndCullingFlags, 12, 12, min.y);
-    minZMaxXAndInstanceMask = bitFieldInsert(minZMaxXAndInstanceMask, 0, 12, min.z);
-}
-
-//=====================================================================================================================
-inline void ChildInfo::SetMax(uint3 max)
-{
-    minZMaxXAndInstanceMask = bitFieldInsert(minZMaxXAndInstanceMask, 12, 12, max.x);
-    maxYMaxZNodeTypeAndNodeRange = bitFieldInsert(maxYMaxZNodeTypeAndNodeRange, 0, 12, max.y);
-    maxYMaxZNodeTypeAndNodeRange = bitFieldInsert(maxYMaxZNodeTypeAndNodeRange, 12, 12, max.z);
-}
-
-//=====================================================================================================================
-inline uint ChildInfo::CullingFlags()
-{
-    return bitFieldExtract(minXMinYAndCullingFlags, 24, 4);
-}
-
-//=====================================================================================================================
-inline void ChildInfo::SetCullingFlags(uint cullingFlags)
-{
-    minXMinYAndCullingFlags = bitFieldInsert(minXMinYAndCullingFlags, 24, 4, cullingFlags);
-}
-
-//=====================================================================================================================
-inline uint ChildInfo::InstanceMask()
-{
-    return bitFieldExtract(minZMaxXAndInstanceMask, 24, 8);
-}
-
-//=====================================================================================================================
-inline void ChildInfo::SetInstanceMask(uint instanceMask)
-{
-    minZMaxXAndInstanceMask = bitFieldInsert(minZMaxXAndInstanceMask, 24, 8, instanceMask);
-}
-
-//=====================================================================================================================
-inline uint ChildInfo::NodeType()
-{
-    return bitFieldExtract(maxYMaxZNodeTypeAndNodeRange, 24, 4);
-}
-
-//=====================================================================================================================
-inline void ChildInfo::SetNodeType(uint nodeType)
-{
-    maxYMaxZNodeTypeAndNodeRange = bitFieldInsert(maxYMaxZNodeTypeAndNodeRange, 24, 4, nodeType);
-}
-
-//=====================================================================================================================
-inline uint ChildInfo::NodeRangeLength()
-{
-    return bitFieldExtract(maxYMaxZNodeTypeAndNodeRange, 28, 4);
-}
-
-//=====================================================================================================================
-inline void ChildInfo::SetNodeRangeLength(uint nodeBoundaries)
-{
-    maxYMaxZNodeTypeAndNodeRange = bitFieldInsert(maxYMaxZNodeTypeAndNodeRange, 28, 4, nodeBoundaries);
-}
-
-//=====================================================================================================================
-inline bool ChildInfo::Valid()
-{
-    uint3 min = Min();
-    uint3 max = Max();
-    return !(min.y == 0xfff && min.x == 0xfff && max.y == 0 && max.z == 0);
-}
-
-//=====================================================================================================================
-inline BoundingBox ChildInfo::DecodeBounds(float3 origin, uint3 exponents)
-{
-    uint3 qmin = Min();
-    uint3 qmax = Max();
-    BoundingBox result;
-    result.min = float3(Dequantize(origin.x, exponents.x, qmin.x, 12),
-                        Dequantize(origin.y, exponents.y, qmin.y, 12),
-                        Dequantize(origin.z, exponents.z, qmin.z, 12));
-    result.max = float3(Dequantize(origin.x, exponents.x, qmax.x + 1, 12),
-                        Dequantize(origin.y, exponents.y, qmax.y + 1, 12),
-                        Dequantize(origin.z, exponents.z, qmax.z + 1, 12));
-    return result;
-}
+#ifndef LIBRARY_COMPILATION
+#include "childInfo.hlsl"
+#endif
 
 #endif

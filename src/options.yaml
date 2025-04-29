@@ -89,3 +89,4 @@ Options:
         # Thread Group size to use when calling DispatchRays
         Type: uint32
         Default: 32
+

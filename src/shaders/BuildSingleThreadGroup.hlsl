@@ -36,9 +36,12 @@
                 "CBV(b255),"\
                 "DescriptorTable(UAV(u0, numDescriptors = 1, space = 2147420894)),"\
 
+#define DISABLE_BUILD_ROOT_SIGNATURE
+
 #if GPURT_BUILD_RTIP3_1
-#include "../shadersClean/common/ShaderDefs.hlsli"
-#include "../shadersClean/common/Common.hlsli"
+
+#include "../shared/gpurtBuildConstants.h"
+#include "../shared/rayTracingDefs.h"
 
 [[vk::binding(0, 1)]] ConstantBuffer<BuildShaderConstants>             ShaderConstants     : register(b0);
 [[vk::binding(1, 1)]] ConstantBuffer<ObbData>                          LutBuffer           : register(b1);
@@ -53,7 +56,11 @@
 
 // The following headers have a dependency on the bindings above
 #define SrcBuffer DstBuffer
-#include "BuildCommon.hlsl"
+
+#include "../shadersClean/common/ShaderDefs.hlsli"
+#include "../shadersClean/common/Common.hlsli"
+
+#include "../shadersClean/build/BuildCommon.hlsli"
 #include "CompactCommon.hlsl"
 #include "MortonCodes.hlsl"
 #include "TrianglePrimitive.hlsl"
@@ -67,6 +74,7 @@ GroupSharedMemLayout LDS;
 #include "SingleThreadGroupBuild/MergeSortLocal.hlsl"
 #include "SingleThreadGroupBuild/LBVH.hlsl"
 #include "SingleThreadGroupBuild/PLOC.hlsl"
+#include "SingleThreadGroupBuild/HPLOC.hlsl"
 
 //=====================================================================================================================
 TriangleData FetchTrianglePrimitiveData(
@@ -454,10 +462,11 @@ void BuildSingleThreadGroup(
             const float3 position = 0.5f * (bbox.max + bbox.min);
             if (Settings.useMortonCode30)
             {
-                float3 normalizedPos = clamp((position - sceneBounds.min) / sceneExtents, 0.0f, 1.0f);
-
-                const uint32_t mortonCode30 = CalculateMortonCode32(normalizedPos,
-                                                                    sceneExtents);
+                // TODO: Store centroid bounds in LDS
+                const uint32_t mortonCode30 = CalculateMortonCode32(sceneBounds.min,
+                                                                    sceneExtents,
+                                                                    position,
+                                                                    false);
                 mortonCode = PackUint64(mortonCode30, 0);
             }
             else
@@ -486,6 +495,11 @@ void BuildSingleThreadGroup(
         {
             LDS.WriteBvh2RangeFlag(threadId, 0xffffffffu);
         }
+        else if (Settings.buildMode == BUILD_MODE_HPLOC)
+        {
+            // Note, LDS is not available to store the per-internal node flags in HPLOC builder.
+            DstBuffer.Store(ShaderConstants.header.offsets.leafNodes + (threadId * sizeof(uint)), 0xffffffffu);
+        }
     }
 
     // Wait for morton codes and associated data to be written in group shared memory
@@ -497,6 +511,10 @@ void BuildSingleThreadGroup(
     if (Settings.buildMode == BUILD_MODE_LINEAR)
     {
         BuildLBVH(threadId, numPrimRefs);
+    }
+    else if (Settings.buildMode == BUILD_MODE_HPLOC)
+    {
+        BuildHPLOC(threadId, numPrimRefs);
     }
     else if (Settings.buildMode == BUILD_MODE_PLOC)
     {

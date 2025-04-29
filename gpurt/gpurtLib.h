@@ -42,7 +42,7 @@ namespace GpuRt
 // update their definition of GPURT_CLIENT_INTERFACE_MAJOR_VERSION to indicate that they have made the required changes
 // to support a new version. When the client version is updated, the old interface will be compiled out and only the
 // new one will remain.
-#define GPURT_INTERFACE_MAJOR_VERSION 54
+#define GPURT_INTERFACE_MAJOR_VERSION 56
 
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 44
 // Minor interface version. This number is incrememnted when a compatible interface change is made. Compatible changes

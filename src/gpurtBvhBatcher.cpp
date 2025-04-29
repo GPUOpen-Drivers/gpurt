@@ -461,6 +461,11 @@ void BvhBatcher::BuildMultiDispatch(Util::Span<BvhBuilder> builders)
         Barrier();
         BuildPhase(BuildPhaseFlags::BuildFastAgglomerativeLbvh, builders, &BvhBuilder::BuildFastAgglomerativeLbvh);
     }
+    if (PhaseEnabled(BuildPhaseFlags::BuildHPLOC))
+    {
+        Barrier(BarrierFlagSyncIndirectArg | BarrierFlagSyncDispatch);
+        BuildPhase(BuildPhaseFlags::BuildHPLOC, builders, &BvhBuilder::BuildHPLOC);
+    }
     if (PhaseEnabled(BuildPhaseFlags::BuildPLOC))
     {
         Barrier();

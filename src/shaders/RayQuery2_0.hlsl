@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2025 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2021-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -22,7 +22,6 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-
 #include "bvh_stack_dxr_prototype.hlsl"
 
 //=====================================================================================================================
@@ -67,12 +66,12 @@ static void TraceRayInlineImpl2_0(
     rayQuery.committedStatus       = COMMITTED_NOTHING;
 
     rayQuery.rayTMin               = rayDesc.TMin;
-    rayQuery.committed.rayTCurrent = rayDesc.TMax - rayDesc.TMin;
+    rayQuery.committed.rayTCurrent = rayDesc.TMax - ApplyTMinBias(rayDesc.TMin);
     rayQuery.candidate.rayTCurrent = rayQuery.committed.rayTCurrent;
 
-    rayQuery.rayDesc.TMax          = rayDesc.TMax - rayDesc.TMin;
-    rayQuery.rayDesc.TMin          = 0.0f;
-    rayQuery.rayDesc.Origin        = mad(rayDesc.Direction, rayDesc.TMin, rayDesc.Origin);
+    rayQuery.rayDesc.TMax          = rayDesc.TMax - ApplyTMinBias(rayDesc.TMin);
+    rayQuery.rayDesc.TMin          = rayDesc.TMin - ApplyTMinBias(rayDesc.TMin);
+    rayQuery.rayDesc.Origin        = rayDesc.Origin + (ApplyTMinBias(rayDesc.TMin) * rayDesc.Direction);
     rayQuery.rayDesc.Direction     = rayDesc.Direction;
 
     rayQuery.candidate.origin      = rayQuery.rayDesc.Origin;
@@ -203,7 +202,7 @@ static bool RayQueryProceedImpl2_0(
     //                           (rayFlags.ForceNonOpaque && instanceFlags.ForceOpaque)
     // Other flags can just be or-ed together
     uint instanceFlagsPreserveBits =
-        (rayQuery.rayFlags & RAY_FLAG_OVERRIDE_MASK) ? RAY_FLAG_PRESERVE_MASK : RAY_FLAG_VALID_MASK;
+        select((rayQuery.rayFlags & RAY_FLAG_OVERRIDE_MASK), RAY_FLAG_PRESERVE_MASK, RAY_FLAG_VALID_MASK);
 
     instanceFlagsPreserveBits <<= POINTER_FLAGS_HIDWORD_SHIFT;
 
@@ -278,7 +277,7 @@ static bool RayQueryProceedImpl2_0(
                     (AmdTraceRayGetTriangleCompressionMode() != NO_TRIANGLE_COMPRESSION) &&
                     (GetNodeType(rayQuery.prevNodePtr) == NODE_TYPE_TRIANGLE_1);
 
-                lastNodePtr = trianglePairIntersected ? (rayQuery.prevNodePtr + 1) : rayQuery.prevNodePtr;
+                lastNodePtr = select(trianglePairIntersected, (rayQuery.prevNodePtr + 1), rayQuery.prevNodePtr);
             }
 
             if (resetRay)
@@ -354,7 +353,7 @@ static bool RayQueryProceedImpl2_0(
             const float t_denom = asfloat(intersectionResult.y);
             const float candidateT = (t_num / t_denom);
 
-            if (candidateT < rayQuery.committed.rayTCurrent)
+            if (EvaluateTriangleHit(rayQuery.rayDesc.TMin, candidateT, rayQuery.committed.rayTCurrent))
             {
                 // Extract instance flags
                 const uint instanceFlags = rayQuery.instanceHitContributionAndFlags >> 24;
@@ -459,7 +458,7 @@ static bool RayQueryProceedImpl2_0(
 
             const uint geometryFlags = primitiveData.geometryFlags;
             const uint isOpaque      = IsOpaque(geometryFlags, instanceFlags, rayQuery.rayFlags);
-            const bool isCulled      = (isOpaque ? rayCullOpaque : rayCullNonOpaque);
+            const bool isCulled      = select(isOpaque, rayCullOpaque, rayCullNonOpaque);
 
             if (isCulled == false)
             {
@@ -524,8 +523,7 @@ static bool RayQueryProceedImpl2_0(
             {
                 // Intersection would return [-1, -1, -1, -1] for a miss. Mark instance as culled if that occurs.
                 isInstanceCulled |= (intersectionResult.x == INVALID_NODE);
-                lastNodePtr = isInstanceCulled ? TERMINAL_NODE : lastNodePtr;
-
+                lastNodePtr = select(isInstanceCulled, TERMINAL_NODE, lastNodePtr);
                 if (IsBvhRebraid())
                 {
                     rayQuery.lastInstanceNode = instanceNodePtr;
@@ -536,18 +534,18 @@ static bool RayQueryProceedImpl2_0(
                 if (IsBvhRebraid())
                 {
                     rayQuery.lastInstanceNode = instanceNodePtr;
-                    intersectionResult.x      = isInstanceCulled ? INVALID_NODE : instanceNodePtr;
+                    intersectionResult.x      = select(isInstanceCulled, INVALID_NODE, instanceNodePtr);
                 }
                 else
                 {
-                    intersectionResult.x = isInstanceCulled ? INVALID_NODE : blasRootNodePtr;
+                    intersectionResult.x = select(isInstanceCulled, INVALID_NODE, blasRootNodePtr);
                 }
             }
 
             // Setting stackPtrTop to INVALID_IDX forces an immediate BLAS->TLAS transition when an instance is culled,
             // reverting the updates above.
             // Setting it to stackAddr postpones the BLAS->TLAS transition until we pop a BLAS node from the stack.
-            rayQuery.stackPtrTop = isInstanceCulled ? INVALID_IDX : rayQuery.stackPtr;
+            rayQuery.stackPtrTop = select(isInstanceCulled, INVALID_IDX, rayQuery.stackPtr);
 
 #if DEVELOPER
             if (EnableTraversalCounter() && (isInstanceCulled == false))

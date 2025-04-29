@@ -56,7 +56,7 @@ void SetSharedMem(uint index, uint value)
     SharedMem[index] = value;
 }
 
-#include "BuildCommonScratch.hlsl"
+#include "../shadersClean/build/BuildCommonScratch.hlsli"
 #endif
 
 #include "EncodeHwBvhCommon.hlsl"
@@ -341,8 +341,7 @@ uint WritePrimitiveNode(
     in uint               nodeOffset,
     in AccelStructOffsets offsets)
 {
-    uint nodeType =
-        (Settings.geometryType == GEOMETRY_TYPE_TRIANGLES) ? NODE_TYPE_TRIANGLE_0 : NODE_TYPE_USER_NODE_PROCEDURAL;
+    uint nodeType = IsProceduralPrimitiveBuild() ? NODE_TYPE_USER_NODE_PROCEDURAL : NODE_TYPE_TRIANGLE_0;
 
     // Load geometry info
     const uint geometryIndex = ExtractScratchNodeGeometryIndex(scratchNode);

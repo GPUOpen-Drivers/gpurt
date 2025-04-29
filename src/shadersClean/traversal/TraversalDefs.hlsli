@@ -56,21 +56,33 @@ struct IntersectionResult
 };
 
 //=====================================================================================================================
-// Commit status
-typedef uint COMMITTED_STATUS;
-
-#define COMMITTED_NOTHING 0
-#define COMMITTED_TRIANGLE_HIT 1
-#define COMMITTED_PROCEDURAL_PRIMITIVE_HIT 2
-
+// Alternate encoding of state bits (TODO: See impact on generated ISA)
+//
+// 0: procedural
+// 1: opaque
+// 2: committed
+// 3: no-duplicate anyhit
+//
+// 0: non_opaque_triangle
+// 1: non_opaque_procedural
+// 2: opaque_triangle
+// 3: opaque_procedural
+// 4: committed_non_opaque_triangle
+// 5: committed_non_opaque_procedural
+// 6: committed_opaque_triangle
+// 7: committed_opaque_procedural
+//
 //=====================================================================================================================
-// Candidate type
-typedef uint CANDIDATE_STATUS;
+// CANDIDATE_STATUS = (TRAVERSAL_STATE - 1)
+#define TRAVERSAL_STATE_CANDIDATE_NON_OPAQUE_TRIANGLE 0
+#define TRAVERSAL_STATE_CANDIDATE_PROCEDURAL_PRIMITIVE 1
+#define TRAVERSAL_STATE_CANDIDATE_NON_OPAQUE_PROCEDURAL_PRIMITIVE 2
+#define TRAVERSAL_STATE_CANDIDATE_NO_DUPLICATE_ANYHIT_PROCEDURAL_PRIMITIVE 3
 
-#define CANDIDATE_NON_OPAQUE_TRIANGLE 0
-#define CANDIDATE_PROCEDURAL_PRIMITIVE 1
-#define CANDIDATE_NON_OPAQUE_PROCEDURAL_PRIMITIVE 2
-#define CANDIDATE_EARLY_RAY_TERMINATE 4
+// COMMITTED_STATUS = (TRAVERSAL_STATE - 4)
+#define TRAVERSAL_STATE_COMMITTED_NOTHING 4
+#define TRAVERSAL_STATE_COMMITTED_TRIANGLE_HIT 5
+#define TRAVERSAL_STATE_COMMITTED_PROCEDURAL_PRIMITIVE_HIT 6
 
 //=====================================================================================================================
 // Data required for system value intrinsics
@@ -108,58 +120,6 @@ struct RayDesc
     float TMax;
 };
 #endif
-
-//=====================================================================================================================
-// Internal RayQuery structure initialised at TraceRaysInline()
-struct RayQueryInternal
-{
-    // Internal query data holding address of current BVH and stack information.
-    // Additional data that may be required will be stored here.
-    uint             bvhLo;
-    uint             bvhHi;
-    uint             topLevelBvhLo;
-    uint             topLevelBvhHi;
-    uint             stackPtr;
-    uint             stackPtrTop;
-    uint             stackNumEntries;
-    uint             instNodePtr;
-    uint             currNodePtr;
-    uint             instanceHitContributionAndFlags;
-    uint             prevNodePtr;
-    uint             isGoingDown;
-    uint             lastInstanceNode;
-
-    RayDesc          rayDesc;
-    float            rayTMin;
-    uint             rayFlags;
-    uint             instanceInclusionMask;
-
-    // Candidate system data
-    CANDIDATE_STATUS candidateType;
-    RaySystemData    candidate;
-
-    // Committed system data
-    COMMITTED_STATUS committedStatus;
-    RaySystemData    committed;
-
-#if GPURT_BUILD_RTIP3
-    uint             currNodePtr2; // Second node pointer for dual traversal
-#else
-    uint             reserved;
-#endif
-
-    // Counter data
-    // @note We don't wrap these in DEVELOPER because it would result in mismatch of RayQuery struct size
-    //       on the driver side when we're not using counters.
-    uint             numRayBoxTest;
-    uint             numRayTriangleTest;
-    uint             numIterations;
-    uint             maxStackDepthAndDynamicId;
-    uint             clocks;
-    uint             numCandidateHits;
-    uint             instanceIntersections;
-    uint             rayQueryObjId;
-};
 
 //=====================================================================================================================
 struct HitGroupInfo

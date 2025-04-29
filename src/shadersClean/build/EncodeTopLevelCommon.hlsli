@@ -25,6 +25,9 @@
 #ifndef _ENCODETOPLEVELCOMMON_HLSL_
 #define _ENCODETOPLEVELCOMMON_HLSL_
 
+#include "../common/Common.hlsli"
+#include "../common/gfx10/BoxNode1_0.hlsli"
+
 //=====================================================================================================================
 bool IsUpdateInPlace()
 {
@@ -59,8 +62,8 @@ uint CalcTopLevelBoxNodeFlags(
     // Propagate BLAS root node flags if instance does not override them.
     nodeFlags = (nodeFlags == 0) ? blasNodeFlags : nodeFlags;
 
-    nodeFlags |= (geometryType == GEOMETRY_TYPE_TRIANGLES) ? 1 << BOX_NODE_FLAGS_ONLY_TRIANGLES_SHIFT
-                                                           : 1 << BOX_NODE_FLAGS_ONLY_PROCEDURAL_SHIFT;
+    nodeFlags |= (geometryType == GEOMETRY_TYPE_AABBS) ? 1 << BOX_NODE_FLAGS_ONLY_PROCEDURAL_SHIFT
+                                                       : 1 << BOX_NODE_FLAGS_ONLY_TRIANGLES_SHIFT;
 
     return nodeFlags;
 }

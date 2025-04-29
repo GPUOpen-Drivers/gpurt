@@ -22,7 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "BuildCommonScratch.hlsl"
+#include "../shadersClean/build/BuildCommonScratch.hlsli"
 
 #include "../shadersClean/common/ShaderDefs.hlsli"
 #if GPURT_BUILD_RTIP3_1
@@ -224,6 +224,246 @@ void WriteGeometryInfo(
 }
 
 //======================================================================================================================
+void EncodeTriangleForUpdate(
+    BuildShaderGeometryConstants geomConstants,
+    NumPrimAndInputOffset        inputOffsets,
+    uint                         metadataSize,
+    uint                         geometryIndex,
+    uint                         primitiveIndex,
+    uint                         flattenedPrimitiveIndex,
+    uint                         primNodePointerOffset,
+    TriangleData                 tri,
+    BoundingBox                  boundingBox,
+    bool                         writeNodesToUpdateStack)
+{
+    TriangleData otherTri = (TriangleData)0;
+    bool isOtherTriValid  = false;
+    uint triangleId       = 0;
+
+    uint nodePointer = SrcBuffer.Load(primNodePointerOffset);
+
+    // If the primitive was active during the initial build, it will have a valid primitive node pointer.
+    if (nodePointer != INVALID_IDX)
+    {
+        const uint nodeOffset = metadataSize + ExtractNodePointerOffset(nodePointer);
+        const uint nodeType   = GetNodeType(nodePointer);
+
+        triangleId = SrcBuffer.Load(nodeOffset + TRIANGLE_NODE_ID_OFFSET);
+
+        uint3 vertexOffsets;
+        if (Settings.triangleCompressionMode != NO_TRIANGLE_COMPRESSION)
+        {
+            vertexOffsets = CalcTriangleCompressionVertexOffsets(nodeType, triangleId);
+        }
+        else
+        {
+            vertexOffsets = CalcTriangleVertexOffsets(nodeType);
+        }
+
+        DstMetadata.Store3(nodeOffset + vertexOffsets.x, asuint(tri.v0));
+        DstMetadata.Store3(nodeOffset + vertexOffsets.y, asuint(tri.v1));
+        DstMetadata.Store3(nodeOffset + vertexOffsets.z, asuint(tri.v2));
+
+        if (Settings.isUpdateInPlace == false)
+        {
+            const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(geometryIndex,
+                                                                         geomConstants.geometryFlags);
+#if GPURT_BUILD_RTIP3
+            if (Settings.rtIpLevel >= GPURT_RTIP3_0)
+            {
+                // We don't use geometry flags during RTIP 3.0 traversal, so no need to pack and unpack it unnecessarily.
+                DstMetadata.Store(nodeOffset + RTIP3_TRIANGLE_NODE_GEOMETRY_INDEX_OFFSET, geometryIndex);
+            }
+            else
+#endif
+            {
+                DstMetadata.Store(nodeOffset + TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
+            }
+
+            const uint primIndexOffset = CalcPrimitiveIndexOffset(nodePointer);
+
+#if GPURT_BUILD_RTIP3
+            if (Settings.rtIpLevel >= GPURT_RTIP3_0)
+            {
+                DstMetadata.Store(
+                    nodeOffset + RTIP3_TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + primIndexOffset, primitiveIndex);
+            }
+            else
+#endif
+            {
+                DstMetadata.Store(
+                    nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + primIndexOffset, primitiveIndex);
+            }
+
+            DstMetadata.Store(nodeOffset + TRIANGLE_NODE_ID_OFFSET, triangleId);
+        }
+    }
+
+    if (Settings.isUpdateInPlace == false)
+    {
+        DstMetadata.Store(primNodePointerOffset, nodePointer);
+    }
+
+    // The shared bounding box for this pair of triangles will be updated by the thread handling triangle 0.
+    const bool skipPairUpdatePush = (Settings.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
+                                    (GetNodeType(nodePointer) == NODE_TYPE_TRIANGLE_1);
+
+    if ((nodePointer != INVALID_IDX) && (skipPairUpdatePush == false))
+    {
+        // Fetch parent node pointer
+        const uint parentNodePointer = ReadParentPointer(metadataSize, nodePointer);
+
+        // Update out of place destination buffer
+        if (Settings.isUpdateInPlace == false)
+        {
+            WriteParentPointer(metadataSize, nodePointer, parentNodePointer);
+        }
+
+        // Handle two triangles sharing a bounding box when pair compression is enabled.
+        uint childNodePointer = nodePointer;
+        if ((Settings.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
+            (GetNodeType(nodePointer) == NODE_TYPE_TRIANGLE_0))
+        {
+            const uint triNodeOffset = metadataSize + ExtractNodePointerOffset(nodePointer);
+
+            // Check whether or not there is a triangle 1 in this node.
+            if (((triangleId >> (NODE_TYPE_TRIANGLE_1 * TRIANGLE_ID_BIT_STRIDE)) & 0xf) != 0)
+            {
+                // Triangle 0 is not a child pointer in the parent box node, so correct the node pointer used for the
+                // comparison when finding the child index in the parent below.
+                childNodePointer |= NODE_TYPE_TRIANGLE_1;
+
+                uint otherPrimIndexOffset = TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET;
+#if GPURT_BUILD_RTIP3
+                if (Settings.rtIpLevel >= GPURT_RTIP3_0)
+                {
+                    otherPrimIndexOffset = RTIP3_TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET;
+                }
+#endif
+                const uint otherPrimIndex = SrcBuffer.Load(triNodeOffset + otherPrimIndexOffset);
+
+                uint3 otherIndices = uint3(0, 0, 0);
+                const bool validIndices =
+                    FetchTrianglePrimitive(
+                        geomConstants,
+                        inputOffsets,
+                        GeometryBuffer[geometryIndex],
+                        geometryIndex,
+                        otherPrimIndex,
+                        otherTri,
+                        otherIndices);
+                if (validIndices)
+                {
+                    const BoundingBox otherBox = GenerateTriangleBoundingBox(otherTri.v0, otherTri.v1, otherTri.v2);
+
+                    // Merge the bounding boxes of the two triangles.
+                    boundingBox = CombineAABB(boundingBox, otherBox);
+                    isOtherTriValid = true;
+                }
+            }
+        }
+
+        uint instanceMask = 0;
+        if (Settings.disableDegenPrims)
+        {
+            bool isDegenTri = IsDegenerateTriangle(tri);
+            if (isOtherTriValid)
+            {
+                isDegenTri = isDegenTri && IsDegenerateTriangle(otherTri);
+            }
+
+            // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
+            instanceMask = isDegenTri ? 0 : 0xff;
+        }
+        else
+        {
+            // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
+            instanceMask = (boundingBox.min.x > boundingBox.max.x) ? 0 : 0xff;
+        }
+
+        PushNodeForUpdate(metadataSize,
+                          childNodePointer,
+                          parentNodePointer,
+                          instanceMask,
+                          boundingBox,
+                          writeNodesToUpdateStack);
+    }
+}
+
+//======================================================================================================================
+void EncodeTriangleForBuild(
+    BuildShaderGeometryConstants geomConstants,
+    NumPrimAndInputOffset        inputOffsets,
+    uint                         geometryIndex,
+    uint                         primitiveIndex,
+    uint                         flattenedPrimitiveIndex,
+    uint                         primNodePointerOffset,
+    TriangleData                 tri,
+    BoundingBox                  boundingBox)
+{
+    uint instanceMask = 0;
+    if (Settings.disableDegenPrims)
+    {
+        // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
+        // Do this before possibly setting tri's vertex to NaN.
+        instanceMask = IsDegenerateTriangle(tri) ? 0 : 0xff;
+    }
+
+    const bool isActiveTriangle = IsActive(tri);
+    if (isActiveTriangle)
+    {
+        if ((Settings.disableDegenPrims) && (IsUpdateAllowed() == false) && IsDegenerateTriangle(tri))
+        {
+            // Override v0.x for inactive case
+            tri.v0.x = NaN;
+        }
+        else
+        {
+            // Always encode the scene bounds
+            UpdateSceneBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
+
+            // Only when size bits are enabled, update the scene size
+            if (IsMortonSizeBitsEnabled(ShaderConstants.numMortonSizeBits))
+            {
+                UpdateSceneSize(ShaderConstants.offsets.sceneBounds, boundingBox);
+            }
+
+            // Only if the centroid bounds are required, update the centroid bounds
+            if (IsCentroidMortonBoundsEnabled() || IsConciseMortonBoundsEnabled())
+            {
+                UpdateCentroidBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
+            }
+        }
+    }
+    else
+    {
+        // Override v0.x for inactive case
+        tri.v0.x = NaN;
+    }
+
+    if (Settings.disableDegenPrims == 0)
+    {
+        // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
+        instanceMask = (boundingBox.min.x > boundingBox.max.x) ? 0 : 0xff;
+    }
+
+    // Triangle scratch nodes have a 1:1 mapping with global primitive index when pairing is disabled
+    WriteScratchTriangleNode(flattenedPrimitiveIndex,
+                             primitiveIndex,
+                             geometryIndex,
+                             geomConstants.geometryFlags,
+                             instanceMask,
+                             boundingBox,
+                             tri);
+
+    {
+        // Store invalid prim node pointer for now during first time builds.
+        // If the triangle is active, EncodeHwBvh will write it in.
+        DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
+    }
+}
+
+//======================================================================================================================
 void EncodeTriangleNode(
     BuildShaderGeometryConstants geomConstants,
     NumPrimAndInputOffset        inputOffsets,
@@ -245,10 +485,7 @@ void EncodeTriangleNode(
     const uint primNodePointerOffset =
         metadataSize + basePrimNodePtr + (flattenedPrimitiveIndex * sizeof(uint));
 
-    TriangleData tri      = (TriangleData)0;
-    TriangleData otherTri = (TriangleData)0;
-    bool isOtherTriValid  = false;
-
+    TriangleData tri = (TriangleData)0;
     uint3 indices = uint3(0, 0, 0);
     const bool validIndices =
         FetchTrianglePrimitive(
@@ -261,9 +498,6 @@ void EncodeTriangleNode(
             indices);
     if (validIndices)
     {
-        uint nodePointer = INVALID_IDX;
-        uint triangleId  = 0;
-
         // Generate triangle bounds and update scene bounding box
         BoundingBox boundingBox = GenerateTriangleBoundingBox(tri.v0, tri.v1, tri.v2);
 
@@ -279,219 +513,27 @@ void EncodeTriangleNode(
 
         if (IsUpdate())
         {
-            nodePointer = SrcBuffer.Load(primNodePointerOffset);
-
-            // If the primitive was active during the initial build, it will have a valid primitive node pointer.
-            if (nodePointer != INVALID_IDX)
-            {
-                const uint nodeOffset = metadataSize + ExtractNodePointerOffset(nodePointer);
-                const uint nodeType   = GetNodeType(nodePointer);
-
-                triangleId = SrcBuffer.Load(nodeOffset + TRIANGLE_NODE_ID_OFFSET);
-
-                uint3 vertexOffsets;
-                if (Settings.triangleCompressionMode != NO_TRIANGLE_COMPRESSION)
-                {
-                    vertexOffsets = CalcTriangleCompressionVertexOffsets(nodeType, triangleId);
-                }
-                else
-                {
-                    vertexOffsets = CalcTriangleVertexOffsets(nodeType);
-                }
-
-                DstMetadata.Store3(nodeOffset + vertexOffsets.x, asuint(tri.v0));
-                DstMetadata.Store3(nodeOffset + vertexOffsets.y, asuint(tri.v1));
-                DstMetadata.Store3(nodeOffset + vertexOffsets.z, asuint(tri.v2));
-
-                if (Settings.isUpdateInPlace == false)
-                {
-                    const uint geometryIndexAndFlags = PackGeometryIndexAndFlags(geometryIndex,
-                                                                                 geomConstants.geometryFlags);
-#if GPURT_BUILD_RTIP3
-                    if (Settings.rtIpLevel >= GPURT_RTIP3_0)
-                    {
-                        // We don't use geometry flags during RTIP 3.0 traversal, so no need to pack and unpack it unnecessarily.
-                        DstMetadata.Store(
-                            nodeOffset + RTIP3_TRIANGLE_NODE_GEOMETRY_INDEX_OFFSET, geometryIndex);
-                    }
-                    else
-#endif
-                    {
-                        DstMetadata.Store(
-                            nodeOffset + TRIANGLE_NODE_GEOMETRY_INDEX_AND_FLAGS_OFFSET, geometryIndexAndFlags);
-                    }
-
-                    const uint primIndexOffset = CalcPrimitiveIndexOffset(nodePointer);
-
-#if GPURT_BUILD_RTIP3
-                    if (Settings.rtIpLevel >= GPURT_RTIP3_0)
-                    {
-                        DstMetadata.Store(
-                            nodeOffset + RTIP3_TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + primIndexOffset, primitiveIndex);
-                    }
-                    else
-#endif
-                    {
-                        DstMetadata.Store(
-                            nodeOffset + TRIANGLE_NODE_PRIMITIVE_INDEX0_OFFSET + primIndexOffset, primitiveIndex);
-                    }
-
-                    DstMetadata.Store(nodeOffset + TRIANGLE_NODE_ID_OFFSET, triangleId);
-                }
-            }
-
-            if (Settings.isUpdateInPlace == false)
-            {
-                DstMetadata.Store(primNodePointerOffset, nodePointer);
-            }
-
-            // The shared bounding box for this pair of triangles will be updated by the thread handling triangle 0.
-            const bool skipPairUpdatePush = (Settings.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
-                                            (GetNodeType(nodePointer) == NODE_TYPE_TRIANGLE_1);
-
-            if ((nodePointer != INVALID_IDX) && (skipPairUpdatePush == false))
-            {
-                // Fetch parent node pointer
-                const uint parentNodePointer = ReadParentPointer(metadataSize, nodePointer);
-
-                // Update out of place destination buffer
-                if (Settings.isUpdateInPlace == false)
-                {
-                    WriteParentPointer(metadataSize, nodePointer, parentNodePointer);
-                }
-
-                // Handle two triangles sharing a bounding box when pair compression is enabled.
-                uint childNodePointer = nodePointer;
-                if ((Settings.triangleCompressionMode == PAIR_TRIANGLE_COMPRESSION) &&
-                    (GetNodeType(nodePointer) == NODE_TYPE_TRIANGLE_0))
-                {
-                    const uint triNodeOffset = metadataSize + ExtractNodePointerOffset(nodePointer);
-
-                    // Check whether or not there is a triangle 1 in this node.
-                    if (((triangleId >> (NODE_TYPE_TRIANGLE_1 * TRIANGLE_ID_BIT_STRIDE)) & 0xf) != 0)
-                    {
-                        // Triangle 0 is not a child pointer in the parent box node, so correct the node pointer used for the
-                        // comparison when finding the child index in the parent below.
-                        childNodePointer |= NODE_TYPE_TRIANGLE_1;
-
-                        uint otherPrimIndexOffset = TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET;
-#if GPURT_BUILD_RTIP3
-                        if (Settings.rtIpLevel >= GPURT_RTIP3_0)
-                        {
-                            otherPrimIndexOffset = RTIP3_TRIANGLE_NODE_PRIMITIVE_INDEX1_OFFSET;
-                        }
-#endif
-                        const uint otherPrimIndex = SrcBuffer.Load(triNodeOffset + otherPrimIndexOffset);
-
-                        uint3 otherIndices = uint3(0, 0, 0);
-                        const bool validIndices =
-                            FetchTrianglePrimitive(
-                                geomConstants,
-                                inputOffsets,
-                                GeometryBuffer[geometryIndex],
-                                geometryIndex,
-                                otherPrimIndex,
-                                otherTri,
-                                otherIndices);
-                        if (validIndices)
-                        {
-                            const BoundingBox otherBox = GenerateTriangleBoundingBox(otherTri.v0, otherTri.v1, otherTri.v2);
-
-                            // Merge the bounding boxes of the two triangles.
-                            boundingBox = CombineAABB(boundingBox, otherBox);
-                            isOtherTriValid = true;
-                        }
-                    }
-                }
-
-                uint instanceMask = 0;
-                if (Settings.disableDegenPrims)
-                {
-                    bool isDegenTri = IsDegenerateTriangle(tri);
-                    if (isOtherTriValid)
-                    {
-                        isDegenTri = isDegenTri && IsDegenerateTriangle(otherTri);
-                    }
-
-                    // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
-                    instanceMask = isDegenTri ? 0 : 0xff;
-                }
-                else
-                {
-                    // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
-                    instanceMask = (boundingBox.min.x > boundingBox.max.x) ? 0 : 0xff;
-                }
-
-                PushNodeForUpdate(metadataSize,
-                                  childNodePointer,
-                                  parentNodePointer,
-                                  instanceMask,
-                                  boundingBox,
-                                  writeNodesToUpdateStack);
-            }
+            EncodeTriangleForUpdate(geomConstants,
+                                    inputOffsets,
+                                    metadataSize,
+                                    geometryIndex,
+                                    primitiveIndex,
+                                    flattenedPrimitiveIndex,
+                                    primNodePointerOffset,
+                                    tri,
+                                    boundingBox,
+                                    writeNodesToUpdateStack);
         }
         else
         {
-            uint instanceMask = 0;
-            if (Settings.disableDegenPrims)
-            {
-                // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
-                // Do this before possibly setting tri's vertex to NaN.
-                instanceMask = IsDegenerateTriangle(tri) ? 0 : 0xff;
-            }
-
-            const bool isActiveTriangle = IsActive(tri);
-            if (isActiveTriangle)
-            {
-                if ((Settings.disableDegenPrims) && (IsUpdateAllowed() == false) && IsDegenerateTriangle(tri))
-                {
-                    // Override v0.x for inactive case
-                    tri.v0.x = NaN;
-                }
-                else
-                {
-                    // Always encode the scene bounds
-                    UpdateSceneBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
-
-                    // Only when size bits are enabled, update the scene size
-                    if (IsMortonSizeBitsEnabled(ShaderConstants.numMortonSizeBits))
-                    {
-                        UpdateSceneSize(ShaderConstants.offsets.sceneBounds, boundingBox);
-                    }
-
-                    // Only if the centroid bounds are required, update the centroid bounds
-                    if (IsCentroidMortonBoundsEnabled() || IsConciseMortonBoundsEnabled())
-                    {
-                        UpdateCentroidBounds(ShaderConstants.offsets.sceneBounds, boundingBox);
-                    }
-                }
-            }
-            else
-            {
-                // Override v0.x for inactive case
-                tri.v0.x = NaN;
-            }
-
-            if (Settings.disableDegenPrims == 0)
-            {
-                // Set the instance inclusion mask to 0 for degenerate triangles so that they are culled out.
-                instanceMask = (boundingBox.min.x > boundingBox.max.x) ? 0 : 0xff;
-            }
-
-            // Triangle scratch nodes have a 1:1 mapping with global primitive index when pairing is disabled
-            WriteScratchTriangleNode(flattenedPrimitiveIndex,
-                                     primitiveIndex,
-                                     geometryIndex,
-                                     geomConstants.geometryFlags,
-                                     instanceMask,
-                                     boundingBox,
-                                     tri);
-
-            {
-                // Store invalid prim node pointer for now during first time builds.
-                // If the triangle is active, EncodeHwBvh will write it in.
-                DstMetadata.Store(primNodePointerOffset, INVALID_IDX);
-            }
+            EncodeTriangleForBuild(geomConstants,
+                                   inputOffsets,
+                                   geometryIndex,
+                                   primitiveIndex,
+                                   flattenedPrimitiveIndex,
+                                   primNodePointerOffset,
+                                   tri,
+                                   boundingBox);
         }
     }
     else

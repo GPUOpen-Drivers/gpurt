@@ -165,6 +165,7 @@ bvhShaderConfigs = [
 #if GPURT_BUILD_RTIP3|| GPURT_BUILD_RTIP3_1
     ShaderConfig(path="BuildParallel.hlsl", entryPoint="BuildBvh", outputName="BuildParallelRtip3x", defines="GPURT_BUILD_PARALLEL_ENABLE_RTIP3=1"),
 #endif
+    ShaderConfig(path="BuildHPLOC.hlsl", entryPoint="BuildHPLOC"),
     ShaderConfig(path="BuildFastAgglomerativeLbvh.hlsl", entryPoint="BuildFastAgglomerativeLbvh"),
 #if GPURT_BUILD_RTIP3_1
     ShaderConfig(path="BuildTrivialBvh.hlsl", entryPoint="BuildTrivialBvh"),
@@ -178,6 +179,8 @@ bvhShaderConfigs = [
 #if GPURT_BUILD_RTIP3_1
     ShaderConfig(path="EncodeHwBvh3_1.hlsl", entryPoint="EncodeHwBvh3_1"),
 #endif
+    ShaderConfig(path="DGF/EncodeDGF.hlsl", entryPoint="EncodeDGF", defines="USES_DGF_BUFFER=1"),
+    ShaderConfig(path="../shadersClean/traversal/PrepareShadowSbtForReplay.hlsl", entryPoint="PrepareShadowSbtForReplay", outputName="PrepareShadowSbtForReplay"),
 ]
 
 def getBaseDxcCommandArgs(isBvh:bool, isLibrary:bool, isSpirv:bool):
@@ -193,18 +196,16 @@ def getBaseDxcCommandArgs(isBvh:bool, isLibrary:bool, isSpirv:bool):
     dxcOptions += ["-Wall", "-Wextra"]
 
     dxcOptions +=  ["-Wno-ignored-attributes",
-                    "-Wno-parameter-usage",
                     "-Wno-unused-variable",
                     "-Wno-unused-function",
                     "-Wno-unused-parameter",
                     "-Wno-sometimes-uninitialized",
                     "-Wno-conversion",
-                    "-Wno-parameter-usage",
                     ]
 
     dxcOptions += ["-enable-16bit-types"]
     dxcOptions += ["-T", SHADER_PROFILE_LIB] if isLibrary else  ["-T", SHADER_PROFILE]
-    # Currently rayquery takes a 8% perf hit in *only* gankino when traversal is compiled with hlsl 2021
+    # Currently rayquery takes a 1% perf hit in *only* gankino when traversal is compiled with hlsl 2021
     dxcOptions += ["-HV", "2021"] if isBvh else ["-HV", "2018"]
 
     return dxcOptions
@@ -308,7 +309,7 @@ def validateIncludes(cmd: [str], path: pathlib.Path, implSuffix: str, interfaceS
     includedFilesStr = set()
     for line in threadOutput[0].split("\n")[1:]:
         # use resolve() + as_posix() to avoid path mismatches when using drive mapping
-        includedFilesStr |= {pathlib.Path(line.strip(" \n\r\t\\/")).resolve().as_posix()}
+        includedFilesStr |= {pathlib.Path(line.strip(" \n\r\t\\")).resolve().as_posix()}
     includedFilesStr -= {path.as_posix() + implSuffix}
     includedFilesStr -= {path.as_posix() + interfaceSuffix}
 
@@ -354,7 +355,7 @@ def validateShared(args) -> bool:
 
     srcPath = gpurtRootPath / "src"
     sharedPath = srcPath / "shared"
-    generatedFilesPath = pathlib.Path(args.g_FilePath).resolve()
+    generatedFilesPath = pathlib.Path(FixInputPath(args.g_FilePath)).resolve()
     implExt = "._unused_"
     headerExt = ".h"
 
@@ -396,7 +397,7 @@ def validateShadersClean(args) -> bool:
 
     srcPath = gpurtRootPath / "src"
     shadersCleanPath = srcPath / "shadersClean"
-    generatedFilesPath = pathlib.Path(args.g_FilePath).resolve()
+    generatedFilesPath = pathlib.Path(FixInputPath(args.g_FilePath)).resolve()
     implExt = ".hlsl"
     headerExt = ".hlsli"
 
@@ -410,9 +411,10 @@ def validateShadersClean(args) -> bool:
     # clean shaders
     allowedDirs += [(shadersCleanPath, headerExt)]
     # llpc version headers
-    for llpcVersionPath in args.llpcVersionIncludeDirs:
-        allowedDirs += [(pathlib.Path(llpcVersionPath), ".h")]
-        allowedDirs += [(pathlib.Path(llpcVersionPath), headerExt)]
+    llpcVersionIncludeDirs = [pathlib.Path(FixInputPath(path)).resolve() for path in args.llpcVersionIncludeDirs]
+    for llpcVersionPath in llpcVersionIncludeDirs:
+        allowedDirs += [(llpcVersionPath, ".h")]
+        allowedDirs += [(llpcVersionPath, headerExt)]
 
     # Validation of the shadersClean folder
     for path, (hasImpl, hasHeader) in getImplInterfacePairs(shadersCleanPath, implExt, headerExt).items():
@@ -512,7 +514,7 @@ def SpvRemap(spvRemap, whiteListFile, inSpvFilename, outputDir, threadOutput) ->
 def ConvertSpvFile(disableDebugStripping, spvRemap, whiteListFile, inSpvFilename, inOutputName, isBVH, outputDir, threadOutput):
     try:
         # Generate file name with *_spv.h and file header name with Cs*_spv[] for SPIR-V shaders to distinguish
-        # them with the AMDIL header
+        # them with the DXIL header
         outputFileName = "g_" + inOutputName + '_spv.h'
         conversionOutputFilename = inOutputName + '_spv'
 
@@ -559,7 +561,7 @@ def ConvertDxilFile(inDxilFilename, inOutputName, threadOutput, addDxilPostfix):
     try:
         postfix = ''
         # Generate file name with *_dxil.h and file header name with Cs*_dxil[] for DXIL shaders to distinguish
-        # them with the AMDIL header
+        # them with the SPIR-V header
         if (addDxilPostfix):
             postfix = '_dxil'
 
@@ -694,13 +696,10 @@ def CompileShaderConfig(shaderConfig, args, shadersOutputDir,
     startTime = time.time()
 
     try:
-        if False:
-            pass
-        else:
-            addDxilPostfix = True
-            if not RunCompiler(tempDirPath, compilerPath, shaderConfig, shadersBasePath, args.verbose, threadOutput, args.spirv, addDxilPostfix, True):
-                threadOutput.append("Failed to compile Vulkan shader config %s" % shaderConfig)
-                return (False, os.linesep.join(threadOutput))
+        addDxilPostfix = True
+        if not RunCompiler(tempDirPath, compilerPath, shaderConfig, shadersBasePath, args.verbose, threadOutput, args.spirv, addDxilPostfix, True):
+            threadOutput.append("Failed to compile Vulkan shader config %s" % shaderConfig)
+            return (False, os.linesep.join(threadOutput))
 
         # Make sure we got a valid output filename
         if conversionOutputFilename is None:
@@ -840,7 +839,7 @@ def main() -> int:
     parser.add_argument('--whiteListPath', help='Path to SPIRV whitelist file', default=SPIRV_WHITELIST)
     parser.add_argument('--jobs', help='Number of job threads to compile with', default=os.cpu_count())
     parser.add_argument('--spirv', action='store_true', help='Output SPIR-V for Vulkan for BVH shaders, need to be used with --vulkan', default=False)
-    parser.add_argument('--strict', action='store_true', help='Require SSC invocations to finish cleanly without output or warnings.')
+    parser.add_argument('--strict', action='store_true', help='Require DXC invocations to finish cleanly without output or warnings.')
     parser.add_argument('--validateShadersClean', action='store_const',const=True, help='Run #include validation on shaders for style enforcement.', default=False)
 
     originalPath = os.getcwd()

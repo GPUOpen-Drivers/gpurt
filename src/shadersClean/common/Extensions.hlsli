@@ -191,6 +191,36 @@ uint64_t spirv_OpGroupNonUniformBitwiseOr(uint scope, [[vk::ext_literal]] uint o
 [[vk::ext_instruction(360)]]
 uint3 spirv_OpGroupNonUniformBitwiseOr(uint scope, [[vk::ext_literal]] uint op, uint3 value);
 
+//=====================================================================================================================
+// GpuRt WaveClusterSum Intrinsics
+uint AmdExtD3DShaderIntrinsics_WaveClusterSum(uint x, uint dxClusterSize);
+
+float AmdExtD3DShaderIntrinsics_WaveClusterSum(float x, uint dxClusterSize);
+
+//=====================================================================================================================
+// GpuRt WaveClusterMin Intrinsics
+float AmdExtD3DShaderIntrinsics_WaveClusterMin(float x, uint dxClusterSize);
+
+float2 AmdExtD3DShaderIntrinsics_WaveClusterMin(float2 val, uint dxClusterSize);
+
+float3 AmdExtD3DShaderIntrinsics_WaveClusterMin(float3 val, uint dxClusterSize);
+
+//=====================================================================================================================
+// GpuRt WaveClusterMax Intrinsics
+float AmdExtD3DShaderIntrinsics_WaveClusterMax(float val, uint dxClusterSize);
+
+float2 AmdExtD3DShaderIntrinsics_WaveClusterMax(float2 val, uint dxClusterSize);
+
+float3 AmdExtD3DShaderIntrinsics_WaveClusterMax(float3 val, uint dxClusterSize);
+//=====================================================================================================================
+// GpuRt WaveClusterBitAnd Intrinsics
+uint AmdExtD3DShaderIntrinsics_WaveClusterBitAnd(uint x, uint dxClusterSize);
+
+//=====================================================================================================================
+// GpuRt WaveClusterBitOr Intrinsics
+uint AmdExtD3DShaderIntrinsics_WaveClusterBitOr(uint x, uint dxClusterSize);
+
+//=====================================================================================================================
 // Driver intrinsic that returns the dispatch rays index for the current thread
 __decl uint3 AmdTraceRayDispatchRaysIndex();
 
@@ -340,25 +370,28 @@ __decl uint64_t AmdExtConstantLoad64AtAddr(GpuVirtualAddress addr, uint offset) 
 __decl uint AmdExtDispatchThreadIdFlat() DUMMY_UINT_FUNC;
 
 //=====================================================================================================================
-__decl uint AmdExtAtomicAddAtAddr(uint64_t gpuVa, uint offset, uint value) DUMMY_UINT_FUNC;
-__decl uint AmdExtAtomicCmpXchgAtAddr(uint64_t gpuVa, uint offset, uint compare_value, uint value) DUMMY_UINT_FUNC
-__decl uint AmdExtAtomicSubClampAtAddr(uint64_t gpuVa, uint offset, uint value) DUMMY_UINT_FUNC
-__decl uint AmdExtAtomicXchgAtAddr(uint64_t gpuVa, uint offset, uint value) DUMMY_UINT_FUNC
+__decl uint     AmdExtAtomicAddAtAddr(uint64_t gpuVa, uint offset, uint value) DUMMY_UINT_FUNC;
+__decl uint     AmdExtAtomicCmpXchgAtAddr(uint64_t gpuVa, uint offset, uint compare_value, uint value) DUMMY_UINT_FUNC
+__decl uint     AmdExtAtomicLdsCondSub(uint handle, uint value) DUMMY_UINT_FUNC
+__decl uint     AmdExtAtomicSubClampAtAddr(uint64_t gpuVa, uint offset, uint value) DUMMY_UINT_FUNC
+__decl uint     AmdExtAtomicXchgAtAddr(uint64_t gpuVa, uint offset, uint value) DUMMY_UINT_FUNC
 __decl uint64_t AmdExtAtomic64AddAtAddr(uint64_t gpuVa, uint offset, uint64_t value) DUMMY_UINT_FUNC
 __decl uint64_t AmdExtAtomic64CmpXchgAtAddr(uint64_t gpuVa, uint offset, uint64_t compare_value, uint64_t value) DUMMY_UINT_FUNC
 __decl uint64_t AmdExtLoad64AtAddrUncached(uint64_t gpuVa, uint offset) DUMMY_UINT_FUNC
-__decl uint  AmdExtLoadDwordAtAddrUncached(uint64_t addr, uint offset) DUMMY_UINT_FUNC
-__decl void  AmdExtStoreDwordAtAddrUncached(uint64_t addr, uint offset, uint value) DUMMY_VOID_FUNC
-__decl uint3 AmdExtGroupIdCompute() DUMMY_UINT3_FUNC
-__decl uint3 AmdExtGroupDimCompute() DUMMY_UINT3_FUNC
-__decl uint3 AmdExtThreadIdInGroupCompute() DUMMY_UINT3_FUNC
-__decl uint  AmdExtFlattenedThreadIdInGroupCompute() DUMMY_UINT_FUNC
-__decl uint  AmdExtLoadDwordAtAddr(uint64_t addr, uint offset) DUMMY_UINT_FUNC
-__decl void  AmdExtStoreDwordAtAddr(uint64_t addr, uint offset, uint value) DUMMY_VOID_FUNC
-__decl void  AmdExtDeviceMemoryAcquire() DUMMY_VOID_FUNC
-__decl void  AmdExtDeviceMemoryRelease() DUMMY_VOID_FUNC
-__decl uint  AmdExtLaneCount() DUMMY_UINT_FUNC
-__decl void  AmdExtSleep(uint value) DUMMY_VOID_FUNC
+__decl uint     AmdExtLoadDwordAtAddrUncached(uint64_t addr, uint offset) DUMMY_UINT_FUNC
+__decl void     AmdExtStoreDwordAtAddrUncached(uint64_t addr, uint offset, uint value) DUMMY_VOID_FUNC
+__decl uint3    AmdExtGroupIdCompute() DUMMY_UINT3_FUNC
+__decl uint3    AmdExtGroupDimCompute() DUMMY_UINT3_FUNC
+__decl uint3    AmdExtThreadIdInGroupCompute() DUMMY_UINT3_FUNC
+__decl uint     AmdExtFlattenedThreadIdInGroupCompute() DUMMY_UINT_FUNC
+__decl uint     AmdExtLoadDwordAtAddr(uint64_t addr, uint offset) DUMMY_UINT_FUNC
+__decl void     AmdExtStoreDwordAtAddr(uint64_t addr, uint offset, uint value) DUMMY_VOID_FUNC
+__decl void     AmdExtDeviceMemoryAcquire() DUMMY_VOID_FUNC
+__decl void     AmdExtDeviceMemoryRelease() DUMMY_VOID_FUNC
+__decl uint     AmdExtLaneCount() DUMMY_UINT_FUNC
+__decl void     AmdExtSleep(uint value) DUMMY_VOID_FUNC
+__decl uint     AmdExtRtsLoadDwordAtAddr(uint64_t addr, uint offset) DUMMY_UINT_FUNC
+__decl uint64_t AmdExtRtsLoad64AtAddr(uint64_t addr, uint offset) DUMMY_UINT_FUNC
 
 #if USE_TEMP_ARRAY_STACK
 //=====================================================================================================================
@@ -409,6 +442,8 @@ static uint ConstantLoadDwordAtAddr(GpuVirtualAddress addr);
 static uint64_t ConstantLoadDwordAtAddrx2(GpuVirtualAddress addr);
 
 static uint4 ConstantLoadDwordAtAddrx4(GpuVirtualAddress addr);
+
+//=====================================================================================================================
 
 //=====================================================================================================================
 

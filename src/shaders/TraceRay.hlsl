@@ -1,7 +1,7 @@
 /*
  ***********************************************************************************************************************
  *
- *  Copyright (c) 2025 Advanced Micro Devices, Inc. All Rights Reserved.
+ *  Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All Rights Reserved.
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -22,7 +22,6 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-
 #include "TraceRay1_1.hlsl"
 #include "TraceRay2_0.hlsl"
 
@@ -321,7 +320,7 @@ static bool TraceRayCommon(
                                     result.numIterations,
                                     result.instanceIntersections,
                                     uint(~0),
-                                    (tMax - tMin));
+                                    (tMax - ApplyTMinBias(tMin)));
         }
         AmdTraceRaySetParentId(dynamicId);
 
@@ -412,7 +411,7 @@ static bool TraceRayCommon(
         }
 #endif
         // Only tCurrent/tMax is valid in the miss shader
-        AmdTraceRaySetHitAttributes((tMax - tMin), 0, 0, 0, 0, 0, false, 0);
+        AmdTraceRaySetHitAttributes(tMax - ApplyTMinBias(tMin), 0, 0, 0, 0, 0, false, 0);
 
         // Driver patch point for Miss shader
         AmdTraceRayCallMissShader(shaderId.xy, missShaderIndex);

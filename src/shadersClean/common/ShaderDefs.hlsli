@@ -25,6 +25,8 @@
 #ifndef SHADERDEFS_HLSLI
 #define SHADERDEFS_HLSLI
 
+typedef uint64_t GpuVirtualAddress;
+
 #if !defined(__cplusplus)
 #define out_param(x) out x
 #define inout_param(x) inout x
@@ -50,11 +52,6 @@
 // TODO: there are functions that use values from these files, but really
 // those functions should be in these files, and then the files that use the functions
 // should include that file, instead of ShaderDefs.h
-#include "gfx10/BoxNode1_0.hlsli"
-#include "gfx10/TriangleNode1_0.hlsli"
-#include "gfx10/ProceduralNode1_0.hlsli"
-#include "gfx10/BoxNode1_0.hlsli"
-#include "gfx10/InstanceNode1_0.hlsli"
 #include "NodePointers.hlsli"
 
 #include "../../shared/rayTracingDefs.h"
@@ -64,8 +61,6 @@
 #define SAH_COST_PRIM_RANGE_INTERSECTION     1.3
 #endif
 #define SAH_COST_AABBB_INTERSECTION          1
-
-typedef uint64_t GpuVirtualAddress;
 
 //=====================================================================================================================
 enum PrimitiveType : uint
@@ -306,7 +301,7 @@ struct GeometryInfo
 #define GEOMETRY_INFO_GEOM_BUFFER_OFFSET          4
 #define GEOMETRY_INFO_PRIM_NODE_PTRS_OFFSET       8
 
-#define PIPELINE_FLAG_UNUSED                         0x80000000
+#define PIPELINE_FLAG_USE_UNBIASED_ORIGIN            0x80000000
 #define PIPELINE_FLAG_USE_REBRAID                    0x40000000
 #define PIPELINE_FLAG_ENABLE_AS_TRACKING             0x20000000
 #define PIPELINE_FLAG_ENABLE_TRAVERSAL_CTR           0x10000000
@@ -355,23 +350,6 @@ static uint PackGeometryFlagsAndNumPrimitives(uint geometryFlags, uint numPrimit
     return (geometryFlags << 29) | numPrimitives;
 }
 
-#if GPURT_BUILD_RTIP3
-//=====================================================================================================================
-struct HighPrecisionBoxNode
-{
-#ifdef __cplusplus
-    HighPrecisionBoxNode(uint val)
-    {
-        memset(this, val, sizeof(HighPrecisionBoxNode));
-    }
-
-    HighPrecisionBoxNode() : HighPrecisionBoxNode(0)
-    {}
-#endif
-    uint32_t dword[16];
-};
-#endif
-
 //=====================================================================================================================
 static uint64_t PackUint64(uint lowBits, uint highBits)
 {
@@ -413,57 +391,6 @@ static uint2 SplitUint64(uint64_t x)
 #define COUNTER_EMPTYPRIM_OFFSET        0x20
 #define COUNTER_EMITCOMPACTSIZE_OFFSET  0x24
 #define COUNTER_BUILDFASTLBVH_OFFSET    0x28
-
-//=====================================================================================================================
-// Get leaf triangle node size in bytes
-static uint GetBvhNodeSizeTriangle()
-{
-    return TRIANGLE_NODE_SIZE;
-}
-
-//=====================================================================================================================
-// Get leaf AABB node size in bytes
-static uint GetBvhNodeSizeProcedural()
-{
-    return USER_NODE_PROCEDURAL_SIZE;
-}
-
-//=====================================================================================================================
-// Get leaf instance node size in bytes
-static uint GetBvhNodeSizeInstance(uint enableFusedInstanceNode)
-{
-    return (enableFusedInstanceNode == 0) ? INSTANCE_NODE_SIZE : FUSED_INSTANCE_NODE_SIZE;
-}
-
-//=====================================================================================================================
-// Get internal BVH node size in bytes
-static uint GetBvhNodeSizeInternal()
-{
-    return FLOAT32_BOX_NODE_SIZE;
-}
-
-//=====================================================================================================================
-// Get internal BVH node size in bytes
-static uint GetBvhNodeSizeLeaf(
-    uint primitiveType,
-    uint enableFusedInstanceNode)
-{
-    uint sizeInBytes = 0;
-    switch (primitiveType)
-    {
-    case PrimitiveType::Triangle:
-        sizeInBytes = GetBvhNodeSizeTriangle();
-        break;
-    case PrimitiveType::AABB:
-        sizeInBytes = GetBvhNodeSizeProcedural();
-        break;
-    case PrimitiveType::Instance:
-        sizeInBytes = GetBvhNodeSizeInstance(enableFusedInstanceNode);
-        break;
-    }
-
-    return sizeInBytes;
-}
 
 //=====================================================================================================================
 static uint CalcParentPtrOffset(uint nodePtr)
@@ -546,7 +473,7 @@ struct IndexBufferInfo
 
 //=====================================================================================================================
 #define BUILD_MODE_LINEAR   0
-// BUILD_MODE_AC was 1, but it has been removed.
+#define BUILD_MODE_HPLOC    1
 #define BUILD_MODE_PLOC     2
 
 //=====================================================================================================================

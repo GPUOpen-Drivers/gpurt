@@ -47,14 +47,6 @@ constexpr uint32 MaxBufferSrdSize = 8;
 constexpr uint32 MaxBufferSrdSize = 4;
 #endif
 
-// Dispatch rays arguments top-level descriptor table (GPU structure)
-struct DispatchRaysTopLevelData
-{
-    uint64 dispatchRaysConstGpuVa;                  // DispatchRays info constant buffer GPU VA
-    uint32 internalUavBufferSrd[MaxBufferSrdSize];  // Internal UAV shader resource descriptor
-    uint32 accelStructTrackerSrd[MaxBufferSrdSize]; // Structured buffer SRD pointing to the accel struct tracker
-};
-
 #define DISPATCHRAYSCONSTANTDATA_STRUCT_OFFSET_DISPATCHID  48
 
 // Dispatch rays constant buffer data (GPU structure). Note, using unaligned uint64_t in HLSL constant buffers requires
@@ -108,11 +100,25 @@ struct DispatchRaysConstantData
 #pragma pack(pop)
 #endif
 
+// Dispatch rays arguments top-level descriptor table (GPU structure)
+struct DispatchRaysTopLevelData
+{
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 56
+    uint64                   dispatchRaysConstGpuVa;                  // DispatchRays info constant buffer GPU VA
+#else
+    DispatchRaysConstantData constData;                               // Dispatch rays constant buffer data
+#endif
+    uint32                   internalUavBufferSrd[MaxBufferSrdSize];  // Internal UAV shader resource descriptor
+    uint32                   accelStructTrackerSrd[MaxBufferSrdSize]; // Structured buffer SRD pointing to the accel struct tracker
+};
+
 // GPU structure containing all data for DXR/VK ray dispatch command
 struct DispatchRaysConstants
 {
     DispatchRaysTopLevelData descriptorTable;  // Top-level internal dispatch bindings (includes pointer to infoData)
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 56
     DispatchRaysConstantData constData;        // Dispatch rays constant buffer data
+#endif
 };
 
 #if __cplusplus
@@ -188,7 +194,37 @@ struct InitExecuteIndirectConstants
     uint32 cpsGlobalMemoryAddressHi;    // Separate CPS stack memory base address high 32-bits
 };
 
+// Resource bindings required for PrepareShadowSbtForReplay
+struct PrepareShadowSbtForReplayUserData
+{
+    uint64 constantsVa;                  // PrepareShadowSbtForReplayConstants struct
+    uint64 shadowRayGenerationTableVa;   // Shadow ray generation table
+    uint64 shadowHitGroupTableVa;        // Shadow hit group table
+    uint64 shadowMissTableVa;            // Shadow miss shader table
+    uint64 shadowCallableTableVa;        // Shadow callable shader table
+    uint64 captureReplayMappingBufferVa; // Capture replay mapping buffer
+};
+
+// Constants for PrepareShadowSbtForReplay shader
+struct PrepareShadowSbtForReplayConstants
+{
+    uint32 hitGroupTableStrideInBytes;           // Hit group table record byte stride
+    uint32 hitGroupTableEntryCount;              // Hit group table entry count
+    uint32 missTableStrideInBytes;               // Miss shader table record byte stride
+    uint32 missTableEntryCount;                  // Miss shader table entry count
+    uint32 callableTableStrideInBytes;           // Callable shader table record byte stride
+    uint32 callableTableEntryCount;              // Callable shader table entry count
+    uint32 captureReplayMappingBufferEntryCount; // Capture replay mapping buffer entry count
+};
+
+struct CaptureReplayMappingBufferEntry
+{
+    uint32 capturedVa;
+    uint32 replayVa;
+};
+
 constexpr uint32 InitExecuteIndirectConstantsDw = sizeof(InitExecuteIndirectConstants) / sizeof(uint32);
+constexpr uint32 PrepareShadowSbtForReplayConstantsDw = sizeof(PrepareShadowSbtForReplayConstants) / sizeof(uint32);
 
 #if __cplusplus
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 47

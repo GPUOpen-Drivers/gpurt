@@ -39,12 +39,12 @@ set(gpurtHlsl
     AccelStructTracker.hlsl
     ../shadersClean/build/BuildRootSignature.hlsli
     BuildPLOC.hlsl
-    BuildCommon.hlsl
-    BuildCommonScratch.hlsl
-    BuildCommonScratchGlobal.hlsl
+    ../shadersClean/build/BuildCommon.hlsli
+    ../shadersClean/build/BuildCommonScratch.hlsli
+    ../shadersClean/build/BuildCommonScratchGlobal.hlsli
     BuildFastAgglomerativeLbvh.hlsl
     ../shadersClean/debug/Debug.hlsli
-    TaskCounter.hlsl
+    ../shadersClean/build/TaskCounter.hlsli
     TaskMacros.hlsl
     TaskQueueCounter.hlsl
     EncodeHwBvhCommon.hlsl
@@ -54,6 +54,7 @@ set(gpurtHlsl
     ../shadersClean/common/LaneGroup.hlsli
 #endif
     ../shadersClean/build/BuildSettings.hlsli
+    BuildHPLOC.hlsl
     BuildParallel.hlsl
 #if GPURT_BUILD_RTIP3_1
     BuildTrivialBvh.hlsl
@@ -62,6 +63,7 @@ set(gpurtHlsl
     SingleThreadGroupBuild/ScratchBuffer.hlsl
     SingleThreadGroupBuild/MergeSortLocal.hlsl
     SingleThreadGroupBuild/LBVH.hlsl
+    SingleThreadGroupBuild/HPLOC.hlsl
     SingleThreadGroupBuild/PLOC.hlsl
     SingleThreadGroupBuild/EncodeHwBvhCounters.hlsl
     SingleThreadGroupBuild/EncodeHwBvh3_1_SingleTG.hlsl
@@ -71,6 +73,7 @@ set(gpurtHlsl
     bvh_stack_dxr_prototype.hlsl
     ../shadersClean/debug/ClearBuffer.hlsl
     ../shadersClean/common/Common.hlsli
+    ../shadersClean/common/Common.hlsl
     CompactAS.hlsl
     CompactAS1_1.hlsl
 #if GPURT_BUILD_RTIP3_1
@@ -88,12 +91,15 @@ set(gpurtHlsl
     EncodePairedTriangleImpl.hlsl
     EncodeTopLevel.hlsl
     EncodeTopLevelBuild.hlsl
-    EncodeTopLevelCommon.hlsl
+    ../shadersClean/build/EncodeTopLevelCommon.hlsli
     EncodeTopLevelUpdate.hlsl
     GenerateMortonCodes.hlsl
     GpuRtLibrary.hlsl
+    GpuRtLibraryRayQuery.hlsl
+    ../shadersClean/traversal/RayQueryCommon.hlsli
 #if GPURT_BUILD_RTIP3
-    HighPrecisionBoxNode.hlsl
+    ../shadersClean/common/gfx12/HighPrecisionBoxNode.hlsli
+    ../shadersClean/common/gfx12/HighPrecisionBoxNode.hlsl
 #endif
     InitAccelerationStructure.hlsl
     InitExecuteIndirect.hlsl
@@ -105,8 +111,9 @@ set(gpurtHlsl
     PrimitiveStructure3_1.hlsl
     ../shadersClean/common/PrimitiveStructure.hlsli
     PrimitiveStructureEncoder3_1.hlsl
-    QuantizedBVH8BoxNode.hlsl
-    ObbCommon.hlsl
+    ../shadersClean/common/gfx12/QuantizedBVH8BoxNode.hlsli
+    ../shadersClean/build/gfx12/QuantizedBVH8BoxNode.hlsli
+    ../shadersClean/common/ObbCommon.hlsli
     KDOP.hlsl
     OrientedBoundingBoxes.hlsl
     RefitOrientedBounds3_1.hlsl
@@ -160,11 +167,21 @@ set(gpurtHlsl
     GpuRtLibraryCont.hlsl
     Continuations1_1.hlsl
     Continuations2_0.hlsl
+    ../shadersClean/traversal/DispatchRaysConstants.hlsli
+    ../shadersClean/traversal/PrepareShadowSbtForReplay.hlsl
+    ../shadersClean/traversal/RayPipelineFlags.hlsli
+    ../shadersClean/traversal/RayState.hlsli
+    ../shadersClean/traversal/RtIp.hlsli
     ../shadersClean/traversal/StackCommon.hlsli
+    ../shadersClean/traversal/Traits.hlsli
+    ../shadersClean/traversal/TraversalCounter.hlsli
+    ../shadersClean/traversal/Vpc.hlsli
 #if GPURT_BUILD_RTIP3_1
     Continuations3_1.hlsl
 #endif
 #endif
+    DGF/EncodeDGF.hlsl
+    ../shadersClean/build/DGF/DGFDecompression.hlsl
 )
 set(otherDeps
     ../../gpurt/gpurtAccelStruct.h
@@ -180,6 +197,7 @@ set(otherDeps
     ../shared/rayTracingDefs.h
 #if GPURT_BUILD_RTIP3_1
     ../shadersClean/common/gfx12/childInfo.hlsli
+    ../shadersClean/common/gfx12/childInfo.hlsl
     ../shadersClean/common/gfx12/internalNode.hlsli
     ../shadersClean/common/gfx12/primitiveNode.hlsli
     ../shared/gpurtShaderConstants.h
@@ -191,14 +209,19 @@ set(otherDeps
     ../shadersClean/common/Extensions.hlsl
     ../shadersClean/common/ShaderDefs.hlsli
     ../shadersClean/common/BoundingBox.hlsli
+    ../shadersClean/common/BoundingBox.hlsl
     ../shadersClean/common/InstanceDesc.hlsli
     ../shadersClean/common/NodePointers.hlsli
     ../shadersClean/common/ScratchNode.hlsli
     ../shadersClean/traversal/TraversalDefs.hlsli
     ../shadersClean/common/gfx10/BoxNode1_0.hlsli
+    ../shadersClean/common/gfx10/BoxNode1_0.hlsl
     ../shadersClean/common/gfx10/InstanceNode1_0.hlsli
+    ../shadersClean/common/gfx10/InstanceNode1_0.hlsl
     ../shadersClean/common/gfx10/ProceduralNode1_0.hlsli
+    ../shadersClean/common/gfx10/ProceduralNode1_0.hlsl
     ../shadersClean/common/gfx10/TriangleNode1_0.hlsli
+    ../shadersClean/common/gfx10/TriangleNode1_0.hlsl
 )
 
 set(GPURT_SHADER_SOURCE_FILES "${gpurtHlsl}" "${otherDeps}" PARENT_SCOPE)

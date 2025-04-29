@@ -472,6 +472,11 @@ uint32 Device::GetStaticPipelineFlags(
     }
 #endif
 
+    if (m_info.deviceSettings.useUnbiasedOrigin)
+    {
+        pipelineFlags |= static_cast<uint32>(GpuRt::StaticPipelineFlag::UseUnbiasedOrigin);
+    }
+
     return pipelineFlags;
 }
 
@@ -588,6 +593,14 @@ Pal::Result Device::Init()
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 54
     m_info.deviceSettings.enableRebraid = (m_info.deviceSettings.rebraidType == RebraidType::V2);
 #endif
+
+    // See shaders/BuildHPLOC.hlsl for details on the maximum supported search radius.
+    constexpr uint32 MaxSupportedHplocSearchRadius = 16u;
+    constexpr uint32 DefaultHplocSearchRadius = 8u;
+
+    m_info.deviceSettings.hplocRadius =
+        (m_info.deviceSettings.hplocRadius == 0u) ?
+            DefaultHplocSearchRadius : Util::Min(m_info.deviceSettings.hplocRadius, MaxSupportedHplocSearchRadius);
 
     // Merged encode/build only works with parallel build
     if (m_info.deviceSettings.enableParallelBuild == false)
@@ -768,7 +781,11 @@ void Device::PatchDispatchRaysConstants(
     const gpusize          cpsMemoryGpuAddr,
     const gpusize          cpsMemoryBytes)
 {
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 56
     PatchConstants(&pDispatchRaysConstants->constData, cpsMemoryGpuAddr, cpsMemoryBytes);
+#else
+    PatchConstants(&pDispatchRaysConstants->descriptorTable.constData, cpsMemoryGpuAddr, cpsMemoryBytes);
+#endif
 }
 
 //=====================================================================================================================
@@ -969,6 +986,7 @@ ClientPipelineHandle Device::GetInternalPipeline(
                 case InternalRayTracingCsType::EmitToolVisDesc:
                 case InternalRayTracingCsType::InitAccelerationStructure:
                 case InternalRayTracingCsType::InitExecuteIndirect:
+                case InternalRayTracingCsType::BuildHPLOC:
 #if GPURT_BUILD_RTIP3_1
                 case InternalRayTracingCsType::BuildTrivialBvh:
                 case InternalRayTracingCsType::BuildSingleThreadGroup32:
@@ -1041,7 +1059,7 @@ ClientPipelineHandle Device::GetInternalPipeline(
                 constexpr const char* BuildModeStr[] =
                 {
                     "LBVH",     // BvhBuildMode::Linear,
-                    "Reserved", // BvhBuildMode::Reserved
+                    "HPLOC",    // BvhBuildMode::HPLOC,
                     "PLOC",     // BvhBuildMode::PLOC,
                     "Reserved",
                     "Auto",     // BvhBuildMode::Auto,
@@ -1049,8 +1067,10 @@ ClientPipelineHandle Device::GetInternalPipeline(
 
                 constexpr const char* GeometryTypeStr[] =
                 {
-                    "_Tri",  // GpuRt::GeometryType::Triangles,
-                    "_Aabb", // GpuRt::GeometryType::Aabbs,
+                    "_Tri",              // GpuRt::GeometryType::Triangles,
+                    "_Aabb",             // GpuRt::GeometryType::Aabbs,
+                    "_CompressedTri",    // GpuRt::GeometryType::CompressedTriangles,
+                    "_CompressedTriOmm", // GpuRt::GeometryType::CompressedTrianglesOmm,
                 };
 
                 char radixSortLevelStr[MaxStrLength];
@@ -1080,7 +1100,7 @@ ClientPipelineHandle Device::GetInternalPipeline(
                                buildSettings.topLevelBuild ? "_TLAS" : "_BLAS",
                                buildSettings.topLevelBuild ? "" : GeometryTypeStr[buildSettings.geometryType],
                                BuildModeStr[buildSettings.buildMode],
-                               buildSettings.triangleCompressionMode ? "_TriCompr" : "",
+                               buildSettings.triangleCompressionMode ? "_TriPair" : "",
                                buildSettings.enableRebraid ? "_RebraidOn" : "",
 #if GPURT_BUILD_RTIP3
                                bvhFormat,
@@ -1522,20 +1542,39 @@ void Device::TraceRtDispatch(
     Util::MutexAuto lock(&m_traceRayHistoryLock);
 
     // TraceRayCounterRayHistoryLight
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 56
     pConstants->constData.counterMode            = 1;
     pConstants->constData.counterRayIdRangeBegin = 0;
     pConstants->constData.counterRayIdRangeEnd   = 0xFFFFFFFF;
     pConstants->constData.counterMask            = GetRayHistoryLightCounterMask();
+
     pConstants->constData.rayDispatchWidth       = dispatchInfo.dimX;
     pConstants->constData.rayDispatchHeight      = dispatchInfo.dimY;
     pConstants->constData.rayDispatchDepth       = dispatchInfo.dimZ;
+#else
+    pConstants->descriptorTable.constData.counterMode            = 1;
+    pConstants->descriptorTable.constData.counterRayIdRangeBegin = 0;
+    pConstants->descriptorTable.constData.counterRayIdRangeEnd   = 0xFFFFFFFF;
+    pConstants->descriptorTable.constData.counterMask            = GetRayHistoryLightCounterMask();
+
+    pConstants->descriptorTable.constData.rayDispatchWidth       = dispatchInfo.dimX;
+    pConstants->descriptorTable.constData.rayDispatchHeight      = dispatchInfo.dimY;
+    pConstants->descriptorTable.constData.rayDispatchDepth       = dispatchInfo.dimZ;
+#endif
+
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 38
     // When not equal to 0 dispatch is rayquery.
     if (dispatchInfo.threadGroupSizeX != 0)
     {
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 56
         pConstants->constData.rayDispatchWidth  = dispatchInfo.dimX * dispatchInfo.threadGroupSizeX;
         pConstants->constData.rayDispatchHeight = dispatchInfo.dimY * dispatchInfo.threadGroupSizeY;
         pConstants->constData.rayDispatchDepth  = dispatchInfo.dimZ * dispatchInfo.threadGroupSizeZ;
+#else
+        pConstants->descriptorTable.constData.rayDispatchWidth  = dispatchInfo.dimX * dispatchInfo.threadGroupSizeX;
+        pConstants->descriptorTable.constData.rayDispatchHeight = dispatchInfo.dimY * dispatchInfo.threadGroupSizeY;
+        pConstants->descriptorTable.constData.rayDispatchDepth  = dispatchInfo.dimZ * dispatchInfo.threadGroupSizeZ;
+#endif
     }
 #endif
 
@@ -1789,11 +1828,17 @@ void Device::TraceIndirectRtDispatch(
                 pPalDevice->CreateUntypedBufferViewSrds(1, &viewInfo, &pConstants->descriptorTable.internalUavBufferSrd[0]);
 
                 // TraceRayCounterRayHistoryLight
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 56
                 pConstants->constData.counterMode            = 1;
                 pConstants->constData.counterRayIdRangeBegin = 0;
                 pConstants->constData.counterRayIdRangeEnd   = 0xFFFFFFFF;
-
-                pConstants->constData.counterMask = GetRayHistoryLightCounterMask();
+                pConstants->constData.counterMask            = GetRayHistoryLightCounterMask();
+#else
+                pConstants->descriptorTable.constData.counterMode            = 1;
+                pConstants->descriptorTable.constData.counterRayIdRangeBegin = 0;
+                pConstants->descriptorTable.constData.counterRayIdRangeEnd   = 0xFFFFFFFF;
+                pConstants->descriptorTable.constData.counterMask            = GetRayHistoryLightCounterMask();
+#endif
             }
             else
             {
@@ -1804,8 +1849,7 @@ void Device::TraceIndirectRtDispatch(
                 pConstants->counterMode            = 1;
                 pConstants->counterRayIdRangeBegin = 0;
                 pConstants->counterRayIdRangeEnd   = 0xFFFFFFFF;
-
-                pConstants->counterMask = GetRayHistoryLightCounterMask();
+                pConstants->counterMask            = GetRayHistoryLightCounterMask();
             }
 
             traceListInfo.pRayHistoryTraceBuffer             = Util::VoidPtrInc(pMappedData, runningOffset);
@@ -2394,6 +2438,29 @@ void Device::InitExecuteIndirect(
                          Util::RoundUpQuotient(maxDispatchCount, threadGroupDim),
                          Util::RoundUpQuotient(pipelineCount, threadGroupDim),
                          1);
+
+    m_pBackend->RestoreComputeState(cmdBuffer);
+}
+
+// =====================================================================================================================
+void Device::PrepareShadowSbtForReplay(
+    ClientCmdBufferHandle                    cmdBuffer,
+    const PrepareShadowSbtForReplayUserData& userData,
+    uint32                                   totoalSbtEntryCount)
+{
+    m_pBackend->SaveComputeState(cmdBuffer);
+
+    m_pBackend->SetUserData(cmdBuffer,
+                            0,
+                            sizeof(userData) / sizeof(uint32),
+                            reinterpret_cast<const uint32*>(&userData));
+
+    m_pBackend->BindPipeline(cmdBuffer,
+                             GetInternalPipeline(InternalRayTracingCsType::PrepareShadowSbtForReplay, {}, 0),
+                             GetInternalPsoHash(InternalRayTracingCsType::PrepareShadowSbtForReplay, {}));
+
+    constexpr uint32 threadGroupDim = 64;
+    m_pBackend->Dispatch(cmdBuffer, Util::RoundUpQuotient(totoalSbtEntryCount, threadGroupDim), 1, 1);
 
     m_pBackend->RestoreComputeState(cmdBuffer);
 }

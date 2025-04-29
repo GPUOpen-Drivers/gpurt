@@ -178,12 +178,20 @@ uint32 BvhBuilder::GetGeometryPrimCount(
             primCount = (geometry.triangles.vertexCount / 3);
         }
     }
-    else
+    else if (geometry.type == GeometryType::Aabbs)
     {
         // Procedural AABB geometry does not require any additional data. Note that AABBCount is 64-bit; in practice we
         // can't support more than 4 billion AABBs so for now just assert that it's a 32-bit value.
         PAL_ASSERT(Util::HighPart(geometry.aabbs.aabbCount) == 0);
         primCount = uint32(geometry.aabbs.aabbCount);
+    }
+    else if (geometry.type == GeometryType::CompressedTriangles)
+    {
+        primCount = geometry.compressedTriangles.numTriangles;
+    }
+    else
+    {
+        PAL_ASSERT_ALWAYS_MSG("Unsupported geometry type %d", uint32(geometry.type));
     }
 
     return primCount;
@@ -623,6 +631,11 @@ BvhBuildMode BvhBuilder::OverrideBuildMode(
         (buildInfo.inputs.type == AccelStructType::TopLevel))
     {
         mode = m_deviceSettings.bvhBuildModeOverrideTLAS;
+    }
+    // HPLOC is not supported in the BuildParallel path
+    if (m_deviceSettings.enableParallelBuild && (mode == BvhBuildMode::HPLOC))
+    {
+        mode = BvhBuildMode::PLOC;
     }
 
     PAL_ASSERT(mode != BvhBuildMode::Auto);
@@ -1179,6 +1192,10 @@ BvhBuilder::ScratchBufferInfo BvhBuilder::CalculateScratchBufferInfoDefault(
         {
             plocTaskQueueCounter = ReserveBytes(RayTracingTaskQueueCounterSize, &runningOffset);
         }
+        if (m_buildConfig.buildMode == BvhBuildMode::HPLOC)
+        {
+            plocTaskQueueCounter = ReserveBytes(RayTracingTaskQueueCounterSize, &runningOffset);
+        }
     }
 
 #if GPURT_BUILD_RTIP3_1
@@ -1616,6 +1633,21 @@ GeometryType BvhBuilder::GetGeometryType(
 }
 
 // =====================================================================================================================
+// Returns whether the build is an uncompressed triangle primitive build
+bool BvhBuilder::IsTriangleBuild() const
+{
+    return (m_buildConfig.geometryType == GeometryType::Triangles);
+}
+
+// =====================================================================================================================
+// Returns whether the build is a compressed triangle primitive build
+bool BvhBuilder::IsCompressedTriangleBuild() const
+{
+    return (m_buildConfig.geometryType == GeometryType::CompressedTriangles) ||
+           (m_buildConfig.geometryType == GeometryType::CompressedTrianglesOmm);
+}
+
+// =====================================================================================================================
 bool BvhBuilder::ForceRebuild(
     const Internal::Device*      pDevice,
     const AccelStructBuildInputs inputs)
@@ -1692,7 +1724,7 @@ void BvhBuilder::InitBuildConfig(
     m_buildConfig.geometryType = GetGeometryType(buildArgs.inputs);
 
     const bool isTrianglePrimitiveBuild = (buildArgs.inputs.type == AccelStructType::BottomLevel) &&
-                                          (m_buildConfig.geometryType == GeometryType::Triangles);
+                                          IsTriangleBuild();
 
 #if GPURT_BUILD_RTIP3_1
     if (m_pDevice->GetRtIpLevel() >= Pal::RayTracingIpLevel::RtIp3_1)
@@ -1796,7 +1828,9 @@ void BvhBuilder::InitBuildConfig(
     {
         if (m_buildConfig.triangleCompressionMode == TriangleCompressionMode::Pair)
         {
-            m_buildConfig.enableEarlyPairCompression = m_deviceSettings.enableEarlyPairCompression;
+            // TODO: DGF + Quads
+            m_buildConfig.enableEarlyPairCompression = m_deviceSettings.enableEarlyPairCompression &&
+                                                       (IsCompressedTriangleBuild() == false);
         }
     }
 
@@ -1807,11 +1841,12 @@ void BvhBuilder::InitBuildConfig(
 
 #if GPURT_BUILD_RTIP3_1
     if ((buildArgs.inputs.type == AccelStructType::BottomLevel) &&
-        (m_buildConfig.geometryType == GeometryType::Triangles))
+        (IsTriangleBuild() || IsCompressedTriangleBuild()) &&
+        (m_pDevice->GetRtIpLevel() >= Pal::RayTracingIpLevel::RtIp3_1))
     {
-        m_buildConfig.primCompressionFlags = m_deviceSettings.primCompressionFlags;
-
         uint numPrimsPerLeaf;
+
+        m_buildConfig.primCompressionFlags = m_deviceSettings.primCompressionFlags;
         {
             numPrimsPerLeaf = 2u;
         }
@@ -1829,23 +1864,24 @@ void BvhBuilder::InitBuildConfig(
             m_buildConfig.maxPrimRangeSize = m_deviceSettings.maxPrimRangeSize;
         }
 
-#if GPURT_BUILD_RTIP3_1
         // Check whether to use the Trivial BVH Builder.
         m_buildConfig.shouldUseTrivialBuilder = m_pDevice->ShouldUseTrivialBuilderForBuild(buildArgs.inputs);
-#endif
 
-        m_buildConfig.enableCompressPrimsPass =
-            (m_deviceSettings.enableParallelBuild == false) &&
-#if GPURT_BUILD_RTIP3_1
-            (m_buildConfig.shouldUseTrivialBuilder == false) &&
-#endif
-            ((m_buildConfig.primCompressionFlags & PrimCompFlags::MultiPrim) ||
-             (m_buildConfig.maxPrimRangeSize > numPrimsPerLeaf));
+        // Determine if the compressPrims path should be enabled.
+        m_buildConfig.enableCompressPrimsPass = (m_deviceSettings.enableParallelBuild == false);
+        if (m_pDevice->GetRtIpLevel() == Pal::RayTracingIpLevel::RtIp3_1)
+        {
+            m_buildConfig.enableCompressPrimsPass &= (m_buildConfig.shouldUseTrivialBuilder == false);
+            m_buildConfig.enableCompressPrimsPass &=
+                ((m_buildConfig.maxPrimRangeSize > numPrimsPerLeaf) ||
+                    (m_buildConfig.primCompressionFlags & PrimCompFlags::MultiPrim));
+        }
     }
+
     m_buildConfig.enableOrientedBoundingBoxes = m_deviceSettings.enableOrientedBoundingBoxes;
 
     // OBBs are disabled for procedural geometry
-    if ((m_buildConfig.geometryType != GeometryType::Triangles) ||
+    if ((m_buildConfig.geometryType == GeometryType::Aabbs) ||
         Util::TestAnyFlagSet(m_buildArgs.inputs.flags, AccelStructBuildFlagAllowUpdate
 #if GPURT_CLIENT_INTERFACE_MAJOR_VERSION >= 49
         // Disable OBBs depending on which D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS flags
@@ -1982,10 +2018,23 @@ void BvhBuilder::InitGeometryConstants()
     BuildShaderGeometryConstants* pConstants = reinterpret_cast<BuildShaderGeometryConstants*>(
         m_pDevice->AllocateTemporaryData(m_cmdBuffer, sizeInBytes, &geometryConstGpuVa));
 
-    void* pVbvTable = m_pDevice->AllocateTypedDescriptorTable(m_cmdBuffer, geometryCount, &m_geomBufferSrdTable);
-    void* pCbvTable = m_pDevice->AllocateUntypedDescriptorTable(m_cmdBuffer, geometryCount, &m_geomConstSrdTable);
     const uint32 untypedSrdSizeBytes = m_pDevice->GetUntypedBufferSrdSizeDw() * sizeof(uint32);
     const uint32 typedSrdSizeBytes = m_pDevice->GetTypedBufferSrdSizeDw() * sizeof(uint32);
+    void* pCbvTable = m_pDevice->AllocateUntypedDescriptorTable(m_cmdBuffer, geometryCount, &m_geomConstSrdTable);
+
+    const bool usesTypedGeometryBuffer = (IsCompressedTriangleBuild() == false);
+    void* pVbvTable;
+    uint32 vbvTableSrdSizeBytes;
+    if (usesTypedGeometryBuffer)
+    {
+        pVbvTable = m_pDevice->AllocateTypedDescriptorTable(m_cmdBuffer, geometryCount, &m_geomBufferSrdTable);
+        vbvTableSrdSizeBytes = typedSrdSizeBytes;
+    }
+    else
+    {
+        pVbvTable = m_pDevice->AllocateUntypedDescriptorTable(m_cmdBuffer, geometryCount, &m_geomBufferSrdTable);
+        vbvTableSrdSizeBytes = untypedSrdSizeBytes;
+    }
 
     for (uint32 i = 0; i < geometryCount; i++)
     {
@@ -2006,13 +2055,31 @@ void BvhBuilder::InitGeometryConstants()
             indexBufferInfo = GetIndexBufferInfo(geometry.triangles);
             vertexComponentSize = uint32(GetBytesPerComponentForFormat(geometry.triangles.vertexFormat));
         }
-        else
+        else if (geometry.type == GeometryType::Aabbs)
         {
             vertexBufferViewInfo = SetupAabbBuffer(geometry.aabbs, &stride);
         }
+        else if (geometry.type == GeometryType::CompressedTriangles)
+        {
+            vertexBufferViewInfo = SetupCompressedGeometryBuffer(geometry.compressedTriangles, &stride);
+        }
+        else
+        {
+            PAL_ASSERT_ALWAYS_MSG("Unsupported geometry type");
+        }
 
-        m_backend.CreateTypedBufferViewSrds(vertexBufferViewInfo, pVbvTable);
-        pVbvTable = Util::VoidPtrInc(pVbvTable, typedSrdSizeBytes);
+        if (usesTypedGeometryBuffer)
+        {
+            // Create typed SRD for non-compressed geometry buffers
+            m_backend.CreateTypedBufferViewSrds(vertexBufferViewInfo, pVbvTable);
+        }
+        else
+        {
+            // Create untyped SRD for non-compressed geometry buffers
+            m_backend.CreateUntypedBufferViewSrds(vertexBufferViewInfo, pVbvTable);
+        }
+
+        pVbvTable = Util::VoidPtrInc(pVbvTable, vbvTableSrdSizeBytes);
 
         pConstants[i] =
         {
@@ -2223,6 +2290,30 @@ BufferViewInfo BvhBuilder::SetupAabbBuffer(
 
     // Stride constant is in terms of X32Y32 elements.
     *pStride = inputByteStride / 8;
+
+    return bufferInfo;
+}
+
+// =====================================================================================================================
+// Setup an untyped buffer view for the provided compressed triangle geometry.
+BufferViewInfo BvhBuilder::SetupCompressedGeometryBuffer(
+    const GeometryCompressedTriangles& desc,
+    uint32*                            pStride
+    ) const
+{
+    // CompressedTriangleFormat is always DGF1 for now
+    PAL_ASSERT(desc.format == CompressedTriangleFormat::Dgf1);
+
+    // DGF1 alignment reqirements
+    PAL_ASSERT(Util::IsPow2Aligned(desc.compressedDataAddr, 128));
+    PAL_ASSERT(Util::IsPow2Aligned(desc.compressedDataSize, 128));
+
+    const BufferViewInfo bufferInfo =
+    {
+        .gpuAddr = desc.compressedDataAddr,
+        .range   = desc.compressedDataSize,
+        .stride  = 1,
+    };
 
     return bufferInfo;
 }
@@ -2536,13 +2627,14 @@ void BvhBuilder::PopRGPMarker()
 const char* BvhBuilder::ConvertBuildModeToString()
 {
     static_assert(static_cast<uint32>(BvhBuildMode::Linear)   == 0, "BvhBuildMode enum mismatch");
+    static_assert(static_cast<uint32>(BvhBuildMode::HPLOC)    == 1, "BvhBuildMode enum mismatch");
     static_assert(static_cast<uint32>(BvhBuildMode::PLOC)     == 2, "BvhBuildMode enum mismatch");
     static_assert(static_cast<uint32>(BvhBuildMode::Auto)     == 4, "BvhBuildMode enum mismatch");
 
     constexpr const char* BuildModeStr[] =
     {
         "LBVH",     // BvhBuildMode::Linear,
-        "Reserved",
+        "HPLOC",    // BvhBuildMode::HPLOC,
         "PLOC",     // BvhBuildMode::PLOC,
         "Reserved",
         "Auto",     // BvhBuildMode::Auto,
@@ -2713,6 +2805,10 @@ void BvhBuilder::InitBuildSettings()
     {
         m_buildSettings.nnSearchRadius = m_deviceSettings.plocRadius;
     }
+    else if (buildMode == BvhBuildMode::HPLOC)
+    {
+        m_buildSettings.nnSearchRadius = m_deviceSettings.hplocRadius;
+    }
     m_buildSettings.enablePairCostCheck          = m_deviceSettings.enablePairCompressionCostCheck;
     m_buildSettings.mortonFlags                  = m_buildConfig.mortonFlags;
 
@@ -2729,7 +2825,7 @@ void BvhBuilder::InitBuildSettings()
     m_buildSettings.enableBvhChannelBalancing    = m_deviceSettings.enableBvhChannelBalancing;
     m_buildSettings.tlasRefittingMode            = m_deviceSettings.tlasRefittingMode;
     // TLAS Refitting is disabled for procedural geometry
-    if ((m_buildConfig.geometryType != GeometryType::Triangles))
+    if ((m_buildConfig.geometryType == GeometryType::Aabbs))
     {
         m_buildSettings.tlasRefittingMode = static_cast<uint32>(TlasRefittingMode::Disabled);
     }
@@ -3167,7 +3263,6 @@ void BvhBuilder::EncodeQuadPrimitives()
 
     BuildShaderRootConstants0 shaderConstants =
     {
-        .numThreadGroups = GetNumThreadGroupsCopy(64),
         .geometryIndex = m_buildConfig.trianglePairBlockCount
     };
 
@@ -3195,9 +3290,15 @@ void BvhBuilder::EncodePrimitives()
 
     if (isBottomLevel)
     {
-        const InternalRayTracingCsType pipelineType =
-            (m_buildConfig.geometryType == GeometryType::Triangles) ? InternalRayTracingCsType::EncodeTriangleNodes :
-                                                                      InternalRayTracingCsType::EncodeAABBNodes;
+        InternalRayTracingCsType pipelineType = InternalRayTracingCsType::EncodeTriangleNodes;
+        if (m_buildConfig.geometryType == GeometryType::Aabbs)
+        {
+            pipelineType = InternalRayTracingCsType::EncodeAABBNodes;
+        }
+        else if (m_buildConfig.geometryType == GeometryType::CompressedTriangles)
+        {
+            pipelineType = InternalRayTracingCsType::EncodeDGF;
+        }
 
         BindPipeline(pipelineType);
 
@@ -3212,8 +3313,7 @@ void BvhBuilder::EncodePrimitives()
         // Prepare merged source AABB buffer data from geometry
         for (uint32 geometryIndex = 0; geometryIndex < m_buildArgs.inputs.inputElemCount; ++geometryIndex)
         {
-            const Geometry geometry =
-                m_clientCb.pfnConvertAccelStructBuildGeometry(m_buildArgs.inputs, geometryIndex);
+            const Geometry geometry = m_clientCb.pfnConvertAccelStructBuildGeometry(m_buildArgs.inputs, geometryIndex);
 
             const uint32 primitiveCount = GetGeometryPrimCount(geometry);
 
@@ -3253,6 +3353,15 @@ void BvhBuilder::EncodePrimitives()
                 // Dispatch at least one group to ensure geometry info is written
                 Dispatch(Util::Max(DispatchSize(primitiveCount), 1u));
 
+                RGP_POP_MARKER();
+            }
+            else if (geometry.type == GeometryType::CompressedTriangles)
+            {
+                constexpr uint32 DgfBlockSize = 128;
+                const uint32 numDgfBlocks = geometry.compressedTriangles.compressedDataSize / DgfBlockSize;
+
+                RGP_PUSH_MARKER("Encode DGF (NumBlocks=%u)", numDgfBlocks);
+                Dispatch(numDgfBlocks);
                 RGP_POP_MARKER();
             }
             else
@@ -3805,6 +3914,10 @@ BuildPhaseFlags BvhBuilder::EnabledPhases() const
             {
                 flags |= BuildPhaseFlags::BuildFastAgglomerativeLbvh;
             }
+            if (m_buildConfig.buildMode == BvhBuildMode::HPLOC)
+            {
+                flags |= BuildPhaseFlags::BuildHPLOC;
+            }
             if (m_buildConfig.buildMode == BvhBuildMode::PLOC)
             {
                 flags |= BuildPhaseFlags::BuildPLOC;
@@ -4088,6 +4201,30 @@ void BvhBuilder::BuildFastAgglomerativeLbvh()
 
     RGP_PUSH_MARKER("Build Fast Agglomerative LBVH (maxNumPrimitives %u)", m_buildConfig.maxNumPrimitives);
     Dispatch(DispatchSize(m_buildConfig.maxNumPrimitives));
+
+    RGP_POP_MARKER();
+}
+
+// =====================================================================================================================
+// Executes the build hierarchical PLOC pass
+void BvhBuilder::BuildHPLOC()
+{
+    BindPipeline(InternalRayTracingCsType::BuildHPLOC);
+
+    WriteBuildBufferBindings();
+
+    RGP_PUSH_MARKER("Build HPLOC (numLeafNodes %u)", m_buildConfig.maxNumPrimitives);
+
+    if (m_buildConfig.enableEarlyPairCompression)
+    {
+        const gpusize indirectArgsGpuVa =
+            ScratchBufferBaseVa() + m_scratchOffsets.encodeTaskCounter + ENCODE_TASK_COUNTER_INDIRECT_ARGS;
+        DispatchIndirect(indirectArgsGpuVa);
+    }
+    else
+    {
+        Dispatch(Util::RoundUpQuotient(m_buildConfig.maxNumPrimitives, 32u));
+    }
 
     RGP_POP_MARKER();
 }

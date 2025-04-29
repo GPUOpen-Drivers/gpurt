@@ -35,11 +35,11 @@ static _AmdTraversalState InitTraversalState2_0(
     _AmdTraversalState traversal    = (_AmdTraversalState)0;
 
 #if REMAT_INSTANCE_RAY == 0
-    traversal.candidateRayOrigin    = ray.Origin + (ray.TMin * ray.Direction);
+    traversal.candidateRayOrigin    = ray.Origin + (ApplyTMinBias(ray.TMin) * ray.Direction);
     traversal.candidateRayDirection = ray.Direction;
 #endif
     traversal.committed.instNodePtr = INVALID_NODE;
-    traversal.committed.rayTCurrent = ray.TMax - ray.TMin;
+    traversal.committed.rayTCurrent = ray.TMax - ApplyTMinBias(ray.TMin);
 
     uint schedulerState = TRAVERSAL_STATE_COMMITTED_NOTHING;
     traversal.committed.PackState(schedulerState);
@@ -92,7 +92,7 @@ static void TraversalInternal2_0(
     const bool triangleCullEnable    = triangleCullFrontFace || triangleCullBackFace;
 
     // Regenerate top-level ray for traversal from ray system state
-    float3 topLevelRayOrigin = data.hitObject.ray.origin + (data.hitObject.ray.tMin * data.hitObject.ray.direction);
+    float3 topLevelRayOrigin = data.hitObject.ray.origin + (ApplyTMinBias(data.hitObject.ray.tMin) * data.hitObject.ray.direction);
     float3 topLevelRayDirection = data.hitObject.ray.direction;
 
     // Initialise transient traversal state
@@ -281,7 +281,7 @@ static void TraversalInternal2_0(
 
             // Determine triangle hit or miss
             const float candidateT = (t_num / t_denom);
-            if (candidateT < committed.rayTCurrent)
+            if (EvaluateTriangleHit(data.hitObject.ray.tMin, candidateT, committed.rayTCurrent))
             {
                 RayHistorySetCandidateTCurrent(data, candidateT);
 

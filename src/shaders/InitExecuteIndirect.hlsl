@@ -22,7 +22,6 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-#include "../shadersClean/common/Common.hlsli"
 #include "../../gpurt/gpurtDispatch.h"
 
 #define RootSig "CBV(b0, visibility=SHADER_VISIBILITY_ALL),"\
@@ -103,6 +102,11 @@ struct IndirectCounterMetadata
 [[vk::binding(4, 0)]] RWStructuredBuffer<DispatchRaysConstantData>    OutputConstants       : register(u4);
 [[vk::binding(5, 0)]] RWStructuredBuffer<DispatchRaysDescriptorTable> OutputDescriptorTable : register(u5);
 [[vk::binding(6, 0)]] RWStructuredBuffer<IndirectCounterMetadata>     CounterMetadata       : register(u6);
+
+#include "../shadersClean/common/Bits.hlsli"
+#include "../shadersClean/common/Extensions.hlsli"
+#include "../shadersClean/common/Math.hlsli"
+#include "../shadersClean/common/Common.hlsli"
 
 uint CalcDispatchDim(uint threadCount, uint tgSize)
 {

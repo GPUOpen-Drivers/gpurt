@@ -23,8 +23,10 @@
  *
  **********************************************************************************************************************/
 #if !defined(__cplusplus)
-#include "../shadersClean/build/BuildSettings.hlsli"
+#include "BuildSettings.hlsli"
 #endif
+
+#include "BuildRootSignature.hlsli"
 
 //======================================================================================================================
 // Set a scratch buffer counter to 0 if it has a valid offset

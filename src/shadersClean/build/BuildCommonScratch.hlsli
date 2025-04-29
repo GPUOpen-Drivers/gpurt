@@ -47,12 +47,12 @@
 #ifndef _BUILDCOMMONSCRATCH_HLSL
 #define _BUILDCOMMONSCRATCH_HLSL
 
-#include "../shadersClean/common/ScratchNode.hlsli"
-#include "BuildCommon.hlsl"
-#include "BuildCommonScratchGlobal.hlsl"
-#include "TaskCounter.hlsl"
+#include "../common/ScratchNode.hlsli"
+#include "BuildCommon.hlsli"
+#include "BuildCommonScratchGlobal.hlsli"
+#include "TaskCounter.hlsli"
 #if GPURT_BUILD_RTIP3_1
-#include "../shadersClean/common/gfx12/primitiveNode.hlsli"
+#include "../common/gfx12/primitiveNode.hlsli"
 #endif
 
 //=====================================================================================================================
@@ -67,9 +67,22 @@ void WriteScratchBatchIndex(
 }
 
 //=====================================================================================================================
+static bool IsCompressedTrianglePrimitiveBuild()
+{
+    return (Settings.topLevelBuild == 0) && ((Settings.geometryType == GEOMETRY_TYPE_COMPRESSED_TRIANGLES) ||
+                                             (Settings.geometryType == GEOMETRY_TYPE_COMPRESSED_TRIANGLES_OMM));
+}
+
+//=====================================================================================================================
 static bool IsTrianglePrimitiveBuild()
 {
     return (Settings.topLevelBuild == 0) && (Settings.geometryType == GEOMETRY_TYPE_TRIANGLES);
+}
+
+//=====================================================================================================================
+static bool IsProceduralPrimitiveBuild()
+{
+    return (Settings.topLevelBuild == 0) && (Settings.geometryType == GEOMETRY_TYPE_AABBS);
 }
 
 //=====================================================================================================================
@@ -82,7 +95,7 @@ static BoundingBox GetScratchNodeBoundingBox(
 {
     BoundingBox bbox;
 
-    if (isLeafNode && IsTrianglePrimitiveBuild())
+    if (isLeafNode && (IsTrianglePrimitiveBuild() || IsCompressedTrianglePrimitiveBuild()))
     {
         // Generate the BoundingBox of given triangle node
         bbox = GenerateTriangleBoundingBox(node.bbox_min_or_v0,
@@ -176,7 +189,7 @@ uint FetchScratchNodeNumPrimitives(
         if (Settings.enableEarlyPairCompression)
         {
             const uint packedGeometryIndex =
-                FETCH_SCRATCH_NODE_DATA(uint, baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_GEOMETRY_INDEX_OFFSET);
+                FetchScratchNodeData<uint>(baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_GEOMETRY_INDEX_OFFSET);
             return IsQuadPrimitive(packedGeometryIndex) ? 2 : 1;
         }
         else
@@ -186,8 +199,7 @@ uint FetchScratchNodeNumPrimitives(
     }
     else
     {
-        return (FETCH_SCRATCH_NODE_DATA(
-            uint,
+        return (FetchScratchNodeData<uint>(
             baseScratchNodesOffset,
             nodeIndex,
             SCRATCH_NODE_NUM_PRIMS_AND_DO_COLLAPSE_OFFSET) >> 1);
@@ -248,7 +260,7 @@ float FetchScratchNodeCost(
     uint baseScratchNodesOffset,
     uint nodeIndex)
 {
-    return FETCH_SCRATCH_NODE_DATA(float, baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_COST_OFFSET);
+    return FetchScratchNodeData<float>(baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_COST_OFFSET);
 }
 
 //=====================================================================================================================
@@ -297,7 +309,7 @@ float FetchScratchNodeSurfaceArea(
     uint baseScratchNodesOffset,
     uint nodeIndex)
 {
-    return FETCH_SCRATCH_NODE_DATA(float, baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_SA_OFFSET);
+    return FetchScratchNodeData<float>(baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_SA_OFFSET);
 }
 
 //=====================================================================================================================
@@ -334,7 +346,7 @@ uint FetchScratchNodeParent(
     uint baseScratchNodesOffset,
     uint nodeIndex)
 {
-    return FETCH_SCRATCH_NODE_DATA(uint, baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_PARENT_OFFSET);
+    return FetchScratchNodeData<uint>(baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_PARENT_OFFSET);
 }
 
 //=====================================================================================================================
@@ -381,7 +393,7 @@ float FetchScratchNodeLargestLength(
     uint baseScratchNodesOffset,
     uint nodeIndex)
 {
-    return FETCH_SCRATCH_NODE_DATA(float, baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_NUM_LARGEST_LENGTH_OFFSET);
+    return FetchScratchNodeData<float>(baseScratchNodesOffset, nodeIndex, SCRATCH_NODE_NUM_LARGEST_LENGTH_OFFSET);
 }
 
 //=====================================================================================================================
@@ -800,17 +812,15 @@ uint GetMinimumNumOfTriangles()
 float GetTriangleIntersectionCost(uint numTris)
 {
     float Ct;
-    {
 #if GPURT_BUILD_RTIP3_1
-        if (Settings.maxPrimRangeSize > 1)
-        {
-            Ct = SAH_COST_PRIM_RANGE_INTERSECTION * numTris;
-        }
-        else
+    if (Settings.maxPrimRangeSize > 1)
+    {
+        Ct = SAH_COST_PRIM_RANGE_INTERSECTION * numTris;
+    }
+    else
 #endif
-        {
-            Ct = SAH_COST_TRIANGLE_INTERSECTION * numTris;
-        }
+    {
+        Ct = SAH_COST_TRIANGLE_INTERSECTION * numTris;
     }
 
     return Ct;
@@ -1039,7 +1049,7 @@ static TriangleData GetScratchNodeQuadVertices(
     in uint nodeIndex,
     in uint triangleIndex)
 {
-    const uint packedFlags = FETCH_SCRATCH_NODE_DATA(uint, scratchNodesOffset, nodeIndex, SCRATCH_NODE_FLAGS_OFFSET);
+    const uint packedFlags = FetchScratchNodeData<uint>(scratchNodesOffset, nodeIndex, SCRATCH_NODE_FLAGS_OFFSET);
 
     const uint quadSwizzle = ExtractScratchNodeQuadSwizzle(packedFlags);
     const uint triSwizzle = (quadSwizzle >> (triangleIndex * 4)) & 0xFF;
@@ -1048,12 +1058,12 @@ static TriangleData GetScratchNodeQuadVertices(
 
     TriangleData tri;
 
-    tri.v0 = FETCH_SCRATCH_NODE_DATA(
-        float3, scratchNodesOffset, nodeIndex, SCRATCH_NODE_V0_OFFSET + (indices.x * SCRATCH_NODE_TRIANGLE_VERTEX_STRIDE));
-    tri.v1 = FETCH_SCRATCH_NODE_DATA(
-        float3, scratchNodesOffset, nodeIndex, SCRATCH_NODE_V0_OFFSET + (indices.y * SCRATCH_NODE_TRIANGLE_VERTEX_STRIDE));
-    tri.v2 = FETCH_SCRATCH_NODE_DATA(
-        float3, scratchNodesOffset, nodeIndex, SCRATCH_NODE_V0_OFFSET + (indices.z * SCRATCH_NODE_TRIANGLE_VERTEX_STRIDE));
+    tri.v0 = FetchScratchNodeData<float3>(
+        scratchNodesOffset, nodeIndex, SCRATCH_NODE_V0_OFFSET + (indices.x * SCRATCH_NODE_TRIANGLE_VERTEX_STRIDE));
+    tri.v1 = FetchScratchNodeData<float3>(
+        scratchNodesOffset, nodeIndex, SCRATCH_NODE_V0_OFFSET + (indices.y * SCRATCH_NODE_TRIANGLE_VERTEX_STRIDE));
+    tri.v2 = FetchScratchNodeData<float3>(
+        scratchNodesOffset, nodeIndex, SCRATCH_NODE_V0_OFFSET + (indices.z * SCRATCH_NODE_TRIANGLE_VERTEX_STRIDE));
 
     return tri;
 }

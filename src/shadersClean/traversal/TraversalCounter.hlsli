@@ -1,0 +1,736 @@
+/*
+ ***********************************************************************************************************************
+ *
+ *  Copyright (c) 2025 Advanced Micro Devices, Inc. All Rights Reserved.
+ *
+ *  Permission is hereby granted, free of charge, to any person obtaining a copy
+ *  of this software and associated documentation files (the "Software"), to deal
+ *  in the Software without restriction, including without limitation the rights
+ *  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ *  copies of the Software, and to permit persons to whom the Software is
+ *  furnished to do so, subject to the following conditions:
+ *
+ *  The above copyright notice and this permission notice shall be included in all
+ *  copies or substantial portions of the Software.
+ *
+ *  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ *  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ *  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ *  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ *  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ *  SOFTWARE.
+ *
+ **********************************************************************************************************************/
+//
+#ifndef _TRAVERSAL_COUNTER_HLSLI
+#define _TRAVERSAL_COUNTER_HLSLI
+
+#include "DispatchRaysConstants.hlsli"
+#include "RayQueryCommon.hlsli"
+
+#include "../common/Bits.hlsli"
+#include "../common/Common.hlsli"
+
+#if DEVELOPER
+#include "../../../gpurt/gpurtCounter.h"
+
+#ifndef __cplusplus
+globallycoherent RWByteAddressBuffer Counters         : register(u0, DISPATCH_RAYS_CONSTANTS_SPACE_ID);
+#endif
+
+#endif
+
+#if DEVELOPER
+//=====================================================================================================================
+static uint AllocateRayHistoryDynamicId()
+{
+    uint waveIdx;
+
+    if (WaveIsFirstLane())
+    {
+        Counters.InterlockedAdd(RAY_TRACING_COUNTER_RAY_ID_BYTE_OFFSET, 1, waveIdx);
+    }
+    return WaveReadLaneFirst(waveIdx);
+}
+
+//=====================================================================================================================
+static uint GetRayQueryMaxStackDepth(inout_param(RayQueryInternal) rayQuery)
+{
+    return rayQuery.maxStackDepthAndDynamicId & 0x0000FFFF;
+}
+
+//=====================================================================================================================
+static uint GetRayQueryDynamicId(in RayQueryInternal rayQuery)
+{
+    // Upper 16 bits is used to store rayId
+    return rayQuery.maxStackDepthAndDynamicId >> 16;
+}
+
+//=====================================================================================================================
+static void SetRayQueryMaxStackDepth(inout_param(RayQueryInternal) rayQuery, in uint value)
+{
+    rayQuery.maxStackDepthAndDynamicId = (value & 0x0000FFFF) | GetRayQueryDynamicId(rayQuery);
+}
+
+//=====================================================================================================================
+static void SetRayQueryDynamicId(inout_param(RayQueryInternal) rayQuery, in uint value)
+{
+    rayQuery.maxStackDepthAndDynamicId = (value << 16) | GetRayQueryMaxStackDepth(rayQuery);
+}
+
+//=====================================================================================================================
+static uint ValidateTokenOffset(in uint offset,
+    in uint type,
+    in uint shift)
+{
+    uint counterBufferSize;
+    Counters.GetDimensions(counterBufferSize);
+
+    const bool tokensOutOfBounds = ((offset + (type << shift)) > counterBufferSize);
+    const bool offsetUnderflow = ((offset + (type << shift)) < offset);
+
+    return (tokensOutOfBounds || offsetUnderflow) ? 0xffffffff : offset + (type << shift);
+}
+
+//=====================================================================================================================
+// Reserve token space in counter buffer for logging
+//
+static uint ReserveTokenSpace(
+    in uint numDwords)
+{
+    // Offset 0 is reserved for tracking token requests
+    uint offset;
+    Counters.InterlockedAdd(RAY_TRACING_COUNTER_REQUEST_BYTE_OFFSET, numDwords << 2, offset);
+
+    // Account for the reserved bytes
+    return ValidateTokenOffset(offset, RAY_TRACING_COUNTER_RESERVED_BYTE_SIZE, 0);
+}
+
+//=====================================================================================================================
+// Write ray-history control token to counter buffer
+//
+// id           : Unique caller generated ray identifier
+// type         : Must be one of RayHistoryTokenType
+// dwordSize    : Size of payload data that follows the control DWORDs
+// optionalData : Optional control data
+//
+static uint WriteRayHistoryControlToken(
+    in uint id,
+    in uint type,
+    in uint dwordSize,
+    in uint optionalData)
+{
+    // Write token to memory
+    const uint rayId = id | RAYID_CONTROL_MASK;
+    const uint cntrl = type | (dwordSize << 16) | (optionalData << 24);
+
+    uint offset = ReserveTokenSpace(dwordSize + RAY_HISTORY_TOKEN_CONTROL_SIZE);
+
+    if (offset != 0xFFFFFFFF)
+    {
+        uint postCounterOffset = ValidateTokenOffset(offset, RAY_HISTORY_TOKEN_CONTROL_SIZE, 2);
+        if (postCounterOffset != 0xFFFFFFFF)
+        {
+            Counters.Store2(offset, uint2(rayId, cntrl));
+        }
+
+        offset = postCounterOffset;
+    }
+    return offset;
+}
+
+//=====================================================================================================================
+static bool LogCounters(
+    in uint id,
+    in uint mode)
+{
+    return ((DispatchRaysConstBuf.counterMode == mode) &&
+        (id >= DispatchRaysConstBuf.counterRayIdRangeBegin) &&
+        (id < DispatchRaysConstBuf.counterRayIdRangeEnd));
+}
+
+//=====================================================================================================================
+static bool LogCountersRayHistory(
+    in uint id,
+    in uint tokenType)
+{
+    uint mask = DispatchRaysConstBuf.counterMask;
+
+#if GPURT_CLIENT_INTERFACE_MAJOR_VERSION < 35
+    if (DispatchRaysConstBuf.counterMode == TRACERAY_COUNTER_MODE_RAYHISTORY_FULL)
+    {
+        mask = 0xffffffff;
+    }
+    if (DispatchRaysConstBuf.counterMode == TRACERAY_COUNTER_MODE_RAYHISTORY_LIGHT)
+    {
+        mask = (1 << RAY_HISTORY_TOKEN_TYPE_BEGIN_V2) |
+            (1 << RAY_HISTORY_TOKEN_TYPE_ANYHIT_STATUS) |
+            (1 << RAY_HISTORY_TOKEN_TYPE_CANDIDATE_INTERSECTION_RESULT) |
+            (1 << RAY_HISTORY_TOKEN_TYPE_INTERSECTION_RESULT_V2);
+    }
+#endif
+    return (((mask & (1U << tokenType)) != 0) &&
+        (id >= DispatchRaysConstBuf.counterRayIdRangeBegin) &&
+        (id < DispatchRaysConstBuf.counterRayIdRangeEnd));
+}
+
+//=====================================================================================================================
+// Write 32-bit hardware node pointer to ray history buffer
+//
+static void WriteRayHistoryTokenNodePtr(
+    in uint id,
+    in uint nodePtr)
+{
+    if (LogCounters(id, TRACERAY_COUNTER_MODE_RAYHISTORY_FULL))
+    {
+        // Reserve token space and write data
+        uint offset = ReserveTokenSpace(2);
+        if (offset != 0xFFFFFFFF)
+        {
+            Counters.Store2(offset, uint2(id, nodePtr));
+        }
+    }
+}
+
+//=====================================================================================================================
+// Write 64-bit top-level acceleration structure base address to ray history buffer
+//
+static void WriteRayHistoryTokenTopLevel(
+    in uint     id,
+    in uint64_t baseAddr)
+{
+    if (LogCountersRayHistory(id, RAY_HISTORY_TOKEN_TYPE_TOP_LEVEL))
+    {
+        uint offset = WriteRayHistoryControlToken(id,
+            RAY_HISTORY_TOKEN_TYPE_TOP_LEVEL,
+            RAY_HISTORY_TOKEN_TOP_LEVEL_SIZE,
+            0);
+        if (offset != 0xFFFFFFFF)
+        {
+            Counters.Store2(offset, uint2(LowPart(baseAddr), HighPart(baseAddr)));
+        }
+    }
+}
+
+//=====================================================================================================================
+// Write 64-bit bottom-level acceleration structure base address to ray history buffer.
+//
+static void WriteRayHistoryTokenBottomLevel(
+    in uint     id,
+    in uint64_t baseAddr)
+{
+    if (LogCountersRayHistory(id, RAY_HISTORY_TOKEN_TYPE_BOTTOM_LEVEL))
+    {
+        uint offset = WriteRayHistoryControlToken(id,
+            RAY_HISTORY_TOKEN_TYPE_BOTTOM_LEVEL,
+            RAY_HISTORY_TOKEN_BOTTOM_LEVEL_SIZE,
+            0);
+        if (offset != 0xFFFFFFFF)
+        {
+            Counters.Store2(offset, uint2(LowPart(baseAddr), HighPart(baseAddr)));
+        }
+    }
+}
+
+//=====================================================================================================================
+#define IS_WAVE_UNIFORM(var) WaveActiveAllTrue(WaveReadLaneFirst(var) == var)
+
+//=====================================================================================================================
+static void WriteRayHistoryTokenWaveBegin(
+    in uint     id,
+    in uint3    dispatchRaysIndex,
+    in uint64_t topLevelBvh,
+    in uint     rayFlags,
+    in uint     traceRayParams,
+    in RayDesc  ray,
+    in uint     staticId,
+    in uint     dynamicId,
+    in uint     parentId)
+{
+#ifndef __cplusplus
+    const uint numActiveLanes = WaveActiveCountBits(true);
+    const uint activeLaneIndex = WavePrefixSum(1);
+
+    const uint4 mask = WaveActiveBallot(true);
+
+    const bool waveUniformDispatchX = (DispatchRaysConstBuf.rayDispatchWidth == 1);
+    const bool waveUniformDispatchY = (DispatchRaysConstBuf.rayDispatchHeight == 1);
+    const bool waveUniformDispatchZ = (DispatchRaysConstBuf.rayDispatchDepth == 1);
+    const bool waveUniformAccelStructLo = IS_WAVE_UNIFORM(LowPart(topLevelBvh));
+    const bool waveUniformAccelStructHi = IS_WAVE_UNIFORM(HighPart(topLevelBvh));
+    const bool waveUniformRayFlags = IS_WAVE_UNIFORM(rayFlags);
+    const bool waveUniformTraceRayParams = IS_WAVE_UNIFORM(traceRayParams);
+    const bool waveUniformRayTMin = IS_WAVE_UNIFORM(ray.TMin);
+    const bool waveUniformRayTMax = IS_WAVE_UNIFORM(ray.TMax);
+
+    RayHistoryTokenWaveBeginPacketHeader header;
+    header.activeLaneMaskLo = mask.x;
+    header.activeLaneMaskHi = mask.y;
+    header.staticId = staticId;
+    header.dynamicId = dynamicId;
+    header.parentId = parentId;
+
+    uint uniformVarBitMask = 0;
+    uniformVarBitMask |= waveUniformDispatchX ? WAVE_UNIFORM_MASK_DISPATCH_X : 0;
+    uniformVarBitMask |= waveUniformDispatchY ? WAVE_UNIFORM_MASK_DISPATCH_Y : 0;
+    uniformVarBitMask |= waveUniformDispatchZ ? WAVE_UNIFORM_MASK_DISPATCH_Z : 0;
+    uniformVarBitMask |= waveUniformAccelStructLo ? WAVE_UNIFORM_MASK_ADDR_LO : 0;
+    uniformVarBitMask |= waveUniformAccelStructHi ? WAVE_UNIFORM_MASK_ADDR_HI : 0;
+    uniformVarBitMask |= waveUniformRayFlags ? WAVE_UNIFORM_MASK_RAY_FLAGS : 0;
+    uniformVarBitMask |= waveUniformTraceRayParams ? WAVE_UNIFORM_MASK_PARAMS : 0;
+    uniformVarBitMask |= waveUniformRayTMin ? WAVE_UNIFORM_MASK_TMIN : 0;
+    uniformVarBitMask |= waveUniformRayTMax ? WAVE_UNIFORM_MASK_TMAX : 0;
+
+    header.packedHwWaveIdAndMask = (AmdTraceRayGetHwWaveId() & 0xffff) | (uniformVarBitMask << 16);
+
+    // Write ray history begin tokens
+    const uint headerSizeDw = RAY_HISTORY_WAVE_BEGIN_PACKET_HEADER_SIZE + countbits(uniformVarBitMask);
+    const uint packetSizeDw =
+        RAY_HISTORY_WAVE_BEGIN_PACKET_DATA_SIZE + countbits((~uniformVarBitMask) & WAVE_UNIFORM_BITS_VALID_MASK);
+
+    uint offset = 0;
+    if (WaveIsFirstLane())
+    {
+        offset = WriteRayHistoryControlToken(
+            id, RAY_HISTORY_TOKEN_TYPE_WAVE_BEGIN, headerSizeDw + (packetSizeDw * numActiveLanes), 0);
+
+        if (offset != 0xFFFFFFFF)
+        {
+            Counters.Store<RayHistoryTokenWaveBeginPacketHeader>(offset, header);
+            offset += sizeof(RayHistoryTokenWaveBeginPacketHeader);
+
+            if (waveUniformDispatchX)
+            {
+                Counters.Store(offset, dispatchRaysIndex.x);
+                offset += sizeof(uint);
+            }
+            if (waveUniformDispatchY)
+            {
+                Counters.Store(offset, dispatchRaysIndex.y);
+                offset += sizeof(uint);
+            }
+            if (waveUniformDispatchZ)
+            {
+                Counters.Store(offset, dispatchRaysIndex.z);
+                offset += sizeof(uint);
+            }
+            if (waveUniformAccelStructLo)
+            {
+                Counters.Store(offset, LowPart(topLevelBvh));
+                offset += sizeof(uint);
+            }
+            if (waveUniformAccelStructHi)
+            {
+                Counters.Store(offset, HighPart(topLevelBvh));
+                offset += sizeof(uint);
+            }
+            if (waveUniformRayFlags)
+            {
+                Counters.Store(offset, rayFlags);
+                offset += sizeof(uint);
+            }
+            if (waveUniformTraceRayParams)
+            {
+                Counters.Store(offset, traceRayParams);
+                offset += sizeof(uint);
+            }
+            if (waveUniformRayTMin)
+            {
+                Counters.Store(offset, asuint(ray.TMin));
+                offset += sizeof(float);
+            }
+            if (waveUniformRayTMax)
+            {
+                Counters.Store(offset, asuint(ray.TMax));
+                offset += sizeof(float);
+            }
+        }
+    }
+
+    const uint waveOffset = WaveReadLaneFirst(offset);
+
+    // Per-lane packet stride in bytes
+    const uint packetStride = (packetSizeDw * sizeof(uint32_t));
+
+    if (waveOffset != 0xFFFFFFFF)
+    {
+        // Wave variant data
+        uint rayOffset = waveOffset + (activeLaneIndex * packetStride);
+
+        Counters.Store<uint>(rayOffset, id);
+        rayOffset += sizeof(uint);
+
+        Counters.Store<float3>(rayOffset, ray.Origin);
+        rayOffset += sizeof(float3);
+
+        Counters.Store<float3>(rayOffset, ray.Direction);
+        rayOffset += sizeof(float3);
+
+        if (!waveUniformDispatchX)
+        {
+            Counters.Store(rayOffset, dispatchRaysIndex.x);
+            rayOffset += sizeof(uint);
+        }
+        if (!waveUniformDispatchY)
+        {
+            Counters.Store(rayOffset, dispatchRaysIndex.y);
+            rayOffset += sizeof(uint);
+        }
+        if (!waveUniformDispatchZ)
+        {
+            Counters.Store(rayOffset, dispatchRaysIndex.z);
+            rayOffset += sizeof(uint);
+        }
+        if (!waveUniformAccelStructLo)
+        {
+            Counters.Store(rayOffset, LowPart(topLevelBvh));
+            rayOffset += sizeof(uint);
+        }
+        if (!waveUniformAccelStructHi)
+        {
+            Counters.Store(rayOffset, HighPart(topLevelBvh));
+            rayOffset += sizeof(uint);
+        }
+        if (!waveUniformRayFlags)
+        {
+            Counters.Store(rayOffset, rayFlags);
+            rayOffset += sizeof(uint);
+        }
+        if (!waveUniformTraceRayParams)
+        {
+            Counters.Store(rayOffset, traceRayParams);
+            rayOffset += sizeof(uint);
+        }
+        if (!waveUniformRayTMin)
+        {
+            Counters.Store(rayOffset, asuint(ray.TMin));
+            rayOffset += sizeof(float);
+        }
+        if (!waveUniformRayTMax)
+        {
+            Counters.Store(rayOffset, asuint(ray.TMax));
+            rayOffset += sizeof(float);
+        }
+    }
+#endif
+}
+
+//=====================================================================================================================
+// Write per-TraceRay data to ray history buffer
+//
+// id                : Unique caller generated ray identifier
+// dispatchRaysIndex : Dispatch grid coordinates for this ray
+// topLevelBvh       : Base address of top-level acceleration structure
+// rayFlags          : API ray flags
+// traceRayParams    : TraceRay parameters packed into a 32-bit integer. See RayHistoryTokenBeginData.packedTraceRayParams
+// ray               : API ray description
+// staticId          : Unique identifier to the shader call site.
+// dynamicId         : Unique identifier generated on traversal begin. Uniform across the wave.
+// parentId          : Unique identifier of the dynamicId for the parent traversal.
+static void WriteRayHistoryTokenBegin(
+    in uint     id,
+    in uint3    dispatchRaysIndex,
+    in uint64_t topLevelBvh,
+    in uint     rayFlags,
+    in uint     traceRayParams,
+    in RayDesc  ray,
+    in uint     staticId,
+    in uint     dynamicId,
+    in uint     parentId)
+{
+    if (LogCountersRayHistory(id, RAY_HISTORY_TOKEN_TYPE_BEGIN_V2))
+    {
+        // Write ray history begin tokens
+        uint offset = WriteRayHistoryControlToken(id,
+            RAY_HISTORY_TOKEN_TYPE_BEGIN_V2,
+            RAY_HISTORY_TOKEN_BEGIN_V2_SIZE,
+            0);
+        if (offset != 0xFFFFFFFF)
+        {
+            Counters.Store4(offset,
+                uint4(AmdTraceRayGetHwWaveId(), dispatchRaysIndex));
+
+            Counters.Store4(offset + 0x10,
+                uint4(LowPart(topLevelBvh), HighPart(topLevelBvh), rayFlags, traceRayParams));
+
+            Counters.Store4(offset + 0x20,
+                uint4(asuint(ray.Origin.x), asuint(ray.Origin.y), asuint(ray.Origin.z), asuint(ray.TMin)));
+
+            Counters.Store4(offset + 0x30,
+                uint4(asuint(ray.Direction.x), asuint(ray.Direction.y), asuint(ray.Direction.z), asuint(ray.TMax)));
+
+            Counters.Store3(offset + 0x40, uint3(staticId, dynamicId, parentId));
+        }
+    }
+    else if (LogCountersRayHistory(id, RAY_HISTORY_TOKEN_TYPE_WAVE_BEGIN))
+    {
+        WriteRayHistoryTokenWaveBegin(
+            id, dispatchRaysIndex, topLevelBvh, rayFlags, traceRayParams, ray, staticId, dynamicId, parentId);
+    }
+}
+
+//=====================================================================================================================
+// Write per-TraceRay end data
+//
+// id   : Unique caller generated ray identifier
+// data : GeometryIndex and PrimitiveIndex as uint2
+//
+static void WriteRayHistoryTokenEnd(
+    in uint  id,
+    in uint2 data,
+    in uint  instanceIndex,
+    in uint  numIterations,
+    in uint  numInstanceIntersections,
+    in uint  hitKind,
+    in float hitT)
+{
+    if (LogCountersRayHistory(id, RAY_HISTORY_TOKEN_TYPE_INTERSECTION_RESULT_V2))
+    {
+        uint offset = WriteRayHistoryControlToken(id,
+            RAY_HISTORY_TOKEN_TYPE_INTERSECTION_RESULT_V2,
+            RAY_HISTORY_TOKEN_INTERSECTION_RESULT_V2_SIZE,
+            0);
+        if (offset != 0xFFFFFFFF)
+        {
+            Counters.Store2(offset, data);
+            Counters.Store4(offset + 8, uint4(instanceIndex | (hitKind << 24),
+                numIterations,
+                numInstanceIntersections,
+                asuint(hitT)));
+        }
+    }
+}
+
+//=====================================================================================================================
+// Write per-ray function call data
+//
+// id             : Unique caller generated ray identifier
+// shaderId       : 64-bit unique shader ID
+// shaderTableIdx : Shader table index
+// shaderType     : Type of the shader called (RAY_HISTORY_FUNC_CALL_TYPE_MISS, etc)
+//
+static void WriteRayHistoryTokenFunctionCall(
+    in uint  id,
+    in uint2 shaderId,
+    in uint  shaderTableIdx,
+    in uint  shaderType)
+{
+    if (LogCountersRayHistory(id, RAY_HISTORY_TOKEN_TYPE_FUNC_CALL_V2))
+    {
+        uint offset = WriteRayHistoryControlToken(id,
+            RAY_HISTORY_TOKEN_TYPE_FUNC_CALL_V2,
+            RAY_HISTORY_TOKEN_FUNC_CALL_V2_SIZE,
+            (shaderType & RAY_HISTORY_CONTROL_TOKEN_DATA_MASK));
+
+        if (offset != 0xFFFFFFFF)
+        {
+            Counters.Store2(offset, shaderId);
+            Counters.Store(offset + 8, shaderTableIdx);
+        }
+    }
+}
+
+//=====================================================================================================================
+// Write per-ray AnyHit call status
+//
+// id     : Unique caller generated ray identifier
+// status : hit status post anyHit call. Could be 0: ignore, 1: accept. 2: acceptAndEndSearch
+//
+static void WriteRayHistoryTokenAnyHitStatus(
+    in uint id,
+    in uint status)
+{
+    if (LogCountersRayHistory(id, RAY_HISTORY_TOKEN_TYPE_ANYHIT_STATUS))
+    {
+        uint offset = WriteRayHistoryControlToken(id,
+            RAY_HISTORY_TOKEN_TYPE_ANYHIT_STATUS,
+            0,
+            status);
+    }
+}
+
+//=====================================================================================================================
+// Write per-ray Triangle candidates hit result
+//
+// id     : Unique caller generated ray identifier
+// hit    : Whether this triangle was hit or missed
+// hitT   : hit distance as reported by the intersection shader
+//
+static void WriteRayHistoryTokenTriangleHitResult(
+    in uint  id,
+    in uint  hit,
+    in float hitT)
+{
+    if (LogCountersRayHistory(id, RAY_HISTORY_TOKEN_TYPE_TRIANGLE_HIT_RESULT))
+    {
+        uint offset = WriteRayHistoryControlToken(id,
+            RAY_HISTORY_TOKEN_TYPE_TRIANGLE_HIT_RESULT,
+            RAY_HISTORY_TOKEN_TRIANGLE_HIT_RESULT_SIZE,
+            hit);
+        if (offset != 0xFFFFFFFF)
+        {
+            Counters.Store(offset, asuint(hitT));
+        }
+    }
+}
+
+//=====================================================================================================================
+// Write per-ray Intersection shader call status
+//
+// id     : Unique caller generated ray identifier
+// status : hit status post intersection shader call. Could be 0: ignore, 1: accept. 2: acceptAndEndSearch
+// hitT   : hit distance as reported by the intersection shader
+// hitKind: hit kind as reported by the intersection shader
+//
+static void WriteRayHistoryTokenProceduralIntersectionStatus(
+    in uint  id,
+    in uint  status,
+    in float hitT,
+    in uint  hitKind)
+{
+    if (LogCountersRayHistory(id, RAY_HISTORY_TOKEN_TYPE_CANDIDATE_INTERSECTION_RESULT))
+    {
+        uint offset = WriteRayHistoryControlToken(id,
+            RAY_HISTORY_TOKEN_TYPE_CANDIDATE_INTERSECTION_RESULT,
+            RAY_HISTORY_TOKEN_CANDIDATE_INTERSECTION_RESULT_SIZE,
+            status);
+        if (offset != 0xFFFFFFFF)
+        {
+            Counters.Store2(offset, uint2(asuint(hitT), hitKind));
+        }
+    }
+}
+
+//=====================================================================================================================
+// Write per-ray gpu timestamp
+//
+// id        : Unique caller generated ray identifier
+// timeStamp : 64-bit timestamp provided by AmdTraceRaySampleGpuTimer()
+static void WriteRayHistoryTokenTimeStamp(
+    in uint     id,
+    in uint64_t timeStamp)
+{
+    if (LogCountersRayHistory(id, RAY_HISTORY_TOKEN_TYPE_GPU_TIME))
+    {
+        uint offset = WriteRayHistoryControlToken(id,
+            RAY_HISTORY_TOKEN_TYPE_GPU_TIME,
+            RAY_HISTORY_TOKEN_GPU_TIME_SIZE,
+            0);
+        if (offset != 0xFFFFFFFF)
+        {
+            Counters.Store2(offset, uint2(LowPart(timeStamp), HighPart(timeStamp)));
+        }
+    }
+}
+
+//=====================================================================================================================
+static void WriteTraversalCounter(
+    in uint             rayId,
+    in TraversalCounter counter)
+{
+    if (LogCounters(rayId, TRACERAY_COUNTER_MODE_TRAVERSAL))
+    {
+        // Reserve token space and write data. (+1 for rayID)
+        uint offset = ReserveTokenSpace(TCID_COUNT + 1);
+
+        if (offset != 0xFFFFFFFF)
+        {
+            // Write rayID
+            Counters.Store(offset, rayId);
+            offset += TCID_STRIDE;
+
+            // Followed by counter data
+            for (uint i = 0; i < TCID_COUNT; ++i)
+            {
+                Counters.Store(offset, counter.data[i]);
+                offset += TCID_STRIDE;
+            }
+        }
+    }
+}
+
+//=====================================================================================================================
+static void WriteTraversalCounter(inout_param(RayQueryInternal) rayQuery, in uint rayId)
+{
+    TraversalCounter counter;
+    counter.data[TCID_NUM_RAY_BOX_TEST] = rayQuery.numRayBoxTest;
+    counter.data[TCID_NUM_RAY_TRIANGLE_TEST] = rayQuery.numRayTriangleTest;
+    counter.data[TCID_NUM_ITERATION] = rayQuery.numIterations;
+    counter.data[TCID_MAX_TRAVERSAL_DEPTH] = GetRayQueryMaxStackDepth(rayQuery);
+    counter.data[TCID_NUM_ANYHIT_INVOCATION] = 0;
+    counter.data[TCID_SHADER_ID] = 0;
+    counter.data[TCID_SHADER_RECORD_INDEX] = 0;
+    counter.data[TCID_TIMING_DATA] = rayQuery.clocks;
+    counter.data[TCID_WAVE_ID] = AmdTraceRayGetHwWaveId();
+    counter.data[TCID_NUM_CANDIDATE_HITS] = rayQuery.numCandidateHits;
+    counter.data[TCID_INSTANCE_INTERSECTIONS] = rayQuery.instanceIntersections;
+
+    WriteTraversalCounter(rayId, counter);
+}
+
+//=====================================================================================================================
+static void WriteDispatchCounters(
+    in uint numIterations)
+{
+    if (LogCounters(0, TRACERAY_COUNTER_MODE_DISPATCH))
+    {
+        const uint cnt = WaveActiveCountBits(true);
+        const uint sum = WaveActiveSum(numIterations);
+        const uint min = WaveActiveMin(numIterations);
+        const uint max = WaveActiveMax(numIterations);
+
+        if (WaveIsFirstLane())
+        {
+            Counters.InterlockedAdd(0, cnt);
+            Counters.InterlockedAdd(4, sum);
+            Counters.InterlockedMin(8, min);
+            Counters.InterlockedMax(12, max);
+        }
+    }
+}
+
+//=====================================================================================================================
+static void UpdateWaveTraversalStatistics(
+    in uint rtIpLevel,
+    in uint nodePtr)
+{
+    if (LogCounters(0, TRACERAY_COUNTER_MODE_DISPATCH))
+    {
+        const uint activeLaneCount = WaveActiveCountBits(true);
+        uint4 laneCnt;
+
+#if GPURT_BUILD_RTIP3_1
+        if (rtIpLevel >= GPURT_RTIP3_1)
+        {
+            laneCnt.x = WaveActiveCountBits(IsBoxNode3_1(nodePtr));
+            laneCnt.y = WaveActiveCountBits(IsTriangleNode3_1(nodePtr));
+        }
+        else
+#endif
+        {
+            laneCnt.x = WaveActiveCountBits(IsBoxNode1_1(nodePtr));
+            laneCnt.y = WaveActiveCountBits(IsTriangleNode1_1(nodePtr));
+        }
+
+        laneCnt.z = WaveActiveCountBits(IsUserNodeInstance(nodePtr));
+        laneCnt.w = WaveActiveCountBits(IsUserNodeProcedural(nodePtr));
+
+        if (WaveIsFirstLane())
+        {
+            // activeLaneCount per iteration
+            Counters.InterlockedAdd(16, activeLaneCount);
+
+            // wave iterations
+            Counters.InterlockedAdd(20, 1);
+
+            // Max active lane count with common node type
+            const uint maxActiveLaneCnt = max(laneCnt.x, max(laneCnt.y, max(laneCnt.z, laneCnt.w)));
+            Counters.InterlockedAdd(24, maxActiveLaneCnt);
+        }
+    }
+}
+
+#endif
+
+#endif

@@ -33,11 +33,11 @@ T LoadInstanceDescBuffer(uint offset)
 }
 #include "IndirectArgBufferUtils.hlsl"
 #include "IntersectCommon.hlsl"
-#include "BuildCommonScratch.hlsl"
+#include "../shadersClean/build/BuildCommonScratch.hlsli"
 #if GPURT_BUILD_RTIP3_1
 #include "KDOP.hlsl"
 #endif
-#include "EncodeTopLevelCommon.hlsl"
+#include "../shadersClean/build/EncodeTopLevelCommon.hlsli"
 #include "EncodeTopLevelBuild.hlsl"
 #include "EncodeTopLevelUpdate.hlsl"
 
@@ -189,7 +189,7 @@ void RefitInstanceBounds(
             const uint64_t kdopAddress = blasBaseAddr + ACCEL_STRUCT_METADATA_KDOP_OFFSET;
             const uint     geometryType = FetchHeaderField(blasBaseAddr + ACCEL_STRUCT_METADATA_HEADER_SIZE,
                                                        ACCEL_STRUCT_HEADER_GEOMETRY_TYPE_OFFSET);
-            if (geometryType == GEOMETRY_TYPE_TRIANGLES)
+            if (geometryType != GEOMETRY_TYPE_AABBS)
             {
                 const BoundingBox boundingBox = ComputeInstanceBoundsFromKdop(kdopAddress, desc.Transform);
 
